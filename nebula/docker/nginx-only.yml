@@ -28,7 +28,7 @@
 
 services:
   nginx:
-    image: huynhquangtoan/openresty-lua-resty-http:latest
+    image: openresty/openresty:1.21.4.1-0-jammy
     container_name: nebula-nginx-gateway
     ports:
       - "3007:3007" # Expose on port 3007 for local development
@@ -41,6 +41,11 @@ services:
     restart: unless-stopped
     networks:
       - nebula-local
+    entrypoint: ["/bin/sh","-c",
+      "test -f /usr/local/openresty/site/lualib/resty/http.lua \
+        || opm get ledgetech/lua-resty-http; \
+       exec openresty -g 'daemon off;'"
+    ]
 
 networks:
   nebula-local:
