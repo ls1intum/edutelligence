@@ -8,7 +8,7 @@ def load_llm_config(filename="llm_config.nebula.yml", llm_id="azure-gpt-4-omni")
     config_path = os.getenv("LLM_CONFIG_PATH")
     if not config_path:
         this_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.abspath(os.path.join(this_dir, "..", filename))
+        config_path = os.path.abspath(os.path.join(this_dir, "..", "..", "..", filename))
 
     if not os.path.isfile(config_path):
         raise FileNotFoundError(f"LLM config file not found at: {config_path}")
