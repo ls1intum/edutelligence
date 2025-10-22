@@ -1,9 +1,9 @@
 from typing import Optional, Type, TypeVar, List
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.pydantic_v1 import BaseModel, ValidationError
 from langchain_core.runnables import RunnableSequence
 from langchain_core.output_parsers import PydanticOutputParser
+from pydantic import BaseModel, ValidationError
 from athena import get_experiment_environment
 from llm_core.utils.append_format_instructions import append_format_instructions
 from llm_core.utils.llm_utils import remove_system_message

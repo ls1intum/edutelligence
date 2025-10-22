@@ -27,6 +27,119 @@ class PipelineWorkflows:
         self.weaviate_client = weaviate_client
         self.weaviate_client._ensure_collections_exist()
 
+
+
+    def map_new_competency_to_exercise(
+            self,
+            exercise_id: int,
+            competency_id: int
+    ):
+        exercise_data = self.weaviate_client.get_embeddings_by_property(CollectionNames.EXERCISE.value, "exercise_id", exercise_id)
+        competency_data = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "competency_id", competency_id)
+
+        if not exercise_data or not competency_data:
+            raise ValueError("No exercise or competency found for mapping")
+
+        exercise = ExerciseWithCompetencies(
+            id=int(exercise_data[0]["properties"]["exercise_id"]),
+            title=exercise_data[0]["properties"].get("title", ""),
+            description=exercise_data[0]["properties"]["description"],
+            competencies=exercise_data[0]["properties"]["competency_ids"],
+            course_id=exercise_data[0]["properties"]["course_id"],
+        )
+        competency = Competency(
+            id=int(competency_data[0]["properties"]["competency_id"]),
+            title=competency_data[0]["properties"]["title"],
+            description=competency_data[0]["properties"]["description"],
+            course_id=int(competency_data[0]["properties"]["course_id"]),
+        )
+
+        if competency.id not in exercise.competencies:
+            exercise.competencies.append(competency.id)
+
+        properties = {
+            "exercise_id": exercise.id,
+            "description": exercise.description,
+            "competency_ids": exercise.competencies,
+            "course_id": exercise.course_id,
+        }
+        self.weaviate_client.update_property_by_id(
+            CollectionNames.EXERCISE.value, exercise_data[0]["id"], properties
+        )
+
+    def map_competency_to_competency(
+            self,
+            source_competency_id: int,
+            target_competency_id: int
+    ):
+        source_competency_data = self.weaviate_client.get_embeddings_by_property(
+            CollectionNames.COMPETENCY.value, "competency_id", source_competency_id
+        )
+        target_competency_data = self.weaviate_client.get_embeddings_by_property(
+            CollectionNames.COMPETENCY.value, "competency_id", target_competency_id
+        )
+
+        if not source_competency_data or not target_competency_data:
+            raise ValueError("Source or target competency not found for mapping")
+
+        # Get existing related competencies and normalize to list of ints
+        source_related_raw = source_competency_data[0]["properties"].get("related_competencies", [])
+        target_related_raw = target_competency_data[0]["properties"].get("related_competencies", [])
+
+        # Convert to list of ints, filtering out non-convertible entries
+        source_related = []
+        for item in source_related_raw:
+            try:
+                source_related.append(int(item))
+            except (ValueError, TypeError):
+                continue
+
+        target_related = []
+        for item in target_related_raw:
+            try:
+                target_related.append(int(item))
+            except (ValueError, TypeError):
+                continue
+
+        # Add bidirectional relationship if not already exists
+        if target_competency_id not in source_related:
+            source_related.append(target_competency_id)
+        if source_competency_id not in target_related:
+            target_related.append(source_competency_id)
+
+        # Update source competency
+        source_properties = {
+            "competency_id": int(source_competency_data[0]["properties"]["competency_id"]),
+            "title": source_competency_data[0]["properties"]["title"],
+            "description": source_competency_data[0]["properties"]["description"],
+            "course_id": source_competency_data[0]["properties"]["course_id"],
+            "related_competencies": source_related,
+        }
+        if "cluster_id" in source_competency_data[0]["properties"]:
+            source_properties["cluster_id"] = source_competency_data[0]["properties"]["cluster_id"]
+        if "cluster_similarity_score" in source_competency_data[0]["properties"]:
+            source_properties["cluster_similarity_score"] = source_competency_data[0]["properties"]["cluster_similarity_score"]
+        self.weaviate_client.update_property_by_id(
+            CollectionNames.COMPETENCY.value, source_competency_data[0]["id"], source_properties
+        )
+
+        # Update target competency
+        target_properties = {
+            "competency_id": int(target_competency_data[0]["properties"]["competency_id"]),
+            "title": target_competency_data[0]["properties"]["title"],
+            "description": target_competency_data[0]["properties"]["description"],
+            "course_id": target_competency_data[0]["properties"]["course_id"],
+            "related_competencies": target_related,
+        }
+        if "cluster_id" in target_competency_data[0]["properties"]:
+            target_properties["cluster_id"] = target_competency_data[0]["properties"]["cluster_id"]
+        if "cluster_similarity_score" in target_competency_data[0]["properties"]:
+            target_properties["cluster_similarity_score"] = target_competency_data[0]["properties"]["cluster_similarity_score"]
+        self.weaviate_client.update_property_by_id(
+            CollectionNames.COMPETENCY.value, target_competency_data[0]["id"], target_properties
+        )
+
+
     def save_competency_to_weaviate(self, competency: Competency):
         embedding = generate_embeddings_openai(competency.description if competency.description else competency.title)
         properties = {
@@ -81,7 +194,7 @@ class PipelineWorkflows:
                     len(existing_competency) == 1
                 ), "Multiple competencies found for the same ID"  # TODO: Throw error
                 competency_to_update = existing_competency[0]
-                embedings = generate_embeddings_openai(competency.description if competency.description else competency.title) 
+                embedings = generate_embeddings_openai(competency.description if competency.description else competency.title)
                 properties = {
                     "competency_id": competency.id,
                     "title": competency.title,
@@ -106,9 +219,9 @@ class PipelineWorkflows:
     ):
         if not competencies:
             return
-            
+
         course_id = competencies[0].course_id
-        
+
         # Save all competencies first
         for competency in competencies:
             if operation_type == OperationType.DELETE:
@@ -123,7 +236,7 @@ class PipelineWorkflows:
                         len(existing_competency) == 1
                     ), "Multiple competencies found for the same ID"  # TODO: Throw error
                     competency_to_update = existing_competency[0]
-                    embedings = generate_embeddings_openai(competency.description if competency.description else competency.title) 
+                    embedings = generate_embeddings_openai(competency.description if competency.description else competency.title)
                     properties = {
                         "competency_id": competency.id,
                         "title": competency.title,
@@ -138,7 +251,7 @@ class PipelineWorkflows:
                     )
                 else:
                     self.save_competency_to_weaviate(competency)
-        
+
         # Recluster once after all competencies are saved
         self.recluster_with_new_competencies(competency=competencies[0], course_id=course_id)
 
