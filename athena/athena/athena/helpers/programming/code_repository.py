@@ -3,7 +3,8 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional, cast, Dict, Any
+from typing import Optional, cast, Dict, Any, Union
+from pydantic import AnyUrl
 
 from athena import contextvars
 from athena.helpers.programming.path_utils import ensure_safe_path
@@ -32,7 +33,9 @@ def _ensure_auth_secret(authorization_secret: Optional[str]) -> str:
     if authorization_secret is None:
         if contextvars.repository_authorization_secret_context_var_empty():
             raise ValueError(
-                "Authorization secret for the repository API is not set. Pass authorization_secret to this function or add the X-Repository-Authorization-Secret header to the request from the assessment module manager."
+                "Authorization secret for the repository API is not set. "
+                "Pass authorization_secret to this function or add the "
+                "X-Repository-Authorization-Secret header to the request from the assessment module manager."
             )
         return cast(str, contextvars.get_repository_authorization_secret_context_var())
     return authorization_secret
@@ -75,18 +78,19 @@ def _write_files_to_directory(root: Path, files_map: Dict[str, str]) -> None:
         candidate.write_text(content, encoding="utf-8")
 
 
-def get_repository(url: str, authorization_secret: Optional[str] = None) -> Repo:
+def get_repository(url: Union[str, AnyUrl], authorization_secret: Optional[str] = None) -> Repo:
     """
     Retrieve a code repository from the given URL, either from the cache or by
     downloading it, and return a Repo object.
     """
 
-    url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
+    url_str = str(url)
+    url_hash = hashlib.md5(url_str.encode("utf-8")).hexdigest()
     dir_name = url_hash + ".git"
     cache_dir_path = cache_dir / dir_name
 
     if not cache_dir_path.exists():
-        files_map = get_repository_files_map(url, authorization_secret)
+        files_map = get_repository_files_map(url_str, authorization_secret)
         # Build in a unique temp dir and atomically rename into place.
         tmp_dir = Path(tempfile.mkdtemp(prefix=f"{dir_name}.tmp.", dir=str(cache_dir)))
         try:
