@@ -194,6 +194,75 @@ async def _generate_feedback(
     return result
 
 
+async def _generate_graded_feedback(
+    exercise: Exercise,
+    submission: Submission,
+    config: DefaultApproachConfig,
+    *,
+    debug: bool,
+) -> Optional[AssessmentModel]:
+
+    """Perform the LLM call to generate feedback."""
+    prompt_input = {
+        "example_solution": exercise.example_solution,
+        "max_points": exercise.max_points,
+        "problem_statement": exercise.problem_statement or "No problem statement.",
+        "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
+        "submission": add_sentence_numbers(submission.text),
+    }
+
+    chat_prompt = get_chat_prompt(
+        system_message=config.generate_graded_suggestions_prompt.system_message,
+        human_message=config.generate_graded_suggestions_prompt.human_message,
+    )
+
+    # Check if the prompt is too long and omit features if necessary (in order of importance)
+    omittable_features = [
+        "example_solution",
+        "problem_statement",
+        "grading_instructions",
+    ]
+    prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
+        prompt=chat_prompt,
+        prompt_input=prompt_input,
+        max_input_tokens=config.max_input_tokens,
+        omittable_features=omittable_features,
+        debug=debug,
+    )
+
+    # Skip if the prompt is too long
+    if not should_run:
+        logger.warning("Input too long. Skipping.")
+        if debug:
+            emit_meta("prompt", chat_prompt.format(**prompt_input))
+            emit_meta(
+                "error",
+                f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}",
+            )
+        return None
+
+    result = await predict_and_parse(
+        model=config.model,
+        chat_prompt=chat_prompt, 
+        prompt_input=prompt_input,
+        pydantic_object=AssessmentModel,
+        tags=[
+            f"exercise-{exercise.id}",
+            f"submission-{submission.id}",
+        ],
+    )
+
+    if debug:
+        emit_meta(
+            "generate_graded_suggestions",
+            {
+                "prompt": chat_prompt.format(**prompt_input),
+                "result": result.model_dump() if result is not None else None
+            }
+        )
+
+    return result
+
 def _convert_to_feedback_objects(
     result: AssessmentModel,
     exercise: Exercise,
@@ -249,6 +318,17 @@ async def generate_suggestions(
     """Generate feedback suggestions for a student submission using a two-step LLM approach."""
     if latest_submission is None:
         logger.info("Latest submission is not provided.")
+
+    if is_graded:
+        result = await _generate_graded_feedback(
+            exercise=exercise,
+            submission=submission,
+            config=config,
+            debug=debug,
+        )
+        if result is None:
+            return []
+        return _convert_to_feedback_objects(result, exercise, submission, is_graded)
 
     # Setup learner profile with fallbacks
     learner_profile = _setup_learner_profile(learner_profile, config)
