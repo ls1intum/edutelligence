@@ -1,0 +1,6 @@
+request_id,arrival_offset,prompt,mode,body_template
+req-1,0,"Explain the difference between time complexity classes O(n log n) and O(n^2) with a practical sorting example.","interactive","{""model"":""gpt-4o-mini"",""messages"":[{""role"":""user"",""content"":""${prompt}""}]}"
+req-2,1.5,"Outline the key components of a modern computer architecture course syllabus for second-year students.","interactive","{""model"":""gpt-4o-mini"",""messages"":[{""role"":""user"",""content"":""${prompt}""}]}"
+req-3,3.2,"Given a directed graph G(V,E) with |V|=200 and |E|=600, describe how you would detect strongly connected components and estimate the runtime.","interactive","{""model"":""gpt-4o-mini"",""messages"":[{""role"":""user"",""content"":""${prompt}""}]}"
+req-4,5.8,"Draft a short lecture introduction that motivates why students should care about type systems in functional programming languages.","interactive","{""model"":""gpt-4o-mini"",""messages"":[{""role"":""user"",""content"":""${prompt}""}]}"
+req-5,8.0,"Pose three progressively harder practice questions on database normalization, each building on the previous one.","interactive","{""model"":""gpt-4o-mini"",""messages"":[{""role"":""user"",""content"":""${prompt}""}]}"
