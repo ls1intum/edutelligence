@@ -2,7 +2,11 @@
 # Custom rules        #
 #######################
 application.local.yml
-llm_config.local.yml
+llm_config.nebula.yml
+llm_config.production.yml
+nginx.local.conf
+nginx.production.conf
+node_modules/
 
 ######################
 # Docker
@@ -177,3 +181,10 @@ cython_debug/
 .idea/
 
 .DS_Store
+
+# Ignore transcription temp files
+nebula/src/nebula/transcript/temp/
+
+# Ignore real config files
+nebula/llm_config.nebula.yml
+nebula/application_local.nebula.yml

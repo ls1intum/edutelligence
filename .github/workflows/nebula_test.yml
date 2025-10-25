@@ -73,6 +73,14 @@ jobs:
         run: poetry install
         working-directory: nebula
 
+      # TODO: Create LLM config from example?
+
+      - name: Clean old coverage data
+        run: |
+          rm -f .coverage
+          rm -f coverage.xml
+        working-directory: nebula
+
       - name: Run Tests
         run: poetry run coverage run -m pytest
         working-directory: nebula
