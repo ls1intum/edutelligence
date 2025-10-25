@@ -8,7 +8,7 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 
 def init():
     sentry_sdk.init(
-        dsn="https://1535dff78eec4932a67fc5affd0a680a@sentry.ase.in.tum.de/7",
+        dsn="https://17806b3674c44a10ac10345ba7201cc6@sentry.aet.cit.tum.de/8",
         environment=os.environ.get("SENTRY_ENVIRONMENT", "development"),
         server_name=os.environ.get("SENTRY_SERVER_NAME", "localhost"),
         release=os.environ.get("SENTRY_RELEASE", None),
