@@ -1,48 +1,61 @@
 import importlib
-import os
 from contextlib import contextmanager
+from typing import Generator
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.engine import Engine
 
-from athena import env
+from athena.base import Base
+from athena.settings import Settings
 
 
-# SQLite specific configuration
-is_sqlite = env.DATABASE_URL.startswith("sqlite:///")
-if is_sqlite:
-    connect_args = {"check_same_thread": False}
-    # create the data directory if it does not exist
-    data_dir = os.path.dirname(env.DATABASE_URL[10:])
-    os.makedirs(data_dir, exist_ok=True)
-else:
-    connect_args = {}
+_engine: Engine | None = None
+_SessionLocal: sessionmaker | None = None
 
-engine = create_engine(
-    env.DATABASE_URL, connect_args=connect_args
-)
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+def init_engine(url: str):
+    """Initialize the database engine with the given URL."""
+    global _engine, _SessionLocal
+    _engine = create_engine(url, future=True, pool_pre_ping=True)
+    _SessionLocal = sessionmaker(
+        bind=_engine, autoflush=False, autocommit=False, future=True
+    )
 
-def create_tables(exercise_type: str):
+
+def _ensure_engine():
+    global _engine, _SessionLocal
+    if _engine is None:
+        url = Settings().DATABASE_URL  # single source of truth
+        _engine = create_engine(url, future=True, pool_pre_ping=True)
+        _SessionLocal = sessionmaker(
+            bind=_engine, autoflush=False, autocommit=False, future=True
+        )
+
+
+@contextmanager
+def get_db() -> Generator[Session, None, None]:
+    """Context manager that provides a SQLAlchemy session."""
+    _ensure_engine()
+    assert _SessionLocal is not None
+    db = _SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def create_tables(engine: Engine, exercise_type: str):
     """
-    Create all tables for models in athena.models, whose name starts with "DB"+exercise_type.name.title().
-    Also create all tables which have been registered previously using `create_additional_table_if_not_exists`.
+    Create all tables for models in athena.models whose name starts with "DB"+exercise_type.title()
     """
     model_module = importlib.import_module("athena.models")
     model_class_name_start = "DB" + exercise_type.title()
     for model_class_name in dir(model_module):
         if model_class_name.startswith(model_class_name_start):
-            # Get the model class so that Base knows about it
             getattr(model_module, model_class_name)
     Base.metadata.create_all(engine)
-
-
-@contextmanager
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()

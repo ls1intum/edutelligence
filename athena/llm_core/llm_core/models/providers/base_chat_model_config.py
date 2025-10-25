@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from typing import ClassVar
-
 from pydantic import (
     model_validator, field_validator, BaseModel,
     Field,
@@ -13,17 +11,16 @@ from langchain.base_language import BaseLanguageModel
 from llm_core.models.model_config import ModelConfig
 from llm_core.loaders.llm_capabilities_loader import get_model_capabilities
 from llm_core.models.usage_handler import UsageHandler
+from collections.abc import Mapping
 
 
 class BaseChatModelConfig(ModelConfig, BaseModel, ABC):
     """Common configuration for any chat-completion model provider"""
 
-    # Provider‑specific parameters
     PROVIDER: ClassVar[str]
     ENUM: ClassVar[type]
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
-    # Generation parameters
     max_tokens: PositiveInt = Field(
         4000,
         description=(
@@ -77,7 +74,6 @@ decreasing the model's likelihood to repeat the same line verbatim.
 """,
     )
 
-    # Capability flags
     _supports_system_messages: bool = PrivateAttr(True)
     _supports_function_calling: bool = PrivateAttr(True)
     _supports_structured_output: bool = PrivateAttr(True)
@@ -99,6 +95,8 @@ decreasing the model's likelihood to repeat the same line verbatim.
     @model_validator(mode="before")
     @classmethod
     def _merge_yaml_caps(cls, values):
+        if not isinstance(values, Mapping):
+            return values
         model_key = values.get("model_name")
         if not model_key:
             return values
@@ -128,7 +126,6 @@ decreasing the model's likelihood to repeat the same line verbatim.
     def supports_structured_output(self) -> bool:
         return self._supports_structured_output
 
-    # Common LangChain‑instantiation helper
     def _template_get_model(self, tmpl: BaseLanguageModel) -> BaseLanguageModel:
         """Return a fresh LC model instance with our params merged in"""
         kwargs = tmpl.__dict__.copy()

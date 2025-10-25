@@ -4,6 +4,7 @@ import importlib
 from pydantic import ConfigDict, BaseModel
 from pydantic.alias_generators import to_camel
 
+from athena.base import Base
 from athena.database import Base
 
 
@@ -22,5 +23,6 @@ class Schema(BaseModel, abc.ABC):
         if not issubclass(model_class, Base):
             raise TypeError(f"Expected {model_class} to be a subclass of Base. Did you use the correct subclass (e.g. "
                             f"TextExercise instead of Exercise)? My class name: {self.__class__.__name__}")
-        return model_class(**self.model_dump())
+        model_class = type(self).get_model_class()
+        return model_class(**self.model_dump(mode="json", by_alias=False))
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)

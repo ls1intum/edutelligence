@@ -7,19 +7,25 @@ from module_modeling_llm.models.assessment_model import AssessmentModel
 from module_modeling_llm.models.exercise_model import ExerciseModel
 from module_modeling_llm.prompts.filter_feedback_prompt import FilterFeedbackInputs
 
+
 async def filter_feedback(
-        exercise: ExerciseModel,
-        original_feedback: AssessmentModel,
-        config: BasicApproachConfig,
-        debug: bool,
+    exercise: ExerciseModel,
+    original_feedback: AssessmentModel,
+    config: BasicApproachConfig,
+    debug: bool,
 ) -> AssessmentModel:
     
     print(f"\n\n\n\n\n{original_feedback.model_dump_json()}\n\n\n\n\n")
 
-    chat_prompt = ChatPromptTemplate.from_messages([
-        ("system", config.generate_suggestions_prompt.filter_feedback_system_message),
-        ("human", config.generate_suggestions_prompt.filter_feedback_human_message)
-    ])
+    chat_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                config.generate_suggestions_prompt.filter_feedback_system_message,
+            ),
+            ("human", config.generate_suggestions_prompt.filter_feedback_human_message),
+        ]
+    )
 
     prompt_inputs = FilterFeedbackInputs(
         original_feedback=original_feedback.model_dump_json(),
@@ -33,7 +39,7 @@ async def filter_feedback(
         tags=[
             f"exercise-{exercise.exercise_id}-filter",
             f"submission-{exercise.submission_id}-filter",
-        ]
+        ],
     )
 
     if debug:
