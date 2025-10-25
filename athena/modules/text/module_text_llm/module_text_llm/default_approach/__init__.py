@@ -3,7 +3,11 @@ from typing import Literal
 
 from athena.schemas import LearnerProfile
 from module_text_llm.approach_config import ApproachConfig
-from module_text_llm.default_approach.prompts import GenerateSuggestionsPrompt, AnalysisPrompt
+from module_text_llm.default_approach.prompts import (
+    GenerateSuggestionsPrompt,
+    AnalysisPrompt,
+    GenerateGradedSuggestionsPrompt,
+)
 
 
 class DefaultApproachConfig(ApproachConfig):
@@ -33,6 +37,9 @@ class DefaultApproachConfig(ApproachConfig):
     )
     analyze_submission_prompt: AnalysisPrompt = Field(
         default=AnalysisPrompt()
+    )
+    generate_graded_suggestions_prompt: GenerateGradedSuggestionsPrompt = Field(
+        default=GenerateGradedSuggestionsPrompt()
     )
     learner_profile: LearnerProfile = Field(
         default=LearnerProfile(

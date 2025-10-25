@@ -19,16 +19,20 @@ You will:
 
 3. Compare the PREVIOUS SUBMISSION to the CURRENT SUBMISSION:
     - Identify if the competency was improved, added, weakened, or removed.
-    - For each change, specify:
-        - Type: added / removed / modified / unchanged
-        - Is_positive: true (improvement), false (regression), or null
-        - A short description of the change and its grading relevance
-        - Related grading_instruction_id if applicable
-        - Line numbers in current submission if possible
+    - For each competency, provide a "changes" array containing all relevant changes:
+        - Each change should specify:
+            - Type: added / removed / modified / unchanged
+            - Is_positive: true (improvement), false (regression), or null
+            - A short description of the change and its grading relevance
+            - Related grading_instruction_id if applicable
+            - Line numbers in current submission if possible
+        - If no changes are detected, provide an empty array []
+        - If multiple changes exist, include all of them in the array
 
 Only output structured data in JSON format.
 Do NOT include superficial grammar or formatting differences.
 Focus only on changes that affect grading or student understanding.
+The "changes" field for each competency must be an array (list) of change objects, even if there is only one change or no changes. Use an empty array [] if no changes are detected.
 
 Problem Statement:
 {problem_statement}
