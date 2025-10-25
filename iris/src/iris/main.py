@@ -10,6 +10,7 @@ import iris.sentry as sentry
 from iris.config import settings
 from iris.web.routers.health import router as health_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
+from iris.web.routers.memiris import router as memiris_router
 from iris.web.routers.pipelines import router as pipelines_router
 from iris.web.routers.webhooks import router as webhooks_router
 
@@ -39,7 +40,7 @@ def custom_openapi():
     return app.openapi_schema
 
 
-app.openapi = custom_openapi
+app.openapi = custom_openapi  # type: ignore[assignment]
 
 
 @app.exception_handler(RequestValidationError)
@@ -80,6 +81,7 @@ app.include_router(health_router)
 app.include_router(pipelines_router)
 app.include_router(webhooks_router)
 app.include_router(ingestion_status_router)
+app.include_router(memiris_router)
 
 # Initialize the LLM manager
 from iris.llm.llm_manager import LlmManager  # noqa: E402
