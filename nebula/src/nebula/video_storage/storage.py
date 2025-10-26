@@ -85,7 +85,9 @@ class VideoStorageService:
 
         logger.info(
             "Saved video %s (%s) - %s bytes, converted to HLS",
-            video_id, filename, len(video_data)
+            video_id,
+            filename,
+            len(video_data),
         )
         return metadata
 
