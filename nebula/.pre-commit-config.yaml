@@ -35,7 +35,7 @@ repos:
     rev: 1.8.3
     hooks:
       - id: bandit
-        args: [-c, nebula/pyproject.toml]
+        args: [-c, pyproject.toml]
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8
@@ -52,12 +52,16 @@ repos:
     hooks:
       - id: pylint
         name: pylint
-        entry: python -c "import sys, os; os.chdir('nebula'); os.execlp('poetry', 'poetry', 'run', 'pylint', '-rn', '-sn', *sys.argv[1:])"
+        entry: poetry run pylint
         language: system
         types: [python]
+        args: [
+            "-rn", # Only display messages
+            "-sn", # Don't display the score
+          ]
 
       - id: mypy
         name: mypy
-        entry: python -c "import sys, os; os.chdir('nebula'); os.execlp('poetry', 'poetry', 'run', 'mypy', *sys.argv[1:])"
+        entry: poetry run mypy
         language: system
         types: [python]
