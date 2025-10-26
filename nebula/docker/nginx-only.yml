@@ -41,11 +41,13 @@ services:
     restart: unless-stopped
     networks:
       - nebula-local
-    entrypoint: ["/bin/sh","-c",
-      "test -f /usr/local/openresty/site/lualib/resty/http.lua \
+    entrypoint: [
+        "/bin/sh",
+        "-c",
+        "test -f /usr/local/openresty/site/lualib/resty/http.lua \
         || opm get ledgetech/lua-resty-http; \
-       exec openresty -g 'daemon off;'"
-    ]
+        exec openresty -g 'daemon off;'",
+      ]
 
 networks:
   nebula-local:
