@@ -53,7 +53,7 @@ async def upload_video(file: UploadFile = File(...)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Invalid file type. Allowed types: "
-                f"{', '.join(Config.ALLOWED_MIME_TYPES)}"
+                f'{", ".join(Config.ALLOWED_MIME_TYPES)}'
             ),
         )
 
@@ -66,7 +66,7 @@ async def upload_video(file: UploadFile = File(...)):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     f"Invalid file extension. Allowed: "
-                    f"{', '.join(Config.ALLOWED_EXTENSIONS)}"
+                    f'{", ".join(Config.ALLOWED_EXTENSIONS)}'
                 ),
             )
 
