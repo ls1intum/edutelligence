@@ -1,7 +1,3 @@
----
-title: "System Design"
----
-
 # System Design
 
 ## Top-Level Design
