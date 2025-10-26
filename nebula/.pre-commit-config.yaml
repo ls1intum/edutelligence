@@ -29,6 +29,7 @@ repos:
     hooks:
       - id: flake8
         language_version: python3.12
+        args: [--config=nebula/.flake8]
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.3

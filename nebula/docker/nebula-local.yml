@@ -18,6 +18,16 @@ services:
     environment:
       LLM_LOG_LEVEL: DEBUG
 
+  video_storage:
+    extends:
+      file: nebula.yml
+      service: video_storage
+    volumes:
+      - ../video_storage:/app/video_storage
+      - ../temp:/app/temp
+    environment:
+      LOG_LEVEL: DEBUG
+
   nginx:
     extends:
       file: nebula.yml

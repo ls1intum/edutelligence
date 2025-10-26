@@ -29,6 +29,23 @@ services:
     networks:
       - nebula
 
+  video_storage:
+    build:
+      context: ../..
+      dockerfile: ./nebula/docker/video_storage/Dockerfile
+    container_name: video-storage-service
+    expose:
+      - "3872"
+    environment:
+      - VIDEO_STORAGE_DIR=/app/video_storage
+      - TEMP_DIR=/app/temp
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - nebula
+    volumes:
+      - video_storage_data:/app/video_storage
+
   nginx:
     image: openresty/openresty:1.21.4.1-0-jammy
     container_name: nginx-proxy
@@ -38,14 +55,21 @@ services:
     depends_on:
       - transcriber
       - faq
+      - video_storage
     restart: unless-stopped
     networks:
       - nebula
-    entrypoint: ["/bin/sh","-c",
-      "test -f /usr/local/openresty/site/lualib/resty/http.lua \
+    entrypoint: [
+        "/bin/sh",
+        "-c",
+        "test -f /usr/local/openresty/site/lualib/resty/http.lua \
         || opm get ledgetech/lua-resty-http; \
-       exec openresty -g 'daemon off;'"
-    ]
+        exec openresty -g 'daemon off;'",
+      ]
+
+volumes:
+  video_storage_data:
+    driver: local
 
 networks:
   nebula:
