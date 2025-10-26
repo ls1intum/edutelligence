@@ -12,6 +12,7 @@ Nebula is a sophisticated microservices-based platform designed for automated le
 ### Key Features
 
 #### Transcription Service
+
 - **Automated Video Processing**: Process `.m3u8` lecture video streams with 95%+ accuracy
 - **Intelligent Slide Detection**: Computer vision-based slide number identification using GPT-4o Vision
 - **FIFO Queue System**: Ordered processing with First-In-First-Out guarantee
@@ -20,6 +21,7 @@ Nebula is a sophisticated microservices-based platform designed for automated le
 - **Timestamp Alignment**: Precise slide number alignment with transcript segments
 
 #### FAQ Service
+
 - **Text Rewriting**: AI-powered FAQ enhancement for educational platforms
 - **Consistency Checking**: Automated contradiction detection and quality assurance
 
@@ -136,12 +138,14 @@ curl -H "Authorization: nebula-secret" \
 ### Troubleshooting
 
 #### General Issues
+
 - **Port already in use**: Make sure ports 3870, 3871, and 3007 are free
 - **Connection refused**: Ensure all services are running in their respective terminals
 - **Unauthorized errors**: Check the API key in `nginx.local.conf` matches what you're sending (default: `nebula-secret`)
 - **Module not found**: Run `poetry install` to ensure all dependencies are installed
 
 #### Nginx Gateway Issues
+
 - **Nginx container exits immediately**:
   - Remove old containers: `docker rm -f nebula-nginx-gateway`
   - Check logs: `docker compose -f docker/nginx-only.yml logs`
@@ -152,6 +156,7 @@ curl -H "Authorization: nebula-secret" \
   ```
 
 #### Transcription Service Issues
+
 - **FFmpeg not found**: Install FFmpeg and ensure it's in your system PATH
   - macOS: `brew install ffmpeg`
   - Windows: Download from https://ffmpeg.org/download.html
@@ -209,6 +214,7 @@ Job Submission → FIFO Queue → Background Worker → Heavy Pipeline → Light
 ```
 
 **Key Benefits:**
+
 - **Ordered Processing**: Jobs are processed in the exact order received
 - **Resource Management**: Heavy operations (video download, audio extraction) run one at a time
 - **Parallel Optimization**: Light operations (frame analysis) run concurrently for different jobs
@@ -290,19 +296,19 @@ Receive Complete Transcription with Slide Numbers
 
 #### Transcription Service
 
-| Endpoint | Method | Description | Response |
-|----------|--------|-------------|----------|
-| `/transcribe/start` | POST | Submit transcription job | Job ID |
-| `/transcribe/status/{job_id}` | GET | Check job status | Status or result |
-| `/transcribe/health` | GET | Service health check | Health status |
+| Endpoint                      | Method | Description              | Response         |
+| ----------------------------- | ------ | ------------------------ | ---------------- |
+| `/transcribe/start`           | POST   | Submit transcription job | Job ID           |
+| `/transcribe/status/{job_id}` | GET    | Check job status         | Status or result |
+| `/transcribe/health`          | GET    | Service health check     | Health status    |
 
 #### FAQ Service
 
-| Endpoint | Method | Description | Response |
-|----------|--------|-------------|----------|
-| `/faq/rewrite-faq` | POST | Rewrite FAQ text | Improved text |
-| `/faq/check-consistency` | POST | Check FAQ consistency | Consistency report |
-| `/faq/health` | GET | Service health check | Health status |
+| Endpoint                 | Method | Description           | Response           |
+| ------------------------ | ------ | --------------------- | ------------------ |
+| `/faq/rewrite-faq`       | POST   | Rewrite FAQ text      | Improved text      |
+| `/faq/check-consistency` | POST   | Check FAQ consistency | Consistency report |
+| `/faq/health`            | GET    | Service health check  | Health status      |
 
 ### Technology Stack
 
@@ -507,16 +513,20 @@ For comprehensive documentation on each service:
 ### Key Concepts
 
 #### FIFO Queue System
+
 The transcription service uses a First-In-First-Out queue to ensure ordered processing of video transcription jobs. This prevents resource contention during heavy operations (video download, audio extraction) while still allowing parallel processing of lighter tasks (slide detection).
 
 #### Two-Phase Pipeline
+
 - **Heavy Pipeline**: Sequential processing of resource-intensive operations (one job at a time)
 - **Light Pipeline**: Parallel processing of independent operations (multiple jobs concurrently)
 
 This separation optimizes both resource usage and throughput.
 
 #### Intelligent Slide Detection
+
 Uses GPT-4o Vision to detect slide numbers from video frames:
+
 1. Extracts frames at transcript segment timestamps
 2. Crops to the slide number region (bottom 5% of frame)
 3. Sends to GPT-4o Vision with optimized prompts
@@ -562,16 +572,17 @@ Uses GPT-4o Vision to detect slide numbers from video frames:
 ### Performance Metrics
 
 For a typical 1-hour lecture video:
+
 - **Total Processing Time**: 10-20 minutes
 - **Video Download**: 2-5 minutes
 - **Audio Extraction**: 20-30 seconds
 - **Whisper Transcription**: 5-10 minutes
 - **Slide Detection**: 2-3 minutes
 
-
 ### API Usage Examples
 
 #### Submit Job
+
 ```bash
 curl -X POST http://localhost:3007/transcribe/start \
   -H "Authorization: nebula-secret" \
@@ -583,12 +594,14 @@ curl -X POST http://localhost:3007/transcribe/start \
 ```
 
 #### Check Status
+
 ```bash
 curl -H "Authorization: nebula-secret" \
   http://localhost:3007/transcribe/status/550e8400-e29b-41d4-a716-446655440000
 ```
 
 #### Health Check
+
 ```bash
 curl http://localhost:3007/health
 ```
@@ -606,6 +619,7 @@ curl http://localhost:3007/health
 ### Adding New Features
 
 When adding new features to the transcription service:
+
 1. Consider impact on FIFO queue processing
 2. Maintain separation between heavy and light pipeline phases
 3. Update both service README and main README
@@ -619,6 +633,7 @@ See the [LICENSE](../LICENSE) file in the root of the repository.
 ## 📞 Support
 
 For issues, questions, or contributions:
+
 - Check the troubleshooting sections above
 - Review the detailed service documentation
 - Consult the system design document for architectural insights

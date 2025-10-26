@@ -13,7 +13,7 @@ Config.ensure_dirs()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):  # pylint: disable=invalid-name,unused-argument
     start_worker()
     logging.info("🔧 FIFO worker started")
     try:
