@@ -15,9 +15,9 @@ class Config:
 
     # File size limits
     MAX_FILE_SIZE = int(
-        os.getenv("MAX_VIDEO_SIZE", 5 * 1024 * 1024 * 1024)
+        os.getenv("MAX_VIDEO_SIZE", str(5 * 1024 * 1024 * 1024))
     )  # 5GB default
-    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1024 * 1024))  # 1MB chunks
+    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", str(1024 * 1024)))  # 1MB chunks
 
     # Allowed video formats
     ALLOWED_EXTENSIONS = {

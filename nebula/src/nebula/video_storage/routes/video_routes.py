@@ -44,16 +44,16 @@ async def upload_video(file: UploadFile = File(...)):
     Returns:
         UploadResponse with video_id, playlist_url, and duration
     """
-    logger.info(f"Received upload request for file: {file.filename}")
+    logger.info("Received upload request for file: %s", file.filename)
 
     # Validate file type
     if file.content_type not in Config.ALLOWED_MIME_TYPES:
-        logger.warning(f"Invalid content type: {file.content_type}")
+        logger.warning("Invalid content type: %s", file.content_type)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Invalid file type. Allowed types: "
-                f"{', '.join(Config.ALLOWED_MIME_TYPES)}"
+                f'{\", \".join(Config.ALLOWED_MIME_TYPES)}'
             ),
         )
 
@@ -61,12 +61,12 @@ async def upload_video(file: UploadFile = File(...)):
     if file.filename:
         file_ext = "." + file.filename.split(".")[-1].lower()
         if file_ext not in Config.ALLOWED_EXTENSIONS:
-            logger.warning(f"Invalid file extension: {file_ext}")
+            logger.warning("Invalid file extension: %s", file_ext)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     f"Invalid file extension. Allowed: "
-                    f"{', '.join(Config.ALLOWED_EXTENSIONS)}"
+                    f'{\", \".join(Config.ALLOWED_EXTENSIONS)}'
                 ),
             )
 
@@ -74,7 +74,7 @@ async def upload_video(file: UploadFile = File(...)):
     try:
         video_data = await file.read()
     except Exception as e:
-        logger.error(f"Error reading uploaded file: {e}")
+        logger.error("Error reading uploaded file: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read uploaded file",
@@ -84,7 +84,7 @@ async def upload_video(file: UploadFile = File(...)):
     if len(video_data) > Config.MAX_FILE_SIZE:
         max_size_gb = Config.MAX_FILE_SIZE / (1024**3)
         logger.warning(
-            f"File too large: {len(video_data)} bytes " f"(max: {Config.MAX_FILE_SIZE})"
+            "File too large: %s bytes (max: %s)", len(video_data), Config.MAX_FILE_SIZE
         )
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -99,7 +99,7 @@ async def upload_video(file: UploadFile = File(...)):
             content_type=file.content_type or "video/mp4",
         )
 
-        logger.info(f"Successfully saved video with ID: {metadata.video_id}")
+        logger.info("Successfully saved video with ID: %s", metadata.video_id)
 
         # Generate playlist URL for Artemis
         playlist_url = f"/video-storage/playlist/{metadata.video_id}/playlist.m3u8"
@@ -114,7 +114,7 @@ async def upload_video(file: UploadFile = File(...)):
         )
 
     except Exception as e:
-        logger.error(f"Error saving video: {e}")
+        logger.error("Error saving video: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save video",
@@ -144,12 +144,12 @@ async def get_playlist(video_id: str):
     Returns:
         HLS playlist (.m3u8)
     """
-    logger.info(f"Playlist request for video: {video_id}")
+    logger.info("Playlist request for video: %s", video_id)
 
     # Get playlist path
     playlist_path = storage_service.get_playlist_path(video_id)
     if playlist_path is None:
-        logger.warning(f"Playlist not found: {video_id}")
+        logger.warning("Playlist not found: %s", video_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Playlist not found"
         )
@@ -188,12 +188,12 @@ async def get_segment(video_id: str, segment_name: str):
     Returns:
         HLS segment (.ts)
     """
-    logger.info(f"Segment request for video: {video_id}, segment: {segment_name}")
+    logger.info("Segment request for video: %s, segment: %s", video_id, segment_name)
 
     # Get segment path
     segment_path = storage_service.get_hls_segment_path(video_id, segment_name)
     if segment_path is None:
-        logger.warning(f"Segment not found: {video_id}/{segment_name}")
+        logger.warning("Segment not found: %s/%s", video_id, segment_name)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found"
         )
@@ -225,7 +225,7 @@ async def delete_video(video_id: str):
     Args:
         video_id: Unique identifier of the video
     """
-    logger.info(f"Delete request for video: {video_id}")
+    logger.info("Delete request for video: %s", video_id)
 
     if not storage_service.video_exists(video_id):
         raise HTTPException(
@@ -239,7 +239,7 @@ async def delete_video(video_id: str):
             detail="Failed to delete video",
         )
 
-    logger.info(f"Successfully deleted video: {video_id}")
+    logger.info("Successfully deleted video: %s", video_id)
 
 
 @router.get("/test")

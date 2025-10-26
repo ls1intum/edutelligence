@@ -36,8 +36,9 @@ def temp_dir():
 
 
 @pytest.fixture
-def storage_service(temp_storage_dir):
+def storage_service(temp_storage_dir):  # pylint: disable=redefined-outer-name,unused-argument
     """Create a storage service instance with temp directory"""
+    # temp_storage_dir is used as a dependency to ensure temp directory is set up
     return VideoStorageService()
 
 
@@ -54,7 +55,7 @@ def sample_video_content():
 
 
 @pytest.fixture
-def sample_video_file(tmp_path, sample_video_content):
+def sample_video_file(tmp_path, sample_video_content):  # pylint: disable=redefined-outer-name
     """Create a sample video file"""
     video_file = tmp_path / "test_video.mp4"
     video_file.write_bytes(sample_video_content)

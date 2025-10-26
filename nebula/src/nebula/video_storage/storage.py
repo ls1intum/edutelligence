@@ -4,6 +4,7 @@ Storage service for managing video files
 
 import json
 import logging
+import shutil
 import subprocess  # nosec B404
 import uuid
 from datetime import datetime
@@ -64,7 +65,7 @@ class VideoStorageService:
         try:
             duration = self._convert_to_hls(video_dir, video_path)
         except Exception as e:
-            logger.error(f"Error converting video to HLS: {e}")
+            logger.error("Error converting video to HLS: %s", e)
             # Clean up and re-raise
             self.delete_video(video_id)
             raise
@@ -83,8 +84,8 @@ class VideoStorageService:
         self._save_metadata(video_id, metadata)
 
         logger.info(
-            f"Saved video {video_id} ({filename}) - "
-            f"{len(video_data)} bytes, converted to HLS"
+            "Saved video %s (%s) - %s bytes, converted to HLS",
+            video_id, filename, len(video_data)
         )
         return metadata
 
@@ -105,7 +106,7 @@ class VideoStorageService:
         playlist_path = hls_dir / "playlist.m3u8"
         segment_pattern = hls_dir / "segment%03d.ts"
 
-        logger.info(f"Converting video to HLS: {video_path}")
+        logger.info("Converting video to HLS: %s", video_path)
 
         try:
             # FFmpeg command to convert to HLS
@@ -145,20 +146,20 @@ class VideoStorageService:
                 timeout=3600,  # 1 hour timeout
             )
 
-            logger.info(f"HLS conversion successful: {playlist_path}")
+            logger.info("HLS conversion successful: %s", playlist_path)
 
             # Get video duration
             duration = self._get_video_duration(video_path)
             return duration
 
         except subprocess.CalledProcessError as e:
-            logger.error(f"FFmpeg error: {e.stderr}")
-            raise RuntimeError(f"Failed to convert video to HLS: {e.stderr}")
-        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg error: %s", e.stderr)
+            raise RuntimeError(f"Failed to convert video to HLS: {e.stderr}") from e
+        except subprocess.TimeoutExpired as exc:
             logger.error("FFmpeg timeout")
-            raise RuntimeError("Video conversion timed out")
+            raise RuntimeError("Video conversion timed out") from exc
         except Exception as e:
-            logger.error(f"Unexpected error during HLS conversion: {e}")
+            logger.error("Unexpected error during HLS conversion: %s", e)
             raise
 
     def _get_video_duration(self, video_path: Path) -> Optional[float]:
@@ -199,7 +200,7 @@ class VideoStorageService:
             ValueError,
             subprocess.TimeoutExpired,
         ) as e:
-            logger.warning(f"Could not get video duration: {e}")
+            logger.warning("Could not get video duration: %s", e)
             return None
 
     def get_video_path(self, video_id: str) -> Optional[Path]:
@@ -247,7 +248,7 @@ class VideoStorageService:
                 data = json.load(f)
             return VideoMetadata(**data)
         except Exception as e:
-            logger.error(f"Error reading metadata for {video_id}: {e}")
+            logger.error("Error reading metadata for %s: %s", video_id, e)
             return None
 
     def _save_metadata(self, video_id: str, metadata: VideoMetadata):
@@ -282,13 +283,11 @@ class VideoStorageService:
 
         try:
             # Delete all files recursively (including HLS directory)
-            import shutil
-
             shutil.rmtree(video_dir)
-            logger.info(f"Deleted video {video_id} and all HLS files")
+            logger.info("Deleted video %s and all HLS files", video_id)
             return True
         except Exception as e:
-            logger.error(f"Error deleting video {video_id}: {e}")
+            logger.error("Error deleting video %s: %s", video_id, e)
             return False
 
     def video_exists(self, video_id: str) -> bool:
