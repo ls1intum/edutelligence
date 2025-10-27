@@ -1,4 +1,30 @@
 services:
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - shared-network
+    depends_on:
+      atlasml:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:80/health']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '50m'
+        max-file: '5'
+
   atlasml:
     image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
     env_file:
@@ -14,8 +40,8 @@ services:
       SENTRY_DSN: ${SENTRY_DSN:-https://8fe7eac930933ea3c83ff7a66555de18@sentry.aet.cit.tum.de/6}
       ENV: ${ENV:-production}
     restart: unless-stopped
-    ports:
-      - '80:8000'
+    expose:
+      - '8000'
     networks:
       - shared-network
     healthcheck:
