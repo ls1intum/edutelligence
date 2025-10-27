@@ -41,15 +41,15 @@ services:
       ENV: ${ENV:-production}
     restart: unless-stopped
     expose:
-      - '8000'
+      - '80'
     networks:
       - shared-network
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1/health']
+      test: ['CMD', 'python', '-c', 'import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen("http://localhost:80/api/v1/health").getcode() == 200 else 1)']
       interval: 5s
       timeout: 10s
       retries: 10
-      start_period: 5s
+      start_period: 10s
     logging:
       driver: 'json-file'
       options:
