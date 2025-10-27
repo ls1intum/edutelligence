@@ -1,6 +1,12 @@
 name: AtlasML - Deploy to Test 1
 
 on:
+  pull-request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'atlas/**'
+      - '.github/workflows/atlas_deploy-test.yml'
+    branches: [main]
   workflow_dispatch:
     inputs:
       image-tag:
