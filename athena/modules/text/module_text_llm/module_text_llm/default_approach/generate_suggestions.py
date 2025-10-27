@@ -286,12 +286,19 @@ def _convert_to_feedback_objects(
             if feedback.grading_instruction_id in grading_instruction_ids
             else None
         )
+
+        feedback_description = (
+            feedback.description
+            if is_graded
+            else f"{feedback.description}\n\n Next step: {feedback.suggested_action}"
+        )
+
         feedbacks.append(
             Feedback(
                 exercise_id=exercise.id,
                 submission_id=submission.id,
                 title=feedback.title,
-                description=f"{feedback.description}\n\n Next step: {feedback.suggested_action}",
+                description=feedback_description,
                 index_start=index_start,
                 index_end=index_end,
                 credits=feedback.credits,
