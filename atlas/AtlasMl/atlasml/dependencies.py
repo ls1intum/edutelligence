@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 def _get_api_key(request: Request) -> str:
     authorization_header = request.headers.get("Authorization")
-    logger.debug(f"Received Authorization header: {authorization_header}")
 
     if not authorization_header:
         logger.warning("No Authorization header provided")
