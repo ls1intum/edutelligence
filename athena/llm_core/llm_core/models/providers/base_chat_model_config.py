@@ -4,13 +4,10 @@ from abc import ABC, abstractmethod
 from typing import ClassVar
 
 from pydantic import (
-    BaseModel,
+    model_validator, field_validator, BaseModel,
     Field,
     PositiveInt,
-    PrivateAttr,
-    root_validator,
-    validator,
-)
+    PrivateAttr)
 from langchain.base_language import BaseLanguageModel
 
 from llm_core.models.model_config import ModelConfig
@@ -85,21 +82,22 @@ decreasing the model's likelihood to repeat the same line verbatim.
     _supports_function_calling: bool = PrivateAttr(True)
     _supports_structured_output: bool = PrivateAttr(True)
 
-    _CAP_FIELDS = (
+    _CAP_FIELDS: ClassVar[tuple[str, ...]] = (
         "max_tokens",
         "temperature",
         "top_p",
         "presence_penalty",
         "frequency_penalty",
     )
-    _FLAG_FIELDS = (
+    _FLAG_FIELDS: ClassVar[tuple[str, ...]] = (
         "supports_system_messages",
         "supports_function_calling",
         "supports_structured_output",
     )
 
     # YAML capability merge
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def _merge_yaml_caps(cls, values):
         model_key = values.get("model_name")
         if not model_key:
@@ -114,7 +112,8 @@ decreasing the model's likelihood to repeat the same line verbatim.
         return values
 
     # Validators and helpers
-    @validator("max_tokens")
+    @field_validator("max_tokens")
+    @classmethod
     def _max_tokens_positive(cls, v):
         if v <= 0:
             raise ValueError("max_tokens must be positive")

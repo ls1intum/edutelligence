@@ -40,13 +40,13 @@ def get_llm_statistics(submission: Submission):
             llm_statistics["suggestions"] = {
                 "count": len(suggestion_runs),
                 **get_statistics(suggestion_runs),
-                "runs": [json.loads(run.json()) for run in suggestion_runs]
+                "runs": [json.loads(run.model_dump_json()) for run in suggestion_runs]
             }
         if evaluation_runs:
             llm_statistics["evaluation"] = {
                 "count": len(evaluation_runs),
                 **get_statistics(evaluation_runs),
-                "runs": [json.loads(run.json()) for run in evaluation_runs]
+                "runs": [json.loads(run.model_dump_json()) for run in evaluation_runs]
             }
 
     return llm_statistics
