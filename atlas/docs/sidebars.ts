@@ -48,6 +48,25 @@ const sidebars: SidebarsConfig = {
         'dev/setup/index',
       ],
     },
+    {
+      type: 'category',
+      label: 'AtlasML',
+      collapsed: false,
+      items: [
+        'dev/atlasml/index',
+        'dev/atlasml/architecture',
+        'dev/atlasml/modules',
+        'dev/atlasml/rest-api',
+        'dev/atlasml/endpoints',
+        'dev/atlasml/middleware',
+        'dev/atlasml/weaviate',
+        'dev/atlasml/ml-pipelines',
+        'dev/atlasml/docker-deployment',
+        'dev/atlasml/development-workflow',
+        'dev/atlasml/testing',
+        'dev/atlasml/troubleshooting',
+      ],
+    },
   ],
 
   adminSidebar: [
