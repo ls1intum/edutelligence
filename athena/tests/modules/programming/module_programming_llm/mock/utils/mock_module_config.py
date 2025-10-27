@@ -45,7 +45,7 @@ class FileSummaryPrompt(BaseModel):
 
 class GradedBasicApproachConfig(BaseModel):
     max_input_tokens: int
-    model: Any
+    model: Any = None
     max_number_of_files: int
     split_problem_statement_by_file_prompt: SplitProblemStatementsWithSolutionByFilePrompt
     split_grading_instructions_by_file_prompt: SplitGradingInstructionsByFilePrompt
@@ -54,7 +54,7 @@ class GradedBasicApproachConfig(BaseModel):
 
 class NonGradedBasicApproachConfig(BaseModel):
     max_input_tokens: int
-    model: Any
+    model: Any = None
     max_number_of_files: int
     split_problem_statement_by_file_prompt: SplitProblemStatementsWithoutSolutionByFilePrompt
     generate_suggestions_by_file_prompt: NonGradedFeedbackGenerationPrompt
@@ -65,20 +65,20 @@ class Configuration(BaseModel):
     graded_approach: GradedBasicApproachConfig
     non_graded_approach: NonGradedBasicApproachConfig
 
-# Create mock module
-mock_module = Mock()
-mock_module.GradedBasicApproachConfig = GradedBasicApproachConfig
-mock_module.NonGradedBasicApproachConfig = NonGradedBasicApproachConfig
-mock_module.Configuration = Configuration
-mock_module.SplitProblemStatementsWithSolutionByFilePrompt = SplitProblemStatementsWithSolutionByFilePrompt
-mock_module.SplitProblemStatementsWithoutSolutionByFilePrompt = SplitProblemStatementsWithoutSolutionByFilePrompt
-mock_module.SplitGradingInstructionsByFilePrompt = SplitGradingInstructionsByFilePrompt
-mock_module.GradedFeedbackGenerationPrompt = GradedFeedbackGenerationPrompt
-mock_module.NonGradedFeedbackGenerationPrompt = NonGradedFeedbackGenerationPrompt
-mock_module.FileSummaryPrompt = FileSummaryPrompt
-
-# Apply the module patch
-sys.modules['module_programming_llm.config'] = mock_module
+# Create mock module function instead of globally overwriting sys.modules
+def create_mock_module():
+    """Create a mock module for use in fixtures instead of globally overwriting sys.modules."""
+    mock_module = Mock()
+    mock_module.GradedBasicApproachConfig = GradedBasicApproachConfig
+    mock_module.NonGradedBasicApproachConfig = NonGradedBasicApproachConfig
+    mock_module.Configuration = Configuration
+    mock_module.SplitProblemStatementsWithSolutionByFilePrompt = SplitProblemStatementsWithSolutionByFilePrompt
+    mock_module.SplitProblemStatementsWithoutSolutionByFilePrompt = SplitProblemStatementsWithoutSolutionByFilePrompt
+    mock_module.SplitGradingInstructionsByFilePrompt = SplitGradingInstructionsByFilePrompt
+    mock_module.GradedFeedbackGenerationPrompt = GradedFeedbackGenerationPrompt
+    mock_module.NonGradedFeedbackGenerationPrompt = NonGradedFeedbackGenerationPrompt
+    mock_module.FileSummaryPrompt = FileSummaryPrompt
+    return mock_module
 
 @pytest.fixture(autouse=True)
 def mock_module_config():

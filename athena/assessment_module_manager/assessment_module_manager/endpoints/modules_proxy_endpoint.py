@@ -78,5 +78,5 @@ async def proxy_to_module(
     )
     return JSONResponse(
         status_code=resp.status,
-        content=resp.dict(),
+        content=resp.model_dump(),
     )

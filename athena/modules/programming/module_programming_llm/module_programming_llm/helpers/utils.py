@@ -6,7 +6,7 @@ from typing import List, Dict, Optional, Callable, Tuple
 
 from git import Remote
 from git.repo import Repo
-from langchain.document_loaders import GitLoader
+from langchain_community.document_loaders import GitLoader
 
 from athena import GradingCriterion
 

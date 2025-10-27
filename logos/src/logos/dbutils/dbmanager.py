@@ -10,6 +10,7 @@ from dateutil.parser import isoparse
 import sqlalchemy.exc
 import yaml
 import json
+import logging
 from sqlalchemy import Table, MetaData, create_engine
 from sqlalchemy import text, func
 from sqlalchemy.orm import sessionmaker
@@ -966,7 +967,7 @@ class DBManager:
             "provider_id": provider_id,
             "model_id": model_id,
             "log_id": log_id,
-            "policy_id": policy_id,
+            "policy_id": policy_id if policy_id >= 0 else None,
             "timestamp_response": datetime.datetime.now(datetime.timezone.utc),
             "classification_statistics": json.dumps(classified)
         })
@@ -1013,7 +1014,7 @@ class DBManager:
                 sequence_name = f"{table_name}_id_seq"
 
                 # Max ID of Table
-                result = self.session.execute(text("SELECT MAX(id) FROM :table_name"), {"table_name": table_name})
+                result = self.session.execute(text(f"SELECT MAX(id) FROM {table_name}"))
                 max_id = result.scalar()
 
                 if max_id is not None:
