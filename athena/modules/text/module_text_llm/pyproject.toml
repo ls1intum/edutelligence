@@ -10,7 +10,7 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
-# langsmith = ">=0.1.0,<0.2.0" # questionable if required here as well
+langsmith = ">=0.1.0,<0.2.0" # questionable if required here as well
 # gitpython = "3.1.41" # questionable if required
 nltk = "3.9.2"
 # python-dotenv = "1.2.1" # questionable if required

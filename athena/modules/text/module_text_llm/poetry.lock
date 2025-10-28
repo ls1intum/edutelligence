@@ -1099,6 +1099,7 @@ langchain-community = ">=0.3,<0.4"
 langchain-openai = ">=0.2,<0.3"
 langsmith = ">=0.1.112,<0.2.0"
 openai = "1.58.1"
+python-dotenv = "1.2.1"
 tiktoken = "0.12.0"
 
 [package.source]
@@ -2033,14 +2034,14 @@ testing = ["coverage (>=6.2)", "hypothesis (>=5.7.1)"]
 
 [[package]]
 name = "python-dotenv"
-version = "1.0.0"
+version = "1.2.1"
 description = "Read key-value pairs from a .env file and set them as environment variables"
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "python-dotenv-1.0.0.tar.gz", hash = "sha256:a8df96034aae6d2d50a4ebe8216326c61c3eb64836776504fcca410e5937a3ba"},
-    {file = "python_dotenv-1.0.0-py3-none-any.whl", hash = "sha256:f5971a9226b701070a4bf2c38c89e5a3f0d64de8debda981d1db98583009122a"},
+    {file = "python_dotenv-1.2.1-py3-none-any.whl", hash = "sha256:b81ee9561e9ca4004139c6cbba3a238c32b03e4894671e181b671e8cb8425d61"},
+    {file = "python_dotenv-1.2.1.tar.gz", hash = "sha256:42667e897e16ab0d66954af0e60a9caa94f0fd4ecf3aaf6d2d260eec1aa36ad6"},
 ]
 
 [package.extras]
@@ -2798,4 +2799,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = "3.11.*"
-content-hash = "45b38e3533f0a3b8bf7b93a136f417cd1de104349f3c7c0c0e322a69413310af"
+content-hash = "e60555002dc577871e6508c91c5199e7fea7af5de5ad4c33ae8cec6aa38efaf4"

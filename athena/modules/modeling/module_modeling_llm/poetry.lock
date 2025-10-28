@@ -1111,6 +1111,7 @@ langchain-community = ">=0.3,<0.4"
 langchain-openai = ">=0.2,<0.3"
 langsmith = ">=0.1.112,<0.2.0"
 openai = "1.58.1"
+python-dotenv = "1.2.1"
 tiktoken = "0.12.0"
 
 [package.source]
@@ -2788,4 +2789,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = "3.11.*"
-content-hash = "7db990c65761e219bca4f1c5bf1c8c1ed7e0471bcc735c18c65e407514389a9e"
+content-hash = "8289e9b62967fa231d43383a32e20981c9667392310e00088bfdd86e76ee1f53"
