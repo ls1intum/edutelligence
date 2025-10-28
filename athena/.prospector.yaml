@@ -24,6 +24,6 @@ pycodestyle:
   max-line-length: 120
 
 pylint:
-  max-args: 6
+  max-positional-arguments: 3 # todo: rework functions and remove this override
   disable:
       - too-few-public-methods
