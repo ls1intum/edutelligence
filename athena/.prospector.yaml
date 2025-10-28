@@ -24,5 +24,6 @@ pycodestyle:
   max-line-length: 120
 
 pylint:
-    disable:
-        - too-few-public-methods
+  max-args: 6
+  disable:
+      - too-few-public-methods
