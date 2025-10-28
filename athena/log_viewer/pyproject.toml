@@ -7,14 +7,14 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-fastapi = "^0.109.1"
-uvicorn = "^0.23.0"
+fastapi = "^0.120.1"
+uvicorn = "^0.38.0"
 docker = "^7.1.0"
-mypy = "1.11.1"
+mypy = "1.18.2"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "^2.31.0.8"
-prospector = "^1.10.2"
+types-requests = "^2.32.4.20250913"
+prospector = "^1.17.3"
 
 [build-system]
 requires = ["poetry-core"]

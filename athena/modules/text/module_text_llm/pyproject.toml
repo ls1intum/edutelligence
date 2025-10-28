@@ -10,20 +10,20 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
-langsmith = ">=0.1.0,<0.2.0"
-gitpython = "3.1.41"
-nltk = "3.9.1"
-python-dotenv = "1.0.0"
-tiktoken = "0.7.0"
+# langsmith = ">=0.1.0,<0.2.0" # questionable if required here as well
+# gitpython = "3.1.41" # questionable if required
+nltk = "3.9.2"
+# python-dotenv = "1.2.1" # questionable if required
+tiktoken = "0.12.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
 
 [tool.poetry.group.dev.dependencies]
 pydantic = "^2.11.7"
-prospector = "^1.10.2"
-types-requests = "^2.31.0.8"
-setuptools = "^69.0.0"
+prospector = "^1.17.3"
+types-requests = "^2.32.4.20250913"
+setuptools = "^80.9.0"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8.2.0"
