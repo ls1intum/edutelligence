@@ -21,7 +21,10 @@ _memiris_embedding_models = ["mxbai-embed-large:latest", "nomic-embed-text:lates
 _memiris_user_focus_personal_details = """
 Find personal details about the user itself.
 Always start the content with 'The user'. \
-Never call the user by name only use 'the user'.
+Never call the user by name only use 'the user'. \
+The exception would be a learning like 'The user is called John'.
+Similarly, use they/them pronouns instead of he/him or she/her. \
+The exception would be a learning like 'The user uses she/her pronouns'.
 Think about the meaning of the user's text and not just the words.
 You are encouraged to interpret the text and extract the most relevant information.
 You should still focus on the user as a person and not the exact content of the conversation.
@@ -34,10 +37,12 @@ _memiris_user_focus_requirements = """
 Find out what requirements the user has for answers to their questions.
 Always start the content with 'The user'. \
 Never call the user by name only use 'the user'.
+Similarly, use they/them pronouns instead of he/him or she/her.
 You are encouraged to interpret the text and extract the most relevant information.
 You should still focus on the user as a person and not the exact content of the conversation.
 In fact the actual content of the conversation is not relevant at all and should not be part of the learnings \
 unless they specifically refer to the user.
+DO NOT extract how the user is communicating but rather how they expect answers to be communicated to them.
 Keep the learnings short and concise. Better have multiple short learnings than one long learning.
 """
 
@@ -45,6 +50,7 @@ _memiris_user_focus_facts = """
 Find out what hard facts about the user you can extract from the conversation.
 Always start the content with 'The user'.
 Never call the user by name only use 'the user'.
+Similarly, use they/them pronouns instead of he/him or she/her.
 You should not interpret the text but rather extract information that is explicitly stated by the user.
 You should focus on the user and not the content of the conversation.
 In fact the actual content of the conversation is not relevant at all and should not be part of the learnings \
@@ -131,17 +137,19 @@ class MemirisWrapper:
         self.memory_connection_service = MemoryConnectionService(weaviate_client)
         self.tenant = tenant
 
-    def create_memories(self, text: str) -> Sequence[Memory]:
+    def create_memories(self, text: str, reference: str) -> Sequence[Memory]:
         """
         Creates memories for the given text using the memory creation pipeline.
 
         Args:
             text (str): The text to create memories from.
         """
-        return self.memory_creation_pipeline.create_memories(self.tenant, text)
+        return self.memory_creation_pipeline.create_memories(
+            self.tenant, text, reference
+        )
 
     def create_memories_in_separate_thread(
-        self, text: str, result_storage: list[Memory]
+        self, text: str, reference: str, result_storage: list[Memory]
     ) -> Thread:
         """
         Creates memories for the given text in a separate thread and stores the results in the provided storage.
@@ -155,7 +163,7 @@ class MemirisWrapper:
 
         def _create_memories():
             try:
-                memories = self.create_memories(text)
+                memories = self.create_memories(text, reference)
                 result_storage.extend(memories)
             except Exception as e:
                 logging.error(

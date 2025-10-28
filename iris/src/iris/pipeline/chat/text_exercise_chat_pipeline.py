@@ -129,6 +129,24 @@ class TextExerciseChatPipeline(
         # return a default tenant or extract from execution if available
         return "default_text_exercise_tenant"
 
+    def get_memiris_reference(self, dto: TextExerciseChatPipelineExecutionDTO):
+        """
+        Return the reference to use for the Memiris learnings created in a text exercise chat.
+        It is simply the id of last user message in the chat history with a prefix.
+
+        Returns:
+            str: The reference identifier
+        """
+        last_message: Optional[PyrisMessage] = None
+        for last_message in reversed(dto.conversation):
+            if last_message.sender == IrisMessageRole.USER:
+                break
+        return (
+            f"session-messages/{last_message.id}"
+            if last_message and last_message.id
+            else "session-messages/unknown"
+        )
+
     def get_tools(
         self,
         state: AgentPipelineExecutionState[

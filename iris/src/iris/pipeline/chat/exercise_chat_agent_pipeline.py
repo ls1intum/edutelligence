@@ -15,6 +15,7 @@ from iris.pipeline.session_title_generation_pipeline import (
 )
 
 from ...common.memiris_setup import get_tenant_for_user
+from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
@@ -152,6 +153,24 @@ class ExerciseChatAgentPipeline(
         if not dto.user:
             raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
+
+    def get_memiris_reference(self, dto: ExerciseChatPipelineExecutionDTO):
+        """
+        Return the reference to use for the Memiris learnings created in a programming exercise chat.
+        It is simply the id of last user message in the chat history with a prefix.
+
+        Returns:
+            str: The reference identifier
+        """
+        last_message: Optional[PyrisMessage] = None
+        for last_message in reversed(dto.chat_history):
+            if last_message.sender == IrisMessageRole.USER:
+                break
+        return (
+            f"session-messages/{last_message.id}"
+            if last_message and last_message.id
+            else "session-messages/unknown"
+        )
 
     def get_tools(
         self,
