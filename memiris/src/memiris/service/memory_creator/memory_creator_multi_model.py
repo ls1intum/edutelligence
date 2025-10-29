@@ -10,6 +10,7 @@ from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
+from memiris.service.memory_creator.memory_creator import MemoryCreator
 from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
@@ -18,7 +19,7 @@ from memiris.util.learning_util import learning_to_dlo
 from memiris.util.memory_util import creation_dlo_to_memory
 
 
-class MemoryCreator:
+class MemoryCreatorMultiModel(MemoryCreator):
     """
     A class to create memories using a large language model.
     """

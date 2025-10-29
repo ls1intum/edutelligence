@@ -1,4 +1,5 @@
 import logging
+import traceback
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -8,6 +9,10 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 from langsmith import traceable
+
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
 
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -31,7 +36,9 @@ from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
 from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
-from ..shared.utils import format_custom_instructions
+from ..shared.utils import (
+    format_custom_instructions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +80,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate
+    session_title_pipeline: SessionTitleGenerationPipeline
     callback: LectureChatCallback
     variant: str
 
@@ -103,6 +111,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         # Create the pipelines
         self.db = VectorDatabase()
         self.retriever = LectureRetrieval(self.db.client)
+        self.session_title_pipeline = SessionTitleGenerationPipeline()
         self.pipeline = self.llm | StrOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
@@ -183,10 +192,29 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                 "Response from lecture chat pipeline: %s",
                 response_with_citation,
             )
+            # Generate a session title if this is the first student message
+            session_title = None
+            if response_with_citation and len(dto.chat_history) == 1:
+                first_user_msg = dto.chat_history[0].contents[0].text_content
+                try:
+                    session_title = self.session_title_pipeline(
+                        first_user_msg, response_with_citation
+                    )
+                    if self.session_title_pipeline.tokens is not None:
+                        self.tokens.append(self.session_title_pipeline.tokens)
+                except Exception as e:
+                    logger.error(
+                        "An error occurred while running the session title generation pipeline",
+                        exc_info=e,
+                    )
+                    traceback.print_exc()
+                    self.callback.error("Generating session title failed.")
+            # Complete main process
             self.callback.done(
                 "Response created",
                 final_result=response_with_citation,
                 tokens=self.tokens,
+                session_title=session_title,
             )
         except Exception as e:
             self.callback.error(
