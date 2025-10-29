@@ -14,7 +14,9 @@ from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.learning_deduplication import LearningDeduplicator
 from memiris.service.learning_extraction import LearningExtractor
-from memiris.service.memory_creator import MemoryCreator
+from memiris.service.memory_creator.memory_creator_multi_model import (
+    MemoryCreatorMultiModel,
+)
 from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 
@@ -57,7 +59,7 @@ class TestMemoryCreationPipeline:
         builder.add_learning_extractor(
             focus="test focus", llm_learning_extraction="test-llm"
         )
-        builder.set_memory_creator(
+        builder.set_memory_creator_multi_model(
             llm_tool="tool-llm",
             llm_thinking="thinking-llm",
             llm_response="response-llm",
@@ -91,7 +93,7 @@ class TestMemoryCreationPipeline:
 
         builder.add_learning_extractor(focus="focus", llm_learning_extraction="llm1")
         builder.add_learning_deduplicator(llm_learning_deduplication="llm2")
-        builder.set_memory_creator(
+        builder.set_memory_creator_multi_model(
             llm_tool="tool-llm",
             llm_thinking="thinking-llm",
             llm_response="response-llm",
@@ -102,7 +104,7 @@ class TestMemoryCreationPipeline:
         assert isinstance(pipeline, MemoryCreationPipeline)
         assert len(pipeline._learning_extractors) == 1
         assert len(pipeline._learning_deduplicators) == 1
-        assert isinstance(pipeline._memory_creator, MemoryCreator)
+        assert isinstance(pipeline._memory_creator, MemoryCreatorMultiModel)
 
     def test_learning_extractor_and_deduplicator_conversion(self, mock_ollama_service):
         extractor_config = _MemoryCreationLearningExtractorConfig(
@@ -135,7 +137,7 @@ class TestMemoryCreationPipeline:
         # Mock LearningExtractor and LearningDeduplicator
         mock_extractor = mocker.Mock(spec=LearningExtractor)
         mock_deduplicator = mocker.Mock(spec=LearningDeduplicator)
-        mock_memory_creator = mocker.Mock(spec=MemoryCreator)
+        mock_memory_creator = mocker.Mock(spec=MemoryCreatorMultiModel)
 
         # Setup extractor to return a list of learnings
         fake_learnings = ["learning1", "learning2"]
@@ -200,7 +202,7 @@ class TestMemoryCreationPipeline:
         builder._learning_repository = mock_learning_repository
         builder._memory_repository = mock_memory_repository
         builder._vectorizer = mock_vectorizer
-        builder.set_memory_creator(
+        builder.set_memory_creator_multi_model(
             llm_tool="tool-llm",
             llm_thinking="thinking-llm",
             llm_response="response-llm",
