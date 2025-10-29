@@ -926,7 +926,7 @@ Now that you understand all the modules:
 - **[API Endpoints](./endpoints.md)**: Learn how endpoints use these modules
 - **[Weaviate Integration](./weaviate.md)**: Deep dive into the database client
 - **[ML Pipelines](./ml-pipelines.md)**: Understand ML workflow details
-- **[Development Workflow](./development-workflow.md)**: Start contributing
+- **[Setup Guide](../setup.md)**: Set up your development environment
 
 :::tip
 Use your IDE's "Go to Definition" feature to navigate between modules while reading this documentation!

@@ -579,10 +579,10 @@ app.add_middleware(
 
 ## Next Steps
 
-- **[Architecture](./architecture.md)**: Understand where middleware fits
+- **[System Design](../system-design.md)**: Understand where middleware fits
 - **[REST API Framework](./rest-api.md)**: Learn about FastAPI patterns
-- **[Development Workflow](./development-workflow.md)**: Add custom middleware
-- **[Testing Guide](./testing.md)**: Test middleware behavior
+- **[Setup Guide](../setup.md)**: Set up your development environment
+- **[Test Guide](../testing.md)**: Test middleware behavior
 
 ---
 

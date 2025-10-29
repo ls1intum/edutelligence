@@ -758,8 +758,8 @@ except requests.exceptions.HTTPError as e:
 
 - **[REST API Framework](./rest-api.md)**: Understand the FastAPI architecture
 - **[ML Pipelines](./ml-pipelines.md)**: Learn how endpoints process data
-- **[Testing Guide](./testing.md)**: Test endpoints locally
-- **[Troubleshooting](./troubleshooting.md)**: Debug API issues
+- **[Testing Guide](../testing.md)**: Test endpoints locally
+- **[Troubleshooting](/admin/atlasml-troubleshooting.md)**: Debug API issues
 
 :::tip Need Examples?
 Check the `tests/routers/` directory for working examples of how to call each endpoint!

@@ -1,12 +1,12 @@
 ---
-title: "Development Workflow"
-description: "Guide to developing and contributing to AtlasML"
-sidebar_position: 10
+title: "Setup Guide"
+description: "Guide to setting up your local development environment for AtlasML"
+sidebar_position: 3
 ---
 
-# Development Workflow
+# Setup Guide
 
-This guide covers the complete development workflow for contributing to AtlasML, from setting up your environment to submitting changes.
+This guide covers setting up your local development environment for contributing to AtlasML.
 
 ---
 
@@ -152,106 +152,6 @@ WEAVIATE_HOST=localhost WEAVIATE_PORT=8085 poetry run uvicorn atlasml.app:app --
 
 ---
 
-## Adding a New Feature
-
-### Step 1: Create a Branch
-
-```bash
-git checkout -b feature/my-new-feature
-```
-
-### Step 2: Implement the Feature
-
-#### Adding a New Endpoint
-
-**1. Define Pydantic Models** (`atlasml/models/competency.py`):
-
-```python
-class MyFeatureRequest(BaseModel):
-    input_text: str
-    course_id: int
-
-class MyFeatureResponse(BaseModel):
-    results: list[str]
-```
-
-**2. Create Router Function** (`atlasml/routers/competency.py`):
-
-```python
-@router.post("/my-feature", dependencies=[Depends(TokenValidator)])
-async def my_feature_endpoint(
-    request: MyFeatureRequest
-) -> MyFeatureResponse:
-    """
-    Process the request and return results.
-
-    Args:
-        request: Input request with text and course ID
-
-    Returns:
-        MyFeatureResponse with processed results
-    """
-    # Implementation
-    results = process_feature(request.input_text, request.course_id)
-    return MyFeatureResponse(results=results)
-```
-
-**3. Implement Business Logic** (`atlasml/ml/my_feature.py`):
-
-```python
-def process_feature(text: str, course_id: int) -> list[str]:
-    # Your implementation
-    return ["result1", "result2"]
-```
-
-**4. Add Tests** (`tests/test_my_feature.py`):
-
-```python
-def test_my_feature():
-    result = process_feature("test input", 1)
-    assert len(result) > 0
-```
-
-#### Adding a New ML Pipeline
-
-**1. Create Pipeline Function** (`atlasml/ml/my_pipeline.py`):
-
-```python
-def my_ml_pipeline(input_data):
-    # 1. Generate embeddings
-    generator = EmbeddingGenerator()
-    embedding = generator.generate_embeddings_openai(input_data)
-
-    # 2. Query Weaviate
-    client = get_weaviate_client()
-    results = client.search(...)
-
-    # 3. Process results
-    processed = process_results(results)
-
-    return processed
-```
-
-**2. Add to PipelineWorkflows** (`atlasml/ml/pipeline_workflows.py`):
-
-```python
-class PipelineWorkflows:
-    def execute_my_pipeline(self, input_data):
-        return my_ml_pipeline(input_data)
-```
-
-**3. Use in Router**:
-
-```python
-@router.post("/my-pipeline")
-async def run_my_pipeline(request: MyRequest):
-    pipeline = PipelineWorkflows()
-    result = pipeline.execute_my_pipeline(request.data)
-    return MyResponse(result=result)
-```
-
----
-
 ## Testing Your Changes
 
 ### Running Tests
@@ -270,50 +170,7 @@ poetry run pytest tests/test_competency.py::test_suggest_competencies -v
 poetry run pytest --cov=atlasml --cov-report=html
 ```
 
-### Writing Tests
-
-**Unit Test Example** (`tests/test_my_feature.py`):
-
-```python
-import pytest
-from atlasml.ml.my_feature import process_feature
-
-def test_process_feature_valid_input():
-    result = process_feature("test", 1)
-    assert isinstance(result, list)
-    assert len(result) > 0
-
-def test_process_feature_empty_input():
-    with pytest.raises(ValueError):
-        process_feature("", 1)
-```
-
-**Integration Test Example** (`tests/routers/test_my_endpoint.py`):
-
-```python
-from fastapi.testclient import TestClient
-from atlasml.app import app
-
-client = TestClient(app)
-
-def test_my_endpoint_success():
-    response = client.post(
-        "/api/v1/competency/my-feature",
-        headers={"Authorization": "test"},
-        json={"input_text": "test", "course_id": 1}
-    )
-    assert response.status_code == 200
-    assert "results" in response.json()
-
-def test_my_endpoint_auth_required():
-    response = client.post(
-        "/api/v1/competency/my-feature",
-        json={"input_text": "test", "course_id": 1}
-    )
-    assert response.status_code == 401
-```
-
-See **[Testing Guide](./testing.md)** for more details.
+See **[Test Guide](./testing.md)** for detailed testing information.
 
 ---
 
@@ -392,137 +249,6 @@ async def suggest_competencies(request: SuggestCompetencyRequest):
         logger.error(f"Error generating suggestions: {e}", exc_info=True)
         raise
 ```
-
----
-
-## Committing Changes
-
-### 1. Check Status
-
-```bash
-git status
-git diff
-```
-
-### 2. Stage Changes
-
-```bash
-# Stage specific files
-git add atlasml/routers/competency.py
-git add tests/test_my_feature.py
-
-# Stage all changes
-git add .
-```
-
-### 3. Run Linters
-
-```bash
-poetry run black .
-poetry run ruff check . --fix
-```
-
-### 4. Run Tests
-
-```bash
-poetry run pytest -v
-```
-
-### 5. Commit
-
-```bash
-git commit -m "Add my new feature
-
-- Implemented feature X
-- Added tests for feature X
-- Updated documentation"
-```
-
-**Commit Message Format**:
-- First line: Short summary (50 chars max)
-- Blank line
-- Body: Detailed description (bullet points)
-
-### 6. Push
-
-```bash
-git push origin feature/my-new-feature
-```
-
----
-
-## Creating a Pull Request
-
-### 1. Push Your Branch
-
-```bash
-git push origin feature/my-new-feature
-```
-
-### 2. Open PR on GitHub
-
-1. Go to https://github.com/ls1intum/edutelligence
-2. Click "Compare & pull request"
-3. Fill in PR template:
-
-```markdown
-## What?
-Brief description of changes
-
-## Why?
-Motivation for changes
-
-## How?
-Technical implementation details
-
-## Testing
-- [ ] Tests added/updated
-- [ ] All tests passing
-- [ ] Manual testing completed
-
-## Screenshots
-(if applicable)
-```
-
-### 3. Request Review
-
-Tag relevant reviewers.
-
-### 4. Address Feedback
-
-```bash
-# Make changes based on feedback
-git add .
-git commit -m "Address review feedback"
-git push
-```
-
----
-
-## Code Review Checklist
-
-### For Reviewers
-
-- [ ] Code follows style guide
-- [ ] Tests added for new functionality
-- [ ] All tests passing
-- [ ] No hardcoded secrets or credentials
-- [ ] Error handling implemented
-- [ ] Documentation updated
-- [ ] Performance considerations addressed
-- [ ] Security implications reviewed
-
-### For Authors
-
-Before requesting review:
-
-- [ ] Code formatted with Black
-- [ ] Code linted with Ruff (no errors)
-- [ ] All tests passing
-- [ ] New tests added
-- [ ] Documentation updated
-- [ ] Manual testing completed
-- [ ] Branch up to date with main
 
 ---
 
@@ -626,9 +352,7 @@ curl -X POST http://localhost:8000/api/v1/competency/suggest \
   -H "Authorization: test" \
   -d '{"description":"test","course_id":1}'
 
-# 5. Commit
-git add atlasml/routers/competency.py
-git commit -m "Update competency endpoint"
+# 5. Commit (see Development Process for git workflow)
 ```
 
 ### Task 2: Fix a Bug
@@ -646,8 +370,7 @@ vim atlasml/...
 # 4. Run test (should pass)
 poetry run pytest tests/test_bug.py -v
 
-# 5. Commit with issue reference
-git commit -m "Fix #123: Description of bug fix"
+# 5. Commit (see Development Process for git workflow)
 ```
 
 ### Task 3: Refactor Code
@@ -663,8 +386,7 @@ poetry run pytest -v
 # 4. Check coverage
 poetry run pytest --cov=atlasml
 
-# 5. Commit
-git commit -m "Refactor: Improve code organization"
+# 5. Commit (see Development Process for git workflow)
 ```
 
 ---
@@ -753,10 +475,11 @@ def complex_algorithm(data):
 
 ## Next Steps
 
-- **[Testing Guide](./testing.md)**: Write comprehensive tests
-- **[Architecture](./architecture.md)**: Understand the system
-- **[Modules](./modules.md)**: Navigate the codebase
-- **[Troubleshooting](./troubleshooting.md)**: Debug issues
+- **[Development Process](./development-process/index.md)**: Learn the complete development workflow
+- **[Test Guide](./testing.md)**: Write comprehensive tests
+- **[System Design](./system-design.md)**: Understand the system architecture
+- **[Code Reference](./code-reference/modules.md)**: Navigate the codebase
+- **[Troubleshooting](/admin/atlasml-troubleshooting.md)**: Debug issues
 
 ---
 

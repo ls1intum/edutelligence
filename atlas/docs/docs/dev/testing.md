@@ -1,10 +1,10 @@
 ---
-title: "Testing Guide"
+title: "Test Guide"
 description: "Complete guide to writing and running tests in AtlasML"
-sidebar_position: 11
+sidebar_position: 4
 ---
 
-# Testing Guide
+# Test Guide
 
 AtlasML uses **pytest** for testing. This guide covers how to write, run, and organize tests effectively.
 
@@ -679,10 +679,10 @@ jobs:
 
 ## Next Steps
 
-- **[Development Workflow](./development-workflow.md)**: Learn to add features with tests
-- **[Modules](./modules.md)**: Understand what to test
-- **[Troubleshooting](./troubleshooting.md)**: Debug test failures
-- **[Architecture](./architecture.md)**: Understand integration points
+- **[Development Process](./development-process/index.md)**: Learn to add features with tests
+- **[Modules](./code-reference/modules.md)**: Understand what to test
+- **[Troubleshooting](/admin/atlasml-troubleshooting.md)**: Debug test failures
+- **[System Design](./system-design.md)**: Understand integration points
 
 ---
 

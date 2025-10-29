@@ -708,8 +708,8 @@ async def get_exercise_recommendations(competency_id: int):
 
 - **[Modules Reference](./modules.md)**: Dive into ML module code
 - **[Weaviate Integration](./weaviate.md)**: Understand vector storage
-- **[Development Workflow](./development-workflow.md)**: Add new ML features
-- **[Testing](./testing.md)**: Test ML pipelines
+- **[Development Process](../development-process/index.md)**: Add new ML features
+- **[Test Guide](../testing.md)**: Test ML pipelines
 
 ---
 

@@ -784,8 +784,8 @@ def cleanup_test_data():
 
 - **[ML Pipelines](./ml-pipelines.md)**: Learn how embeddings are generated
 - **[Modules](./modules.md)**: Deep dive into `weaviate.py` implementation
-- **[Troubleshooting](./troubleshooting.md)**: Debug Weaviate issues
-- **[Architecture](./architecture.md)**: Understand Weaviate's role
+- **[Troubleshooting](/admin/atlasml-troubleshooting.md)**: Debug Weaviate issues
+- **[System Design](../system-design.md)**: Understand Weaviate's role
 
 ---
 

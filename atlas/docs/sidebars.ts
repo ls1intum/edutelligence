@@ -24,47 +24,34 @@ const sidebars: SidebarsConfig = {
   devSidebar: [
     {
       type: 'doc',
-      id: 'dev/index',
-      label: 'Developer Guide',
-    },
-    {
-      type: 'category',
+      id: 'dev/development-process/index',
       label: 'Development Process',
-      items: [
-        'dev/development-process/index',
-      ],
     },
     {
-      type: 'category',
+      type: 'doc',
+      id: 'dev/system-design',
       label: 'System Design',
-      items: [
-        'dev/system-design/index',
-      ],
     },
     {
-      type: 'category',
+      type: 'doc',
+      id: 'dev/setup',
       label: 'Setup',
-      items: [
-        'dev/setup/index',
-      ],
+    },
+    {
+      type: 'doc',
+      id: 'dev/testing',
+      label: 'Test Guide',
     },
     {
       type: 'category',
-      label: 'AtlasML',
-      collapsed: false,
+      label: 'Code Reference',
       items: [
-        'dev/atlasml/index',
-        'dev/atlasml/architecture',
-        'dev/atlasml/modules',
-        'dev/atlasml/rest-api',
-        'dev/atlasml/endpoints',
-        'dev/atlasml/middleware',
-        'dev/atlasml/weaviate',
-        'dev/atlasml/ml-pipelines',
-        'dev/atlasml/docker-deployment',
-        'dev/atlasml/development-workflow',
-        'dev/atlasml/testing',
-        'dev/atlasml/troubleshooting',
+        'dev/code-reference/modules',
+        'dev/code-reference/rest-api',
+        'dev/code-reference/endpoints',
+        'dev/code-reference/middleware',
+        'dev/code-reference/weaviate',
+        'dev/code-reference/ml-pipelines',
       ],
     },
   ],
@@ -74,6 +61,31 @@ const sidebars: SidebarsConfig = {
       type: 'doc',
       id: 'admin/index',
       label: 'Admin Guide',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-installation',
+      label: 'Installation',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-configuration',
+      label: 'Configuration',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-deployment',
+      label: 'Deployment',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-monitoring',
+      label: 'Monitoring',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-troubleshooting',
+      label: 'Troubleshooting',
     },
   ],
 };

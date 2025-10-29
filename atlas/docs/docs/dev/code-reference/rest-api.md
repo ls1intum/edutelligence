@@ -628,7 +628,7 @@ def test_suggest_competencies():
     assert "competencies" in response.json()
 ```
 
-See **[Testing Guide](./testing.md)** for more details.
+See **[Testing Guide](../testing.md)** for more details.
 
 ---
 
@@ -680,8 +680,8 @@ results = await weaviate_client.async_search(query)
 
 - **[Middleware Documentation](./middleware.md)**: Understand request/response processing
 - **[Endpoints](./endpoints.md)**: Detailed API endpoint documentation
-- **[Testing Guide](./testing.md)**: Test FastAPI endpoints
-- **[Development Workflow](./development-workflow.md)**: Adding new endpoints
+- **[Test Guide](../testing.md)**: Test FastAPI endpoints
+- **[Development Process](../development-process/index.md)**: Adding new endpoints
 
 ---
 

@@ -1,10 +1,10 @@
 ---
-title: "Architecture Deep Dive"
+title: "System Design"
 description: "Understanding AtlasML's architecture and component interactions"
 sidebar_position: 2
 ---
 
-# AtlasML Architecture Deep Dive
+# System Design
 
 This guide explains how AtlasML is architected, how components interact, and the request/response flow through the system.
 
@@ -560,10 +560,10 @@ sentry_sdk.init(
 
 Now that you understand the architecture:
 
-- **[Modules Reference](./modules.md)**: Dive deep into each code module
-- **[REST API Framework](./rest-api.md)**: Learn about FastAPI patterns
-- **[Middleware](./middleware.md)**: Understand request processing
-- **[Weaviate Integration](./weaviate.md)**: Master the vector database
+- **[Modules Reference](./code-reference/modules.md)**: Dive deep into each code module
+- **[REST API Framework](./code-reference/rest-api.md)**: Learn about FastAPI patterns
+- **[Middleware](./code-reference/middleware.md)**: Understand request processing
+- **[Weaviate Integration](./code-reference/weaviate.md)**: Master the vector database
 
 :::tip
 Use the [FastAPI documentation](http://localhost:8000/docs) to explore the live API while reading these docs!
