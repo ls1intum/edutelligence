@@ -5,7 +5,7 @@ from typing import List, Optional
 from langchain_community.callbacks import get_openai_callback
 from langchain_openai.chat_models import AzureChatOpenAI
 from pandas import DataFrame
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from model.evaluation_model import Metric, MetricEvaluationRequest, MetricEvaluations
 from prompts.llm_evaluation_prompt import get_formatted_prompt
@@ -72,9 +72,10 @@ def process_feedback_evaluations(
 ) -> None:
     """Processes feedback evaluations using the LLM as a judge and saves the results."""
     selected_values = {}
-
     total_cost = 0.0
+
     progress_bar = tqdm(requests, desc="Processing")
+
     for request in progress_bar:
         with get_openai_callback() as cb:
             metric_evaluations = model.with_structured_output(MetricEvaluations).invoke(
