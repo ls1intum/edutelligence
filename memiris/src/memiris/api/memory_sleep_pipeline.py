@@ -16,7 +16,7 @@ from memiris.repository.weaviate.weaviate_memory_repository import (
     WeaviateMemoryRepository,
 )
 from memiris.service.memory_sleep import MemorySleeper
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.service.ollama_wrapper import OllamaChatModel
 from memiris.service.vectorizer import Vectorizer
 
 
@@ -26,13 +26,12 @@ class MemorySleepPipelineBuilder:
     This class is used to create an instance of MemorySleepPipeline with the necessary services.
     """
 
-    _tool_llm: str
-    _response_llm: str
+    _tool_llm: OllamaChatModel
+    _response_llm: OllamaChatModel
     _learning_repository: LearningRepository | None
     _memory_repository: MemoryRepository | None
     _memory_connection_repository: MemoryConnectionRepository | None
     _vectorizer: Vectorizer | None
-    _ollama_service: OllamaService
 
     _template_deduplication: str | None
     _template_connector: str | None
@@ -43,12 +42,9 @@ class MemorySleepPipelineBuilder:
     )  # Size of memory groups, can be larger to meet the max_groups limit
     _max_groups: int | None  # Maximum number of groups to process in parallel
 
-    def __init__(self, ollama_service: OllamaService):
-        if not ollama_service:
-            raise ValueError("OllamaService must be provided.")
-        self._ollama_service = ollama_service
-        self._tool_llm = "mistral-small3.1:24b"
-        self._response_llm = "gemma3:27b"
+    def __init__(self):
+        self._tool_llm = OllamaChatModel("mistral-small3.1:24b")
+        self._response_llm = OllamaChatModel("gemma3:27b")
         self._learning_repository = None
         self._memory_repository = None
         self._memory_connection_repository = None
@@ -59,26 +55,22 @@ class MemorySleepPipelineBuilder:
         self._group_size = None
         self._max_groups = None
 
-    def set_tool_llm(self, tool_llm: str | None) -> "MemorySleepPipelineBuilder":
+    def set_tool_llm(
+        self, tool_llm: OllamaChatModel | None
+    ) -> "MemorySleepPipelineBuilder":
         """
         Set the tool language model.
         """
-        if not tool_llm:
-            self._tool_llm = "mistral-small3.1:24b"
-        else:
-            self._tool_llm = tool_llm
+        self._tool_llm = tool_llm or OllamaChatModel("mistral-small3.1:24b")
         return self
 
     def set_response_llm(
-        self, response_llm: str | None
+        self, response_llm: OllamaChatModel | None
     ) -> "MemorySleepPipelineBuilder":
         """
         Set the response language model.
         """
-        if not response_llm:
-            self._response_llm = "gemma3:27b"
-        else:
-            self._response_llm = response_llm
+        self._response_llm = response_llm or OllamaChatModel("gemma3:27b")
         return self
 
     def set_deduplication_template(
@@ -239,7 +231,7 @@ class MemorySleepPipelineBuilder:
         """
 
     def set_vectorizer(
-        self, value: Vectorizer | list[str]
+        self, value: Vectorizer | list[OllamaChatModel] | list[str]
     ) -> "MemorySleepPipelineBuilder":
         if not value:
             raise ValueError("Either Vectorizer or embedding models must be provided.")
@@ -247,12 +239,15 @@ class MemorySleepPipelineBuilder:
         if isinstance(value, Vectorizer):
             self._vectorizer = value
         elif isinstance(value, list):
-            self._vectorizer = Vectorizer(
-                vector_models=value, ollama_service=self._ollama_service
-            )
+            models: list[OllamaChatModel] = []
+            if len(value) > 0 and isinstance(value[0], str):  # type: ignore[index]
+                models = [OllamaChatModel(v) for v in value]  # type: ignore[arg-type]
+            else:
+                models = value  # type: ignore[assignment]
+            self._vectorizer = Vectorizer(vector_models=models)
         else:
             raise TypeError(
-                "Value must be either Vectorizer or a list of embedding model names."
+                "Value must be either Vectorizer or a list of embedding models."
             )
 
         return self
@@ -319,7 +314,6 @@ class MemorySleepPipelineBuilder:
                 memory_repository=self._memory_repository,
                 memory_connection_repository=self._memory_connection_repository,
                 vectorizer=self._vectorizer,
-                ollama_service=self._ollama_service,
                 template_deduplication=self._template_deduplication,
                 template_connector=self._template_connector,
                 max_threads=self._max_threads,

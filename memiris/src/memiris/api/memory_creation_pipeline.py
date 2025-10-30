@@ -28,7 +28,7 @@ from memiris.service.memory_creator.memory_creator_langchain import (
 from memiris.service.memory_creator.memory_creator_multi_model import (
     MemoryCreatorMultiModel,
 )
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.service.ollama_wrapper import OllamaChatModel
 from memiris.service.vectorizer import Vectorizer
 
 
@@ -38,21 +38,18 @@ class _MemoryCreationLearningExtractorConfig:
     This class holds the configuration for the LearningExtractor.
     """
 
-    llm_learning_extraction: str
+    llm_learning_extraction: OllamaChatModel
     focus: str
     template: str | None
-    ollama_service: OllamaService
 
     def __init__(
         self,
-        llm_learning_extraction: str,
+        llm_learning_extraction: OllamaChatModel,
         focus: str,
-        ollama_service: OllamaService,
         template: str | None = None,
     ):
         self.llm_learning_extraction = llm_learning_extraction
         self.focus = focus
-        self.ollama_service = ollama_service
         self.template = template
 
     def convert(self) -> LearningExtractor:
@@ -61,7 +58,6 @@ class _MemoryCreationLearningExtractorConfig:
         """
         return LearningExtractor(
             llm=self.llm_learning_extraction,
-            ollama_service=self.ollama_service,
             focus=self.focus,
             template=self.template,
         )
@@ -73,18 +69,15 @@ class _MemoryCreationLearningDeduplicatorConfig:
     This class holds the configuration for the LearningDeduplicator.
     """
 
-    llm_learning_deduplication: str
-    ollama_service: OllamaService
+    llm_learning_deduplication: OllamaChatModel
     template: str | None
 
     def __init__(
         self,
-        llm_learning_deduplication: str,
-        ollama_service: OllamaService,
+        llm_learning_deduplication: OllamaChatModel,
         template: str | None = None,
     ):
         self.llm_learning_deduplication = llm_learning_deduplication
-        self.ollama_service = ollama_service
         self.template = template
 
     def convert(self) -> LearningDeduplicator:
@@ -93,7 +86,6 @@ class _MemoryCreationLearningDeduplicatorConfig:
         """
         return LearningDeduplicator(
             llm=self.llm_learning_deduplication,
-            ollama_service=self.ollama_service,
             template=self.template,
         )
 
@@ -120,24 +112,21 @@ class _MemoryCreationMemoryCreatorMultiModelConfig(_MemoryCreationMemoryCreatorC
     This class holds the configuration for the MemoryCreator.
     """
 
-    llm_tool: str
-    llm_thinking: str
-    llm_response: str
+    llm_tool: OllamaChatModel
+    llm_thinking: OllamaChatModel
+    llm_response: OllamaChatModel
     template: str | None
-    ollama_service: OllamaService
 
     def __init__(
         self,
-        llm_tool: str,
-        llm_thinking: str,
-        llm_response: str,
-        ollama_service: OllamaService,
+        llm_tool: OllamaChatModel,
+        llm_thinking: OllamaChatModel,
+        llm_response: OllamaChatModel,
         template: str | None = None,
     ):
         self.llm_tool = llm_tool
         self.llm_thinking = llm_thinking
         self.llm_response = llm_response
-        self.ollama_service = ollama_service
         self.template = template
 
     def convert(
@@ -156,7 +145,6 @@ class _MemoryCreationMemoryCreatorMultiModelConfig(_MemoryCreationMemoryCreatorC
             learning_repository=learning_repository,
             memory_repository=memory_repository,
             vectorizer=vectorizer,
-            ollama_service=self.ollama_service,
             template=self.template,
         )
 
@@ -167,18 +155,15 @@ class _MemoryCreationMemoryCreatorLangchainConfig(_MemoryCreationMemoryCreatorCo
     This class holds the configuration for the MemoryCreator.
     """
 
-    llm: str
+    llm: OllamaChatModel
     template: str | None
-    ollama_service: OllamaService
 
     def __init__(
         self,
-        llm: str,
-        ollama_service: OllamaService,
+        llm: OllamaChatModel,
         template: str | None = None,
     ):
         self.llm = llm
-        self.ollama_service = ollama_service
         self.template = template
 
     def convert(
@@ -192,7 +177,7 @@ class _MemoryCreationMemoryCreatorLangchainConfig(_MemoryCreationMemoryCreatorCo
         """
 
         return MemoryCreatorLangChain(
-            llm=self.ollama_service.langchain_client(self.llm),
+            llm=self.llm.langchain_client(),
             learning_repository=learning_repository,
             memory_repository=memory_repository,
             vectorizer=vectorizer,
@@ -206,7 +191,6 @@ class MemoryCreationPipelineBuilder:
     This class is used to create an instance of MemoryCreationPipeline with the necessary services.
     """
 
-    _ollama_service: OllamaService
     _llm_learning_extractor_configs: list[_MemoryCreationLearningExtractorConfig]
     _llm_learning_deduplicator_configs: list[_MemoryCreationLearningDeduplicatorConfig]
     _memory_creator_config: _MemoryCreationMemoryCreatorConfig | None
@@ -214,10 +198,7 @@ class MemoryCreationPipelineBuilder:
     _memory_repository: MemoryRepository | None
     _vectorizer: Vectorizer | None
 
-    def __init__(self, ollama_service: OllamaService):
-        if not ollama_service:
-            raise ValueError("OllamaService must be provided.")
-        self._ollama_service = ollama_service
+    def __init__(self):
         self._llm_learning_extractor_configs = []
         self._llm_learning_deduplicator_configs = []
         self._memory_creator_config = None
@@ -228,13 +209,13 @@ class MemoryCreationPipelineBuilder:
     def add_learning_extractor(
         self,
         focus: str,
-        llm_learning_extraction: str = "gemma3:27b",
+        llm_learning_extraction: OllamaChatModel | None = None,
         template: str | None = None,
     ) -> "MemoryCreationPipelineBuilder":
+        model = llm_learning_extraction or OllamaChatModel("gemma3:27b")
         self._llm_learning_extractor_configs.append(
             _MemoryCreationLearningExtractorConfig(
-                llm_learning_extraction=llm_learning_extraction,
-                ollama_service=self._ollama_service,
+                llm_learning_extraction=model,
                 focus=focus,
                 template=template,
             )
@@ -243,13 +224,13 @@ class MemoryCreationPipelineBuilder:
 
     def add_learning_deduplicator(
         self,
-        llm_learning_deduplication: str = "gemma3:27b",
+        llm_learning_deduplication: OllamaChatModel | None = None,
         template: str | None = None,
     ) -> "MemoryCreationPipelineBuilder":
+        model = llm_learning_deduplication or OllamaChatModel("gemma3:27b")
         self._llm_learning_deduplicator_configs.append(
             _MemoryCreationLearningDeduplicatorConfig(
-                llm_learning_deduplication=llm_learning_deduplication,
-                ollama_service=self._ollama_service,
+                llm_learning_deduplication=model,
                 template=template,
             )
         )
@@ -258,9 +239,9 @@ class MemoryCreationPipelineBuilder:
     @deprecated("Use set_memory_creator_multi_model instead")
     def set_memory_creator(
         self,
-        llm_tool: str = "mistral-small3.1:24b",
-        llm_thinking: str = "qwen3:30b-a3b",
-        llm_response: str = "gemma3:27b",
+        llm_tool: OllamaChatModel | None = None,
+        llm_thinking: OllamaChatModel | None = None,
+        llm_response: OllamaChatModel | None = None,
         template: str | None = None,
     ) -> "MemoryCreationPipelineBuilder":
         """
@@ -268,17 +249,17 @@ class MemoryCreationPipelineBuilder:
         See set_memory_creator_multi_model for details.
         """
         return self.set_memory_creator_multi_model(
-            llm_tool=llm_tool,
-            llm_thinking=llm_thinking,
-            llm_response=llm_response,
+            llm_tool=llm_tool or OllamaChatModel("mistral-small3.1:24b"),
+            llm_thinking=llm_thinking or OllamaChatModel("qwen3:30b-a3b"),
+            llm_response=llm_response or OllamaChatModel("gemma3:27b"),
             template=template,
         )
 
     def set_memory_creator_multi_model(
         self,
-        llm_tool: str = "mistral-small3.1:24b",
-        llm_thinking: str = "qwen3:30b-a3b",
-        llm_response: str = "gemma3:27b",
+        llm_tool: OllamaChatModel | None = None,
+        llm_thinking: OllamaChatModel | None = None,
+        llm_response: OllamaChatModel | None = None,
         template: str | None = None,
     ) -> "MemoryCreationPipelineBuilder":
         """
@@ -287,26 +268,25 @@ class MemoryCreationPipelineBuilder:
         and one for generating the final JSON response.
 
         Args:
-            llm_tool: An LLM with native tool-calling capabilities
-            llm_thinking: An LLM optimized for reasoning and planning
-            llm_response: An LLM optimized for generating JSON responses
+            llm_tool: Bound model with native tool-calling capabilities
+            llm_thinking: Bound model optimized for reasoning and planning
+            llm_response: Bound model optimized for generating JSON responses
             template: Optional Jinja2 template string. If None, use the default file.
 
         Returns:
             MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
         """
         self._memory_creator_config = _MemoryCreationMemoryCreatorMultiModelConfig(
-            llm_tool=llm_tool,
-            llm_thinking=llm_thinking,
-            llm_response=llm_response,
-            ollama_service=self._ollama_service,
+            llm_tool=llm_tool or OllamaChatModel("mistral-small3.1:24b"),
+            llm_thinking=llm_thinking or OllamaChatModel("qwen3:30b-a3b"),
+            llm_response=llm_response or OllamaChatModel("gemma3:27b"),
             template=template,
         )
         return self
 
     def _set_memory_creator_langchain(
         self,
-        llm: str = "gpt-oss:120b",
+        llm: OllamaChatModel | None = None,
         template: str | None = None,
     ) -> "MemoryCreationPipelineBuilder":
         """
@@ -321,8 +301,7 @@ class MemoryCreationPipelineBuilder:
             MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
         """
         self._memory_creator_config = _MemoryCreationMemoryCreatorLangchainConfig(
-            llm=llm,
-            ollama_service=self._ollama_service,
+            llm=llm or OllamaChatModel("gpt-oss:120b"),
             template=template,
         )
         return self
@@ -399,7 +378,7 @@ class MemoryCreationPipelineBuilder:
         """
 
     def set_vectorizer(
-        self, value: Vectorizer | list[str]
+        self, value: Vectorizer | list[OllamaChatModel] | list[str]
     ) -> "MemoryCreationPipelineBuilder":
         if not value:
             raise ValueError("Either Vectorizer or embedding models must be provided.")
@@ -407,12 +386,16 @@ class MemoryCreationPipelineBuilder:
         if isinstance(value, Vectorizer):
             self._vectorizer = value
         elif isinstance(value, list):
-            self._vectorizer = Vectorizer(
-                vector_models=value, ollama_service=self._ollama_service
-            )
+            # Convert list of strings to wrapped models if needed
+            models: list[OllamaChatModel] = []
+            if len(value) > 0 and isinstance(value[0], str):  # type: ignore[index]
+                models = [OllamaChatModel(v) for v in value]  # type: ignore[arg-type]
+            else:
+                models = value  # type: ignore[assignment]
+            self._vectorizer = Vectorizer(vector_models=models)
         else:
             raise TypeError(
-                "Value must be either Vectorizer or a list of embedding model names."
+                "Value must be either Vectorizer or a list of embedding models."
             )
 
         return self

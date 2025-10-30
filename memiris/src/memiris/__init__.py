@@ -22,7 +22,7 @@ from memiris.api.memory_with_relations_dto import MemoryWithRelationsDTO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.domain.memory_connection import MemoryConnection
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.service.ollama_wrapper import OllamaChatModel
 
 try:
     dist_name = "MemIris"
@@ -50,5 +50,5 @@ __all__ = [
     "MemoryConnectionService",
     "LearningService",
     # Internal services
-    "OllamaService",
+    "OllamaChatModel",
 ]

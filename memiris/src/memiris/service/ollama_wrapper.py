@@ -1,5 +1,7 @@
 """
-Wrapper around ollama client for better testability and typed returns.
+Typed wrappers around the Ollama client.
+Provides `OllamaChatModel`, a self-contained proxy bound to a specific model
+with helpers for chat, embeddings, LangChain adapter, and model lifecycle.
 """
 
 import os
@@ -84,115 +86,56 @@ class ModelInfo:
         )
 
 
-class OllamaService:
+class OllamaChatModel:
     """
-    Wrapper around the ollama client to provide better testing and typed returns.
+    Proxy wrapper that bundles a specific model and acts directly against Ollama.
+
+    Exposes high-level methods that operate on the bound `model`:
+    - chat(messages, ...)
+    - embed(text)
+    - langchain_client()
+    - ensure_present(), is_loaded(), load(), unload()
     """
 
     def __init__(
         self,
+        model: str,
         host: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
         token: Optional[str] = None,
     ) -> None:
-        """
-        Initialize the OllamaService.
-
-        Args:
-            host: The Ollama host URL. Defaults to environment variable OLLAMA_HOST.
-            username: The username for authentication. Defaults to environment variable OLLAMA_USERNAME.
-            password: The password for authentication. Defaults to environment variable OLLAMA_PASSWORD.
-        """
+        self.model = model
         self.host = host or os.environ.get("OLLAMA_HOST")
         self.username = username or os.environ.get("OLLAMA_USERNAME")
         self.password = password or os.environ.get("OLLAMA_PASSWORD")
         self.token = token or os.environ.get("OLLAMA_TOKEN")
 
-        self.auth_tuple = (
+        self._auth = (
             (self.username, self.password) if self.username and self.password else None
         )
-        self.cookies = {"token": self.token} if self.token else None
-        self.client = Client(host, auth=self.auth_tuple, cookies=self.cookies)
-        self.langfuse_client = langfuse.get_client()
+        self._cookies = {"token": self.token} if self.token else None
+        self._client = Client(self.host, auth=self._auth, cookies=self._cookies)
+        self._langfuse = langfuse.get_client()
 
-    def langchain_client(self, model: str) -> ChatOllama:
-        """
-        Get a LangChain ChatOllama client.
-
-        Args:
-            model: The model name to use.
-
-        Returns:
-            ChatOllama client instance.
-        """
-        return ChatOllama(
-            model=model,
-            base_url=self.host,
-            client_kwargs={"auth": self.auth_tuple, "cookies": self.cookies},
-            reasoning="high" if model.startswith("gpt-oss") else None,  # type: ignore
-        )
-
-    def list(self) -> List[ModelInfo]:
-        """
-        List all available models.
-
-        Returns:
-            List of ModelInfo objects representing the available models.
-        """
-        response = self.client.list()
-        return [ModelInfo.from_ollama_model(model) for model in response["models"]]
-
-    def pull(self, model: str) -> None:
-        """
-        Pull a model from the Ollama registry.
-
-        Args:
-            model: The name of the model to pull.
-        """
-        self.client.pull(model)
-
-    def ps(self) -> List[ModelInfo]:
-        """
-        List all running models.
-
-        Returns:
-            List of ModelInfo objects representing the running models.
-        """
-        response = self.client.ps()
-        return [ModelInfo.from_ollama_model(model) for model in response["models"]]
-
+    # --- Core operations ---
     def chat(
         self,
-        model: str,
         messages: Sequence[Union[Mapping[str, Any], Message]],
         response_format: Optional[Dict[str, Any]] = None,
         keep_alive: Optional[Union[str, int]] = None,
         options: Optional[Dict[str, Any]] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> WrappedChatResponse:
-        """
-        Send a chat message to the model.
-
-        Args:
-            model: The name of the model to use.
-            messages: The list of messages in the conversation.
-            response_format: Format to apply to the response, typically a JSON schema.
-            keep_alive: Duration to keep the model loaded, e.g., "5m", "1h".
-                        Pass 0 to unload the model immediately after the request.
-            options: Additional options like temperature, top_p, etc.
-            **kwargs: Additional arguments to pass to the ollama client.
-
-        Returns:
-            WrappedChatResponse: The response from the model.
-        """
-        # Create a nested generation
-        with self.langfuse_client.start_as_current_generation(
-            name="ollama-chat", model=model, input=messages, model_parameters=options
+        with self._langfuse.start_as_current_generation(
+            name="ollama-chat",
+            model=self.model,
+            input=messages,
+            model_parameters=options,
         ) as generation:
-            think = "high" if model.startswith("gpt-oss") else None
-            response = self.client.chat(
-                model,
+            think = "high" if self.model.startswith("gpt-oss") else None
+            response = self._client.chat(
+                self.model,
                 messages=messages,
                 format=response_format,
                 keep_alive=keep_alive,
@@ -200,72 +143,51 @@ class OllamaService:
                 think=think,  # type: ignore
                 **kwargs,
             )
-            generation.update(
-                output=response.message,
-                metadata=response,
-            )
+            generation.update(output=response.message, metadata=response)
         return WrappedChatResponse.from_ollama_response(response)
 
-    def embed(self, model: str, text: str) -> WrappedEmbeddingResponse:
-        """
-        Generate embeddings for a text.
-
-        Args:
-            model: The name of the embedding model to use.
-            text: The text to embed.
-
-        Returns:
-            WrappedEmbeddingResponse: The embeddings for the text.
-        """
-        response = self.client.embed(model, text)
+    def embed(self, text: str) -> WrappedEmbeddingResponse:
+        response = self._client.embed(self.model, text)
         return WrappedEmbeddingResponse.from_ollama_response(response)
 
-    def ensure_model_present(self, model: str) -> None:
-        """
-        Ensure that a model is present, pulling it if necessary.
+    def langchain_client(self) -> ChatOllama:
+        return ChatOllama(
+            model=self.model,
+            base_url=self.host,
+            client_kwargs={"auth": self._auth, "cookies": self._cookies},
+            reasoning="high" if self.model.startswith("gpt-oss") else None,  # type: ignore
+        )
 
-        Args:
-            model: The name of the model to ensure is present.
-        """
-        models = [model_info.name for model_info in self.list()]
-        if model not in models:
-            print(f"Model {model} not found. Pulling...")
-            self.pull(model)
+    # --- Model lifecycle / admin ---
+    def _list(self) -> List[ModelInfo]:
+        response = self._client.list()
+        return [ModelInfo.from_ollama_model(model) for model in response["models"]]
+
+    def _pull(self) -> None:
+        self._client.pull(self.model)
+
+    def _ps(self) -> List[ModelInfo]:
+        response = self._client.ps()
+        return [ModelInfo.from_ollama_model(model) for model in response["models"]]
+
+    def ensure_present(self) -> None:
+        models = [model_info.name for model_info in self._list()]
+        if self.model not in models:
+            print(f"Model {self.model} not found. Pulling...")
+            self._pull()
         else:
-            print(f"Model {model} is already present.")
+            print(f"Model {self.model} is already present.")
 
-    def is_loaded(self, model: str) -> bool:
-        """
-        Check if a model is currently loaded.
+    def is_loaded(self) -> bool:
+        models = [model_info.name for model_info in self._ps()]
+        return self.model in models
 
-        Args:
-            model: The name of the model to check.
+    def load(self, duration: str = "5m") -> None:
+        print(f"Loading model {self.model} for {duration}...")
+        self.chat(messages=[], keep_alive=duration)
+        print(f"Model {self.model} loaded.")
 
-        Returns:
-            bool: True if the model is loaded, False otherwise.
-        """
-        models = [model_info.name for model_info in self.ps()]
-        return model in models
-
-    def load_model(self, model: str, duration: str = "5m") -> None:
-        """
-        Load a model into memory.
-
-        Args:
-            model: The name of the model to load.
-            duration: How long to keep the model loaded, e.g., "5m", "1h".
-        """
-        print(f"Loading model {model} for {duration}...")
-        self.chat(model, messages=[], keep_alive=duration)
-        print(f"Model {model} loaded.")
-
-    def unload_model(self, model: str) -> None:
-        """
-        Unload a model from memory.
-
-        Args:
-            model: The name of the model to unload.
-        """
-        print(f"Unloading model {model}...")
-        self.chat(model, messages=[], keep_alive=0)
-        print(f"Model {model} unloaded.")
+    def unload(self) -> None:
+        print(f"Unloading model {self.model}...")
+        self.chat(messages=[], keep_alive=0)
+        print(f"Model {self.model} unloaded.")

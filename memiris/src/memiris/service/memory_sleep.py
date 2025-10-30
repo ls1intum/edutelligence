@@ -22,7 +22,7 @@ from memiris.domain.memory_connection import ConnectionType, MemoryConnection
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_connection_repository import MemoryConnectionRepository
 from memiris.repository.memory_repository import MemoryRepository
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.service.ollama_wrapper import OllamaChatModel
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.enum_util import get_enum_values_with_descriptions
 from memiris.util.grouping import greedy_cover_max_groups
@@ -36,13 +36,13 @@ class MemorySleeper:
     themselves and existing memories.
     """
 
-    tool_llm: str
-    response_llm: str
+    tool_llm: OllamaChatModel
+    response_llm: OllamaChatModel
     learning_repository: LearningRepository
     memory_repository: MemoryRepository
     memory_connection_repository: MemoryConnectionRepository
     vectorizer: Vectorizer
-    ollama_service: OllamaService
+    ollama_service: None  # Deprecated: use model proxies
     langfuse_client: Langfuse
 
     template_deduplication: Template
@@ -57,13 +57,12 @@ class MemorySleeper:
 
     def __init__(
         self,
-        tool_llm: str,
-        response_llm: str,
+        tool_llm: OllamaChatModel,
+        response_llm: OllamaChatModel,
         learning_repository: LearningRepository,
         memory_repository: MemoryRepository,
         memory_connection_repository: MemoryConnectionRepository,
         vectorizer: Vectorizer,
-        ollama_service: OllamaService,
         template_deduplication: Optional[str] = None,
         template_connector: Optional[str] = None,
         max_threads: int | None = None,
@@ -79,7 +78,7 @@ class MemorySleeper:
             learning_repository: Repository for learning operations
             memory_repository: Repository for memory operations
             vectorizer: Service for vectorizing content
-            ollama_service: The Ollama service to use for LLM calls
+            ollama_service: Deprecated. Use model proxies.
             template_deduplication: Optional template path for deduplication
             template_deduplication_with_tools: Optional template path for deduplication with tools
             template_connector: Optional template path for connector
@@ -93,7 +92,7 @@ class MemorySleeper:
         self.memory_repository = memory_repository
         self.memory_connection_repository = memory_connection_repository
         self.vectorizer = vectorizer
-        self.ollama_service = ollama_service
+        self.ollama_service = None
 
         self.template_deduplication = create_template(
             template_deduplication, "memory_sleep/memory_deduplication.md.j2"
@@ -421,8 +420,7 @@ class MemorySleeper:
         logging.debug("Sending messages to LLM for deduplication")
 
         # Call the LLM to deduplicate memories
-        response = self.ollama_service.chat(
-            model=self.response_llm,
+        response = self.response_llm.chat(
             messages=messages,
             response_format=MemoryDeduplicationDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},
@@ -757,8 +755,7 @@ class MemorySleeper:
         logging.debug("Sending messages to LLM for connection analysis")
 
         # Call the LLM to identify connections between memories
-        response = self.ollama_service.chat(
-            model=self.response_llm,
+        response = self.response_llm.chat(
             messages=messages,
             response_format=MemoryConnectionDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},
