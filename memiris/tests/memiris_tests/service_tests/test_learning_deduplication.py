@@ -6,7 +6,7 @@ import pytest
 from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
 from memiris.service.learning_deduplication import LearningDeduplicator
-from memiris.service.ollama_wrapper import OllamaChatModel, WrappedChatResponse
+from memiris.service.ollama_wrapper import AbstractLanguageModel, WrappedChatResponse
 
 
 class TestLearningDeduplicator:
@@ -14,8 +14,8 @@ class TestLearningDeduplicator:
 
     @pytest.fixture
     def mock_llm(self):
-        """Create a mock OllamaChatModel."""
-        mock_model = MagicMock(spec=OllamaChatModel)
+        """Create a mock AbstractLanguageModel."""
+        mock_model = MagicMock(spec=AbstractLanguageModel)
         mock_model.model = "test-model"
         return mock_model
 

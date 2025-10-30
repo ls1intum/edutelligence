@@ -11,7 +11,7 @@ from memiris.domain.memory import Memory
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.memory_creator.memory_creator import MemoryCreator
-from memiris.service.ollama_wrapper import OllamaChatModel
+from memiris.service.ollama_wrapper import AbstractLanguageModel
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
 from memiris.util.jinja_util import create_template
@@ -24,9 +24,9 @@ class MemoryCreatorMultiModel(MemoryCreator):
     A class to create memories using a large language model.
     """
 
-    tool_llm: OllamaChatModel
-    thinking_llm: OllamaChatModel
-    response_llm: OllamaChatModel
+    tool_llm: AbstractLanguageModel
+    thinking_llm: AbstractLanguageModel
+    response_llm: AbstractLanguageModel
     template: Template
     learning_repository: LearningRepository
     memory_repository: MemoryRepository
@@ -35,9 +35,9 @@ class MemoryCreatorMultiModel(MemoryCreator):
 
     def __init__(
         self,
-        tool_llm: OllamaChatModel,
-        thinking_llm: OllamaChatModel,
-        response_llm: OllamaChatModel,
+        tool_llm: AbstractLanguageModel,
+        thinking_llm: AbstractLanguageModel,
+        response_llm: AbstractLanguageModel,
         learning_repository: LearningRepository,
         memory_repository: MemoryRepository,
         vectorizer: Vectorizer,

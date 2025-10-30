@@ -1,7 +1,7 @@
 from langfuse import observe
 from typing_extensions import Sequence
 
-from memiris.service.ollama_wrapper import OllamaChatModel
+from memiris.service.ollama_wrapper import AbstractLanguageModel
 
 
 class Vectorizer:
@@ -9,14 +9,14 @@ class Vectorizer:
     A class to handle vectorization of text data for various models.
     """
 
-    vector_models: dict[str, OllamaChatModel]
+    vector_models: dict[str, AbstractLanguageModel]
 
-    def __init__(self, vector_models: list[OllamaChatModel]) -> None:
+    def __init__(self, vector_models: list[AbstractLanguageModel]) -> None:
         """
         Initialize the Vectorizer with a dictionary of vector models.
 
         Args:
-            vector_models (list[OllamaChatModel]): A list of bound models to be used for vectorization.
+            vector_models (list[AbstractLanguageModel]): A list of bound models to be used for vectorization.
         """
         self.vector_models = {
             f"vector_{i}": vector_models[i] for i in range(len(vector_models))

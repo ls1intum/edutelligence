@@ -6,7 +6,7 @@ from ollama import Message
 
 from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.service.ollama_wrapper import OllamaChatModel
+from memiris.service.ollama_wrapper import AbstractLanguageModel
 from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import (
     creation_dlo_to_learning,
@@ -19,13 +19,13 @@ class LearningExtractor:
     This class is responsible for extracting learning information from the given data.
     """
 
-    llm: OllamaChatModel  # Bound chat model wrapper
+    llm: AbstractLanguageModel  # Bound chat model wrapper
     template: Template
     focus: Optional[str]
 
     def __init__(
         self,
-        llm: OllamaChatModel,
+        llm: AbstractLanguageModel,
         focus: Optional[str] = None,
         template: Optional[str] = None,
     ) -> None:

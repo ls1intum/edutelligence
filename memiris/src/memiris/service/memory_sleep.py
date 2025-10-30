@@ -22,7 +22,7 @@ from memiris.domain.memory_connection import ConnectionType, MemoryConnection
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_connection_repository import MemoryConnectionRepository
 from memiris.repository.memory_repository import MemoryRepository
-from memiris.service.ollama_wrapper import OllamaChatModel
+from memiris.service.ollama_wrapper import AbstractLanguageModel
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.enum_util import get_enum_values_with_descriptions
 from memiris.util.grouping import greedy_cover_max_groups
@@ -36,8 +36,8 @@ class MemorySleeper:
     themselves and existing memories.
     """
 
-    tool_llm: OllamaChatModel
-    response_llm: OllamaChatModel
+    tool_llm: AbstractLanguageModel
+    response_llm: AbstractLanguageModel
     learning_repository: LearningRepository
     memory_repository: MemoryRepository
     memory_connection_repository: MemoryConnectionRepository
@@ -57,8 +57,8 @@ class MemorySleeper:
 
     def __init__(
         self,
-        tool_llm: OllamaChatModel,
-        response_llm: OllamaChatModel,
+        tool_llm: AbstractLanguageModel,
+        response_llm: AbstractLanguageModel,
         learning_repository: LearningRepository,
         memory_repository: MemoryRepository,
         memory_connection_repository: MemoryConnectionRepository,

@@ -16,7 +16,7 @@ from memiris.repository.weaviate.weaviate_memory_repository import (
     WeaviateMemoryRepository,
 )
 from memiris.service.memory_sleep import MemorySleeper
-from memiris.service.ollama_wrapper import OllamaChatModel
+from memiris.service.ollama_wrapper import AbstractLanguageModel, OllamaLanguageModel
 from memiris.service.vectorizer import Vectorizer
 
 
@@ -26,8 +26,8 @@ class MemorySleepPipelineBuilder:
     This class is used to create an instance of MemorySleepPipeline with the necessary services.
     """
 
-    _tool_llm: OllamaChatModel
-    _response_llm: OllamaChatModel
+    _tool_llm: AbstractLanguageModel
+    _response_llm: AbstractLanguageModel
     _learning_repository: LearningRepository | None
     _memory_repository: MemoryRepository | None
     _memory_connection_repository: MemoryConnectionRepository | None
@@ -43,8 +43,8 @@ class MemorySleepPipelineBuilder:
     _max_groups: int | None  # Maximum number of groups to process in parallel
 
     def __init__(self):
-        self._tool_llm = OllamaChatModel("mistral-small3.1:24b")
-        self._response_llm = OllamaChatModel("gemma3:27b")
+        self._tool_llm = OllamaLanguageModel("mistral-small3.1:24b")
+        self._response_llm = OllamaLanguageModel("gemma3:27b")
         self._learning_repository = None
         self._memory_repository = None
         self._memory_connection_repository = None
@@ -56,21 +56,21 @@ class MemorySleepPipelineBuilder:
         self._max_groups = None
 
     def set_tool_llm(
-        self, tool_llm: OllamaChatModel | None
+        self, tool_llm: AbstractLanguageModel | None
     ) -> "MemorySleepPipelineBuilder":
         """
         Set the tool language model.
         """
-        self._tool_llm = tool_llm or OllamaChatModel("mistral-small3.1:24b")
+        self._tool_llm = tool_llm or OllamaLanguageModel("mistral-small3.1:24b")
         return self
 
     def set_response_llm(
-        self, response_llm: OllamaChatModel | None
+        self, response_llm: AbstractLanguageModel | None
     ) -> "MemorySleepPipelineBuilder":
         """
         Set the response language model.
         """
-        self._response_llm = response_llm or OllamaChatModel("gemma3:27b")
+        self._response_llm = response_llm or OllamaLanguageModel("gemma3:27b")
         return self
 
     def set_deduplication_template(
@@ -231,7 +231,7 @@ class MemorySleepPipelineBuilder:
         """
 
     def set_vectorizer(
-        self, value: Vectorizer | list[OllamaChatModel] | list[str]
+        self, value: Vectorizer | list[AbstractLanguageModel] | list[str]
     ) -> "MemorySleepPipelineBuilder":
         if not value:
             raise ValueError("Either Vectorizer or embedding models must be provided.")
@@ -239,9 +239,9 @@ class MemorySleepPipelineBuilder:
         if isinstance(value, Vectorizer):
             self._vectorizer = value
         elif isinstance(value, list):
-            models: list[OllamaChatModel] = []
+            models: list[AbstractLanguageModel] = []
             if len(value) > 0 and isinstance(value[0], str):  # type: ignore[index]
-                models = [OllamaChatModel(v) for v in value]  # type: ignore[arg-type]
+                models = [OllamaLanguageModel(v) for v in value]  # type: ignore[arg-type]
             else:
                 models = value  # type: ignore[assignment]
             self._vectorizer = Vectorizer(vector_models=models)

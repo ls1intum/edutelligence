@@ -17,7 +17,7 @@ from memiris.service.learning_extraction import LearningExtractor
 from memiris.service.memory_creator.memory_creator_multi_model import (
     MemoryCreatorMultiModel,
 )
-from memiris.service.ollama_wrapper import OllamaChatModel
+from memiris.service.ollama_wrapper import OllamaLanguageModel
 from memiris.service.vectorizer import Vectorizer
 
 
@@ -54,12 +54,12 @@ class TestMemoryCreationPipeline:
 
         # Add only a learning extractor and memory creator, but no deduplicator
         builder.add_learning_extractor(
-            focus="test focus", llm_learning_extraction=OllamaChatModel("test-llm")
+            focus="test focus", llm_learning_extraction=OllamaLanguageModel("test-llm")
         )
         builder.set_memory_creator_multi_model(
-            llm_tool=OllamaChatModel("tool-llm"),
-            llm_thinking=OllamaChatModel("thinking-llm"),
-            llm_response=OllamaChatModel("response-llm"),
+            llm_tool=OllamaLanguageModel("tool-llm"),
+            llm_thinking=OllamaLanguageModel("thinking-llm"),
+            llm_response=OllamaLanguageModel("response-llm"),
         )
 
         # Patch the add_learning_deduplicator method to track if it is called
@@ -88,15 +88,15 @@ class TestMemoryCreationPipeline:
         builder._vectorizer = mock_vectorizer
 
         builder.add_learning_extractor(
-            focus="focus", llm_learning_extraction=OllamaChatModel("llm1")
+            focus="focus", llm_learning_extraction=OllamaLanguageModel("llm1")
         )
         builder.add_learning_deduplicator(
-            llm_learning_deduplication=OllamaChatModel("llm2")
+            llm_learning_deduplication=OllamaLanguageModel("llm2")
         )
         builder.set_memory_creator_multi_model(
-            llm_tool=OllamaChatModel("tool-llm"),
-            llm_thinking=OllamaChatModel("thinking-llm"),
-            llm_response=OllamaChatModel("response-llm"),
+            llm_tool=OllamaLanguageModel("tool-llm"),
+            llm_thinking=OllamaLanguageModel("thinking-llm"),
+            llm_response=OllamaLanguageModel("response-llm"),
         )
 
         pipeline = builder.build()
@@ -108,12 +108,12 @@ class TestMemoryCreationPipeline:
 
     def test_learning_extractor_and_deduplicator_conversion(self):
         extractor_config = _MemoryCreationLearningExtractorConfig(
-            llm_learning_extraction=OllamaChatModel("llm-extract"),
+            llm_learning_extraction=OllamaLanguageModel("llm-extract"),
             focus="focus-topic",
             template="template-path",
         )
         deduplicator_config = _MemoryCreationLearningDeduplicatorConfig(
-            llm_learning_deduplication=OllamaChatModel("llm-dedupe"),
+            llm_learning_deduplication=OllamaLanguageModel("llm-dedupe"),
             template="template-path",
         )
 
@@ -198,9 +198,9 @@ class TestMemoryCreationPipeline:
         builder._memory_repository = mock_memory_repository
         builder._vectorizer = mock_vectorizer
         builder.set_memory_creator_multi_model(
-            llm_tool=OllamaChatModel("tool-llm"),
-            llm_thinking=OllamaChatModel("thinking-llm"),
-            llm_response=OllamaChatModel("response-llm"),
+            llm_tool=OllamaLanguageModel("tool-llm"),
+            llm_thinking=OllamaLanguageModel("thinking-llm"),
+            llm_response=OllamaLanguageModel("response-llm"),
         )
 
         with pytest.raises(
@@ -219,7 +219,7 @@ class TestMemoryCreationPipeline:
         builder._memory_repository = mock_memory_repository
         builder._vectorizer = mock_vectorizer
         builder.add_learning_extractor(
-            focus="focus", llm_learning_extraction=OllamaChatModel("llm1")
+            focus="focus", llm_learning_extraction=OllamaLanguageModel("llm1")
         )
 
         pipeline = builder.build()
