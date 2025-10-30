@@ -82,10 +82,6 @@ services:
       - llm_core
     ports:
       - "5008:5008"
-    environment:
-      OLLAMA_ENDPOINT: http://host.docker.internal:11434
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   module_programming_winnowing:
     hostname: module-programming-winnowing
