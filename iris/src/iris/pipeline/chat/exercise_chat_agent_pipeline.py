@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Any, Callable, List, cast
+from typing import Any, Callable, List, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -9,6 +9,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
+
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
 
 from ...common.memiris_setup import get_tenant_for_user
 from ...domain import ExerciseChatPipelineExecutionDTO
@@ -53,6 +57,7 @@ class ExerciseChatAgentPipeline(
     Exercise chat agent pipeline that answers exercises related questions from students.
     """
 
+    session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     code_feedback_pipeline: CodeFeedbackPipeline
     citation_pipeline: CitationPipeline
@@ -67,6 +72,7 @@ class ExerciseChatAgentPipeline(
         super().__init__(implementation_id="exercise_chat_pipeline")
 
         # Create the pipelines
+        self.session_title_pipeline = SessionTitleGenerationPipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.code_feedback_pipeline = CodeFeedbackPipeline()
         self.citation_pipeline = CitationPipeline()
@@ -306,10 +312,18 @@ class ExerciseChatAgentPipeline(
             # Add citations if applicable
             result = self._add_citations(state, result)
 
+            # Generate title
+            session_title = self._generate_session_title(state, result, state.dto)
+
             # Generate suggestions
             self._generate_suggestions(state, result)
 
-            state.callback.done("Done!", final_result=result, tokens=state.tokens)
+            state.callback.done(
+                "Done!",
+                final_result=result,
+                tokens=state.tokens,
+                session_title=session_title,
+            )
 
             return result
 
@@ -470,6 +484,30 @@ class ExerciseChatAgentPipeline(
         except Exception as e:
             logger.error("Error generating suggestions", exc_info=e)
             state.callback.error("Generating interaction suggestions failed.")
+
+    def _generate_session_title(
+        self,
+        state: AgentPipelineExecutionState[
+            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+        ],
+        output: str,
+        dto: ExerciseChatPipelineExecutionDTO,
+    ) -> Optional[str]:
+        """
+        Generate session title from the first user prompt and the model output.
+
+        Args:
+            state: The current pipeline execution state
+            output: The agent's output
+            dto: The pipeline execution DTO
+
+        Returns:
+            The generated session title or None if not applicable
+        """
+        if len(dto.chat_history) == 1:
+            first_user_msg = dto.chat_history[0].contents[0].text_content
+            return super()._create_session_title(state, output, first_user_msg)
+        return None
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(

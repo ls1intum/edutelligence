@@ -113,6 +113,7 @@ class StatusCallback(ABC):
         self,
         message: Optional[str] = None,
         final_result: Optional[str] = None,
+        session_title: Optional[str] = None,
         suggestions: Optional[List[str]] = None,
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
@@ -132,6 +133,8 @@ class StatusCallback(ABC):
         self.stage.message = message
         self.status.tokens = tokens or self.status.tokens
         self.status.result = final_result
+        if hasattr(self.status, "session_title"):
+            self.status.session_title = session_title
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = suggestions
         if hasattr(self.status, "inconsistencies"):
@@ -164,6 +167,8 @@ class StatusCallback(ABC):
         self.on_status_update()
 
         self.status.result = None
+        if hasattr(self.status, "session_title"):
+            self.status.session_title = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         if hasattr(self.status, "inconsistencies"):
@@ -253,6 +258,7 @@ class CourseChatStatusCallback(StatusCallback):
                 weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Extracting memories",
+                internal=True,
             ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)

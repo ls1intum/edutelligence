@@ -68,7 +68,7 @@ async def test_generate_suggestions_default(mock_exercise, mock_submission, mock
             submission=mock_submission,
             config=mock_config,
             debug=False,
-            is_graded=True,
+            is_graded=False,
             learner_profile=None,
             latest_submission=None,
         )
@@ -99,7 +99,7 @@ async def test_generate_suggestions_empty_submission(mock_exercise, mock_config)
             submission=empty_submission,
             config=mock_config,
             debug=False,
-            is_graded=True,
+            is_graded=False,
             learner_profile=None,
             latest_submission=None,
         )
@@ -142,7 +142,7 @@ async def test_generate_suggestions_long_input(mock_exercise, mock_config):
             submission=long_submission,
             config=mock_config,
             debug=False,
-            is_graded=True,
+            is_graded=False,
             learner_profile=None,
             latest_submission=None,
         )
