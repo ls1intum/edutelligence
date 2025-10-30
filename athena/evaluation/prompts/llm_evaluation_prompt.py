@@ -6,9 +6,8 @@ from langchain_core.prompts import (
     HumanMessagePromptTemplate,
 )
 from langchain_core.messages import BaseMessage
-from langchain_core.output_parsers import PydanticOutputParser
 
-from model.evaluation_model import Metric, MetricEvaluations
+from model.evaluation_model import Metric
 from model.model import (
     Exercise,
     Submission,
@@ -43,7 +42,6 @@ Additionally, you will be provided with the following:
 
 # Your Task:
 Evaluate the tutor’s feedback based on the criteria. For each criterion, rate the feedback on a scale from 1 (strongly disagree) to 5 (strongly agree). If you can not evaluate a criterion, rate it 0 (not ratable).
-{format_instructions}
 
 Do **not** provide comments. Focus on adhering strictly to the problem description and the criteria.
 """
@@ -128,8 +126,6 @@ def get_formatted_prompt(
     feedbacks: List[Feedback],
     metrics: List[Metric],
 ) -> List[BaseMessage]:
-    output_parser = PydanticOutputParser(pydantic_object=MetricEvaluations)
-
     def feedback_to_dict(
         exercise: Exercise, feedback: Feedback, submission: Submission
     ):
@@ -162,7 +158,6 @@ def get_formatted_prompt(
             exercise.grading_instructions, exercise.grading_criteria
         ),
         "metrics": format_metrics(metrics),
-        "format_instructions": output_parser.get_format_instructions(),
         "submission": submission.text,
         "feedbacks": json.dumps(
             [feedback_to_dict(exercise, feedback, submission) for feedback in feedbacks]
