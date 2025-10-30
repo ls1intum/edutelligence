@@ -14,13 +14,16 @@ from memiris import (
     MemoryDTO,
     MemoryService,
     MemoryWithRelationsDTO,
-    OllamaService,
+    OllamaLanguageModel,
 )
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.uuid_util import is_valid_uuid, to_uuid
 from weaviate import WeaviateClient
 
-_memiris_embedding_models = ["mxbai-embed-large:latest", "nomic-embed-text:latest"]
+_memiris_embedding_models = [
+    OllamaLanguageModel("mxbai-embed-large:latest"),
+    OllamaLanguageModel("nomic-embed-text:latest"),
+]
 
 _memiris_user_focus_personal_details = """
 Find personal details about the user itself.
@@ -76,7 +79,7 @@ def memiris_create_user_memory_creation_pipeline(
         MemoryCreationPipeline: The fully constructed memory creation pipeline.
     """
     return (
-        MemoryCreationPipelineBuilder(OllamaService())
+        MemoryCreationPipelineBuilder()
         .set_memory_repository(weaviate_client)
         .set_learning_repository(weaviate_client)
         .set_vectorizer(_memiris_embedding_models)
@@ -126,7 +129,7 @@ class MemirisWrapper:
     """
 
     def __init__(self, weaviate_client: WeaviateClient, tenant: Tenant):
-        self.vectorizer = Vectorizer(_memiris_embedding_models, OllamaService())
+        self.vectorizer = Vectorizer(_memiris_embedding_models)
         self.memory_creation_pipeline = memiris_create_user_memory_creation_pipeline(
             weaviate_client
         )
