@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import List, Dict, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -10,9 +10,9 @@ from pandas import DataFrame
 from model.model import (
     Exercise,
     Feedback,
-    Submission,
     GradingCriterion,
     StructuredGradingInstruction,
+    Submission,
 )
 
 
@@ -49,7 +49,7 @@ def get_columns_from_dataframe(
 
 
 def group_exercise_data(
-    df: pd.DataFrame, feedback_type_filter: str = None
+    df: pd.DataFrame, feedback_type_filter: Optional[str] = None
 ) -> List[Exercise]:
     """
     Groups exercises, submissions, grading instructions, and feedback of specified type into a structured format.
