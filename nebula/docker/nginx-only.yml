@@ -1,0 +1,55 @@
+# ============================================================================
+# NGINX-ONLY DOCKER COMPOSE - FOR LOCAL DEVELOPMENT
+# ============================================================================
+# This compose file runs ONLY the nginx gateway for local development.
+# Your services (transcriber, FAQ) should be running locally on your machine.
+#
+# Usage:
+# 1. Start your services locally:
+#    cd nebula
+#    poetry run uvicorn nebula.transcript.app:app --port 3870 --reload
+#    poetry run uvicorn nebula.faq.app:app --port 3871 --reload
+#
+# 2. Copy and configure nginx:
+#    cp nginx.local_example.conf nginx.local.conf
+#    (edit nginx.local.conf if needed)
+#
+# 3. Start nginx gateway (with cleanup to avoid conflicts):
+#    docker compose -f docker/nginx-only.yml down
+#    docker compose -f docker/nginx-only.yml up
+#
+# 4. Access the gateway:
+#    http://localhost:3007
+#
+# 5. Test endpoints:
+#    curl http://localhost:3007/health
+#    curl -H "Authorization: nebula-secret" http://localhost:3007/transcribe/...
+# ============================================================================
+
+services:
+  nginx:
+    image: openresty/openresty:1.21.4.1-0-jammy
+    container_name: nebula-nginx-gateway
+    ports:
+      - "3007:3007" # Expose on port 3007 for local development
+    volumes:
+      - ../nginx.local.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+    extra_hosts:
+      # This allows the container to access the host machine
+      # Works on Docker Desktop for Mac/Windows
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - nebula-local
+    entrypoint: [
+        "/bin/sh",
+        "-c",
+        "test -f /usr/local/openresty/site/lualib/resty/http.lua \
+        || opm get ledgetech/lua-resty-http; \
+        exec openresty -g 'daemon off;'",
+      ]
+
+networks:
+  nebula-local:
+    driver: bridge
+    name: nebula-local

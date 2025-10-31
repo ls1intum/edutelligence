@@ -1,0 +1,55 @@
+# ----------------------------------------------------------------------------------------------------------------------
+# Nebula base service
+# ----------------------------------------------------------------------------------------------------------------------
+
+services:
+  transcriber:
+    build:
+      context: ../..
+      dockerfile: ./nebula/docker/transcriber/Dockerfile
+    container_name: transcriber-service
+    expose:
+      - "3870"
+    environment:
+      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
+    restart: unless-stopped
+    networks:
+      - nebula
+
+  faq:
+    build:
+      context: ../..
+      dockerfile: ./nebula/docker/faq/Dockerfile
+    container_name: faq-service
+    expose:
+      - "3871"
+    environment:
+      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
+    restart: unless-stopped
+    networks:
+      - nebula
+
+  nginx:
+    image: openresty/openresty:1.21.4.1-0-jammy
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - transcriber
+      - faq
+    restart: unless-stopped
+    networks:
+      - nebula
+    entrypoint: [
+        "/bin/sh",
+        "-c",
+        "test -f /usr/local/openresty/site/lualib/resty/http.lua \
+        || opm get ledgetech/lua-resty-http; \
+        exec openresty -g 'daemon off;'",
+      ]
+
+networks:
+  nebula:
+    driver: "bridge"
+    name: nebula

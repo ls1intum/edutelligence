@@ -1,0 +1,52 @@
+services:
+  transcriber:
+    extends:
+      file: nebula.yml
+      service: transcriber
+    image: ghcr.io/ls1intum/edutelligence/nebula-transcriber:${NEBULA_DOCKER_TAG}
+    pull_policy: always
+    restart: unless-stopped
+    container_name: transcriber-service
+    volumes:
+      - ${NEBULA_LLM_CONFIG_FILE}:/app/llm_config.nebula.yml:ro
+      - ${NEBULA_TEMP_DIR}:/app/temp
+    environment:
+      LLM_LOG_LEVEL: DEBUG
+
+  faq:
+    extends:
+      file: nebula.yml
+      service: faq
+    image: ghcr.io/ls1intum/edutelligence/nebula-faq:${NEBULA_DOCKER_TAG}
+    pull_policy: always
+    restart: unless-stopped
+    container_name: faq-service
+    volumes:
+      - ${NEBULA_LLM_CONFIG_FILE}:/app/llm_config.nebula.yml:ro
+    environment:
+      LLM_LOG_LEVEL: DEBUG
+
+  nginx:
+    extends:
+      file: nebula.yml
+      service: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+    container_name: nginx-proxy
+    volumes:
+      - ${NEBULA_NGINX_CONFIG_FILE}:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - type: bind
+        source: ${NEBULA_NGINX_SSL_CERT_FILE}
+        target: "/etc/ssl/nebula.crt"
+        read_only: true
+      - type: bind
+        source: ${NEBULA_NGINX_SSL_KEY_FILE}
+        target: "/etc/ssl/nebula.key"
+        read_only: true
+
+networks:
+  nebula:
+    driver: "bridge"
+    name: nebula

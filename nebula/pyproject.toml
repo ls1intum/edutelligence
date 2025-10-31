@@ -1,57 +1,75 @@
 [tool.poetry]
-name = "nebula"
+name = "nebula-transcriber"
 version = "3.0.0"
-description = "An LLM microservice for the learning platform Artemis"
-authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>"]
-readme = "README.MD"
+description = "FastAPI-based transcription service for lecture videos using Whisper and GPT-4o"
+authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>", "Anish Goyal <anish.goyal@tum.de>"]
+readme = "README.md"
 packages = [
-    {include = "nebula", from = "src"},
-]
-include = [
-    "src/nebula/py.typed",
+    { include = "nebula", from = "src" }
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.12,<4.0.0"
-requests = "2.32.3"
-fastapi = "0.115.5"
-uvicorn = "0.32.0"
+python = ">=3.10,<3.13"
+fastapi = "0.110.1"
+uvicorn = "0.29.0"
+openai = "1.55.3"
+httpx = "0.27.2"
+ffmpeg-python = "0.2.0"
+opencv-python-headless = "4.9.0.80"
+pillow = "*"
+python-dotenv = "1.0.1"
+requests = "2.31.0"
+pyyaml = "6.0.1"
+pydub = "0.25.1"
+numpy = "<2.0.0"
+grpcio = "^1.62.1"
+grpcio-tools = "^1.62.1"
 
 [tool.poetry.group.dev.dependencies]
-mypy = "^1.10.0"
-pylint = "^3.2.3"
 black = "^25.1.0"
+pylint = "^3.2.3"
+coverage = "^7.6.1"
+pytest = "^8.3.3"
+aiohttp = "^3.11.18"
+pre-commit = "^4.1.0"
+mypy = "^1.10.0"
+types-pyyaml = "^6.0.12.20250516"
+types-requests = "^2.32.0.20250515"
 isort = "^6.0.1"
 yamllint = "^1.35.1"
 bandit = "^1.8.3"
-pytest = "^8.3.3"
-coverage = "^7.6.1"
 detect-secrets = "^1.5.0"
-pre-commit = "^4.1.0"
+autoflake = "^2.3.1"
+flake8 = "^7.1.1"
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
 
 [tool.bandit]
+skips = ["B101"]
 exclude_dirs = ["tests"]
 
 [tool.coverage.run]
-branch = true
 source = ["src"]
-dynamic_context = "test_function"
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+    "*/config-*.py"
+]
 
 [tool.coverage.report]
-show_missing = true
-# fail_under = 80
-# omit = ["tests/*", "your_module_name/__init__.py"]
-
-[tool.coverage.html]
-directory = "htmlcov"
-
-[virtualenvs]
-create = true
-in-project = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
 
 [build-system]
 requires = ["poetry-core"]
