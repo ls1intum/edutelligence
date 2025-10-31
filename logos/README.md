@@ -88,3 +88,25 @@ To deploy Logos locally or on a server:
 5. Explore the API
 
    A full overview of available endpoints can be found at: https://logos.ase.cit.tum.de:8080/docs
+   
+## Scheduler Benchmarking
+
+To evaluate scheduler behaviour against the running Logos API, replay a scripted workload via the `/v1` endpoint using the helper in `tests/support/scheduling/run_api_workload.py`.
+
+A short guide on crafting compatible workload CSVs lives next to the sample workload in `tests/fixtures/scheduling/README.md`.
+
+```bash
+docker compose exec logos-server \
+  poetry run python logos/tests/support/scheduling/run_api_workload.py \
+    --logos-key "YourLogosApiKey" \
+    --workload logos/tests/fixtures/scheduling/sample_workload.csv \
+    --api-base http://localhost:8080 \
+    --latency-slo-ms 10000 \
+    --output logos/tests/results/scheduling/api_benchmark.csv
+```
+
+Workload definitions live under `tests/fixtures/scheduling/`, and the generated benchmark CSVs are written to `tests/results/scheduling/` so they are accessible from the host machine.
+
+The script sends each request at its configured arrival offset, waits for the system to schedule and execute it, and then pulls the resulting log entries. The output CSV contains a summary row (request counts, average TTFT, average latency, SLO attainment) followed by one row per request with the prompt, HTTP status, selected model/provider, TTFT, total latency, and the provider response text. Optional custom payloads can be provided via the `body_json` or `body_template` columns. Additionally, latency charts are written next to the CSV (PNG files) for quick visual inspection of the run. Use `--latency-slo-ms` to tune the latency objective (in milliseconds) for the summary calculations.
+
+_The scheduling testing scaffolding was prepared with GPT-5 assistance._
