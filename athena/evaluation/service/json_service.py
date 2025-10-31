@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-from athena.evaluation.model.model import (
+from model.model import (
     Exercise,
     Feedback,
     Submission,

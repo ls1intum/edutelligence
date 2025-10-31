@@ -2,12 +2,12 @@ import string
 from typing import List, Any
 
 from langchain_community.callbacks import get_openai_callback
-from langchain.chat_models import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import BaseMessage
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import ValidationError
 
-from athena.evaluation.model.evaluation_model import MetricEvaluations
+from model.evaluation_model import MetricEvaluations
 
 
 def evaluate_feedback_with_model(
