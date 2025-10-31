@@ -12,7 +12,7 @@ from weaviate.exceptions import (
 
 from iris.config import settings
 from iris.vector_database.database import VectorDatabase
-from iris.web.routers.health.health_model import ModuleStatus
+from iris.web.routers.health.health_model import ModuleStatus, ServiceStatus
 
 log = logging.getLogger(__name__)
 
@@ -21,12 +21,12 @@ def check_weaviate_status() -> list[tuple[str, ModuleStatus]]:
     """Check the connection and readiness status of the Weaviate instance."""
     module_name = "Weaviate Vector Database"
     url = f"https://{settings.weaviate.host}:{settings.weaviate.port}/v1"
-    status_obj = ModuleStatus(healthy=False, url=url)
+    status_obj = ModuleStatus(status=ServiceStatus.DOWN, meta_data=url)
 
     try:
         client = VectorDatabase().client
         if client.is_ready():
-            status_obj.healthy = True
+            status_obj.status = ServiceStatus.UP
         else:
             status_obj.error = "Weaviate reported not ready."
     except (WeaviateConnectionError, UnexpectedStatusCodeException) as exc:

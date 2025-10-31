@@ -11,16 +11,16 @@ from iris.dependencies import TokenValidator
 from iris.web.routers.health.health_model import (
     IrisHealthResponse,
     ModuleStatus,
+    ServiceStatus,
 )
+from iris.web.routers.health.Pipelines.pipeline_health import check_pipelines_health
 from iris.web.routers.health.weaviate_health import check_weaviate_status
 
 router = APIRouter(prefix="/api/v1/health", tags=["health"])
 logging = getLogger(__name__)
 HealthCheckCallable = Callable[[], list[tuple[str, ModuleStatus]]]
 
-MODULES: list[HealthCheckCallable] = [
-    check_weaviate_status,
-]
+MODULES: list[HealthCheckCallable] = [check_weaviate_status, check_pipelines_health]
 
 
 @router.get(
@@ -38,7 +38,7 @@ def health(response: Response) -> IrisHealthResponse:
     logging.debug("health_check invoked")
     results = {k: v for check in MODULES for (k, v) in check()}
     logging.debug("Health check results: %s", results)
-    overall_ok = all(m.healthy for m in results.values())
+    overall_ok = all(m.status != ServiceStatus.DOWN for m in results.values())
     if overall_ok:
         response.status_code = status.HTTP_200_OK
     else:
