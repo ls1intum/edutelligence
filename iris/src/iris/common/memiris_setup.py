@@ -1,4 +1,5 @@
 import logging
+import os
 from threading import Thread
 from typing import Callable, Sequence
 from uuid import UUID
@@ -20,10 +21,8 @@ from memiris.service.vectorizer import Vectorizer
 from memiris.util.uuid_util import is_valid_uuid, to_uuid
 from weaviate import WeaviateClient
 
-_memiris_embedding_models = [
-    OllamaLanguageModel("mxbai-embed-large:latest"),
-    OllamaLanguageModel("nomic-embed-text:latest"),
-]
+from iris.llm import OllamaModel
+from iris.llm.llm_manager import LlmManager
 
 _memiris_user_focus_personal_details = """
 Find personal details about the user itself.
@@ -62,8 +61,26 @@ Keep the learnings short and concise. Better have multiple short learnings than 
 type Tenant = str
 
 
-def memiris_create_user_memory_creation_pipeline(
-    weaviate_client: WeaviateClient,
+def setup_ollama_env_vars():
+    llm_manager = LlmManager()
+    iris_ollama_model: OllamaModel | None = None
+    for model in llm_manager.entries:
+        if isinstance(model, OllamaModel):
+            iris_ollama_model = model
+            break
+
+    if iris_ollama_model is not None:
+        os.environ["OLLAMA_HOST"] = iris_ollama_model.host
+        os.environ["OLLAMA_TOKEN"] = iris_ollama_model.api_key or ""
+
+    if not os.environ.get("OLLAMA_HOST"):
+        raise RuntimeError("Ollama host not configured for Memiris LLM access.")
+    if not os.environ.get("OLLAMA_TOKEN"):
+        raise RuntimeError("Ollama token not configured for Memiris LLM access.")
+
+
+def memiris_create_user_memory_creation_pipeline_ollama(
+    weaviate_client: WeaviateClient, vectorizer: Vectorizer
 ) -> MemoryCreationPipeline:
     """
     Creates a memory creation pipeline for users.
@@ -82,11 +99,12 @@ def memiris_create_user_memory_creation_pipeline(
         MemoryCreationPipelineBuilder()
         .set_memory_repository(weaviate_client)
         .set_learning_repository(weaviate_client)
-        .set_vectorizer(_memiris_embedding_models)
+        .set_vectorizer(vectorizer)
         .add_learning_extractor(focus=_memiris_user_focus_personal_details)
         .add_learning_extractor(focus=_memiris_user_focus_requirements)
         .add_learning_extractor(focus=_memiris_user_focus_facts)
         .add_learning_deduplicator()
+        .set_memory_creator_langchain()
         .build()
     )
 
@@ -128,10 +146,29 @@ class MemirisWrapper:
     A wrapper class for the Memiris memory service for easier use in Iris's pipelines.
     """
 
+    enabled: bool
+
     def __init__(self, weaviate_client: WeaviateClient, tenant: Tenant):
-        self.vectorizer = Vectorizer(_memiris_embedding_models)
-        self.memory_creation_pipeline = memiris_create_user_memory_creation_pipeline(
-            weaviate_client
+        try:
+            setup_ollama_env_vars()
+        except RuntimeError:
+            logging.error(
+                "Failed to setup Memiris. Please provide at least one Ollama model in the LLM config"
+            )
+            self.enabled = False
+            return
+        self.enabled = True
+        self._memiris_embedding_models = [
+            OllamaLanguageModel("mxbai-embed-large:latest"),
+            OllamaLanguageModel("nomic-embed-text:latest"),
+            # OllamaLanguageModel("embeddinggemma:latest"),
+            # OllamaLanguageModel("qwen3-embedding:0.6b"),
+        ]
+        self.vectorizer = Vectorizer(self._memiris_embedding_models)
+        self.memory_creation_pipeline = (
+            memiris_create_user_memory_creation_pipeline_ollama(
+                weaviate_client, self.vectorizer
+            )
         )
         self.learning_service = LearningService(weaviate_client)
         self.memory_service = MemoryService(weaviate_client)

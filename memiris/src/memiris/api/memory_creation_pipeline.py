@@ -285,7 +285,7 @@ class MemoryCreationPipelineBuilder:
         )
         return self
 
-    def _set_memory_creator_langchain(
+    def set_memory_creator_langchain(
         self,
         llm: AbstractLanguageModel | None = None,
         template: str | None = None,
@@ -460,7 +460,7 @@ class MemoryCreationPipelineBuilder:
             self.add_learning_deduplicator()
         if not self._memory_creator_config:
             print("No MemoryCreator configured, using default.")
-            self._set_memory_creator_langchain()
+            self.set_memory_creator_langchain()
 
         return MemoryCreationPipeline(
             learning_extractors=[

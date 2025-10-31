@@ -157,21 +157,14 @@ class OllamaLanguageModel(AbstractLanguageModel):
         self,
         model: str,
         host: Optional[str] = None,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
         token: Optional[str] = None,
     ) -> None:
         self._model = model
         self.host = host or os.environ.get("OLLAMA_HOST")
-        self.username = username or os.environ.get("OLLAMA_USERNAME")
-        self.password = password or os.environ.get("OLLAMA_PASSWORD")
         self.token = token or os.environ.get("OLLAMA_TOKEN")
 
-        self._auth = (
-            (self.username, self.password) if self.username and self.password else None
-        )
         self._cookies = {"token": self.token} if self.token else None
-        self._client = Client(self.host, auth=self._auth, cookies=self._cookies)
+        self._client = Client(self.host, cookies=self._cookies)
         self._langfuse = langfuse.get_client()
 
     # --- Core operations ---
@@ -214,7 +207,7 @@ class OllamaLanguageModel(AbstractLanguageModel):
         return ChatOllama(
             model=self._model,
             base_url=self.host,
-            client_kwargs={"auth": self._auth, "cookies": self._cookies},
+            client_kwargs={"cookies": self._cookies},
             reasoning="high" if self._model.startswith("gpt-oss") else None,  # type: ignore
         )
 
