@@ -1,3 +1,9 @@
+---
+title: "Development Process"
+description: "Complete guide to the Atlas development process and contribution workflow"
+sidebar_position: 1
+---
+
 # Development Process
 
 ![Process Model - Activity Diagram](./process-model.png)

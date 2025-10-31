@@ -1,3 +1,18 @@
+"""
+AtlasML FastAPI application.
+
+This module wires together the API application, lifecycle hooks, middleware,
+and routers. It also initializes external service clients (notably the
+Weaviate vector database) and provides a global validation error handler.
+
+Key responsibilities:
+- Create the FastAPI app and register lifespan events
+- Initialize and log the Weaviate client connectivity status
+- Add request/response logging middleware
+- Handle request validation errors centrally
+- Mount routers under versioned prefixes (e.g., health, competency)
+"""
+
 import logging
 import os
 import json
@@ -41,6 +56,12 @@ logger = logging.getLogger(__name__)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Logs inbound requests and outbound responses with timing.
+
+    The middleware prints concise request metadata (method, path) and best-effort
+    bodies for POST requests, then logs response status codes and total latency.
+    This is useful for debugging and observability in non-production setups.
+    """
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
 
@@ -81,6 +102,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app):
+    """Application lifespan hook to manage external connections.
+
+    On startup, logs Weaviate connectivity and basic runtime info. On shutdown,
+    gracefully closes the Weaviate client to free resources.
+    """
     logger.info("🚀 Starting AtlasML API...")
     logger.info(
         f"🔌 Weaviate client status: {'Connected' if get_weaviate_client().is_alive() else 'Disconnected'}"
@@ -99,6 +125,11 @@ app = FastAPI(title="AtlasML API", lifespan=lifespan)
 # Add validation error handler
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return a structured 422 response for Pydantic validation errors.
+
+    Includes the validation errors and original request body (as text) to aid
+    debugging of malformed inputs.
+    """
     logger.error(f"❌ Validation error for {request.method} {request.url.path}")
     logger.error(f"❌ Validation details: {exc.errors()}")
     logger.error(f"❌ Request body was: {await request.body()}")
