@@ -3,6 +3,8 @@ from typing import overload
 from langfuse._client.observe import observe
 from weaviate.client import WeaviateClient
 
+from memiris.llm.abstract_language_model import AbstractLanguageModel
+from memiris.llm.ollama_language_model import OllamaLanguageModel
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_connection_repository import MemoryConnectionRepository
 from memiris.repository.memory_repository import MemoryRepository
@@ -16,7 +18,6 @@ from memiris.repository.weaviate.weaviate_memory_repository import (
     WeaviateMemoryRepository,
 )
 from memiris.service.memory_sleep import MemorySleeper
-from memiris.service.ollama_wrapper import AbstractLanguageModel, OllamaLanguageModel
 from memiris.service.vectorizer import Vectorizer
 
 

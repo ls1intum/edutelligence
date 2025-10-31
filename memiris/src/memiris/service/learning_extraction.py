@@ -6,7 +6,7 @@ from ollama import Message
 
 from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.service.ollama_wrapper import AbstractLanguageModel
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import (
     creation_dlo_to_learning,

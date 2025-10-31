@@ -1,7 +1,8 @@
-from langfuse import observe
-from typing_extensions import Sequence
+from typing import Sequence
 
-from memiris.service.ollama_wrapper import AbstractLanguageModel
+from langfuse import observe
+
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 
 
 class Vectorizer:
@@ -11,7 +12,7 @@ class Vectorizer:
 
     vector_models: dict[str, AbstractLanguageModel]
 
-    def __init__(self, vector_models: list[AbstractLanguageModel]) -> None:
+    def __init__(self, vector_models: Sequence[AbstractLanguageModel]) -> None:
         """
         Initialize the Vectorizer with a dictionary of vector models.
 

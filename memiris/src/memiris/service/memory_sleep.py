@@ -19,10 +19,10 @@ from memiris.dlo.memory_deduplication_input_dlo import (
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.domain.memory_connection import ConnectionType, MemoryConnection
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_connection_repository import MemoryConnectionRepository
 from memiris.repository.memory_repository import MemoryRepository
-from memiris.service.ollama_wrapper import AbstractLanguageModel
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.enum_util import get_enum_values_with_descriptions
 from memiris.util.grouping import greedy_cover_max_groups

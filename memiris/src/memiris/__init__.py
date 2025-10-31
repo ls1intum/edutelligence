@@ -22,7 +22,9 @@ from memiris.api.memory_with_relations_dto import MemoryWithRelationsDTO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.domain.memory_connection import MemoryConnection
-from memiris.service.ollama_wrapper import AbstractLanguageModel, OllamaLanguageModel
+from memiris.llm.abstract_language_model import AbstractLanguageModel
+from memiris.llm.ollama_language_model import OllamaLanguageModel
+from memiris.llm.openai_language_model import OpenAiLanguageModel
 
 try:
     dist_name = "MemIris"
@@ -51,5 +53,6 @@ __all__ = [
     "LearningService",
     # Internal services
     "OllamaLanguageModel",
+    "OpenAiLanguageModel",
     "AbstractLanguageModel",
 ]

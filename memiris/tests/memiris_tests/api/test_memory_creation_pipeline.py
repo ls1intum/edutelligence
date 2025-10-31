@@ -10,6 +10,7 @@ from memiris.api.memory_creation_pipeline import (
 )
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
+from memiris.llm.ollama_language_model import OllamaLanguageModel
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.learning_deduplication import LearningDeduplicator
@@ -17,7 +18,6 @@ from memiris.service.learning_extraction import LearningExtractor
 from memiris.service.memory_creator.memory_creator_multi_model import (
     MemoryCreatorMultiModel,
 )
-from memiris.service.ollama_wrapper import OllamaLanguageModel
 from memiris.service.vectorizer import Vectorizer
 
 

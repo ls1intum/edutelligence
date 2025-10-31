@@ -8,10 +8,10 @@ from memiris.dlo.learning_main_dlo import LearningDLO
 from memiris.dlo.memory_creation_dlo import MemoryCreationDLO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.memory_creator.memory_creator import MemoryCreator
-from memiris.service.ollama_wrapper import AbstractLanguageModel
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
 from memiris.util.jinja_util import create_template
@@ -137,7 +137,14 @@ class MemoryCreatorMultiModel(MemoryCreator):
             if not response or not response.message:
                 break
 
-            messages.append(response.message)
+            # Append assistant message in normalized mapping form
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.message.content or "",
+                    "name": None,
+                }
+            )
 
             print(response.message)
 
@@ -159,10 +166,11 @@ class MemoryCreatorMultiModel(MemoryCreator):
                 if done:
                     break
 
+            phase = "thinking phase" if i % 2 == 1 else "tool phase"
             messages.append(
                 Message(
                     role="user",
-                    content=f"You are now in the {"thinking phase" if i % 2 == 1 else "tool phase"}.\n",
+                    content=f"You are now in the {phase}.\n",
                 )
             )
 
