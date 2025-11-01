@@ -63,7 +63,7 @@ Keep the learnings short and concise. Better have multiple short learnings than 
 type Tenant = str
 
 
-def setup_ollama_env_vars():
+def setup_ollama_env_vars() -> None:
     llm_manager = LlmManager()
     iris_ollama_model: OllamaModel | None = None
     for model in llm_manager.entries:
