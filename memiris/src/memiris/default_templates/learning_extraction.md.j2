@@ -18,7 +18,18 @@ The following learnings were already found in this conversation. Do NOT repeat t
 
 {% if learning_focus is not none -%}
 Please focus on the following topic and only extract learnings related to it:
+```
 {{ learning_focus }}
+```
+Please adhere to this focus strictly.
+Unless the focus states otherwise, focus on what will actually be useful in the future.
+Some examples what NOT to extract:
+- Learnings about the meta context of being in a chat based conversation
+- Learnings about the process of extracting learnings
+- Learnings about content only relevant to understanding the current conversation.
+
+INSTEAD, focus on learnings that will be useful in the future and applicable in other contexts.
+And again, ONLY output learnings related to the provided focus.
 {% endif -%}
 
 The user will now provide a text.
