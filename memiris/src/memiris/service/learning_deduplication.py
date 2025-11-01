@@ -6,7 +6,7 @@ from ollama import Message
 
 from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import (
     creation_dlo_to_learning,
@@ -19,24 +19,23 @@ class LearningDeduplicator:
     A class to deduplicate Learnings using a large language model.
     """
 
-    llm: str
+    llm: AbstractLanguageModel
     template: Template
-    ollama_service: OllamaService
+    ollama_service: None  # Deprecated: use llm proxy
 
     def __init__(
-        self, llm: str, ollama_service: OllamaService, template: Optional[str] = None
+        self, llm: AbstractLanguageModel, template: Optional[str] = None
     ) -> None:
         """
         Initialize the LearningExtractor
 
         Args:
-            llm: The name of the language model to use
-            ollama_service: The Ollama service to use for LLM calls
+            llm: The bound chat model to use
             template: Optional template path to use for the deduplication prompt
         """
         self.llm = llm
         self.template = create_template(template, "learning_deduplication.md.j2")
-        self.ollama_service = ollama_service
+        self.ollama_service = None
 
     @observe(name="learning-deduplication")
     def deduplicate(self, learnings: List[Learning], **kwargs) -> List[Learning]:
@@ -69,8 +68,7 @@ class LearningDeduplicator:
             ),
         ]
 
-        response = self.ollama_service.chat(
-            model=self.llm,
+        response = self.llm.chat(
             messages=messages,
             response_format=LearningCreationDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},

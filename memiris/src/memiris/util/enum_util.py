@@ -41,7 +41,7 @@ def get_enum_values_with_descriptions(
     for member in enum_class:
         name = member.name
         value = member.value
-        description = descriptions.get(name, f"{name.replace("_", " ").title()}")
+        description = descriptions.get(name, name.replace("_", " ").title())
 
         result[name.lower()] = {"value": value, "description": description}
 

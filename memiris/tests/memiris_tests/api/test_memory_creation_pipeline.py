@@ -10,6 +10,7 @@ from memiris.api.memory_creation_pipeline import (
 )
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
+from memiris.llm.ollama_language_model import OllamaLanguageModel
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.learning_deduplication import LearningDeduplicator
@@ -17,16 +18,13 @@ from memiris.service.learning_extraction import LearningExtractor
 from memiris.service.memory_creator.memory_creator_multi_model import (
     MemoryCreatorMultiModel,
 )
-from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 
 
 class TestMemoryCreationPipeline:
     """Test suite for MemoryCreationPipelineBuilder and MemoryCreationPipeline."""
 
-    @pytest.fixture
-    def mock_ollama_service(self, mocker):
-        return mocker.Mock(spec=OllamaService)
+    # No OllamaService injection needed; using model proxies
 
     @pytest.fixture
     def mock_learning_repository(self, mocker):
@@ -43,13 +41,12 @@ class TestMemoryCreationPipeline:
     def test_build_adds_default_deduplicator_if_missing(
         self,
         mocker,
-        mock_ollama_service,
         mock_learning_repository,
         mock_memory_repository,
         mock_vectorizer,
     ):
         # Arrange
-        builder = MemoryCreationPipelineBuilder(ollama_service=mock_ollama_service)
+        builder = MemoryCreationPipelineBuilder()
         # Set required repositories and vectorizer
         builder.set_learning_repository(mock_learning_repository)
         builder.set_memory_repository(mock_memory_repository)
@@ -57,12 +54,12 @@ class TestMemoryCreationPipeline:
 
         # Add only a learning extractor and memory creator, but no deduplicator
         builder.add_learning_extractor(
-            focus="test focus", llm_learning_extraction="test-llm"
+            focus="test focus", llm_learning_extraction=OllamaLanguageModel("test-llm")
         )
         builder.set_memory_creator_multi_model(
-            llm_tool="tool-llm",
-            llm_thinking="thinking-llm",
-            llm_response="response-llm",
+            llm_tool=OllamaLanguageModel("tool-llm"),
+            llm_thinking=OllamaLanguageModel("thinking-llm"),
+            llm_response=OllamaLanguageModel("response-llm"),
         )
 
         # Patch the add_learning_deduplicator method to track if it is called
@@ -81,22 +78,25 @@ class TestMemoryCreationPipeline:
 
     def test_build_pipeline_success(
         self,
-        mock_ollama_service,
         mock_learning_repository,
         mock_memory_repository,
         mock_vectorizer,
     ):
-        builder = MemoryCreationPipelineBuilder(ollama_service=mock_ollama_service)
+        builder = MemoryCreationPipelineBuilder()
         builder._learning_repository = mock_learning_repository
         builder._memory_repository = mock_memory_repository
         builder._vectorizer = mock_vectorizer
 
-        builder.add_learning_extractor(focus="focus", llm_learning_extraction="llm1")
-        builder.add_learning_deduplicator(llm_learning_deduplication="llm2")
+        builder.add_learning_extractor(
+            focus="focus", llm_learning_extraction=OllamaLanguageModel("llm1")
+        )
+        builder.add_learning_deduplicator(
+            llm_learning_deduplication=OllamaLanguageModel("llm2")
+        )
         builder.set_memory_creator_multi_model(
-            llm_tool="tool-llm",
-            llm_thinking="thinking-llm",
-            llm_response="response-llm",
+            llm_tool=OllamaLanguageModel("tool-llm"),
+            llm_thinking=OllamaLanguageModel("thinking-llm"),
+            llm_response=OllamaLanguageModel("response-llm"),
         )
 
         pipeline = builder.build()
@@ -106,16 +106,14 @@ class TestMemoryCreationPipeline:
         assert len(pipeline._learning_deduplicators) == 1
         assert isinstance(pipeline._memory_creator, MemoryCreatorMultiModel)
 
-    def test_learning_extractor_and_deduplicator_conversion(self, mock_ollama_service):
+    def test_learning_extractor_and_deduplicator_conversion(self):
         extractor_config = _MemoryCreationLearningExtractorConfig(
-            llm_learning_extraction="llm-extract",
+            llm_learning_extraction=OllamaLanguageModel("llm-extract"),
             focus="focus-topic",
-            ollama_service=mock_ollama_service,
             template="template-path",
         )
         deduplicator_config = _MemoryCreationLearningDeduplicatorConfig(
-            llm_learning_deduplication="llm-dedupe",
-            ollama_service=mock_ollama_service,
+            llm_learning_deduplication=OllamaLanguageModel("llm-dedupe"),
             template="template-path",
         )
 
@@ -123,13 +121,11 @@ class TestMemoryCreationPipeline:
         deduplicator = deduplicator_config.convert()
 
         assert isinstance(extractor, LearningExtractor)
-        assert extractor.llm == "llm-extract"
+        assert extractor.llm.model == "llm-extract"
         assert extractor.focus == "focus-topic"
-        assert extractor.ollama_service == mock_ollama_service
 
         assert isinstance(deduplicator, LearningDeduplicator)
-        assert deduplicator.llm == "llm-dedupe"
-        assert deduplicator.ollama_service == mock_ollama_service
+        assert deduplicator.llm.model == "llm-dedupe"
 
     def test_create_memory_pipeline_flow(
         self, mocker, mock_learning_repository, mock_memory_repository, mock_vectorizer
@@ -193,19 +189,18 @@ class TestMemoryCreationPipeline:
 
     def test_build_without_learning_extractor_raises(
         self,
-        mock_ollama_service,
         mock_learning_repository,
         mock_memory_repository,
         mock_vectorizer,
     ):
-        builder = MemoryCreationPipelineBuilder(ollama_service=mock_ollama_service)
+        builder = MemoryCreationPipelineBuilder()
         builder._learning_repository = mock_learning_repository
         builder._memory_repository = mock_memory_repository
         builder._vectorizer = mock_vectorizer
         builder.set_memory_creator_multi_model(
-            llm_tool="tool-llm",
-            llm_thinking="thinking-llm",
-            llm_response="response-llm",
+            llm_tool=OllamaLanguageModel("tool-llm"),
+            llm_thinking=OllamaLanguageModel("thinking-llm"),
+            llm_response=OllamaLanguageModel("response-llm"),
         )
 
         with pytest.raises(
@@ -215,16 +210,17 @@ class TestMemoryCreationPipeline:
 
     def test_build_without_memory_creator_creates_default(
         self,
-        mock_ollama_service,
         mock_learning_repository,
         mock_memory_repository,
         mock_vectorizer,
     ):
-        builder = MemoryCreationPipelineBuilder(ollama_service=mock_ollama_service)
+        builder = MemoryCreationPipelineBuilder()
         builder._learning_repository = mock_learning_repository
         builder._memory_repository = mock_memory_repository
         builder._vectorizer = mock_vectorizer
-        builder.add_learning_extractor(focus="focus", llm_learning_extraction="llm1")
+        builder.add_learning_extractor(
+            focus="focus", llm_learning_extraction=OllamaLanguageModel("llm1")
+        )
 
         pipeline = builder.build()
 
