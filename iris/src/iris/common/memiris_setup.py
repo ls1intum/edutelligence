@@ -143,6 +143,9 @@ class MemirisWrapper:
 
         Args:
             text (str): The text to create memories from.
+            reference (str): The reference for the memories.
+        Returns:
+            Sequence[Memory]: A sequence of created Memory objects.
         """
         return self.memory_creation_pipeline.create_memories(
             self.tenant, text, reference

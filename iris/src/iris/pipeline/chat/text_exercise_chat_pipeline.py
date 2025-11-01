@@ -137,10 +137,14 @@ class TextExerciseChatPipeline(
         Returns:
             str: The reference identifier
         """
-        last_message: Optional[PyrisMessage] = None
-        for last_message in reversed(dto.conversation):
-            if last_message.sender == IrisMessageRole.USER:
-                break
+        last_message: Optional[PyrisMessage] = next(
+            (
+                m
+                for m in reversed(dto.conversation or [])
+                if m.sender == IrisMessageRole.USER
+            ),
+            None,
+        )
         return (
             f"session-messages/{last_message.id}"
             if last_message and last_message.id

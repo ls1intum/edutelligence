@@ -184,7 +184,7 @@ class TestMemoryCreationPipeline:
         tenant = "tenant1"
         content = "Some content to extract learnings from"
 
-        pipeline.create_memories(tenant, content)
+        pipeline.create_memories(tenant, content, reference="Test")
 
         mock_extractor.extract.assert_called()
         mock_deduplicator.deduplicate.assert_called_once_with(
