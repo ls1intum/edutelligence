@@ -4,12 +4,16 @@ from typing import Callable, Sequence
 from uuid import UUID
 
 from memiris import (
+    LearningDTO,
     LearningService,
     Memory,
+    MemoryConnectionDTO,
     MemoryConnectionService,
     MemoryCreationPipeline,
     MemoryCreationPipelineBuilder,
+    MemoryDTO,
     MemoryService,
+    MemoryWithRelationsDTO,
     OllamaService,
 )
 from memiris.service.vectorizer import Vectorizer
@@ -294,3 +298,71 @@ class MemirisWrapper:
             return memories
 
         return memiris_find_similar_memories
+
+    def get_memory_with_relations(
+        self, memory_id: UUID | str
+    ) -> MemoryWithRelationsDTO | None:
+        """
+        Fetch a memory by ID and fully populate its learnings and connections.
+
+        Returns a MemoryWithRelationsDTO or None if the memory does not exist.
+        """
+        if isinstance(memory_id, str):
+            if not is_valid_uuid(memory_id):
+                return None
+            memory_uuid: UUID = to_uuid(memory_id)  # type: ignore
+        else:
+            memory_uuid = memory_id
+
+        memory = self.memory_service.get_memory_by_id(self.tenant, memory_uuid)
+        if memory is None:
+            return None
+
+        # Fetch learnings
+        learning_ids = memory.learnings
+        learnings = (
+            self.learning_service.get_learnings_by_ids(self.tenant, learning_ids)
+            if learning_ids
+            else []
+        )
+
+        # Fetch connections and all connected memories
+        connections = (
+            self.memory_connection_service.get_memory_connections_by_ids(
+                self.tenant, memory.connections
+            )
+            if memory.connections
+            else []
+        )
+
+        connected_memory_ids: list[UUID] = []
+        for conn in connections:
+            for mid in conn.memories:
+                if mid not in connected_memory_ids:
+                    connected_memory_ids.append(mid)
+
+        connected_memories = (
+            self.memory_service.get_memories_by_ids(self.tenant, connected_memory_ids)
+            if connected_memory_ids
+            else []
+        )
+        connected_memory_map: dict[UUID, Memory] = {
+            memory.id: memory for memory in connected_memories if memory.id is not None
+        }
+
+        # Build DTOs
+        memory_dto = MemoryDTO.from_memory(memory)
+        learning_dtos = [LearningDTO.from_learning(learning) for learning in learnings]
+
+        connection_dtos = []
+        for conn in connections:
+            cm = [
+                MemoryDTO.from_memory(connected_memory_map[mid])
+                for mid in conn.memories
+                if mid in connected_memory_map
+            ]
+            connection_dtos.append(MemoryConnectionDTO.from_connection(conn, cm))
+
+        return MemoryWithRelationsDTO(
+            memory=memory_dto, learnings=learning_dtos, connections=connection_dtos
+        )
