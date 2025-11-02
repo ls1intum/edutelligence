@@ -7,7 +7,9 @@ You should output the learnings in this structured JSON format:
 ```
 {{ learning_json_schema }}
 ```
-You should not include any other text or explanation. Providing an empty array is acceptable if no (new) learnings are found.
+You should not include any other text or explanation.
+Providing an empty array is acceptable if no (new) learnings are found.
+It is better to return an empty array than providing low-quality or redundant learnings.
 
 {% if previous_learnings is not none and previous_learnings | length > 0 %}
 The following learnings were already found in this conversation. Do NOT repeat them and do NOT output them! Only output new learnings.
