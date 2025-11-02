@@ -535,6 +535,7 @@ class MemoryCreationPipeline:
         Args:
             tenant: The tenant to which the memories belong.
             content: The content from which learnings will be extracted.
+            reference: A reference string associated with the learnings.
             **kwargs: Additional keyword arguments that may be used by the extractors or deduplicators.
 
         Returns:
@@ -550,6 +551,8 @@ class MemoryCreationPipeline:
                 deduplicated_learnings.extend(
                     deduplicator.deduplicate(learnings, **kwargs)
                 )
+        else:
+            deduplicated_learnings = learnings
 
         for learning in deduplicated_learnings:
             learning.vectors = self._vectorizer.vectorize(learning.content)

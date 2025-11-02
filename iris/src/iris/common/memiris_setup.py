@@ -163,6 +163,7 @@ class MemirisWrapper:
 
         Args:
             text (str): The text to create memories from.
+            reference (str): The reference for the memories.
             result_storage (list[Memory]): The storage to append the created memories to.
         Returns:
             Thread: The thread that is running the memory creation.
