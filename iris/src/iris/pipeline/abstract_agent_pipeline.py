@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 DTO = TypeVar("DTO")
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
+DEFAULT_SESSION_TITLE_ALIASES: set[str] = {"new chat", "neuer chat"}
 
 
 class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
@@ -289,21 +290,36 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 final_output = step["output"]
         return final_output
 
+    @staticmethod
+    def should_generate_session_title(
+        session_title: Optional[str],
+    ) -> bool:
+        """
+        Determine if a session title should be generated.
+
+        Args:
+            session_title: The current session title
+        Returns:
+            bool: True if a new session title should be generated
+        """
+        title = (session_title or "").strip().lower()
+        return not title or title in DEFAULT_SESSION_TITLE_ALIASES
+
     def _create_session_title(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
         output: str,
-        first_user_msg: str,
+        user_msg: str,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the user prompt and the model output.
 
         This is a common implementation used across different chat pipelines.
 
         Args:
             state: The current pipeline execution state
             output: The agent's output
-            first_user_msg: The first user message text
+            user_msg: The user message text
 
         Returns:
             The generated session title or None if not applicable
@@ -316,7 +332,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         try:
             if output:
-                session_title = self.session_title_pipeline(first_user_msg, output)
+                session_title = self.session_title_pipeline(user_msg, output)
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)
                 if session_title is None:

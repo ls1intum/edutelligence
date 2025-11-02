@@ -445,7 +445,7 @@ class TextExerciseChatPipeline(
         dto: TextExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the user prompt and the model output.
 
         Args:
             state: The current pipeline execution state
@@ -455,9 +455,11 @@ class TextExerciseChatPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if len(dto.conversation) == 1:
-            first_user_msg = dto.conversation[0].contents[0].text_content
-            return super()._create_session_title(state, output, first_user_msg)
+        if self.should_generate_session_title(dto.session_title):
+            user_msg = (
+                dto.conversation[len(dto.chat_history) - 1].contents[0].text_content
+            )
+            return super()._create_session_title(state, output, user_msg)
         return None
 
     @traceable(name="Text Exercise Chat Pipeline")

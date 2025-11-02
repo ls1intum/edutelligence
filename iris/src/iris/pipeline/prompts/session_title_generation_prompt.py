@@ -10,7 +10,7 @@ def session_title_generation_prompt():
         - The title MUST be in the same language as the user message and assistant reply
 
         Return ONLY the title text, nothing else.
-        User: {first_user_msg}
+        User: {user_msg}
 
         Assistant: {llm_response}
         """

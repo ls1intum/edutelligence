@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class SessionTitleGenerationPipeline(SubPipeline):
     """
-    Pipeline that generates a session title from the first user message and the LLM response for all iris chats.
+    Pipeline that generates a session title from a user message and its LLM response for all iris chats.
     """
 
     llm: IrisLangchainChatModel
@@ -49,16 +49,14 @@ class SessionTitleGenerationPipeline(SubPipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Session Title Generation Pipeline")
-    def __call__(
-        self, first_user_msg: str, llm_response: str, **kwargs
-    ) -> Optional[str]:
+    def __call__(self, user_msg: str, llm_response: str, **kwargs) -> Optional[str]:
         prompt = ChatPromptTemplate.from_messages(
             [("system", session_title_generation_prompt())]
         )
         try:
             logger.info("Running Session Title Generation Pipeline")
             session_title = (prompt | self.pipeline).invoke(
-                {"first_user_msg": first_user_msg, "llm_response": llm_response}
+                {"user_msg": user_msg, "llm_response": llm_response}
             )
             self.tokens = self.llm.tokens
             self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
