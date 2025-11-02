@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from athena import emit_meta
-from athena.schemas import LearnerProfile
+from athena.schemas import LearnerProfile, Competency
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
