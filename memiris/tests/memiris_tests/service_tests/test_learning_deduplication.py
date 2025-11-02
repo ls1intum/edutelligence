@@ -5,8 +5,10 @@ import pytest
 
 from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.llm.abstract_language_model import AbstractLanguageModel
-from memiris.llm.ollama_language_model import WrappedChatResponse
+from memiris.llm.abstract_language_model import (
+    AbstractLanguageModel,
+    WrappedChatResponse,
+)
 from memiris.service.learning_deduplication import LearningDeduplicator
 
 

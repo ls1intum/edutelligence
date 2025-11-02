@@ -1,5 +1,6 @@
 import logging
 import os
+import warnings
 from threading import Thread
 from typing import Callable, Sequence
 from uuid import UUID
@@ -78,7 +79,7 @@ def setup_ollama_env_vars() -> None:
     if not os.environ.get("OLLAMA_HOST"):
         raise RuntimeError("Ollama host not configured for Memiris LLM access.")
     if not os.environ.get("OLLAMA_TOKEN"):
-        raise RuntimeError("Ollama token not configured for Memiris LLM access.")
+        warnings.warn("Ollama token not configured for Memiris LLM access.")
 
 
 def memiris_create_user_memory_creation_pipeline_ollama(

@@ -93,12 +93,24 @@ class OpenAiLanguageModel(AbstractLanguageModel):
             # OpenAI v1 supports {"type": "json_object"} or json_schema
             rf = response_format
 
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=normalized,  # type: ignore[arg-type]
-            temperature=temperature,  # type: ignore[arg-type]
-            response_format=rf,  # type: ignore[arg-type]
-        )
+        # Build request payload and forward additional options/kwargs (e.g., tools)
+        payload: Dict[str, Any] = {
+            "model": self._model,
+            "messages": normalized,  # type: ignore[arg-type]
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature  # type: ignore[arg-type]
+        if rf:
+            payload["response_format"] = rf  # type: ignore[arg-type]
+        if options:
+            # Do not overwrite explicit temperature if already set
+            payload.update({k: v for k, v in options.items() if k != "temperature"})
+        if kwargs:
+            payload.update(kwargs)
+        # Remove None-valued entries to avoid invalid arguments
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        resp = self._client.chat.completions.create(**payload)
         return WrappedChatResponse.from_openai_chat(resp)
 
     def embed(self, text: str) -> WrappedEmbeddingResponse:

@@ -90,14 +90,16 @@ class OllamaLanguageModel(AbstractLanguageModel):
     # --- Model lifecycle / admin ---
     def _list(self) -> List[ModelInfo]:
         response = self._client.list()
-        return [ModelInfo.from_ollama_model(model) for model in response["models"]]
+        models = response.get("models", [])
+        return [ModelInfo.from_ollama_model(model) for model in models]
 
     def _pull(self) -> None:
         self._client.pull(self._model)
 
     def _ps(self) -> List[ModelInfo]:
         response = self._client.ps()
-        return [ModelInfo.from_ollama_model(model) for model in response["models"]]
+        models = response.get("models", [])
+        return [ModelInfo.from_ollama_model(model) for model in models]
 
     def ensure_present(self) -> None:
         models = [model_info.name for model_info in self._list()]
