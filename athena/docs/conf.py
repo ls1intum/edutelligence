@@ -61,9 +61,9 @@ html_theme = 'sphinx_rtd_theme'
 html_context = {
     "display_github": True,
     "github_user": "ls1intum",
-    "github_repo": "Athena",
-    "github_version": "develop",
-    "conf_py_path": "/docs/",
+    "github_repo": "edutelligence",
+    "github_version": "main",
+    "conf_py_path": "/athena/docs/",
 }
 
 html_style = 'css/style.css'
