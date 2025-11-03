@@ -19,7 +19,7 @@ pydantic = "2.11.7"
 PyMuPDF = "1.26.3"
 pytz = "2025.2"
 PyYAML = "6.0.2"
-requests = "2.32.4"
+requests = "^2.32.5"
 sentry-sdk = {version = "2.34.1", extras = ["starlette", "fastapi", "openai"]}
 unstructured = "0.18.11"
 uvicorn = "0.35.0"
