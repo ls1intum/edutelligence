@@ -21,7 +21,7 @@ def check_weaviate_status() -> tuple[str, ModuleStatus]:
     """Check the connection and readiness status of the Weaviate instance."""
     module_name = "Weaviate Vector Database"
     url = f"https://{settings.weaviate.host}:{settings.weaviate.port}/v1"
-    status_obj = ModuleStatus(status=ServiceStatus.DOWN, meta_data=url)
+    status_obj = ModuleStatus(status=ServiceStatus.DOWN, metaData=url)
 
     try:
         client = VectorDatabase().client
