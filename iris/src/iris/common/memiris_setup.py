@@ -236,7 +236,7 @@ class MemirisWrapper:
                 weaviate_client, self.vectorizer
             )
         )
-        self.memiris_creation_pipeline_openai = (
+        self.memory_creation_pipeline_openai = (
             memiris_create_user_memory_creation_pipeline_openai(
                 weaviate_client, self.vectorizer
             )
@@ -259,7 +259,7 @@ class MemirisWrapper:
             Sequence[Memory]: A sequence of created Memory objects.
         """
         if use_cloud_models:
-            return self.memoris_creation_pipeline_openai.create_memories(
+            return self.memory_creation_pipeline_openai.create_memories(
                 self.tenant, text
             )
         else:
