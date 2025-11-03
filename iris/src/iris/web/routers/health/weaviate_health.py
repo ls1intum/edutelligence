@@ -17,7 +17,7 @@ from iris.web.routers.health.health_model import ModuleStatus, ServiceStatus
 log = logging.getLogger(__name__)
 
 
-def check_weaviate_status() -> list[tuple[str, ModuleStatus]]:
+def check_weaviate_status() -> tuple[str, ModuleStatus]:
     """Check the connection and readiness status of the Weaviate instance."""
     module_name = "Weaviate Vector Database"
     url = f"https://{settings.weaviate.host}:{settings.weaviate.port}/v1"
@@ -44,4 +44,4 @@ def check_weaviate_status() -> list[tuple[str, ModuleStatus]]:
         )
         status_obj.error = f"Network error: {exc}"
 
-    return [(module_name, status_obj)]
+    return module_name, status_obj

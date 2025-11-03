@@ -25,4 +25,5 @@ class ModuleStatus(BaseModel):
 class IrisHealthResponse(BaseModel):
     """Overall health response, including all module statuses."""
 
+    is_healthy: bool = Field(alias="isHealthy")
     modules: dict[str, ModuleStatus] = Field(default_factory=dict)

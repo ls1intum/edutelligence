@@ -18,7 +18,7 @@ from iris.web.routers.health.weaviate_health import check_weaviate_status
 
 router = APIRouter(prefix="/api/v1/health", tags=["health"])
 logging = getLogger(__name__)
-HealthCheckCallable = Callable[[], list[tuple[str, ModuleStatus]]]
+HealthCheckCallable = Callable[[], tuple[str, ModuleStatus]]
 
 MODULES: list[HealthCheckCallable] = [check_weaviate_status, check_pipelines_health]
 
@@ -36,12 +36,8 @@ def health(response: Response) -> IrisHealthResponse:
     otherwise 503 Service Unavailable.
     """
     logging.debug("health_check invoked")
-    results = {k: v for check in MODULES for (k, v) in check()}
+    results = dict(check() for check in MODULES)
     logging.debug("Health check results: %s", results)
     overall_ok = all(m.status != ServiceStatus.DOWN for m in results.values())
-    if overall_ok:
-        response.status_code = status.HTTP_200_OK
-    else:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-
-    return IrisHealthResponse(modules=results)
+    response.status_code = status.HTTP_200_OK
+    return IrisHealthResponse(isHealthy=overall_ok, modules=results)
