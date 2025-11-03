@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 import langfuse
+from langchain_ollama import ChatOllama
 from ollama import ChatResponse as OllamaChatResponse
 from ollama import Client, EmbedResponse, ListResponse, Message
 
@@ -103,15 +104,34 @@ class OllamaService:
             username: The username for authentication. Defaults to environment variable OLLAMA_USERNAME.
             password: The password for authentication. Defaults to environment variable OLLAMA_PASSWORD.
         """
-        host = host or os.environ.get("OLLAMA_HOST")
-        username = username or os.environ.get("OLLAMA_USERNAME")
-        password = password or os.environ.get("OLLAMA_PASSWORD")
-        token = token or os.environ.get("OLLAMA_TOKEN")
+        self.host = host or os.environ.get("OLLAMA_HOST")
+        self.username = username or os.environ.get("OLLAMA_USERNAME")
+        self.password = password or os.environ.get("OLLAMA_PASSWORD")
+        self.token = token or os.environ.get("OLLAMA_TOKEN")
 
-        auth_tuple = (username, password) if username and password else None
-        cookies = {"token": token} if token else None
-        self.client = Client(host, auth=auth_tuple, cookies=cookies)
+        self.auth_tuple = (
+            (self.username, self.password) if self.username and self.password else None
+        )
+        self.cookies = {"token": self.token} if self.token else None
+        self.client = Client(host, auth=self.auth_tuple, cookies=self.cookies)
         self.langfuse_client = langfuse.get_client()
+
+    def langchain_client(self, model: str) -> ChatOllama:
+        """
+        Get a LangChain ChatOllama client.
+
+        Args:
+            model: The model name to use.
+
+        Returns:
+            ChatOllama client instance.
+        """
+        return ChatOllama(
+            model=model,
+            base_url=self.host,
+            client_kwargs={"auth": self.auth_tuple, "cookies": self.cookies},
+            reasoning="high" if model.startswith("gpt-oss") else None,  # type: ignore
+        )
 
     def list(self) -> List[ModelInfo]:
         """
@@ -170,12 +190,14 @@ class OllamaService:
         with self.langfuse_client.start_as_current_generation(
             name="ollama-chat", model=model, input=messages, model_parameters=options
         ) as generation:
+            think = "high" if model.startswith("gpt-oss") else None
             response = self.client.chat(
                 model,
                 messages=messages,
                 format=response_format,
                 keep_alive=keep_alive,
                 options=options,
+                think=think,  # type: ignore
                 **kwargs,
             )
             generation.update(
