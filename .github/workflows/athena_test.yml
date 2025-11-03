@@ -128,7 +128,7 @@ jobs:
           path: coverage-reports
       - name: Test Report Summary
         id: test-report
-        uses: mikepenz/action-junit-report@v5
+        uses: mikepenz/action-junit-report@v6
         with:
           report_paths: "all-test-results/**/*_mock.xml"
           check_name: "Athena Test Report"
