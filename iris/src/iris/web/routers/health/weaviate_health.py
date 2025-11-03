@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 def check_weaviate_status() -> tuple[str, ModuleStatus]:
     """Check the connection and readiness status of the Weaviate instance."""
     module_name = "Weaviate Vector Database"
-    url = f"https://{settings.weaviate.host}:{settings.weaviate.port}/v1"
+    url = f"http://{settings.weaviate.host}:{settings.weaviate.port}/v1"
     status_obj = ModuleStatus(status=ServiceStatus.DOWN, metaData=url)
 
     try:

@@ -30,10 +30,7 @@ MODULES: list[HealthCheckCallable] = [check_weaviate_status, check_pipelines_hea
 )
 def health(response: Response) -> IrisHealthResponse:
     """
-    Run health checks for all registered modules and return an overall status.
-
-    Sets the HTTP status code to 200 OK if all modules are healthy,
-    otherwise 503 Service Unavailable.
+    Run health checks for all registered modules and return an overall status with metadata for each module.
     """
     logging.debug("health_check invoked")
     results = dict(check() for check in MODULES)
