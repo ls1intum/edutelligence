@@ -1,0 +1,128 @@
+services:
+  traefik:
+    image: traefik:v3.2
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - weaviate_network
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/traefik.yml:ro
+      - ./traefik/acme.json:/acme.json
+      - ./traefik/config.yml:/config.yml:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:${WEAVIATE_VERSION:-1.30.0}
+    container_name: weaviate
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - weaviate_network
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --scheme
+      - http
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: '${WEAVIATE_API_KEY}'
+      AUTHENTICATION_APIKEY_USERS: '${WEAVIATE_API_USER:-admin}'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      ENABLE_MODULES: 'multi2vec-clip'
+      ENABLE_API_BASED_MODULES: 'true'
+      CLIP_INFERENCE_API: 'http://multi2vec-clip:8080'
+      CLUSTER_HOSTNAME: 'node1'
+      LOG_LEVEL: '${WEAVIATE_LOG_LEVEL:-info}'
+      LOG_FORMAT: 'json'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/.well-known/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.weaviate.entrypoints=http"
+      - "traefik.http.routers.weaviate.rule=Host(`${WEAVIATE_DOMAIN}`)"
+      - "traefik.http.middlewares.weaviate-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.weaviate.middlewares=weaviate-https-redirect"
+      - "traefik.http.routers.weaviate-secure.entrypoints=https"
+      - "traefik.http.routers.weaviate-secure.rule=Host(`${WEAVIATE_DOMAIN}`)"
+      - "traefik.http.routers.weaviate-secure.tls=true"
+      - "traefik.http.routers.weaviate-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.weaviate-secure.tls.options=default@file"
+      - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit"
+      - "traefik.http.routers.weaviate-secure.service=weaviate"
+      - "traefik.http.services.weaviate.loadbalancer.server.port=8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+        reservations:
+          cpus: '4'
+          memory: 8G
+    depends_on:
+      multi2vec-clip:
+        condition: service_healthy
+
+  multi2vec-clip:
+    image: cr.weaviate.io/semitechnologies/multi2vec-clip:sentence-transformers-clip-ViT-B-32-multilingual-v1
+    container_name: multi2vec-clip
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - weaviate_network
+    environment:
+      ENABLE_CUDA: '0'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+networks:
+  weaviate_network:
+    driver: bridge
+
+volumes:
+  weaviate_data:

@@ -1,0 +1,43 @@
+http:
+  middlewares:
+    https-redirectscheme:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    default-headers:
+      headers:
+        frameDeny: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 15552000
+        customFrameOptionsValue: SAMEORIGIN
+        customRequestHeaders:
+          X-Forwarded-Proto: https
+
+    # Rate limiting: 100 requests/sec average, 200 burst
+    rate-limit:
+      rateLimit:
+        average: 100
+        period: 1s
+        burst: 200
+
+    # IP whitelist for private network access (not applied by default)
+    # To enable: change weaviate-secure.middlewares to use 'secured' instead of 'default-headers,rate-limit'
+    default-whitelist:
+      ipAllowList:
+        sourceRange:
+          - "10.0.0.0/8"
+          - "192.168.0.0/16"
+          - "172.16.0.0/12"
+
+    # Secured chain with IP whitelist (optional, not applied by default)
+    secured:
+      chain:
+        middlewares:
+          - default-whitelist
+          - default-headers
+          - rate-limit

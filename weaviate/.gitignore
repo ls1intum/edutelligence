@@ -1,0 +1,27 @@
+# Environment variables
+.env
+
+# Traefik SSL certificates
+traefik/acme.json
+
+# Logs
+*.log
+
+# Docker volumes (if mounted locally)
+data/
+
+# Backup files
+backup/
+*.tar.gz
+*.zip
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
