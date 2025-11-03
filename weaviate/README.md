@@ -39,7 +39,7 @@ This setup provides:
 - Docker Engine 20.10+
 - Docker Compose v2.0+
 - A domain name pointing to your VM's public IP
-- Ports 80 and 443 accessible from the internet (required for Let's Encrypt HTTP challenge)
+- Ports 80, 443, and 50051 accessible (80/443 for HTTPS, 50051 for gRPC)
 
 ## Quick Start
 
@@ -97,7 +97,7 @@ Before running `docker-compose up -d`, verify:
 - [ ] `LETSENCRYPT_EMAIL` is your valid email address
 - [ ] `traefik/acme.json` exists with 600 permissions
 - [ ] DNS A record is configured and propagated (`nslookup weaviate.example.com`)
-- [ ] Firewall allows ports 80 and 443 from the internet
+- [ ] Firewall allows ports 80, 443 (HTTPS), and 50051 (gRPC) from the internet
 
 ### 6. Deploy
 
@@ -441,20 +441,23 @@ sudo aa-complain /etc/apparmor.d/docker
 
 ### External Access
 - **Port 80**: HTTP (redirects to HTTPS)
-- **Port 443**: HTTPS (Weaviate API)
+- **Port 443**: HTTPS (Weaviate REST API)
+- **Port 50051**: gRPC (Weaviate gRPC API - required by Atlas and Iris)
 
 ### Internal Network
 All services communicate over the `weaviate_network` bridge network:
-- `traefik` → `weaviate:8080`
-- `weaviate` → `multi2vec-clip:8080`
+- `traefik` → `weaviate:8080` (HTTP)
+- `weaviate` → `multi2vec-clip:8080` (HTTP)
+- Atlas/Iris can access `weaviate:50051` (gRPC) directly
 
 ## Security Considerations
 
 1. **API Key Storage**: Store the `WEAVIATE_API_KEY` securely and never commit it to version control
-2. **Firewall**: Only expose ports 80 and 443 externally
-3. **Updates**: Regularly update Docker images for security patches
-4. **Backups**: Regularly backup the Weaviate data volume
-5. **Monitoring**: Monitor logs for suspicious activity
+2. **Firewall**: Only expose ports 80, 443, and 50051 externally (or restrict 50051 to trusted IPs only)
+3. **gRPC Security**: Consider restricting port 50051 to specific IPs if not using internal access
+4. **Updates**: Regularly update Docker images for security patches
+5. **Backups**: Regularly backup the Weaviate data volume
+6. **Monitoring**: Monitor logs for suspicious activity
 
 ## Support
 

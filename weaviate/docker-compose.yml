@@ -41,6 +41,8 @@ services:
       - no-new-privileges:true
     networks:
       - weaviate_network
+    ports:
+      - "50051:50051"  # gRPC port
     command:
       - --host
       - 0.0.0.0
