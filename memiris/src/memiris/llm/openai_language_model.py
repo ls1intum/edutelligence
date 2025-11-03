@@ -6,11 +6,21 @@ Includes a LangChain ChatOpenAI adapter via `langchain_openai`.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
-from typing import Any, Dict, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Union, cast
 
-from langchain_openai import ChatOpenAI
-from openai import AzureOpenAI, OpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from openai import AzureOpenAI, Omit, OpenAI
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionMessageParam,
+)
+from openai.types.shared_params.response_format_json_schema import (
+    JSONSchema,
+    ResponseFormatJSONSchema,
+)
 
 from memiris.llm.abstract_language_model import (
     AbstractLanguageModel,
@@ -43,9 +53,9 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         self._api_version = (
             api_version
             or os.environ.get("AZURE_OPENAI_API_VERSION")
-            or "2024-02-15-preview"
+            or "2025-04-01-preview"
         )
-        self._client: Any = None
+        self._client: OpenAI
         if azure:
             if not self._azure_endpoint:
                 raise ValueError("Azure endpoint must be provided for Azure OpenAI.")
@@ -65,65 +75,166 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         self,
         messages: Sequence[Union[Mapping[str, Any], Any]],
         response_format: Optional[Dict[str, Any]] = None,
-        keep_alive: Optional[Union[str, int]] = None,  # unused for OpenAI
+        keep_alive: Optional[Union[str, int]] = None,
         options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> WrappedChatResponse:
-        # Normalize messages to OpenAI format
-        normalized: list[Dict[str, Any]] = []
+        # normalize messages
+        normalized: List[ChatCompletionMessageParam] = []
         for m in messages:
             if hasattr(m, "role") and hasattr(m, "content"):
                 normalized.append(
-                    {"role": getattr(m, "role"), "content": getattr(m, "content")}
+                    cast(
+                        ChatCompletionMessageParam,
+                        {
+                            "role": getattr(m, "role"),
+                            "content": getattr(m, "content"),
+                        },
+                    )
                 )
             elif isinstance(m, Mapping):
-                role = m.get("role", "user")
-                content = m.get("content", "")
-                name = m.get("name")
-                d: Dict[str, Any] = {"role": role, "content": content}
-                if name:
-                    d["name"] = name
-                normalized.append(d)
+                d: Dict[str, Any] = {
+                    "role": cast(str, m.get("role", "user")),
+                    "content": m.get("content", ""),
+                }
+                if m.get("name") is not None:
+                    d["name"] = m["name"]
+                normalized.append(cast(ChatCompletionMessageParam, d))
 
-        temperature = (options or {}).get("temperature") if options else None
-
-        # response_format: basic support for JSON output
-        rf = None
+        # build ResponseFormatJSONSchema; accept raw Pydantic schema or wrapped
+        rf: Optional[ResponseFormatJSONSchema] = None
+        unwrap_key: Optional[str] = (
+            None  # if we wrap non-object roots, remember key to unwrap later
+        )
         if response_format:
-            # OpenAI v1 supports {"type": "json_object"} or json_schema
-            rf = response_format
+            raw = cast(
+                Dict[str, Any],
+                response_format.get("json_schema")
+                or response_format.get("schema")
+                or response_format,
+            )
 
-        # Build request payload and forward additional options/kwargs (e.g., tools)
-        payload: Dict[str, Any] = {
-            "model": self._model,
-            "messages": normalized,  # type: ignore[arg-type]
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature  # type: ignore[arg-type]
-        if rf:
-            payload["response_format"] = rf  # type: ignore[arg-type]
+            root_key = cast(str, response_format.get("root_key", "result"))
+            name = cast(str, raw.get("name") or raw.get("title") or "schema")
+
+            schema_dict = cast(Dict[str, Any], raw.get("schema", raw)).copy()
+            schema_dict.pop("$schema", None)  # remove draft URL
+
+            defs = schema_dict.get("$defs") or schema_dict.get("definitions")
+            top_type = cast(Optional[str], schema_dict.get("type"))
+
+            if top_type != "object":
+                # wrap non-object root and hoist $defs so internal $ref resolve
+                inner = schema_dict.copy()
+                inner.pop("$defs", None)
+                inner.pop("definitions", None)
+                wrapped: Dict[str, Any] = {
+                    "type": "object",
+                    "properties": {root_key: inner},
+                    "required": [root_key],
+                    "additionalProperties": False,
+                }
+                if defs:
+                    wrapped["$defs"] = defs
+                schema_dict = wrapped
+                unwrap_key = root_key  # we will unwrap this key from the model output
+
+            # enforce additionalProperties: false on all objects (API requirement)
+            def _enforce_no_additional_props(s: Any) -> None:
+                if not isinstance(s, dict):
+                    return
+                t = s.get("type")
+                if t == "object":
+                    s["additionalProperties"] = False
+                    props = s.get("properties")
+                    if isinstance(props, dict):
+                        for v in props.values():
+                            _enforce_no_additional_props(v)
+                    pprops = s.get("patternProperties")
+                    if isinstance(pprops, dict):
+                        for v in pprops.values():
+                            _enforce_no_additional_props(v)
+                if t == "array":
+                    _enforce_no_additional_props(s.get("items"))
+                for key in ("allOf", "anyOf", "oneOf"):
+                    arr = s.get(key)
+                    if isinstance(arr, list):
+                        for sub in arr:
+                            _enforce_no_additional_props(sub)
+                for defs_key in ("$defs", "definitions"):
+                    dct = s.get(defs_key)
+                    if isinstance(dct, dict):
+                        for v in dct.values():
+                            _enforce_no_additional_props(v)
+
+            _enforce_no_additional_props(schema_dict)
+
+            rf = ResponseFormatJSONSchema(
+                type="json_schema",
+                json_schema=JSONSchema(
+                    name=name,
+                    schema=schema_dict,
+                    strict=True,
+                ),
+            )
+
+        # merge options/kwargs, drop None
+        payload: Dict[str, Any] = {}
         if options:
-            # Do not overwrite explicit temperature if already set
             payload.update({k: v for k, v in options.items() if k != "temperature"})
+            if options.get("temperature") is not None:
+                payload["temperature"] = options["temperature"]
         if kwargs:
             payload.update(kwargs)
-        # Remove None-valued entries to avoid invalid arguments
         payload = {k: v for k, v in payload.items() if v is not None}
 
-        resp = self._client.chat.completions.create(**payload)
+        resp: ChatCompletion = self._client.chat.completions.create(
+            model=self._model,
+            messages=normalized,
+            response_format=rf or Omit(),
+            **payload,
+        )
+
+        # If we wrapped a non-object schema, unwrap the key so downstream parsers
+        # expecting a top-level array/object see exactly that.
+        if unwrap_key:
+            try:
+                content = resp.choices[0].message.content or ""
+                data = json.loads(content)
+                if isinstance(data, dict) and unwrap_key in data:
+                    inner = data[unwrap_key]
+                    new_content = json.dumps(inner)
+                    # Rebuild nested Pydantic models immutably
+                    first = resp.choices[0]
+                    new_message = first.message.model_copy(
+                        update={"content": new_content}
+                    )
+                    new_choice = first.model_copy(update={"message": new_message})
+                    new_choices = [new_choice] + list(resp.choices[1:])
+                    resp = resp.model_copy(update={"choices": new_choices})
+            except (ValueError, json.JSONDecodeError, AttributeError, TypeError) as exc:
+                logging.getLogger(__name__).debug("OpenAI unwrap failed: %s", exc)
+
         return WrappedChatResponse.from_openai_chat(resp)
 
     def embed(self, text: str) -> WrappedEmbeddingResponse:
         resp = self._client.embeddings.create(model=self._model, input=text)
         return WrappedEmbeddingResponse.from_openai_embedding(resp)
 
-    def langchain_client(self) -> ChatOpenAI:
-        # Let environment handle credentials; only pass model and base_url
+    def langchain_client(self) -> Union[ChatOpenAI, AzureChatOpenAI]:
         if self._azure:
-            return ChatOpenAI(model=self._model, base_url=self._azure_endpoint)
-        return ChatOpenAI(model=self._model, base_url=self._base_url)
+            return AzureChatOpenAI(
+                model=self._model,
+                api_key=self._api_key,  # type: ignore
+                azure_endpoint=self._azure_endpoint,
+                api_version=self._api_version,
+            )
+        return ChatOpenAI(
+            model=self._model,
+            api_key=self._api_key,  # type: ignore
+            base_url=self._base_url,
+        )
 
-    # --- Lifecycle helpers are not applicable for OpenAI managed service ---
     def ensure_present(self) -> None:
         pass
 
