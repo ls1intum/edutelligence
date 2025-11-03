@@ -40,34 +40,28 @@ import matplotlib.pyplot as plt
 class WorkloadEntry:
     request_id: str
     arrival_offset: float
-    prompt: str
     mode: str
-    body_json: Optional[str]
-    body_template: Optional[str]
+    priority: str
+    body_json: str
 
     def render_payload(self) -> Dict[str, object]:
-        if self.body_json:
-            try:
-                return json.loads(self.body_json)
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise ValueError(f"{self.request_id}: body_json column is not valid JSON.") from exc
-        if self.body_template:
-            try:
-                rendered = Template(self.body_template).substitute(prompt=self.prompt)
-            except KeyError as exc:
-                raise ValueError(f"{self.request_id}: body_template is missing placeholder {exc!s}.") from exc
-            except Exception as exc:
-                raise ValueError(f"{self.request_id}: failed to render body_template.") from exc
-            try:
-                return json.loads(rendered)
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise ValueError(f"{self.request_id}: rendered body_template is not valid JSON.") from exc
-        return {
-            "messages": [
-                {"role": "user", "content": self.prompt},
-            ],
-            "mode": self.mode,
+        try:
+            payload = json.loads(self.body_json)
+            # Add mode and priority to the payload for tracking
+            payload["mode"] = self.mode
+            payload["priority"] = self.map_priority_to_int()
+            return payload
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"{self.request_id}: body_json column is not valid JSON.") from exc
+
+    def map_priority_to_int(self) -> int:
+        """Map priority string to integer value."""
+        priority_map = {
+            "low": 1,
+            "mid": 5,
+            "high": 10,
         }
+        return priority_map.get(self.priority.lower(), 5)  # Default to mid (5)
 
 @dataclass(slots=True)
 class RequestResult:
@@ -111,7 +105,8 @@ async def dispatch_request(
     entry: WorkloadEntry,
     start_monotonic: float,
 ) -> RequestResult:
-    wait = entry.arrival_offset - (asyncio.get_event_loop().time() - start_monotonic)
+    # Convert arrival_offset from milliseconds to seconds, then calculate wait time
+    wait = (entry.arrival_offset / 1000.0) - (asyncio.get_event_loop().time() - start_monotonic)
     if wait > 0:
         await asyncio.sleep(wait)
 
@@ -169,7 +164,7 @@ def parse_workload(path: Path) -> List[WorkloadEntry]:
             normalized_headers.append(normalized)
             seen_headers.add(normalized)
         reader.fieldnames = normalized_headers
-        required = {"arrival_offset", "prompt", "mode"}
+        required = {"arrival_offset", "body_json"}
         missing = required - set(reader.fieldnames)
         if missing:
             raise ValueError(f"Workload file is missing required columns: {', '.join(sorted(missing))}")
@@ -179,14 +174,28 @@ def parse_workload(path: Path) -> List[WorkloadEntry]:
                 offset = float(row["arrival_offset"])
             except ValueError as exc:
                 raise ValueError(f"Invalid arrival_offset for row {idx}: {row['arrival_offset']}") from exc
+
+            body_json = row.get("body_json")
+            if not body_json:
+                raise ValueError(f"Row {idx}: body_json is required and cannot be empty")
+
+            # Parse mode (optional, default to "interactive")
+            mode = row.get("mode", "interactive").strip().lower()
+            if mode not in ("interactive", "batch"):
+                raise ValueError(f"Row {idx}: mode must be 'interactive' or 'batch', got '{mode}'")
+
+            # Parse priority (optional, default to "mid")
+            priority = row.get("priority", "mid").strip().lower()
+            if priority not in ("low", "mid", "high"):
+                raise ValueError(f"Row {idx}: priority must be 'low', 'mid', or 'high', got '{priority}'")
+
             entries.append(
                 WorkloadEntry(
                     request_id=request_id,
                     arrival_offset=offset,
-                    prompt=row["prompt"],
-                    mode=row["mode"],
-                    body_json=row.get("body_json"),
-                    body_template=row.get("body_template"),
+                    mode=mode,
+                    priority=priority,
+                    body_json=body_json,
                 )
             )
     entries.sort(key=lambda e: (e.arrival_offset, e.request_id))
@@ -302,14 +311,48 @@ def extract_response_text(payload: Optional[dict]) -> Optional[str]:
     return json.dumps(payload, ensure_ascii=False)[:500]
 
 
+def extract_token_count(payload: Optional[dict]) -> Optional[int]:
+    """Extract completion token count from response payload."""
+    if payload is None or not isinstance(payload, dict):
+        return None
+
+    # OpenAI-style usage field
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        completion_tokens = usage.get("completion_tokens")
+        if isinstance(completion_tokens, int):
+            return completion_tokens
+
+    # Alternative fields
+    for key in ("output_tokens", "tokens_generated", "num_tokens"):
+        value = payload.get(key)
+        if isinstance(value, int):
+            return value
+
+    return None
+
+
+def calculate_percentile(values: List[float], percentile: float) -> float:
+    """Calculate the given percentile of a list of values."""
+    if not values:
+        return math.nan
+    sorted_values = sorted(values)
+    index = (len(sorted_values) - 1) * (percentile / 100.0)
+    lower = int(math.floor(index))
+    upper = int(math.ceil(index))
+    if lower == upper:
+        return sorted_values[lower]
+    return sorted_values[lower] * (upper - index) + sorted_values[upper] * (index - lower)
+
+
 def build_rows(
     results: Sequence[RequestResult],
     logs: Sequence[LogRecord],
     latency_slo_ms: float,
-) -> tuple[List[List[object]], List[List[object]], int, List[Dict[str, object]]]:
-    detail_rows: List[List[object]] = []
+) -> tuple[Dict[str, object], List[Dict[str, object]], int]:
     detail_records: List[Dict[str, object]] = []
     ttft_values: List[float] = []
+    tpot_values: List[float] = []
     latency_values: List[float] = []
     successes = 0
 
@@ -325,6 +368,8 @@ def build_rows(
         model_name: Optional[str] = None
         response_text: Optional[str] = None
         log_id: Optional[int] = None
+        tokens: Optional[int] = None
+        tpot: Optional[float] = None
 
         if log is not None:
             ttft = log.ttft_ms
@@ -334,9 +379,17 @@ def build_rows(
             model_id = log.model_id
             model_name = log.model_name
             response_text = extract_response_text(log.response_payload)
+            tokens = extract_token_count(log.response_payload)
             log_id = log.log_id
+
+            # Calculate TPOT (Time Per Output Token)
+            if ttft is not None and total_latency is not None and tokens is not None and tokens > 1:
+                tpot = (total_latency - ttft) / (tokens - 1)
+
             if ttft is not None:
                 ttft_values.append(ttft)
+            if tpot is not None:
+                tpot_values.append(tpot)
             if total_latency is not None:
                 latency_values.append(total_latency)
 
@@ -351,8 +404,8 @@ def build_rows(
         record = {
             "log_id": log_id,
             "request_id": result.entry.request_id,
-            "prompt": result.entry.prompt,
             "mode": result.entry.mode,
+            "priority": result.entry.priority,
             "http_status": result.status_code,
             "client_duration_ms": result.duration_ms,
             "provider_id": provider_id,
@@ -360,131 +413,149 @@ def build_rows(
             "model_id": model_id,
             "model_name": model_name,
             "ttft_ms": ttft,
+            "tpot_ms": tpot,
+            "tokens": tokens,
             "total_latency_ms": total_latency,
             "response_text": response_text,
             "error": error_text,
         }
         detail_records.append(record)
 
-        detail_rows.append([
-            "request",
-            log_id,
-            result.entry.request_id,
-            result.entry.prompt.replace("\n", " "),
-            result.entry.mode,
-            result.status_code,
-            f"{result.duration_ms:.2f}",
-            provider_id,
-            provider_name,
-            model_id,
-            model_name,
-            "" if ttft is None else f"{ttft:.2f}",
-            "" if total_latency is None else f"{total_latency:.2f}",
-            response_text,
-            error_text,
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-        ])
-
     total_requests = len(results)
     errors = total_requests - successes
+    error_rate = (errors / total_requests * 100) if total_requests else math.nan
+
     slo_hits = sum(1 for latency in latency_values if latency <= latency_slo_ms)
+    slo_attainment_rate = (slo_hits / len(latency_values) * 100) if latency_values else math.nan
+
+    # Calculate statistics
     avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else math.nan
+    p50_ttft = calculate_percentile(ttft_values, 50)
+    p95_ttft = calculate_percentile(ttft_values, 95)
+    p99_ttft = calculate_percentile(ttft_values, 99)
+
+    avg_tpot = sum(tpot_values) / len(tpot_values) if tpot_values else math.nan
+    p50_tpot = calculate_percentile(tpot_values, 50)
+    p95_tpot = calculate_percentile(tpot_values, 95)
+    p99_tpot = calculate_percentile(tpot_values, 99)
+
     avg_latency = sum(latency_values) / len(latency_values) if latency_values else math.nan
+    p50_latency = calculate_percentile(latency_values, 50)
+    p95_latency = calculate_percentile(latency_values, 95)
+    p99_latency = calculate_percentile(latency_values, 99)
 
-    successful_records = [rec for rec in detail_records if rec["response_text"]]
-    successful_ttft = [rec["ttft_ms"] for rec in successful_records if isinstance(rec["ttft_ms"], (int, float))]
-    successful_latency = [rec["total_latency_ms"] for rec in successful_records if isinstance(rec["total_latency_ms"], (int, float))]
+    summary_stats = {
+        "total_requests": total_requests,
+        "successful_requests": successes,
+        "failed_requests": errors,
+        "error_rate": error_rate,
+        "slo_attainment_rate": slo_attainment_rate,
+        "avg_ttft_ms": avg_ttft,
+        "p50_ttft_ms": p50_ttft,
+        "p95_ttft_ms": p95_ttft,
+        "p99_ttft_ms": p99_ttft,
+        "avg_tpot_ms": avg_tpot,
+        "p50_tpot_ms": p50_tpot,
+        "p95_tpot_ms": p95_tpot,
+        "p99_tpot_ms": p99_tpot,
+        "avg_latency_ms": avg_latency,
+        "p50_latency_ms": p50_latency,
+        "p95_latency_ms": p95_latency,
+        "p99_latency_ms": p99_latency,
+    }
 
-    def fmt(value: Optional[float]) -> str:
-        return "" if value is None or math.isnan(value) else f"{value:.2f}"
-
-    successful_successes = sum(1 for rec in successful_records if rec["http_status"] and rec["http_status"] < 400)
-    successful_errors = len(successful_records) - successful_successes
-
-    summary_rows = [[
-        "summary",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        total_requests,
-        successes,
-        errors,
-        fmt(avg_ttft),
-        fmt(avg_latency),
-        fmt(slo_hits / total_requests if total_requests else math.nan),
-    ], [
-        "summary_successful",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        len(successful_records),
-        successful_successes,
-        successful_errors,
-        fmt(sum(successful_ttft) / len(successful_ttft) if successful_ttft else math.nan),
-        fmt(sum(successful_latency) / len(successful_latency) if successful_latency else math.nan),
-        fmt(sum(1 for latency in successful_latency if latency <= latency_slo_ms) / len(successful_latency) if successful_latency else math.nan),
-    ]]
-
-    return summary_rows, detail_rows, missing_logs, detail_records
+    return summary_stats, detail_records, missing_logs
 
 
-def write_results_csv(path: Path, summary_rows: List[List[object]], detail_rows: List[List[object]]) -> None:
+def write_summary_csv(path: Path, summary_stats: Dict[str, object]) -> None:
+    """Write a compact summary CSV with aggregated metrics."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def fmt(value: object) -> str:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return "N/A"
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        return str(value)
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["metric", "value", "unit"])
+
+        # Request counts
+        writer.writerow(["total_requests", summary_stats["total_requests"], "count"])
+        writer.writerow(["successful_requests", summary_stats["successful_requests"], "count"])
+        writer.writerow(["failed_requests", summary_stats["failed_requests"], "count"])
+        writer.writerow(["error_rate", fmt(summary_stats["error_rate"]), "%"])
+        writer.writerow(["slo_attainment_rate", fmt(summary_stats["slo_attainment_rate"]), "%"])
+
+        # TTFT metrics
+        writer.writerow(["avg_ttft", fmt(summary_stats["avg_ttft_ms"]), "ms"])
+        writer.writerow(["p50_ttft", fmt(summary_stats["p50_ttft_ms"]), "ms"])
+        writer.writerow(["p95_ttft", fmt(summary_stats["p95_ttft_ms"]), "ms"])
+        writer.writerow(["p99_ttft", fmt(summary_stats["p99_ttft_ms"]), "ms"])
+
+        # TPOT metrics
+        writer.writerow(["avg_tpot", fmt(summary_stats["avg_tpot_ms"]), "ms/token"])
+        writer.writerow(["p50_tpot", fmt(summary_stats["p50_tpot_ms"]), "ms/token"])
+        writer.writerow(["p95_tpot", fmt(summary_stats["p95_tpot_ms"]), "ms/token"])
+        writer.writerow(["p99_tpot", fmt(summary_stats["p99_tpot_ms"]), "ms/token"])
+
+        # Total latency metrics
+        writer.writerow(["avg_total_latency", fmt(summary_stats["avg_latency_ms"]), "ms"])
+        writer.writerow(["p50_total_latency", fmt(summary_stats["p50_latency_ms"]), "ms"])
+        writer.writerow(["p95_total_latency", fmt(summary_stats["p95_latency_ms"]), "ms"])
+        writer.writerow(["p99_total_latency", fmt(summary_stats["p99_latency_ms"]), "ms"])
+
+
+def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> None:
+    """Write a detailed CSV with individual request data."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
     headers = [
-        "record_type",
         "log_id",
         "request_id",
-        "prompt",
         "mode",
+        "priority",
         "http_status",
         "client_duration_ms",
-        "provider_id",
         "provider_name",
-        "model_id",
         "model_name",
         "ttft_ms",
+        "tpot_ms",
+        "tokens",
         "total_latency_ms",
         "response_text",
         "error",
-        "total_requests",
-        "successes",
-        "errors",
-        "avg_ttft_ms",
-        "avg_total_latency_ms",
-        "slo_attainment",
     ]
-    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def fmt(value: object) -> str:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return ""
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        return str(value)
+
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(headers)
-        for row in summary_rows + detail_rows:
-            writer.writerow(row + [""] * (len(headers) - len(row)))
+        for rec in detail_records:
+            writer.writerow([
+                fmt(rec.get("log_id")),
+                rec.get("request_id", ""),
+                rec.get("mode", ""),
+                rec.get("priority", ""),
+                fmt(rec.get("http_status")),
+                fmt(rec.get("client_duration_ms")),
+                rec.get("provider_name", ""),
+                rec.get("model_name", ""),
+                fmt(rec.get("ttft_ms")),
+                fmt(rec.get("tpot_ms")),
+                fmt(rec.get("tokens")),
+                fmt(rec.get("total_latency_ms")),
+                rec.get("response_text", ""),
+                rec.get("error", ""),
+            ])
 
 
 def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, object]]) -> None:
@@ -580,15 +651,27 @@ def main() -> None:
             timeout=30.0,
             poll_interval=1.0,
         )
-        summary_rows, detail_rows, missing_logs, detail_records = build_rows(results, logs, args.latency_slo_ms)
-        write_results_csv(args.output, summary_rows, detail_rows)
-        generate_visualizations(args.output, detail_records)
+        summary_stats, detail_records, missing_logs = build_rows(results, logs, args.latency_slo_ms)
+
+        # Generate output file paths
+        output_base = args.output.stem
+        output_dir = args.output.parent
+        summary_path = output_dir / f"{output_base}_summary.csv"
+        detailed_path = output_dir / f"{output_base}_detailed.csv"
+
+        # Write both CSV files
+        write_summary_csv(summary_path, summary_stats)
+        write_detailed_csv(detailed_path, detail_records)
+        generate_visualizations(detailed_path, detail_records)
+
         if missing_logs:
             print(
                 f"Warning: expected {len(results)} new log entries but only found {len(logs)}. "
                 "Some rows are marked with 'log entry missing'."
             )
-        print(f"Completed run. Summary: {len(results)} requests, output stored in {args.output}")
+        print(f"Completed run. Summary: {len(results)} requests")
+        print(f"  Summary metrics: {summary_path}")
+        print(f"  Detailed results: {detailed_path}")
     finally:
         if original_log != "FULL":
             set_log_level(process_id, restore_log)
