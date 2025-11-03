@@ -151,35 +151,6 @@ Traefik is configured to:
 6. **Security Headers**: HSTS, X-Frame-Options, XSS protection enabled
 7. **Container Hardening**: No-new-privileges security option on all containers
 
-## Connecting Microservices
-
-### From Atlas
-
-Update your Atlas configuration to connect to the shared Weaviate instance:
-
-```yaml
-weaviate:
-  host: "weaviate.example.com"
-  port: "443"
-  scheme: "https"
-  api_key: "your-weaviate-api-key"
-```
-
-### From Iris
-
-Update your Iris `application.yml` configuration:
-
-```yaml
-weaviate:
-  host: "weaviate.example.com"
-  port: "443"
-  grpc_port: "443"
-  scheme: "https"
-  api_key: "your-weaviate-api-key"
-```
-
-**Note**: If Atlas and Iris are running on the same VM, they can also connect via the internal Docker network using `http://weaviate:8080` instead of going through Traefik.
-
 ## Advanced Configuration
 
 ### Restricting Access by IP (Optional)
