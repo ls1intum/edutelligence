@@ -236,7 +236,7 @@ class MemirisWrapper:
                 weaviate_client, self.vectorizer
             )
         )
-        self.memoris_creation_pipeline_openai = (
+        self.memiris_creation_pipeline_openai = (
             memiris_create_user_memory_creation_pipeline_openai(
                 weaviate_client, self.vectorizer
             )
