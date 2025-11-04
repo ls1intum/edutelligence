@@ -22,5 +22,6 @@ class Schema(BaseModel, abc.ABC):
         if not issubclass(model_class, Base):
             raise TypeError(f"Expected {model_class} to be a subclass of Base. Did you use the correct subclass (e.g. "
                             f"TextExercise instead of Exercise)? My class name: {self.__class__.__name__}")
-        return model_class(**self.model_dump())
+        # Use the JSON dump mode so pydantic v2 types (e.g. AnyUrl) become plain strings.
+        return model_class(**self.model_dump(mode="json"))
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
