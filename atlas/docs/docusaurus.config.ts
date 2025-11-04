@@ -117,7 +117,7 @@ const config: Config = {
             },
             {
               label: 'Contributor Guide',
-              to: '/dev',
+              to: '/dev/development-process',
             },
             {
               label: 'Admin Guide',
