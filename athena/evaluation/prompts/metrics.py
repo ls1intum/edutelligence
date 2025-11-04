@@ -1,4 +1,4 @@
-from athena.evaluation.model.evaluation_model import Metric
+from model.evaluation_model import Metric
 
 correctness = Metric(
     title="Correctness",
