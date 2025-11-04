@@ -4,10 +4,11 @@ Storage service for managing video files
 
 import json
 import logging
+import re
 import shutil
 import subprocess  # nosec B404
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,6 +22,11 @@ class VideoStorageService:
     """Service for storing and retrieving videos"""
 
     METADATA_FILENAME = "metadata.json"
+    # UUID v4 pattern for validation
+    UUID_PATTERN = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        re.IGNORECASE,
+    )
 
     def __init__(self):
         self.storage_dir = Path(Config.STORAGE_DIR)
@@ -29,6 +35,20 @@ class VideoStorageService:
     def generate_video_id(self) -> str:
         """Generate a unique video ID"""
         return str(uuid.uuid4())
+
+    def _validate_video_id(self, video_id: str) -> bool:
+        """
+        Validate that video_id matches UUID format to prevent path traversal attacks.
+
+        Args:
+            video_id: The video ID to validate
+
+        Returns:
+            True if valid UUID format, False otherwise
+        """
+        if not video_id or not isinstance(video_id, str):
+            return False
+        return bool(self.UUID_PATTERN.match(video_id))
 
     def save_video(
         self,
@@ -51,6 +71,8 @@ class VideoStorageService:
         """
         if video_id is None:
             video_id = self.generate_video_id()
+        elif not self._validate_video_id(video_id):
+            raise ValueError(f"Invalid video_id format: {video_id}")
 
         # Create directory for this video
         video_dir = self.storage_dir / video_id
@@ -65,7 +87,7 @@ class VideoStorageService:
         try:
             duration = self._convert_to_hls(video_dir, video_path)
         except Exception as e:
-            logger.error("Error converting video to HLS: %s", e)
+            logger.exception("Error converting video to HLS: %s", e)
             # Clean up and re-raise
             self.delete_video(video_id)
             raise
@@ -76,7 +98,7 @@ class VideoStorageService:
             filename=filename,
             content_type=content_type,
             size_bytes=len(video_data),
-            uploaded_at=datetime.now(),
+            uploaded_at=datetime.now(timezone.utc),
             duration_seconds=duration,
         )
 
@@ -155,13 +177,13 @@ class VideoStorageService:
             return duration
 
         except subprocess.CalledProcessError as e:
-            logger.error("FFmpeg error: %s", e.stderr)
+            logger.exception("FFmpeg error: %s", e.stderr)
             raise RuntimeError(f"Failed to convert video to HLS: {e.stderr}") from e
         except subprocess.TimeoutExpired as exc:
-            logger.error("FFmpeg timeout")
+            logger.exception("FFmpeg timeout")
             raise RuntimeError("Video conversion timed out") from exc
         except Exception as e:
-            logger.error("Unexpected error during HLS conversion: %s", e)
+            logger.exception("Unexpected error during HLS conversion: %s", e)
             raise
 
     def _get_video_duration(self, video_path: Path) -> Optional[float]:
@@ -207,6 +229,10 @@ class VideoStorageService:
 
     def get_video_path(self, video_id: str) -> Optional[Path]:
         """Get the path to a video file"""
+        if not self._validate_video_id(video_id):
+            logger.warning("Invalid video_id format: %s", video_id)
+            return None
+
         video_dir = self.storage_dir / video_id
         if not video_dir.exists():
             return None
@@ -223,6 +249,10 @@ class VideoStorageService:
 
     def get_playlist_path(self, video_id: str) -> Optional[Path]:
         """Get the path to the HLS playlist file"""
+        if not self._validate_video_id(video_id):
+            logger.warning("Invalid video_id format: %s", video_id)
+            return None
+
         video_dir = self.storage_dir / video_id
         playlist_path = video_dir / "hls" / "playlist.m3u8"
 
@@ -232,8 +262,34 @@ class VideoStorageService:
 
     def get_hls_segment_path(self, video_id: str, segment_name: str) -> Optional[Path]:
         """Get the path to an HLS segment file"""
+        if not self._validate_video_id(video_id):
+            logger.warning("Invalid video_id format: %s", video_id)
+            return None
+
+        # Prevent path traversal attacks by ensuring segment_name is just a filename
+        # without any directory separators
+        if "/" in segment_name or "\\" in segment_name or ".." in segment_name:
+            logger.warning(
+                "Rejected segment request with invalid characters: %s", segment_name
+            )
+            return None
+
         video_dir = self.storage_dir / video_id
         segment_path = video_dir / "hls" / segment_name
+
+        # Verify the resolved path is within the expected directory
+        try:
+            segment_path = segment_path.resolve()
+            expected_dir = (video_dir / "hls").resolve()
+            if not str(segment_path).startswith(str(expected_dir)):
+                logger.warning(
+                    "Rejected segment request outside expected directory: %s",
+                    segment_name,
+                )
+                return None
+        except (OSError, RuntimeError):
+            logger.warning("Error resolving segment path: %s", segment_name)
+            return None
 
         if segment_path.exists() and segment_name.endswith(".ts"):
             return segment_path
@@ -241,6 +297,10 @@ class VideoStorageService:
 
     def get_metadata(self, video_id: str) -> Optional[VideoMetadata]:
         """Get metadata for a video"""
+        if not self._validate_video_id(video_id):
+            logger.warning("Invalid video_id format: %s", video_id)
+            return None
+
         metadata_path = self.storage_dir / video_id / self.METADATA_FILENAME
         if not metadata_path.exists():
             return None
@@ -250,11 +310,14 @@ class VideoStorageService:
                 data = json.load(f)
             return VideoMetadata(**data)
         except Exception as e:
-            logger.error("Error reading metadata for %s: %s", video_id, e)
+            logger.exception("Error reading metadata for %s: %s", video_id, e)
             return None
 
     def _save_metadata(self, video_id: str, metadata: VideoMetadata):
         """Save metadata to disk"""
+        if not self._validate_video_id(video_id):
+            raise ValueError(f"Invalid video_id format: {video_id}")
+
         metadata_path = self.storage_dir / video_id / self.METADATA_FILENAME
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata.model_dump(mode="json"), f, indent=2, default=str)
@@ -279,6 +342,10 @@ class VideoStorageService:
         Returns:
             True if video was deleted, False if not found
         """
+        if not self._validate_video_id(video_id):
+            logger.warning("Invalid video_id format: %s", video_id)
+            return False
+
         video_dir = self.storage_dir / video_id
         if not video_dir.exists():
             return False
@@ -289,7 +356,7 @@ class VideoStorageService:
             logger.info("Deleted video %s and all HLS files", video_id)
             return True
         except Exception as e:
-            logger.error("Error deleting video %s: %s", video_id, e)
+            logger.exception("Error deleting video %s: %s", video_id, e)
             return False
 
     def video_exists(self, video_id: str) -> bool:

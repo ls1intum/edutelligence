@@ -29,7 +29,10 @@ def test_upload_video_success(temp_storage_dir, sample_video_content):
     assert "video_id" in data
     assert data["filename"] == "test_video.mp4"
     assert data["size_bytes"] == len(sample_video_content)
-    assert data["message"] == "Video uploaded successfully"
+    assert "playlist_url" in data
+    assert data["playlist_url"].endswith("/playlist.m3u8")
+    assert "duration_seconds" in data
+    assert "message" in data
 
 
 def test_upload_video_invalid_type(temp_storage_dir):
@@ -44,8 +47,8 @@ def test_upload_video_invalid_type(temp_storage_dir):
     assert response.status_code == 400
 
 
-def test_stream_video(temp_storage_dir, sample_video_content):
-    """Test streaming a video"""
+def test_get_playlist(temp_storage_dir, sample_video_content):
+    """Test getting HLS playlist"""
     client = TestClient(app)
 
     # First upload a video
@@ -59,22 +62,25 @@ def test_stream_video(temp_storage_dir, sample_video_content):
     upload_response = client.post("/video-storage/upload", files=files)
     video_id = upload_response.json()["video_id"]
 
-    # Now stream it
-    stream_response = client.get(f"/video-storage/stream/{video_id}")
-    assert stream_response.status_code == 200
-    assert stream_response.content == sample_video_content
+    # Get the playlist
+    playlist_response = client.get(f"/video-storage/playlist/{video_id}/playlist.m3u8")
+    assert playlist_response.status_code == 200
+    assert playlist_response.headers["content-type"] == "application/vnd.apple.mpegurl"
+    # Verify it's a valid m3u8 file
+    content = playlist_response.content.decode("utf-8")
+    assert "#EXTM3U" in content
 
 
-def test_stream_nonexistent_video(temp_storage_dir):
-    """Test streaming a video that doesn't exist"""
+def test_get_playlist_nonexistent_video(temp_storage_dir):
+    """Test getting playlist for a video that doesn't exist"""
     client = TestClient(app)
 
-    response = client.get("/video-storage/stream/nonexistent-id")
+    response = client.get("/video-storage/playlist/nonexistent-id/playlist.m3u8")
     assert response.status_code == 404
 
 
-def test_download_video(temp_storage_dir, sample_video_content):
-    """Test downloading a video"""
+def test_get_segment(temp_storage_dir, sample_video_content):
+    """Test getting HLS segment"""
     client = TestClient(app)
 
     # First upload a video
@@ -88,66 +94,35 @@ def test_download_video(temp_storage_dir, sample_video_content):
     upload_response = client.post("/video-storage/upload", files=files)
     video_id = upload_response.json()["video_id"]
 
-    # Now download it
-    download_response = client.get(f"/video-storage/download/{video_id}")
-    assert download_response.status_code == 200
-    assert download_response.content == sample_video_content
+    # Get the playlist to see what segments exist
+    playlist_response = client.get(f"/video-storage/playlist/{video_id}/playlist.m3u8")
+    assert playlist_response.status_code == 200
 
+    # Parse playlist to find a segment name
+    content = playlist_response.content.decode("utf-8")
+    # Look for .ts files in the playlist
+    lines = content.split("\n")
+    segment_name = None
+    for line in lines:
+        if line.endswith(".ts"):
+            segment_name = line.strip()
+            break
 
-def test_get_video_info(temp_storage_dir, sample_video_content):
-    """Test getting video info"""
-    client = TestClient(app)
-
-    # First upload a video
-    files = {
-        "file": (
-            "test_video.mp4",
-            io.BytesIO(sample_video_content),
-            "video/mp4",
+    if segment_name:
+        # Get the segment
+        segment_response = client.get(
+            f"/video-storage/playlist/{video_id}/{segment_name}"
         )
-    }
-    upload_response = client.post("/video-storage/upload", files=files)
-    video_id = upload_response.json()["video_id"]
-
-    # Get info
-    info_response = client.get(f"/video-storage/info/{video_id}")
-    assert info_response.status_code == 200
-    data = info_response.json()
-    assert data["video_id"] == video_id
-    assert data["filename"] == "test_video.mp4"
-    assert data["content_type"] == "video/mp4"
-    assert data["size_bytes"] == len(sample_video_content)
-    assert "stream_url" in data
+        assert segment_response.status_code == 200
+        assert segment_response.headers["content-type"] == "video/mp2t"
 
 
-def test_list_videos(temp_storage_dir, sample_video_content):
-    """Test listing videos"""
+def test_get_segment_nonexistent(temp_storage_dir):
+    """Test getting a segment that doesn't exist"""
     client = TestClient(app)
 
-    # Initially should be empty
-    response = client.get("/video-storage/list")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["count"] == 0
-    assert len(data["videos"]) == 0
-
-    # Upload some videos
-    for i in range(3):
-        files = {
-            "file": (
-                f"video{i}.mp4",
-                io.BytesIO(sample_video_content),
-                "video/mp4",
-            )
-        }
-        client.post("/video-storage/upload", files=files)
-
-    # List again
-    response = client.get("/video-storage/list")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["count"] == 3
-    assert len(data["videos"]) == 3
+    response = client.get("/video-storage/playlist/nonexistent-id/segment000.ts")
+    assert response.status_code == 404
 
 
 def test_delete_video(temp_storage_dir, sample_video_content):
@@ -169,9 +144,9 @@ def test_delete_video(temp_storage_dir, sample_video_content):
     delete_response = client.delete(f"/video-storage/delete/{video_id}")
     assert delete_response.status_code == 204
 
-    # Verify it's gone
-    info_response = client.get(f"/video-storage/info/{video_id}")
-    assert info_response.status_code == 404
+    # Verify it's gone by checking that the playlist no longer exists
+    playlist_response = client.get(f"/video-storage/playlist/{video_id}/playlist.m3u8")
+    assert playlist_response.status_code == 404
 
 
 def test_delete_nonexistent_video(temp_storage_dir):

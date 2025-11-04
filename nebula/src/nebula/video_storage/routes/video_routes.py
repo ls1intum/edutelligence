@@ -58,23 +58,36 @@ async def upload_video(file: UploadFile = File(...)):
         )
 
     # Validate file extension
-    if file.filename:
-        file_ext = "." + file.filename.split(".")[-1].lower()
-        if file_ext not in Config.ALLOWED_EXTENSIONS:
-            logger.warning("Invalid file extension: %s", file_ext)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Invalid file extension. Allowed: "
-                    f'{", ".join(Config.ALLOWED_EXTENSIONS)}'
-                ),
-            )
+    if not file.filename or "." not in file.filename:
+        logger.warning("Invalid filename: %s", file.filename)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename must have a valid extension",
+        )
+
+    file_ext = "." + file.filename.split(".")[-1].lower()
+    if not file_ext or file_ext == ".":
+        logger.warning("Empty file extension for filename: %s", file.filename)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename must have a valid extension",
+        )
+
+    if file_ext not in Config.ALLOWED_EXTENSIONS:
+        logger.warning("Invalid file extension: %s", file_ext)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invalid file extension. Allowed: "
+                f'{", ".join(Config.ALLOWED_EXTENSIONS)}'
+            ),
+        )
 
     # Read file data
     try:
         video_data = await file.read()
     except Exception as e:
-        logger.error("Error reading uploaded file: %s", e)
+        logger.exception("Error reading uploaded file: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read uploaded file",
@@ -114,7 +127,7 @@ async def upload_video(file: UploadFile = File(...)):
         )
 
     except Exception as e:
-        logger.error("Error saving video: %s", e)
+        logger.exception("Error saving video: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save video",
