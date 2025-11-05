@@ -623,13 +623,12 @@ print(f"Total competencies: {len(competencies)}")
 ### View Sample Object
 
 ```python
-competencies = client.get_all_embedencies("Competency")
+competencies = client.get_all_embeddings("Competency")
 if competencies:
     sample = competencies[0]
     print(f"UUID: {sample['uuid']}")
     print(f"Properties: {sample['properties']}")
     print(f"Vector dimensions: {len(sample['vector'])}")
-```
 
 ---
 
