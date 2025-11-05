@@ -151,7 +151,7 @@ def memiris_create_user_memory_creation_pipeline_openai(
         model=model_to_use.model,
         api_key=model_to_use.api_key,
         azure=isinstance(model_to_use, AzureOpenAIChatModel),
-        azure_endpoint=getattr(model_to_use, "azure_endpoint", None),
+        azure_endpoint=getattr(model_to_use, "endpoint", None),
         api_version=getattr(model_to_use, "api_version", None),
     )
     return (
