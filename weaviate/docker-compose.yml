@@ -16,7 +16,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/traefik.yml:ro
-      - ./traefik/acme.json:/acme.json
+      - ./traefik/acme.json:/acme.json:rw
       - ./traefik/config.yml:/config.yml:ro
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
@@ -65,11 +65,12 @@ services:
       CLUSTER_HOSTNAME: 'node1'
       LOG_LEVEL: '${WEAVIATE_LOG_LEVEL:-info}'
       LOG_FORMAT: 'json'
+      BACKUP_FILESYSTEM_PATH: '/var/lib/weaviate/backups'
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/.well-known/ready >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 30s
     labels:
       - "traefik.enable=true"

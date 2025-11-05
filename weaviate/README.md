@@ -49,6 +49,17 @@ This setup provides:
 cd edutelligence/weaviate
 ```
 
+### Available Scripts
+
+This setup includes several helper scripts:
+
+- **`setup.sh`**: Initializes the environment (creates acme.json, generates Traefik config)
+- **`generate-traefik-config.sh`**: Generates Traefik configuration from template with IP whitelist settings
+- **`backup.sh`**: Creates a backup using Weaviate's backup API
+- **`restore.sh`**: Restores from a Weaviate backup
+
+All scripts are located in the `weaviate/` directory and should be run from there.
+
 ### 2. Configure Environment Variables
 
 Copy the example environment file and edit it:
@@ -70,7 +81,14 @@ WEAVIATE_API_KEY=$(openssl rand -base64 32)
 
 # Let's Encrypt Configuration
 LETSENCRYPT_EMAIL=your-email@example.com
+
+# IP Whitelisting (Optional)
+# Default: Public access with API key authentication (recommended)
+# Uncomment to restrict to specific IP ranges:
+# ALLOWED_IPS=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
 ```
+
+**Default Security Model**: By default, Weaviate is accessible from any IP address but requires API key authentication. This provides a good balance of security and usability. Only configure `ALLOWED_IPS` if you need additional IP-based restrictions (e.g., internal-only access).
 
 ### 3. Generate Secure Credentials
 
@@ -88,24 +106,38 @@ In your DNS provider (e.g., Cloudflare, Route53, etc.), create an A record point
 
 **Important**: Ensure the domain is publicly accessible on ports 80 and 443 before deploying, as Let's Encrypt uses HTTP challenge for certificate validation.
 
-### 5. Pre-Deployment Checklist
+### 5. Run Setup Script
+
+Run the setup script to prepare the environment:
+
+```bash
+./setup.sh
+```
+
+This script will:
+- Verify your `.env` file exists
+- Create `traefik/acme.json` with proper permissions (600)
+- Generate Traefik configuration with your IP whitelist settings
+
+### 6. Pre-Deployment Checklist
 
 Before running `docker-compose up -d`, verify:
 - [ ] `.env` file exists and is configured (not `.env.example`)
 - [ ] `WEAVIATE_API_KEY` is set to a strong random value (not the example)
 - [ ] `WEAVIATE_DOMAIN` points to your server's public domain
 - [ ] `LETSENCRYPT_EMAIL` is your valid email address
-- [ ] `traefik/acme.json` exists with 600 permissions
+- [ ] `traefik/acme.json` exists with 600 permissions (created by setup.sh)
+- [ ] `traefik/config.yml` has been generated (created by setup.sh)
 - [ ] DNS A record is configured and propagated (`nslookup weaviate.example.com`)
 - [ ] Firewall allows ports 80, 443 (HTTPS), and 50051 (gRPC) from the internet
 
-### 6. Deploy
+### 7. Deploy
 
 ```bash
 docker-compose up -d
 ```
 
-### 7. Verify Deployment
+### 8. Verify Deployment
 
 Check that all services are running:
 ```bash
@@ -155,33 +187,45 @@ Traefik is configured to:
 
 ### Restricting Access by IP (Optional)
 
-By default, Weaviate is publicly accessible with API key authentication. To restrict access to specific IP ranges (e.g., internal networks only):
+**Default Behavior**: Weaviate is accessible from any IP with valid API key authentication.
 
-1. **Edit** [`docker-compose.yml`](docker-compose.yml:83)
-2. **Change** the middleware line from:
-   ```yaml
-   - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit"
+**When to use IP restrictions**:
+- Restrict to internal networks only (VPN, office IPs)
+- Add additional security layer beyond API key auth
+- Compliance requirements for network-level access control
+
+**Steps to enable IP whitelisting**:
+
+1. **Edit** `.env` file and uncomment/set the `ALLOWED_IPS` variable:
+   ```bash
+   # Restrict to private networks only
+   ALLOWED_IPS=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
+
+   # Or specific IPs/ranges
+   ALLOWED_IPS=203.0.113.1/32,198.51.100.0/24
    ```
-   To:
+
+2. **Regenerate** Traefik configuration:
+   ```bash
+   ./generate-traefik-config.sh
+   ```
+   This will generate `traefik/config.yml` with your IP restrictions.
+
+3. **Update** middleware in [`docker-compose.yml`](docker-compose.yml:85) line 85 to enable the IP whitelist:
    ```yaml
+   # Change from:
+   - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit"
+
+   # To:
    - "traefik.http.routers.weaviate-secure.middlewares=secured"
    ```
 
-3. **Update** IP ranges in [`traefik/config.yml`](traefik/config.yml:30-35) if needed:
-   ```yaml
-   default-whitelist:
-     ipAllowList:
-       sourceRange:
-         - "10.0.0.0/8"          # Your internal network
-         - "192.168.0.0/16"
-         - "172.16.0.0/12"
-         - "YOUR_OFFICE_IP/32"  # Add specific IPs
-   ```
-
-4. **Restart** Traefik:
+4. **Restart** Traefik to apply changes:
    ```bash
    docker-compose restart traefik
    ```
+
+**To revert to public access**: Remove or comment out `ALLOWED_IPS` in `.env`, regenerate config, change middleware back to `default-headers,rate-limit`, and restart Traefik.
 
 ### Adjusting Rate Limits
 
@@ -210,25 +254,94 @@ Adjust these based on your workload requirements.
 
 ### Backup Weaviate Data
 
+**Recommended Method - Using Weaviate Backup API:**
+
+The included `backup.sh` script uses Weaviate's native backup API for consistent backups:
+
 ```bash
+./backup.sh
+```
+
+This creates a timestamped backup in the `./backups/` directory (e.g., `backup-20250115-143022.tar.gz`).
+
+**Features:**
+- Uses Weaviate's backup API for consistency
+- Creates compressed archives automatically
+- Includes backup verification
+- Safe for production use (no downtime required)
+
+**Alternative - Volume Backup (Not Recommended):**
+
+For manual volume backups (requires stopping Weaviate):
+
+```bash
+# Stop Weaviate
+docker-compose stop weaviate
+
 # Backup the volume
-docker run --rm -v weaviate_weaviate_data:/data -v $(pwd)/backup:/backup alpine \
-  tar czf /backup/weaviate-backup-$(date +%Y%m%d).tar.gz -C /data .
+docker run --rm -v weaviate_weaviate_data:/data -v $(pwd)/backups:/backup alpine \
+  tar czf /backup/volume-backup-$(date +%Y%m%d).tar.gz -C /data .
+
+# Start Weaviate
+docker-compose start weaviate
 ```
 
 ### Restore Weaviate Data
+
+**Recommended Method - Using Weaviate Restore API:**
+
+Use the included `restore.sh` script to restore from a Weaviate backup:
+
+```bash
+# List available backups
+./restore.sh
+
+# Restore a specific backup
+./restore.sh backup-20250115-143022
+```
+
+**Warning**: Restoring will replace all current data in Weaviate. You will be prompted for confirmation.
+
+**Alternative - Volume Restore (Not Recommended):**
+
+For manual volume restores:
 
 ```bash
 # Stop services
 docker-compose down
 
 # Restore from backup
-docker run --rm -v weaviate_weaviate_data:/data -v $(pwd)/backup:/backup alpine \
-  tar xzf /backup/weaviate-backup-YYYYMMDD.tar.gz -C /data
+docker run --rm -v weaviate_weaviate_data:/data -v $(pwd)/backups:/backup alpine \
+  tar xzf /backup/volume-backup-YYYYMMDD.tar.gz -C /data
 
 # Start services
 docker-compose up -d
 ```
+
+### Backup Best Practices
+
+1. **Schedule Regular Backups**: Set up a cron job to run `backup.sh` regularly:
+   ```bash
+   # Add to crontab (daily at 2 AM)
+   0 2 * * * cd /path/to/weaviate && ./backup.sh >> backup.log 2>&1
+   ```
+
+2. **Off-site Storage**: Copy backups to remote storage:
+   ```bash
+   # Example: Copy to S3
+   aws s3 sync ./backups/ s3://your-bucket/weaviate-backups/
+
+   # Example: Copy to another server
+   rsync -avz ./backups/ user@backup-server:/backups/weaviate/
+   ```
+
+3. **Retention Policy**: Delete old backups to save space:
+   ```bash
+   # Keep only last 7 days of backups
+   find ./backups -name "backup-*.tar.gz" -mtime +7 -delete
+   ```
+
+4. **Test Restores**: Periodically test restore procedures to ensure backups work
 
 ### Update Services
 
@@ -436,6 +549,7 @@ sudo aa-complain /etc/apparmor.d/docker
 | `WEAVIATE_API_USER` | No | admin | Username associated with API key |
 | `WEAVIATE_LOG_LEVEL` | No | info | Logging level (trace, debug, info, warning, error, fatal, panic) |
 | `LETSENCRYPT_EMAIL` | Yes | - | Email for Let's Encrypt certificate notifications and renewal reminders |
+| `ALLOWED_IPS` | No | (empty) | **Optional** - Comma-separated IP ranges for additional access restrictions (e.g., 10.0.0.0/8,192.168.0.0/16). Default (empty) = public access with API key auth (recommended) |
 
 ## Network Architecture
 
