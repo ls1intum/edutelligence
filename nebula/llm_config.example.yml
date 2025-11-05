@@ -1,0 +1,45 @@
+- api_key:
+  api_version: 2024-02-15-preview
+  azure_deployment: gpt-4o
+  capabilities:
+    context_length: 128000
+    gpt_version_equivalent: 4.5
+    image_recognition: true
+    input_cost: 5
+    json_mode: true
+    output_cost: 15
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: GPT 4 Omni on Azure
+  endpoint: "<your-endpoint>"
+  id: azure-gpt-4-omni
+  model: gpt-4o
+  name: GPT 4 Omni
+  type: azure_chat
+
+- id: azure-whisper
+  name: Azure Whisper
+  type: azure_whisper
+  endpoint: "<your-endpoint>"
+  azure_deployment: whisper
+  api_key:
+  api_version: 2024-06-01
+
+- id: openai-gpt-4o
+  name: GPT 4 Omni (OpenAI)
+  type: openai
+  model: gpt-4o
+  api_key:
+  capabilities:
+    image_recognition: true
+    context_length: 128000
+    gpt_version_equivalent: 4.5
+    input_cost: 5
+    output_cost: 15
+
+- id: openai-whisper
+  name: OpenAI Whisper
+  type: openai_whisper
+  model: whisper-1
+  api_key:

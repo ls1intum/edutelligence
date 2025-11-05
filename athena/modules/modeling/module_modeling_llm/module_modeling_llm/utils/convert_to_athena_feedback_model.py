@@ -5,10 +5,11 @@ from module_modeling_llm.models.assessment_model import AssessmentModel
 from module_modeling_llm.models.exercise_model import ExerciseModel
 
 
-def convert_to_athana_feedback_model(
+def convert_to_athena_feedback_model(
         feedback_result: AssessmentModel,
         exercise_model: ExerciseModel,
-        manual_structured_grading_instructions: Optional[List[GradingCriterion]] = None
+        manual_structured_grading_instructions: Optional[List[GradingCriterion]] = None,
+        is_graded: bool = False,
     ) -> List[Feedback]:
 
     grading_instruction_ids = {
@@ -42,7 +43,7 @@ def convert_to_athana_feedback_model(
             structured_grading_instruction_id=grading_instruction_id,
             meta={},
             id=None,
-            is_graded=False,
+            is_graded=is_graded,
             reference=reference,
             element_ids=[reference] if reference else [] # Todo: Remove after adding migrations to athena
         ))
