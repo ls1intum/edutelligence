@@ -96,6 +96,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     def get_memiris_tenant(self, dto: DTO) -> str:
         """Return the Memiris tenant identifier for the current user."""
 
+    @abstractmethod
+    def get_memiris_reference(self, dto: DTO):
+        """Return the reference to use for the Memiris learnings created in this pipeline."""
+
     # ========================================
     # === CAN override (optional methods) ===
     # ========================================
@@ -374,9 +378,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         # 4. Start memory creation if enabled
         if self.is_memiris_memory_creation_enabled(state):
+            reference = self.get_memiris_reference(dto=state.dto)
             state.memiris_memory_creation_thread = (
                 state.memiris_wrapper.create_memories_in_separate_thread(
-                    user_query, state.memiris_memory_creation_storage
+                    user_query, reference, state.memiris_memory_creation_storage
                 )
             )
 
