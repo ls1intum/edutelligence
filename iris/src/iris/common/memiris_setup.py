@@ -258,6 +258,9 @@ class MemirisWrapper:
         Returns:
             Sequence[Memory]: A sequence of created Memory objects.
         """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, returning empty sequence.")
+            return []
         if use_cloud_models:
             return self.memory_creation_pipeline_openai.create_memories(
                 self.tenant, text
@@ -280,7 +283,6 @@ class MemirisWrapper:
         Returns:
             Thread: The thread that is running the memory creation.
         """
-
         def _create_memories():
             try:
                 memories = self.create_memories(text, use_cloud_models)
@@ -301,6 +303,9 @@ class MemirisWrapper:
         Returns:
             bool: True if there are memories, False otherwise.
         """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, returning empty sequence.")
+            return False
         return has_memories_for_tenant(self.tenant, self.memory_service)
 
     def create_tool_memory_search(
@@ -420,6 +425,9 @@ class MemirisWrapper:
 
         Returns a MemoryWithRelationsDTO or None if the memory does not exist.
         """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, returning empty sequence.")
+            return None
         if isinstance(memory_id, str):
             if not is_valid_uuid(memory_id):
                 return None
