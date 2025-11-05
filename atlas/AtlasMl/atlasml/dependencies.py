@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 def _get_api_key(request: Request) -> str:
     """Extract the `Authorization` header value or raise for missing header."""
     authorization_header = request.headers.get("Authorization")
-    logger.debug(f"Received Authorization header: {authorization_header}")
 
     if not authorization_header:
         logger.warning("No Authorization header provided")
@@ -43,13 +42,12 @@ def get_api_keys() -> List[APIKeyConfig]:
 
 
 class TokenValidator:
-    """Callable dependency that validates API keys against configured values."""
-    def __init__(self, api_keys: List[APIKeyConfig] = Depends(get_api_keys)):
-        self.api_keys = api_keys
-
-    async def __call__(self, api_key: str = Depends(_get_api_key)) -> APIKeyConfig:
-        """Return the matching `APIKeyConfig` if the key is valid, else raise."""
-        for key in self.api_keys:
+    async def __call__(
+        self,
+        api_key: str = Depends(_get_api_key),
+        api_keys: List[APIKeyConfig] = Depends(get_api_keys),
+    ) -> APIKeyConfig:
+        for key in api_keys:
             logger.debug(f"Checking API key: {key}")
             if key.token == api_key:
                 return key

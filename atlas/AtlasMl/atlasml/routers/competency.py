@@ -41,7 +41,7 @@ router = APIRouter(prefix="/api/v1/competency", tags=["competency"])
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
-    dependencies=[],
+    dependencies=[Depends(TokenValidator())],
 )
 async def suggest_competencies(
     request: SuggestCompetencyRequest,
@@ -84,7 +84,7 @@ async def suggest_competencies(
         raise handle_pipeline_error(e, "suggest_competencies")
 
 
-@router.post("/save", dependencies=[])
+@router.post("/save", dependencies=[Depends(TokenValidator())])
 async def save_competencies(request: SaveCompetencyRequest):
     """
     Save competencies and/or a single exercise with an operation type.
@@ -158,7 +158,7 @@ async def save_competencies(request: SaveCompetencyRequest):
 @router.get(
     "/relations/suggest/{course_id}",
     response_model=CompetencyRelationSuggestionResponse,
-    dependencies=[],
+    dependencies=[Depends(TokenValidator())],
 )
 async def suggest_competency_relations(course_id: int) -> CompetencyRelationSuggestionResponse:
     """
@@ -184,7 +184,7 @@ async def suggest_competency_relations(course_id: int) -> CompetencyRelationSugg
         raise handle_pipeline_error(e, "suggest_competency_relations")
 
 
-@router.post("/map-competency-to-exercise",dependencies=[])
+@router.post("/map-competency-to-exercise", dependencies=[Depends(TokenValidator())])
 async def map_new_competency_to_exercise(request: MapNewCompetencyToExerciseRequest):
     """
     Map a new competency to an existing exercise.
@@ -219,7 +219,7 @@ async def map_new_competency_to_exercise(request: MapNewCompetencyToExerciseRequ
         raise handle_pipeline_error(e, "map_new_competency_to_exercise")
 
 
-@router.post("/map-competency-to-competency",dependencies=[])
+@router.post("/map-competency-to-competency", dependencies=[Depends(TokenValidator())])
 async def map_competency_to_competency(request: MapCompetencyToCompetencyRequest):
     """
     Map a competency to another competency (bidirectional relationship).

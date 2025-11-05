@@ -1,15 +1,15 @@
 import json
 from typing import List, Optional
-from langchain.prompts import (
+from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
 from langchain_core.messages import BaseMessage
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 
-from athena.evaluation.model.evaluation_model import Metric, MetricEvaluations
-from athena.evaluation.model.model import (
+from model.evaluation_model import Metric, MetricEvaluations
+from model.model import (
     Exercise,
     Submission,
     Feedback,

@@ -50,7 +50,7 @@ class StatusCallback(ABC):
     stage: StageDTO
     current_stage_index: Optional[int]
 
-    api_url: str = "api/iris/public/pyris/pipelines"
+    api_url: str = "api/iris/internal/pipelines"
 
     def __init__(
         self,
@@ -258,6 +258,7 @@ class CourseChatStatusCallback(StatusCallback):
                 weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Extracting memories",
+                internal=True,
             ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)

@@ -4,7 +4,9 @@ MemIris: A Python package for long-term memory management in large language mode
 
 from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
 
+from memiris.api.learning_dto import LearningDTO
 from memiris.api.learning_service import LearningService
+from memiris.api.memory_connection_dto import MemoryConnectionDTO
 from memiris.api.memory_connection_service import MemoryConnectionService
 from memiris.api.memory_creation_pipeline import (
     MemoryCreationPipeline,
@@ -16,10 +18,13 @@ from memiris.api.memory_sleep_pipeline import (
     MemorySleepPipeline,
     MemorySleepPipelineBuilder,
 )
+from memiris.api.memory_with_relations_dto import MemoryWithRelationsDTO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.domain.memory_connection import MemoryConnection
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.llm.abstract_language_model import AbstractLanguageModel
+from memiris.llm.ollama_language_model import OllamaLanguageModel
+from memiris.llm.openai_language_model import OpenAiLanguageModel
 
 try:
     dist_name = "MemIris"
@@ -33,6 +38,9 @@ __all__ = [
     # Domain Models
     "Memory",
     "MemoryDTO",
+    "LearningDTO",
+    "MemoryConnectionDTO",
+    "MemoryWithRelationsDTO",
     "Learning",
     "MemoryConnection",
     # API services
@@ -44,5 +52,7 @@ __all__ = [
     "MemoryConnectionService",
     "LearningService",
     # Internal services
-    "OllamaService",
+    "OllamaLanguageModel",
+    "OpenAiLanguageModel",
+    "AbstractLanguageModel",
 ]
