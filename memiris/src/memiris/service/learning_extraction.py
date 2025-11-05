@@ -6,7 +6,7 @@ from ollama import Message
 
 from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import (
     creation_dlo_to_learning,
@@ -19,15 +19,13 @@ class LearningExtractor:
     This class is responsible for extracting learning information from the given data.
     """
 
-    llm: str  # Placeholder for the LLM instance
+    llm: AbstractLanguageModel  # Bound chat model wrapper
     template: Template
     focus: Optional[str]
-    ollama_service: OllamaService
 
     def __init__(
         self,
-        llm: str,
-        ollama_service: OllamaService,
+        llm: AbstractLanguageModel,
         focus: Optional[str] = None,
         template: Optional[str] = None,
     ) -> None:
@@ -35,14 +33,12 @@ class LearningExtractor:
         Initialize the LearningExtractor
 
         Args:
-            llm: The name of the language model to use
-            ollama_service: The Ollama service to use for LLM calls
+            llm: The bound chat model to use
             focus: Optional focus for the extraction
             template: Optional template path to use for the extraction prompt
         """
         self.llm = llm
         self.focus = focus
-        self.ollama_service = ollama_service
         self.template = create_template(template, "learning_extraction.md.j2")
 
     @observe(name="learning-extraction")
@@ -73,8 +69,7 @@ class LearningExtractor:
             Message(role="user", content=text),
         ]
 
-        response = self.ollama_service.chat(
-            model=self.llm,
+        response = self.llm.chat(
             messages=messages,
             response_format=LearningCreationDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},
