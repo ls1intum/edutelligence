@@ -165,7 +165,7 @@ class ExerciseChatAgentPipeline(
         last_message: Optional[PyrisMessage] = next(
             (
                 m
-                for m in reversed(dto.conversation or [])
+                for m in reversed(dto.chat_history or [])
                 if m.sender == IrisMessageRole.USER
             ),
             None,
