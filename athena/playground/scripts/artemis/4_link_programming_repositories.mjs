@@ -34,21 +34,21 @@ for (let exercise of exercises) {
     console.log(`Exercise ${exercise.id} has no solution at ${exercisePath}/solution`);
     exercise.solution_repository_uri = null;
   } else {
-    exercise.solution_repository_uri = `{{exerciseDataUrl}}/solution.zip`;
+    exercise.solution_repository_uri = `{{exerciseDataUrl}}/solution`;
   }
 
   if (!fs.existsSync(path.join(exercisePath, "template"))) {
     console.log(`Exercise ${exercise.id} has no template at ${exercisePath}/template`);
     exercise.template_repository_uri = null;
   } else {
-    exercise.template_repository_uri = `{{exerciseDataUrl}}/template.zip`;
+    exercise.template_repository_uri = `{{exerciseDataUrl}}/template`;
   }
 
   if (!fs.existsSync(path.join(exercisePath, "tests"))) {
     console.log(`Exercise ${exercise.id} has no tests at ${exercisePath}/tests`);
     exercise.tests_repository_uri = null;
   } else {
-    exercise.tests_repository_uri = `{{exerciseDataUrl}}/tests.zip`;
+    exercise.tests_repository_uri = `{{exerciseDataUrl}}/tests`;
   }
 
   const submissionsPath = path.join(exercisePath, "submissions");
@@ -58,7 +58,7 @@ for (let exercise of exercises) {
       console.log(`Submission ${submission.id} has no directory at ${submissionPath}`);
       submission.repository_uri = null;
     } else {
-      submission.repository_uri = `{{exerciseDataUrl}}/submissions/${submission.id}.zip`;
+      submission.repository_uri = `{{exerciseDataUrl}}/submissions/${submission.id}`;
     }
     return submission;
   });
