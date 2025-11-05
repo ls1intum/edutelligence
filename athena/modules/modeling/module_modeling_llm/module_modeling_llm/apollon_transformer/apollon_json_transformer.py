@@ -1,6 +1,7 @@
 import json
 
 from module_modeling_llm.apollon_transformer.parser.uml_parser import UMLParser
+from module_modeling_llm.apollon_transformer.schema_converter import SchemaConverter
 
 
 class ApollonJSONTransformer:
@@ -10,6 +11,7 @@ class ApollonJSONTransformer:
         """
         Serialize a given Apollon diagram model to a string representation.
         This method converts the UML diagram model into a format similar to mermaid syntax, called "apollon".
+        Supports both v3.0.0 and v4.0.0 Apollon schema formats for backward compatibility.
     
         :param model: The Apollon diagram model to serialize.
         :return: A tuple containing the serialized model as a string and a dictionary mapping element and relation names
@@ -18,9 +20,12 @@ class ApollonJSONTransformer:
 
         model_dict = json.loads(model)
 
-        parser = UMLParser(model_dict)
+        # Normalize the schema to v3 format for parsing
+        normalized_model = SchemaConverter.normalize_to_v3(model_dict)
 
-        diagram_type = model_dict.get("type", "unknown")
+        parser = UMLParser(normalized_model)
+
+        diagram_type = normalized_model.get("type", "unknown")
     
         # Convert the UML diagram to the apollon representation
         apollon_representation = parser.to_apollon()
