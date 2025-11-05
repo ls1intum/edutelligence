@@ -283,6 +283,7 @@ class MemirisWrapper:
         Returns:
             Thread: The thread that is running the memory creation.
         """
+
         def _create_memories():
             try:
                 memories = self.create_memories(text, use_cloud_models)
