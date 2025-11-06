@@ -93,7 +93,7 @@ class SchemaConverter:
 
                 # Handle attributes (convert from embedded objects to ID references)
                 if "attributes" in node_data and node_data["attributes"]:
-                    attribute_ids = []
+                    attribute_ids: list[str] = []
                     for attr in node_data["attributes"]:
                         attr_id = attr.get("id", f"{element_id}_attr_{len(attribute_ids)}")
                         attribute_ids.append(attr_id)
@@ -111,7 +111,7 @@ class SchemaConverter:
 
                 # Handle methods (convert from embedded objects to ID references)
                 if "methods" in node_data and node_data["methods"]:
-                    method_ids = []
+                    method_ids: list[str] = []
                     for method in node_data["methods"]:
                         method_id = method.get("id", f"{element_id}_method_{len(method_ids)}")
                         method_ids.append(method_id)
