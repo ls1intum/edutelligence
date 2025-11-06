@@ -380,7 +380,7 @@ export default function ConductExperiment({
                 )}
               >
                 <ConductBatchModuleExperiment
-                  ref={(el) => (moduleViewRefs.current[index] = el)}
+                  ref={(el) => { moduleViewRefs.current[index] = el; }}
                   fullScreenHandle={fullScreenHandle}
                   experiment={experiment}
                   moduleConfiguration={moduleConfiguration}

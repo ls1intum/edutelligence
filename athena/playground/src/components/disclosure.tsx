@@ -12,7 +12,7 @@ type DisclosureProps = {
   }
   openedInitially?: boolean,
   noContentIndent?: boolean,
-  forceMount: true | undefined,
+  forceMount?: true | undefined,
 }
 
 export default function Disclosure({ title, children, className, openedInitially, noContentIndent, forceMount }: DisclosureProps) {
