@@ -17,6 +17,12 @@ export const text = {
   inputDataPath: path.join(__dirname, "evaluation_data", "text_exercises.json"),
 };
 
+export const modeling = {
+  exerciseType: "modeling",
+  queryPath: path.join(__dirname, "export_modeling_exercises.sql"),
+  inputDataPath: path.join(__dirname, "evaluation_data", "modeling_exercises.json"),
+};
+
 export const programming = {
   exerciseType: "programming",
   queryPath: path.join(__dirname, "export_programming_exercises.sql"),

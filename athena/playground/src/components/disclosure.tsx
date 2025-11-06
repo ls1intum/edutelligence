@@ -12,9 +12,10 @@ type DisclosureProps = {
   }
   openedInitially?: boolean,
   noContentIndent?: boolean,
+  forceMount: true | undefined,
 }
 
-export default function Disclosure({ title, children, className, openedInitially, noContentIndent }: DisclosureProps) {
+export default function Disclosure({ title, children, className, openedInitially, noContentIndent, forceMount }: DisclosureProps) {
   const [open, setOpen] = useState(openedInitially ?? false);
 
   return (
@@ -25,7 +26,7 @@ export default function Disclosure({ title, children, className, openedInitially
         </span>
         {title}
       </Collapsible.Trigger>
-      <Collapsible.Content className={twMerge('mt-1', noContentIndent ? '' : 'ml-4', className?.content)}>
+      <Collapsible.Content className={twMerge('mt-1', noContentIndent ? '' : 'ml-4', className?.content)} forceMount={forceMount} hidden={forceMount ? !open : undefined}>
         {children}
       </Collapsible.Content>
     </Collapsible.Root>
