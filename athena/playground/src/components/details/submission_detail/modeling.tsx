@@ -1,13 +1,12 @@
-import React, {useEffect, useRef, useState}  from 'react';
-
-import type {ModelingSubmission} from "@/model/submission";
-import type {Feedback} from "@/model/feedback";
-import {createFeedbackItemUpdater, createNewFeedback, getFeedbackReferenceType} from "@/model/feedback";
-import type {ManualRating} from "@/model/manual_rating";
-import {createManualRatingItemUpdater} from "@/model/manual_rating";
+import type { Feedback } from "@/model/feedback";
+import { createFeedbackItemUpdater, createNewFeedback, getFeedbackReferenceType } from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
+import { createManualRatingItemUpdater } from "@/model/manual_rating";
+import type { ModelingSubmission } from "@/model/submission";
+import '@tumaet/apollon/dist/assets/style.css';
+import { useEffect, useRef, useState } from 'react';
 
 import InlineFeedback from "@/components/details/editor/inline_feedback";
-
 
 type ModelingSubmissionDetailProps = {
   identifier?: string;
@@ -36,17 +35,18 @@ export default function ModelingSubmissionDetail({
 
   useEffect(() => {
 
-    const Apollon = require("@ls1intum/apollon");
-
     if (!editorRef?.current) {
       return;
     }
-
-    setEditor(new Apollon.ApollonEditor(editorRef.current!, {
-      model: JSON.parse(submission.model),
-      readonly: true,
-      scale: 0.8
-    }));
+    
+    // Dynamically import both ApollonEditor and importDiagram to avoid SSR issues
+    import('@tumaet/apollon').then(({ ApollonEditor, importDiagram }) => {
+      setEditor(new ApollonEditor(editorRef.current!, {
+        model: importDiagram(JSON.parse(submission.model)),
+        readonly: true,
+        scale: 0.8
+      }));
+    });
 
   }, [editorRef, submission]);
 
