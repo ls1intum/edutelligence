@@ -27,6 +27,9 @@ services:
       pyris-app:
         condition: service_started
     volumes:
+      - cert_fullchain:/certs/fullchain.pem:ro
+      - cert_privkey:/certs/priv_key.pem:ro
+
       - type: bind
         source: ${NGINX_PROXY_SSL_CERTIFICATE_PATH:-./nginx/certs/pyris-nginx+4.pem}
         target: "/certs/fullchain.pem"
@@ -42,6 +45,21 @@ services:
       service: weaviate
     networks:
       - pyris
+
+# https://stackoverflow.com/a/79423627
+volumes:
+  cert_fullchain:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "/var/lib/rbg-cert/live/host:f:pyris-prod.artemis.cit.tum.de.fullchain.pem"
+  cert_privkey:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "/var/lib/rbg-cert/live/host:f:pyris-prod.artemis.cit.tum.de.privkey.pem"
 
 networks:
   pyris:
