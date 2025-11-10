@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import warnings
 from threading import Thread
 from typing import Callable, Sequence
@@ -18,6 +19,10 @@ from memiris import (
     MemoryWithRelationsDTO,
     OllamaLanguageModel,
 )
+from memiris.api.memory_sleep_pipeline import (
+    MemorySleepPipeline,
+    MemorySleepPipelineBuilder,
+)
 from memiris.llm.openai_language_model import OpenAiLanguageModel
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.uuid_util import is_valid_uuid, to_uuid
@@ -26,6 +31,7 @@ from weaviate import WeaviateClient
 from iris.llm import AzureOpenAIChatModel, OllamaModel
 from iris.llm.external.openai_chat import OpenAIChatModel
 from iris.llm.llm_manager import LlmManager
+from iris.vector_database.database import VectorDatabase
 
 _memiris_user_focus_personal_details = """
 Find personal details about the user itself.
@@ -175,6 +181,87 @@ def memiris_create_user_memory_creation_pipeline_openai(
     )
 
 
+def memiris_create_user_memory_sleep_pipeline_ollama(
+    weaviate_client: WeaviateClient, vectorizer: Vectorizer
+) -> MemorySleepPipeline:
+    """
+    Creates a memory sleep pipeline for users.
+
+    This function initializes and configures a memory sleep pipeline for users.
+    It sets up LLM access and vector database access.
+
+    Parameters:
+        weaviate_client (WeaviateClient): A client instance for interacting with the Weaviate database.
+    Returns:
+        MemorySleepPipeline: The fully constructed memory sleep pipeline.
+    """
+    return (
+        MemorySleepPipelineBuilder()
+        .set_memory_repository(weaviate_client)
+        .set_learning_repository(weaviate_client)
+        .set_memory_connection_repository(weaviate_client)
+        .set_vectorizer(vectorizer)
+        .set_group_size(50)
+        .set_max_threads(4)
+        .build()
+    )
+
+
+def memiris_create_user_memory_sleep_pipeline_openai(
+    weaviate_client: WeaviateClient, vectorizer: Vectorizer
+) -> MemorySleepPipeline:
+    """
+    Creates a memory sleep pipeline for users using OpenAI.
+
+    This function initializes and configures a memory sleep pipeline for users.
+    It sets up LLM access and vector database access.
+
+    Parameters:
+        weaviate_client (WeaviateClient): A client instance for interacting with the Weaviate database.
+    Returns:
+        MemorySleepPipeline: The fully constructed memory sleep pipeline.
+    """
+    llm_manager = LlmManager()
+    model_to_use: OpenAIChatModel | None = None
+    for model in llm_manager.entries:
+        if isinstance(model, OpenAIChatModel) and model.model == "gpt-5-mini":
+            model_to_use = model
+            break
+    else:
+        for model in llm_manager.entries:
+            if isinstance(model, OpenAIChatModel) and model.model == "gpt-4.1-mini":
+                model_to_use = model
+                break
+        else:
+            logging.error(
+                "No OpenAIChatModel with model 'gpt-5-mini' or 'gpt-4.1-mini' found in LlmManager."
+                "Using Ollama for Memiris instead."
+            )
+            return memiris_create_user_memory_sleep_pipeline_ollama(
+                weaviate_client, vectorizer
+            )
+
+    memiris_llm = OpenAiLanguageModel(
+        model=model_to_use.model,
+        api_key=model_to_use.api_key,
+        azure=isinstance(model_to_use, AzureOpenAIChatModel),
+        azure_endpoint=getattr(model_to_use, "endpoint", None),
+        api_version=getattr(model_to_use, "api_version", None),
+    )
+    return (
+        MemorySleepPipelineBuilder()
+        .set_memory_repository(weaviate_client)
+        .set_learning_repository(weaviate_client)
+        .set_memory_connection_repository(weaviate_client)
+        .set_vectorizer(vectorizer)
+        .set_group_size(25)
+        .set_max_threads(20)
+        .set_tool_llm(memiris_llm)
+        .set_response_llm(memiris_llm)
+        .build()
+    )
+
+
 def get_tenant_for_user(user_id: int) -> Tenant:
     """
     Returns the tenant for the given user ID.
@@ -241,6 +328,16 @@ class MemirisWrapper:
                 weaviate_client, self.vectorizer
             )
         )
+        self.memory_sleep_pipeline_ollama = (
+            memiris_create_user_memory_sleep_pipeline_ollama(
+                weaviate_client, self.vectorizer
+            )
+        )
+        self.memory_sleep_pipeline_openai = (
+            memiris_create_user_memory_sleep_pipeline_openai(
+                weaviate_client, self.vectorizer
+            )
+        )
         self.learning_service = LearningService(weaviate_client)
         self.memory_service = MemoryService(weaviate_client)
         self.memory_connection_service = MemoryConnectionService(weaviate_client)
@@ -296,6 +393,33 @@ class MemirisWrapper:
         thread = Thread(name="MemirisMemoryCreationThread", target=_create_memories)
         thread.start()
         return thread
+
+    def sleep_memories(self, use_cloud_models: bool = False) -> None:
+        """
+        Sleeps memories for the tenant using the memory sleep pipeline.
+
+        Args:
+            use_cloud_models (bool): Whether to use cloud models (OpenAI) or local models (Ollama).
+        """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, skipping sleep memories.")
+            return
+        # Track time for the sleep operation and log which pipeline is used
+        start_time = time.perf_counter()
+        if use_cloud_models:
+            logging.info(
+                "Starting memory sleep for tenant %s using OpenAI", self.tenant
+            )
+            self.memory_sleep_pipeline_openai.sleep(self.tenant)
+        else:
+            logging.info(
+                "Starting memory sleep for tenant %s using Ollama", self.tenant
+            )
+            self.memory_sleep_pipeline_ollama.sleep(self.tenant)
+        elapsed = time.perf_counter() - start_time
+        logging.info(
+            "Memory sleep finished for tenant %s; duration=%.3fs", self.tenant, elapsed
+        )
 
     def has_memories(self) -> bool:
         """
@@ -488,3 +612,47 @@ class MemirisWrapper:
         return MemoryWithRelationsDTO(
             memory=memory_dto, learnings=learning_dtos, connections=connection_dtos
         )
+
+
+def memory_sleep_task():
+    """
+    A periodic task to sleep memories for all users.
+    """
+    logging.info("Running memory sleep task for all users.")
+    vector_db = VectorDatabase().static_client_instance
+    if not vector_db:
+        logging.warning("Vector database client not initialized. Skipping sleep task.")
+        return
+    memory_service = MemoryService(vector_db)
+    tenants = memory_service.find_all_tenants()
+    if not tenants:
+        logging.info("No tenants found in memory service. Exiting sleep task.")
+        return
+    tenants = [tenant for tenant in tenants if tenant.startswith("artemis-user-")]
+    logging.info("Found %d tenants for memory sleep task.", len(tenants))
+    tenants = [
+        tenant for tenant in tenants if memory_service.has_unslept_memories(tenant)
+    ]
+    logging.info("Found %d tenants with unslept memories.", len(tenants))
+    total = len(tenants)
+    if total == 0:
+        logging.info("No tenants with unslept memories found. Exiting sleep task.")
+        return
+    for idx, tenant in enumerate(tenants, start=1):
+        try:
+            logging.info("Sleeping memories for tenant %s (%d/%d)", tenant, idx, total)
+            memiris_wrapper = MemirisWrapper(vector_db, tenant)
+            start = time.perf_counter()
+            memiris_wrapper.sleep_memories()
+            elapsed = time.perf_counter() - start
+            logging.info(
+                "Finished sleeping memories for tenant %s (%d/%d) in %.3fs",
+                tenant,
+                idx,
+                total,
+                elapsed,
+            )
+        except Exception as e:
+            logging.error(
+                "Error sleeping memories for tenant %s: %s", tenant, e, exc_info=True
+            )
