@@ -67,7 +67,7 @@ def llm_config_openai(monkeypatch):
     monkeypatch.setattr(
         wu,
         "load_llm_config",
-        lambda llm_id=None: config,
+        lambda *args, **kwargs: config,
         raising=True,
     )
     return config
@@ -85,7 +85,7 @@ def llm_config_azure(monkeypatch):
     monkeypatch.setattr(
         wu,
         "load_llm_config",
-        lambda llm_id=None: config,
+        lambda *args, **kwargs: config,
         raising=True,
     )
     return config

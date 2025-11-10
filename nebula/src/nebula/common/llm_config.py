@@ -4,7 +4,7 @@ import yaml
 from openai import AzureOpenAI, OpenAI
 
 
-def load_llm_config(filename="llm_config.nebula.yml", model="gpt-4.1"):
+def load_llm_config(model: str, filename: str = "llm_config.nebula.yml"):
     """Load LLM configuration from a YAML file."""
     config_path = os.getenv("LLM_CONFIG_PATH")
     if not config_path:
@@ -26,25 +26,25 @@ def load_llm_config(filename="llm_config.nebula.yml", model="gpt-4.1"):
     raise ValueError(f"LLM config with model '{model}' not found.")
 
 
-def get_openai_client(model="gpt-4.1"):
+def get_openai_client(model: str = "gpt-4.1"):
     """
     Create and return an OpenAI or AzureOpenAI client, plus the model/deployment name.
     """
-    config = load_llm_config(model)
+    config = load_llm_config(model=model)
     llm_type = config.get("type")
 
     if llm_type == "azure_chat":
-        client = AzureOpenAI(
-            azure_endpoint=config["endpoint"],
-            azure_deployment=config["azure_deployment"],
-            api_key=config["api_key"],
-            api_version=config["api_version"],
+        return (
+            AzureOpenAI(
+                azure_endpoint=config["endpoint"],
+                azure_deployment=config["azure_deployment"],
+                api_key=config["api_key"],
+                api_version=config["api_version"],
+            ),
+            config["azure_deployment"],
         )
-        return client, config["azure_deployment"]
 
-    elif llm_type == "openai_chat":
-        client = OpenAI(api_key=config["api_key"])
-        return client, config["model"]
+    if llm_type == "openai_chat":
+        return OpenAI(api_key=config["api_key"]), config["model"]
 
-    else:
-        raise ValueError(f"Unsupported OpenAI LLM config type: {llm_type}")
+    raise ValueError(f"Unsupported OpenAI LLM config type: {llm_type}")

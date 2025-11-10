@@ -19,7 +19,7 @@ def get_audio_duration(audio_path: str) -> float:
 
 
 def transcribe_with_whisper(audio_path: str) -> dict:
-    config = load_llm_config("whisper")
+    config = load_llm_config(model="whisper")
     llm_type = config.get("type")
     if llm_type not in ("azure_whisper", "openai_whisper"):
         raise ValueError(f"Unsupported Whisper LLM type: {llm_type}")
