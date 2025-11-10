@@ -1,4 +1,6 @@
 import logging
+import os
+import warnings
 from threading import Thread
 from typing import Callable, Sequence
 from uuid import UUID
@@ -14,13 +16,16 @@ from memiris import (
     MemoryDTO,
     MemoryService,
     MemoryWithRelationsDTO,
-    OllamaService,
+    OllamaLanguageModel,
 )
+from memiris.llm.openai_language_model import OpenAiLanguageModel
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.uuid_util import is_valid_uuid, to_uuid
 from weaviate import WeaviateClient
 
-_memiris_embedding_models = ["mxbai-embed-large:latest", "nomic-embed-text:latest"]
+from iris.llm import AzureOpenAIChatModel, OllamaModel
+from iris.llm.external.openai_chat import OpenAIChatModel
+from iris.llm.llm_manager import LlmManager
 
 _memiris_user_focus_personal_details = """
 Find personal details about the user itself.
@@ -59,11 +64,29 @@ Keep the learnings short and concise. Better have multiple short learnings than 
 type Tenant = str
 
 
-def memiris_create_user_memory_creation_pipeline(
-    weaviate_client: WeaviateClient,
+def setup_ollama_env_vars() -> None:
+    llm_manager = LlmManager()
+    iris_ollama_model: OllamaModel | None = None
+    for model in llm_manager.entries:
+        if isinstance(model, OllamaModel):
+            iris_ollama_model = model
+            break
+
+    if iris_ollama_model is not None:
+        os.environ["OLLAMA_HOST"] = iris_ollama_model.host
+        os.environ["OLLAMA_TOKEN"] = iris_ollama_model.api_key or ""
+
+    if not os.environ.get("OLLAMA_HOST"):
+        raise RuntimeError("Ollama host not configured for Memiris LLM access.")
+    if not os.environ.get("OLLAMA_TOKEN"):
+        warnings.warn("Ollama token not configured for Memiris LLM access.")
+
+
+def memiris_create_user_memory_creation_pipeline_ollama(
+    weaviate_client: WeaviateClient, vectorizer: Vectorizer
 ) -> MemoryCreationPipeline:
     """
-    Creates a memory creation pipeline for users.
+    Creates a memory creation pipeline for users using Ollama.
 
     This function initializes and configures a memory creation pipeline for users.
     It sets up LLM access and vector database access.
@@ -76,14 +99,78 @@ def memiris_create_user_memory_creation_pipeline(
         MemoryCreationPipeline: The fully constructed memory creation pipeline.
     """
     return (
-        MemoryCreationPipelineBuilder(OllamaService())
+        MemoryCreationPipelineBuilder()
         .set_memory_repository(weaviate_client)
         .set_learning_repository(weaviate_client)
-        .set_vectorizer(_memiris_embedding_models)
+        .set_vectorizer(vectorizer)
         .add_learning_extractor(focus=_memiris_user_focus_personal_details)
         .add_learning_extractor(focus=_memiris_user_focus_requirements)
         .add_learning_extractor(focus=_memiris_user_focus_facts)
         .add_learning_deduplicator()
+        .set_memory_creator_langchain()
+        .build()
+    )
+
+
+def memiris_create_user_memory_creation_pipeline_openai(
+    weaviate_client: WeaviateClient, vectorizer: Vectorizer
+) -> MemoryCreationPipeline:
+    """
+    Creates a memory creation pipeline for users using OpenAI.
+
+    This function initializes and configures a memory creation pipeline for users.
+    It sets up LLM access and vector database access.
+    It also adds learning extractors for personal details, requirements, and facts about the user.
+
+    Parameters:
+        weaviate_client (WeaviateClient): A client instance for interacting with the Weaviate database.
+    Returns:
+        MemoryCreationPipeline: The fully constructed memory creation pipeline.
+    """
+    llm_manager = LlmManager()
+    model_to_use: OpenAIChatModel | None = None
+    for model in llm_manager.entries:
+        if isinstance(model, OpenAIChatModel) and model.model == "gpt-5-mini":
+            model_to_use = model
+            break
+    else:
+        for model in llm_manager.entries:
+            if isinstance(model, OpenAIChatModel) and model.model == "gpt-4.1-mini":
+                model_to_use = model
+                break
+        else:
+            logging.error(
+                "No OpenAIChatModel with model 'gpt-5-mini' or 'gpt-4.1-mini' found in LlmManager."
+                "Using Ollama for Memiris instead."
+            )
+            return memiris_create_user_memory_creation_pipeline_ollama(
+                weaviate_client, vectorizer
+            )
+
+    memiris_llm = OpenAiLanguageModel(
+        model=model_to_use.model,
+        api_key=model_to_use.api_key,
+        azure=isinstance(model_to_use, AzureOpenAIChatModel),
+        azure_endpoint=getattr(model_to_use, "endpoint", None),
+        api_version=getattr(model_to_use, "api_version", None),
+    )
+    return (
+        MemoryCreationPipelineBuilder()
+        .set_memory_repository(weaviate_client)
+        .set_learning_repository(weaviate_client)
+        .set_vectorizer(vectorizer)
+        .add_learning_extractor(
+            focus=_memiris_user_focus_personal_details,
+            llm_learning_extraction=memiris_llm,
+        )
+        .add_learning_extractor(
+            focus=_memiris_user_focus_requirements, llm_learning_extraction=memiris_llm
+        )
+        .add_learning_extractor(
+            focus=_memiris_user_focus_facts, llm_learning_extraction=memiris_llm
+        )
+        .add_learning_deduplicator(llm_learning_deduplication=memiris_llm)
+        .set_memory_creator_langchain(llm=memiris_llm)
         .build()
     )
 
@@ -125,27 +212,66 @@ class MemirisWrapper:
     A wrapper class for the Memiris memory service for easier use in Iris's pipelines.
     """
 
+    enabled: bool
+
     def __init__(self, weaviate_client: WeaviateClient, tenant: Tenant):
-        self.vectorizer = Vectorizer(_memiris_embedding_models, OllamaService())
-        self.memory_creation_pipeline = memiris_create_user_memory_creation_pipeline(
-            weaviate_client
+        try:
+            setup_ollama_env_vars()
+        except RuntimeError:
+            logging.error(
+                "Failed to setup Memiris. Please provide at least one Ollama model in the LLM config"
+            )
+            self.enabled = False
+            return
+        self.enabled = True
+        self._memiris_embedding_models = [
+            OllamaLanguageModel("mxbai-embed-large:latest"),
+            OllamaLanguageModel("nomic-embed-text:latest"),
+            # OllamaLanguageModel("embeddinggemma:latest"),
+            # OllamaLanguageModel("qwen3-embedding:0.6b"),
+        ]
+        self.vectorizer = Vectorizer(self._memiris_embedding_models)
+        self.memory_creation_pipeline_ollama = (
+            memiris_create_user_memory_creation_pipeline_ollama(
+                weaviate_client, self.vectorizer
+            )
+        )
+        self.memory_creation_pipeline_openai = (
+            memiris_create_user_memory_creation_pipeline_openai(
+                weaviate_client, self.vectorizer
+            )
         )
         self.learning_service = LearningService(weaviate_client)
         self.memory_service = MemoryService(weaviate_client)
         self.memory_connection_service = MemoryConnectionService(weaviate_client)
         self.tenant = tenant
 
-    def create_memories(self, text: str) -> Sequence[Memory]:
+    def create_memories(
+        self, text: str, use_cloud_models: bool = False
+    ) -> Sequence[Memory]:
         """
         Creates memories for the given text using the memory creation pipeline.
 
         Args:
             text (str): The text to create memories from.
+            use_cloud_models (bool): Whether to use cloud models (OpenAI) or local models (Ollama).
+        Returns:
+            Sequence[Memory]: A sequence of created Memory objects.
         """
-        return self.memory_creation_pipeline.create_memories(self.tenant, text)
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, returning empty sequence.")
+            return []
+        if use_cloud_models:
+            return self.memory_creation_pipeline_openai.create_memories(
+                self.tenant, text
+            )
+        else:
+            return self.memory_creation_pipeline_ollama.create_memories(
+                self.tenant, text
+            )
 
     def create_memories_in_separate_thread(
-        self, text: str, result_storage: list[Memory]
+        self, text: str, result_storage: list[Memory], use_cloud_models: bool = False
     ) -> Thread:
         """
         Creates memories for the given text in a separate thread and stores the results in the provided storage.
@@ -153,13 +279,14 @@ class MemirisWrapper:
         Args:
             text (str): The text to create memories from.
             result_storage (list[Memory]): The storage to append the created memories to.
+            use_cloud_models (bool): Whether to use cloud models (OpenAI) or local models (Ollama).
         Returns:
             Thread: The thread that is running the memory creation.
         """
 
         def _create_memories():
             try:
-                memories = self.create_memories(text)
+                memories = self.create_memories(text, use_cloud_models)
                 result_storage.extend(memories)
             except Exception as e:
                 logging.error(
@@ -177,6 +304,9 @@ class MemirisWrapper:
         Returns:
             bool: True if there are memories, False otherwise.
         """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, returning empty sequence.")
+            return False
         return has_memories_for_tenant(self.tenant, self.memory_service)
 
     def create_tool_memory_search(
@@ -296,6 +426,9 @@ class MemirisWrapper:
 
         Returns a MemoryWithRelationsDTO or None if the memory does not exist.
         """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, returning empty sequence.")
+            return None
         if isinstance(memory_id, str):
             if not is_valid_uuid(memory_id):
                 return None

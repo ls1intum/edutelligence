@@ -1,5 +1,9 @@
+/**
+ * Repository fetching utilities for the playground.
+ * Handles fetching repository filemaps and building file trees for display.
+ */
+
 import { useEffect, useState } from "react";
-import JSZip from "jszip";
 
 export type FileTree = {
   path: string;
@@ -31,8 +35,6 @@ function buildFileTree(paths: string[], path: string = ""): FileTree[] {
     // All subPaths are prefixed with {path}*
     var remainingPath = subPath.replace(path, "");
 
-    var promisses: Promise<FileTree>[] = [];
-
     // If there is no / in remainingPath, then it is a file
     if (remainingPath.indexOf("/") === -1) {
       tree.push({
@@ -54,27 +56,27 @@ function buildFileTree(paths: string[], path: string = ""): FileTree[] {
   return tree;
 }
 
-export const useFetchAndUnzip = (url: string) => {
+
+export const useFetchFilemap = (url: string) => {
   const [isError, setIsError] = useState<boolean>(false);
-  const [zip, setZip] = useState<JSZip | undefined>();
+  const [filesMap, setFilesMap] = useState<Record<string, string>>({});
   const [tree, setTree] = useState<FileTree[]>([]);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         const response = await fetch(url);
-        const blob = await response.blob();
-        const zip = await JSZip.loadAsync(blob);
-        const tree = buildFileTree(Object.keys(zip.files));
-
-        setZip(zip);
-        setTree(tree);
+        const data = await response.json();
+        
+        if (!response.ok || typeof data !== 'object') {
+          throw new Error('Invalid repository filemap response');
+        }
+        
+        setFilesMap(data);
+        setTree(buildFileTree(Object.keys(data)));
         setIsError(false);
       } catch (error) {
-        console.error(
-          "Error fetching or unzipping the file, you may link downloaded repositories with `npm run export:artemis:4-link-programming-repositories`",
-          error
-        );
+        console.error('Error fetching repository filemap:', error);
         setIsError(true);
       }
     };
@@ -82,5 +84,5 @@ export const useFetchAndUnzip = (url: string) => {
     fetchData();
   }, [url]);
 
-  return { isError, zip, tree };
+  return { isError, filesMap, tree };
 };

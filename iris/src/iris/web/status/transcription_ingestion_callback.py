@@ -23,7 +23,7 @@ class TranscriptionIngestionStatus(StatusCallback):
         initial_stages: List[StageDTO] = None,
         lecture_unit_id: int = None,
     ):
-        url = f"{base_url}/api/iris/public/pyris/webhooks/ingestion/transcriptions/runs/{run_id}/status"
+        url = f"{base_url}/api/iris/internal/webhooks/ingestion/transcriptions/runs/{run_id}/status"
 
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
