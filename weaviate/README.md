@@ -532,10 +532,10 @@ sudo aa-complain /etc/apparmor.d/docker
    docker exec traefik wget -qO- http://localhost:80/ping
 
    # Weaviate
-   docker exec weaviate wget -qO- http://localhost:8080/v1/.well-known/ready
+   docker exec weaviate curl -f -s http://localhost:8080/v1/.well-known/ready
 
    # Multi2vec-clip
-   docker exec multi2vec-clip wget -qO- http://localhost:8080/.well-known/ready
+   docker exec multi2vec-clip curl -f -s http://localhost:8080/.well-known/ready
    ```
 3. Increase startup time in `docker-compose.yml` if services are slow to start
 
