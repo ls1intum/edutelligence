@@ -7,20 +7,16 @@ import uuid
 from typing import Tuple
 
 from nebula.transcript.align_utils import align_slides_with_segments
-from nebula.transcript.config import Config
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
 from nebula.transcript.jobs import cleanup_finished_jobs, fail_job, save_job_result
-from nebula.transcript.llm_utils import load_llm_config
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
+from nebula.transcript.transcriber_config import VIDEO_STORAGE_PATH
 from nebula.transcript.video_utils import (
     download_video,
     extract_audio,
     extract_frames_at_timestamps,
 )
-from nebula.transcript.whisper_utils import (
-    transcribe_with_azure_whisper,
-    transcribe_with_openai_whisper,
-)
+from nebula.transcript.whisper_utils import transcribe_with_whisper
 
 # FIFO queue of (job_id, request)
 _job_queue: "asyncio.Queue[Tuple[str, TranscribeRequestDTO]]" = asyncio.Queue()
@@ -43,8 +39,8 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
 
     # Unique temp paths
     uid = str(uuid.uuid4())
-    video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
-    audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
+    video_path = os.path.join(VIDEO_STORAGE_PATH, f"{uid}.mp4")
+    audio_path = os.path.join(VIDEO_STORAGE_PATH, f"{uid}.wav")
 
     try:
         # Run blocking work in threads so the event loop stays responsive
@@ -54,19 +50,10 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
         logging.debug("[Job %s] Extracting audio...", job_id)
         await asyncio.to_thread(extract_audio, video_path, audio_path)  #
 
-        whisper_config = load_llm_config(llm_id=Config.get_whisper_llm_id())  #
-        if whisper_config["type"] == "azure_whisper":
-            logging.debug(" [Job %s] Transcribing with Azure Whisper...", job_id)
-            transcription = await asyncio.to_thread(
-                transcribe_with_azure_whisper, audio_path, whisper_config["id"]
-            )  # requests loop, blocking
-        elif whisper_config["type"] == "openai_whisper":
-            logging.debug(" [Job %s] Transcribing with OpenAI Whisper...", job_id)
-            transcription = await asyncio.to_thread(
-                transcribe_with_openai_whisper, audio_path, whisper_config["id"]
-            )  # requests loop, blocking
-        else:
-            raise ValueError(f'Unsupported Whisper type: {whisper_config["type"]}')
+        logging.debug(" [Job %s] Transcribing with Whisper...", job_id)
+        transcription = await asyncio.to_thread(
+            transcribe_with_whisper, audio_path
+        )  # requests loop, blocking
 
         return {
             "transcription": transcription,
@@ -101,9 +88,7 @@ async def _light_phase(
         slide_timestamps = []
         for ts, img_b64 in frames:
             # You already planned to add job_id logging inside ask_gpt_for_slide_number
-            slide_num = ask_gpt_for_slide_number(
-                img_b64, llm_id=Config.get_gpt_vision_llm_id(), job_id=job_id
-            )  #
+            slide_num = ask_gpt_for_slide_number(img_b64, job_id=job_id)  #
             if slide_num is not None:
                 slide_timestamps.append((ts, slide_num))
             await asyncio.sleep(2)  # existing throttle
@@ -136,8 +121,8 @@ async def _light_phase(
                     logging.debug("[Job %s] Removed temp file: %s", job_id, path)
             # remove chunk dirs
             chunk_dir_prefix = f"chunks_{uid}"
-            for entry in os.listdir(Config.VIDEO_STORAGE_PATH):
-                full = os.path.join(Config.VIDEO_STORAGE_PATH, entry)
+            for entry in os.listdir(VIDEO_STORAGE_PATH):
+                full = os.path.join(VIDEO_STORAGE_PATH, entry)
                 if entry.startswith(chunk_dir_prefix) and os.path.isdir(full):
                     shutil.rmtree(full)
                     logging.debug("[Job %s] Removed chunk directory: %s", job_id, full)

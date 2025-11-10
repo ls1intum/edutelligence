@@ -57,7 +57,7 @@ def extract_frames_at_timestamps(
         if not ret:
             continue
         height = frame.shape[0]
-        cropped = frame[int(height * 0.95) :, :]
+        cropped = frame[int(height * 0.5) :, :]
         _, buffer = cv2.imencode(".jpg", cropped)
         img_b64 = base64.b64encode(buffer).decode("utf-8")
         result.append((ts, img_b64))

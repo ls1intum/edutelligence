@@ -4,10 +4,8 @@ import yaml
 from openai import AzureOpenAI, OpenAI
 
 
-def load_llm_config(filename="llm_config.nebula.yml", llm_id="azure-gpt-4-omni"):
-    """
-    Load LLM configuration from a YAML file and return the config for the given ID.
-    """
+def load_llm_config(filename="llm_config.nebula.yml", model="gpt-4.1"):
+    """Load LLM configuration from a YAML file."""
     config_path = os.getenv("LLM_CONFIG_PATH")
     if not config_path:
         this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,40 +17,34 @@ def load_llm_config(filename="llm_config.nebula.yml", llm_id="azure-gpt-4-omni")
         raise FileNotFoundError(f"LLM config file not found at: {config_path}")
 
     with open(config_path, "r", encoding="utf-8") as f:
-        config_list = yaml.safe_load(f)
+        config = yaml.safe_load(f)
 
-    for entry in config_list:
-        if entry.get("id") == llm_id:
+    for entry in config:
+        if entry.get("model") == model:
             return entry
 
-    raise ValueError(f"LLM config with ID '{llm_id}' not found.")
+    raise ValueError(f"LLM config with model '{model}' not found.")
 
 
-def get_openai_client(llm_id="azure-gpt-4-omni"):
+def get_openai_client(model="gpt-4.1"):
     """
     Create and return an OpenAI or AzureOpenAI client, plus the model/deployment name.
     """
-    config = load_llm_config(llm_id=llm_id)
+    config = load_llm_config(model)
     llm_type = config.get("type")
 
     if llm_type == "azure_chat":
         client = AzureOpenAI(
             azure_endpoint=config["endpoint"],
+            azure_deployment=config["azure_deployment"],
             api_key=config["api_key"],
             api_version=config["api_version"],
         )
         return client, config["azure_deployment"]
 
-    elif llm_type == "openai":
+    elif llm_type == "openai_chat":
         client = OpenAI(api_key=config["api_key"])
         return client, config["model"]
 
     else:
-        raise ValueError(f"Unsupported LLM config type: {llm_type}")
-
-
-def get_whisper_config(llm_id="azure-whisper"):
-    """
-    Return configuration for Whisper transcription (Azure or OpenAI).
-    """
-    return load_llm_config(llm_id=llm_id)
+        raise ValueError(f"Unsupported OpenAI LLM config type: {llm_type}")
