@@ -29,13 +29,6 @@ services:
     volumes:
       - cert_fullchain:/certs/fullchain.pem:ro
       - cert_privkey:/certs/priv_key.pem:ro
-
-      - type: bind
-        source: ${NGINX_PROXY_SSL_CERTIFICATE_PATH:-./nginx/certs/pyris-nginx+4.pem}
-        target: "/certs/fullchain.pem"
-      - type: bind
-        source: ${NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH:-./nginx/certs/pyris-nginx+4-key.pem}
-        target: "/certs/priv_key.pem"
     networks:
       - pyris
 
@@ -53,13 +46,14 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: "/var/lib/rbg-cert/live/host:f:pyris-prod.artemis.cit.tum.de.fullchain.pem"
+      device: "${NGINX_PROXY_SSL_CERTIFICATE_PATH:-./nginx/certs/pyris-nginx+4.pem}"
+
   cert_privkey:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: "/var/lib/rbg-cert/live/host:f:pyris-prod.artemis.cit.tum.de.privkey.pem"
+      device: "${NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH:-./nginx/certs/pyris-nginx+4-key.pem}"
 
 networks:
   pyris:
