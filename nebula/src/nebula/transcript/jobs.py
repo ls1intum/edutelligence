@@ -1,11 +1,15 @@
 import asyncio
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 # Job state store
 JOB_RESULTS: Dict[str, Dict[str, Any]] = {}
 JOB_LOCK = asyncio.Lock()
+
+# Track jobs that should be cancelled
+CANCELLED_JOBS: Set[str] = set()
+CANCELLED_JOBS_LOCK = asyncio.Lock()
 
 
 async def create_job() -> str:
@@ -53,3 +57,27 @@ async def cleanup_finished_jobs(ttl_minutes: int = 60):
         ]
         for job_id in expired:
             del JOB_RESULTS[job_id]
+
+
+async def cancel_job(job_id: str):
+    """Mark a job as cancelled."""
+    async with CANCELLED_JOBS_LOCK:
+        CANCELLED_JOBS.add(job_id)
+    async with JOB_LOCK:
+        if job_id in JOB_RESULTS:
+            JOB_RESULTS[job_id] = {
+                "status": "cancelled",
+                "timestamp": time.time(),
+            }
+
+
+async def is_job_cancelled(job_id: str) -> bool:
+    """Check if a job has been cancelled."""
+    async with CANCELLED_JOBS_LOCK:
+        return job_id in CANCELLED_JOBS
+
+
+async def remove_from_cancelled(job_id: str):
+    """Remove job from cancelled set (cleanup)."""
+    async with CANCELLED_JOBS_LOCK:
+        CANCELLED_JOBS.discard(job_id)

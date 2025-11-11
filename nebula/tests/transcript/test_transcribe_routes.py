@@ -67,3 +67,96 @@ def test_status_endpoint(monkeypatch):
         resp = client.get("/transcribe/status/abc")
         assert resp.status_code == 200
         assert resp.json()["status"] == "processing"
+
+
+def test_cancel_endpoint_cancels_queued_job(monkeypatch):
+    """Test that cancel endpoint successfully cancels a queued job."""
+
+    async def fake_cancel_job_processing(job_id: str):
+        return {
+            "status": "cancelled",
+            "message": "Job was in queue and has been removed",
+        }
+
+    # Neutralize worker lifecycle
+    monkeypatch.setattr(app_mod, "start_worker", lambda: None, raising=False)
+
+    async def _noop():
+        pass
+
+    monkeypatch.setattr(app_mod, "stop_worker", _noop, raising=False)
+
+    # Patch the endpoint's globals
+    cancel_route = _get_route("/transcribe/cancel/{job_id}", "POST")
+    cancel_route.endpoint.__globals__["cancel_job_processing"] = (
+        fake_cancel_job_processing
+    )
+
+    with TestClient(app) as client:
+        resp = client.post("/transcribe/cancel/test-job-id")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "cancelled"
+        assert "in queue" in data["message"]
+
+
+def test_cancel_endpoint_cancels_processing_job(monkeypatch):
+    """Test that cancel endpoint successfully cancels a processing job."""
+
+    async def fake_cancel_job_processing(job_id: str):
+        return {
+            "status": "cancelled",
+            "message": "Job was processing and has been stopped",
+        }
+
+    # Neutralize worker lifecycle
+    monkeypatch.setattr(app_mod, "start_worker", lambda: None, raising=False)
+
+    async def _noop():
+        pass
+
+    monkeypatch.setattr(app_mod, "stop_worker", _noop, raising=False)
+
+    # Patch the endpoint's globals
+    cancel_route = _get_route("/transcribe/cancel/{job_id}", "POST")
+    cancel_route.endpoint.__globals__["cancel_job_processing"] = (
+        fake_cancel_job_processing
+    )
+
+    with TestClient(app) as client:
+        resp = client.post("/transcribe/cancel/processing-job-id")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "cancelled"
+        assert "processing" in data["message"]
+
+
+def test_cancel_endpoint_handles_nonexistent_job(monkeypatch):
+    """Test that cancel endpoint handles nonexistent jobs gracefully."""
+
+    async def fake_cancel_job_processing(job_id: str):
+        return {
+            "status": "cancelled",
+            "message": "Job cancellation requested (job may have already completed or not exist)",
+        }
+
+    # Neutralize worker lifecycle
+    monkeypatch.setattr(app_mod, "start_worker", lambda: None, raising=False)
+
+    async def _noop():
+        pass
+
+    monkeypatch.setattr(app_mod, "stop_worker", _noop, raising=False)
+
+    # Patch the endpoint's globals
+    cancel_route = _get_route("/transcribe/cancel/{job_id}", "POST")
+    cancel_route.endpoint.__globals__["cancel_job_processing"] = (
+        fake_cancel_job_processing
+    )
+
+    with TestClient(app) as client:
+        resp = client.post("/transcribe/cancel/nonexistent-job")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "cancelled"
+        assert "may have already completed" in data["message"]
