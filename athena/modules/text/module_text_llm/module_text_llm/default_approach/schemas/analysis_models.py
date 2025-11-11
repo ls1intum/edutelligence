@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from enum import Enum
+
+from athena.schemas import Competency
+from pydantic import BaseModel, Field
 
 
 class CompetencyStatus(str, Enum):
@@ -8,21 +10,6 @@ class CompetencyStatus(str, Enum):
     ATTEMPTED_INCORRECTLY = "Attempted Incorrectly"
     PARTIALLY_CORRECT = "Partially Correct"
     CORRECT = "Correct"
-
-
-class CognitiveLevel(str, Enum):
-    RECALL = "Recall"
-    UNDERSTAND = "Understand"
-    APPLY = "Apply"
-    ANALYZE = "Analyze"
-    EVALUATE = "Evaluate"
-    CREATE = "Create"
-
-
-class RequiredCompetency(BaseModel):
-    description: str = Field(..., description="The skill or knowledge the student is expected to demonstrate.")
-    cognitive_level: Optional[CognitiveLevel] = Field(None, description="Bloom's Taxonomy level")
-    grading_instruction_id: Optional[int] = Field(None, description="Reference to grading instruction if applicable")
 
 
 class CompetencyChange(BaseModel):
@@ -35,8 +22,8 @@ class CompetencyChange(BaseModel):
 
 
 class EnhancedCompetencyEvaluation(BaseModel):
-    competency: RequiredCompetency
-    status: CompetencyStatus
+    competency: Competency = Field(..., description="The competency that was evaluated")
+    status: CompetencyStatus = Field(..., description="The student's status for the competency")
     evidence: Optional[str] = Field(None, description="Quote or paraphrase from student's current submission")
     line_start: Optional[int] = Field(None, description="Start line number for evidence")
     line_end: Optional[int] = Field(None, description="End line number for evidence")

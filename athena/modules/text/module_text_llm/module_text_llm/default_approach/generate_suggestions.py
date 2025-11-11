@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from athena import emit_meta
-from athena.schemas import LearnerProfile
+from athena.schemas import LearnerProfile, Competency
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
@@ -44,6 +44,7 @@ def _prepare_analysis_prompt_input(
     exercise: Exercise,
     submission: Submission,
     latest_submission: Optional[Submission] = None,
+    competencies: Optional[List[Competency]] = None,
 ) -> dict:
     """Prepare input data for the submission analysis prompt."""
     return {
@@ -57,6 +58,7 @@ def _prepare_analysis_prompt_input(
         "submission": add_sentence_numbers(submission.text),
         "previous_submission": add_sentence_numbers(
             latest_submission.text) if latest_submission is not None else "Previous submission is not available.",
+        "competencies": competencies or [],
     }
 
 
@@ -243,7 +245,7 @@ async def _generate_graded_feedback(
 
     result = await predict_and_parse(
         model=config.model,
-        chat_prompt=chat_prompt, 
+        chat_prompt=chat_prompt,
         prompt_input=prompt_input,
         pydantic_object=AssessmentModel,
         tags=[
@@ -321,6 +323,7 @@ async def generate_suggestions(
     is_graded: bool,
     learner_profile: Optional[LearnerProfile],
     latest_submission: Optional[Submission] = None,
+    competencies: Optional[List[Competency]] = None,
 ) -> List[Feedback]:
     """Generate feedback suggestions for a student submission using a two-step LLM approach."""
     if latest_submission is None:
@@ -337,11 +340,16 @@ async def generate_suggestions(
             return []
         return _convert_to_feedback_objects(result, exercise, submission, is_graded)
 
+    if competencies is None:
+        logger.info("Competencies are not provided.")
+    else:
+        logger.info("Competencies are provided: %s", competencies)
+
     # Setup learner profile with fallbacks
     learner_profile = _setup_learner_profile(learner_profile, config)
 
     # Prepare input for submission analysis
-    prompt_input = _prepare_analysis_prompt_input(exercise, submission, latest_submission)
+    prompt_input = _prepare_analysis_prompt_input(exercise, submission, latest_submission, competencies)
 
     # Analyze the submission
     submission_analysis = await _analyze_submission(
