@@ -79,9 +79,14 @@ WEAVIATE_API_KEY=$(openssl rand -base64 32)
 
 # Let's Encrypt Configuration
 LETSENCRYPT_EMAIL=your-email@example.com
+
+# IP Whitelisting (Optional)
+# Leave empty for public access (default - recommended)
+# Set to restrict access: ALLOWED_IPS=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
+ALLOWED_IPS=
 ```
 
-**Default Security Model**: By default, Weaviate is accessible from any IP address but requires API key authentication. This provides a good balance of security and usability. To add IP-based restrictions, edit `traefik/config.yml` directly and enable the `secured` middleware (see Advanced Configuration).
+**Default Security Model**: By default, Weaviate is accessible from any IP address but requires API key authentication. This provides a good balance of security and usability. To add IP-based restrictions, simply set the `ALLOWED_IPS` environment variable in your `.env` file (see Advanced Configuration).
 
 ### 3. Generate Secure Credentials
 
@@ -184,32 +189,36 @@ Traefik is configured to:
 
 **Steps to enable IP whitelisting**:
 
-1. **Edit** [`traefik/config.yml`](traefik/config.yml) and update the `sourceRange` list:
-   ```yaml
-   default-whitelist:
-     ipAllowList:
-       sourceRange:
-         - "10.0.0.0/8"        # Private network
-         - "192.168.0.0/16"    # Private network
-         - "172.16.0.0/12"     # Private network
-         - "203.0.113.1/32"    # Specific office IP
-   ```
-
-2. **Update** middleware in [`docker-compose.yml`](docker-compose.yml:85) line 85 to enable the IP whitelist:
-   ```yaml
-   # Change from:
-   - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit"
-
-   # To:
-   - "traefik.http.routers.weaviate-secure.middlewares=secured"
-   ```
-
-3. **Restart** Traefik to apply changes:
+1. **Edit** `.env` file and set `ALLOWED_IPS` with your IP ranges (comma-separated):
    ```bash
-   docker-compose restart traefik
+   # Restrict to private networks only
+   ALLOWED_IPS=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
+
+   # Or specific IPs/ranges
+   ALLOWED_IPS=203.0.113.1/32,198.51.100.0/24
+
+   # Or single IP
+   ALLOWED_IPS=203.0.113.1/32
    ```
 
-**To revert to public access**: Change `sourceRange` back to `["0.0.0.0/0"]` in `traefik/config.yml`, change middleware back to `default-headers,rate-limit`, and restart Traefik.
+2. **Restart** services to apply changes:
+   ```bash
+   docker-compose up -d
+   ```
+
+That's it! The IP whitelist middleware is automatically applied when `ALLOWED_IPS` is set.
+
+**To revert to public access**: Remove or empty the `ALLOWED_IPS` variable in `.env`:
+```bash
+ALLOWED_IPS=
+```
+
+Then restart: `docker-compose up -d`
+
+**How it works**: When `ALLOWED_IPS` is set, Traefik automatically:
+- Creates an IP whitelist middleware with your specified IPs
+- Applies it to the Weaviate router via Docker labels
+- Only allows traffic from the specified IP ranges (in addition to API key auth)
 
 ### Adjusting Rate Limits
 
@@ -533,6 +542,7 @@ sudo aa-complain /etc/apparmor.d/docker
 | `WEAVIATE_API_USER` | No | admin | Username associated with API key |
 | `WEAVIATE_LOG_LEVEL` | No | info | Logging level (trace, debug, info, warning, error, fatal, panic) |
 | `LETSENCRYPT_EMAIL` | Yes | - | Email for Let's Encrypt certificate notifications and renewal reminders |
+| `ALLOWED_IPS` | No | (empty) | Comma-separated IP ranges for whitelisting (e.g., "10.0.0.0/8,192.168.0.0/16"). Empty = public access with API key auth (recommended) |
 
 ## Network Architecture
 

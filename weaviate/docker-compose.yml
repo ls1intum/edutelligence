@@ -83,7 +83,10 @@ services:
       - "traefik.http.routers.weaviate-secure.tls=true"
       - "traefik.http.routers.weaviate-secure.tls.certresolver=letsencrypt"
       - "traefik.http.routers.weaviate-secure.tls.options=default@file"
-      - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit"
+      # IP Whitelist middleware (only applied if ALLOWED_IPS is set)
+      - "traefik.http.middlewares.weaviate-ipwhitelist.ipallowlist.sourcerange=${ALLOWED_IPS:-0.0.0.0/0}"
+      # Apply middlewares (IP whitelist only used if explicitly enabled)
+      - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit${ALLOWED_IPS:+,weaviate-ipwhitelist}"
       - "traefik.http.routers.weaviate-secure.service=weaviate"
       - "traefik.http.services.weaviate.loadbalancer.server.port=8080"
     deploy:

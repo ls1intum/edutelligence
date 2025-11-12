@@ -24,28 +24,3 @@ http:
         average: 100
         period: 1s
         burst: 200
-
-    # IP whitelist (not applied by default)
-    # Default: 0.0.0.0/0 (allows all IPs) - access control via API key authentication
-    # To restrict access to specific IP ranges:
-    #   1. Edit the sourceRange list below with your allowed IPs
-    #   2. In docker-compose.yml, change weaviate-secure.middlewares from
-    #      "default-headers,rate-limit" to "secured"
-    #   3. Restart Traefik: docker-compose restart traefik
-    default-whitelist:
-      ipAllowList:
-        sourceRange:
-          - "0.0.0.0/0"  # Allow all IPs (default - change this to restrict access)
-          # Examples for restricting access:
-          # - "10.0.0.0/8"        # Private network 10.x.x.x
-          # - "192.168.0.0/16"    # Private network 192.168.x.x
-          # - "172.16.0.0/12"     # Private network 172.16-31.x.x
-          # - "203.0.113.1/32"    # Single specific IP
-
-    # Secured chain with IP whitelist (optional, not applied by default)
-    secured:
-      chain:
-        middlewares:
-          - default-whitelist
-          - default-headers
-          - rate-limit
