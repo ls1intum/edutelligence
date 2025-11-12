@@ -51,10 +51,8 @@ cd edutelligence/weaviate
 
 ### Available Scripts
 
-This setup includes several helper scripts:
+This setup includes helper scripts for backup and restore:
 
-- **`setup.sh`**: Initializes the environment (creates acme.json, generates Traefik config)
-- **`generate-traefik-config.sh`**: Generates Traefik configuration from template with IP whitelist settings
 - **`backup.sh`**: Creates a backup using Weaviate's backup API
 - **`restore.sh`**: Restores from a Weaviate backup
 
@@ -81,14 +79,9 @@ WEAVIATE_API_KEY=$(openssl rand -base64 32)
 
 # Let's Encrypt Configuration
 LETSENCRYPT_EMAIL=your-email@example.com
-
-# IP Whitelisting (Optional)
-# Default: Public access with API key authentication (recommended)
-# Uncomment to restrict to specific IP ranges:
-# ALLOWED_IPS=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
 ```
 
-**Default Security Model**: By default, Weaviate is accessible from any IP address but requires API key authentication. This provides a good balance of security and usability. Only configure `ALLOWED_IPS` if you need additional IP-based restrictions (e.g., internal-only access).
+**Default Security Model**: By default, Weaviate is accessible from any IP address but requires API key authentication. This provides a good balance of security and usability. To add IP-based restrictions, edit `traefik/config.yml` directly and enable the `secured` middleware (see Advanced Configuration).
 
 ### 3. Generate Secure Credentials
 
@@ -106,18 +99,14 @@ In your DNS provider (e.g., Cloudflare, Route53, etc.), create an A record point
 
 **Important**: Ensure the domain is publicly accessible on ports 80 and 443 before deploying, as Let's Encrypt uses HTTP challenge for certificate validation.
 
-### 5. Run Setup Script
+### 5. Create SSL Certificate File
 
-Run the setup script to prepare the environment:
+Create the file for Let's Encrypt certificates with proper permissions:
 
 ```bash
-./setup.sh
+touch traefik/acme.json
+chmod 600 traefik/acme.json
 ```
-
-This script will:
-- Verify your `.env` file exists
-- Create `traefik/acme.json` with proper permissions (600)
-- Generate Traefik configuration with your IP whitelist settings
 
 ### 6. Pre-Deployment Checklist
 
@@ -126,8 +115,7 @@ Before running `docker-compose up -d`, verify:
 - [ ] `WEAVIATE_API_KEY` is set to a strong random value (not the example)
 - [ ] `WEAVIATE_DOMAIN` points to your server's public domain
 - [ ] `LETSENCRYPT_EMAIL` is your valid email address
-- [ ] `traefik/acme.json` exists with 600 permissions (created by setup.sh)
-- [ ] `traefik/config.yml` has been generated (created by setup.sh)
+- [ ] `traefik/acme.json` exists with 600 permissions
 - [ ] DNS A record is configured and propagated (`nslookup weaviate.example.com`)
 - [ ] Firewall allows ports 80, 443 (HTTPS), and 50051 (gRPC) from the internet
 
@@ -196,22 +184,18 @@ Traefik is configured to:
 
 **Steps to enable IP whitelisting**:
 
-1. **Edit** `.env` file and uncomment/set the `ALLOWED_IPS` variable:
-   ```bash
-   # Restrict to private networks only
-   ALLOWED_IPS=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
-
-   # Or specific IPs/ranges
-   ALLOWED_IPS=203.0.113.1/32,198.51.100.0/24
+1. **Edit** [`traefik/config.yml`](traefik/config.yml) and update the `sourceRange` list:
+   ```yaml
+   default-whitelist:
+     ipAllowList:
+       sourceRange:
+         - "10.0.0.0/8"        # Private network
+         - "192.168.0.0/16"    # Private network
+         - "172.16.0.0/12"     # Private network
+         - "203.0.113.1/32"    # Specific office IP
    ```
 
-2. **Regenerate** Traefik configuration:
-   ```bash
-   ./generate-traefik-config.sh
-   ```
-   This will generate `traefik/config.yml` with your IP restrictions.
-
-3. **Update** middleware in [`docker-compose.yml`](docker-compose.yml:85) line 85 to enable the IP whitelist:
+2. **Update** middleware in [`docker-compose.yml`](docker-compose.yml:85) line 85 to enable the IP whitelist:
    ```yaml
    # Change from:
    - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit"
@@ -220,16 +204,16 @@ Traefik is configured to:
    - "traefik.http.routers.weaviate-secure.middlewares=secured"
    ```
 
-4. **Restart** Traefik to apply changes:
+3. **Restart** Traefik to apply changes:
    ```bash
    docker-compose restart traefik
    ```
 
-**To revert to public access**: Remove or comment out `ALLOWED_IPS` in `.env`, regenerate config, change middleware back to `default-headers,rate-limit`, and restart Traefik.
+**To revert to public access**: Change `sourceRange` back to `["0.0.0.0/0"]` in `traefik/config.yml`, change middleware back to `default-headers,rate-limit`, and restart Traefik.
 
 ### Adjusting Rate Limits
 
-To modify rate limiting thresholds, edit [`traefik/config.yml`](traefik/config.yml:22-26):
+To modify rate limiting thresholds, edit [`traefik/config.yml`](traefik/config.yml):
 
 ```yaml
 rate-limit:
@@ -549,7 +533,6 @@ sudo aa-complain /etc/apparmor.d/docker
 | `WEAVIATE_API_USER` | No | admin | Username associated with API key |
 | `WEAVIATE_LOG_LEVEL` | No | info | Logging level (trace, debug, info, warning, error, fatal, panic) |
 | `LETSENCRYPT_EMAIL` | Yes | - | Email for Let's Encrypt certificate notifications and renewal reminders |
-| `ALLOWED_IPS` | No | (empty) | **Optional** - Comma-separated IP ranges for additional access restrictions (e.g., 10.0.0.0/8,192.168.0.0/16). Default (empty) = public access with API key auth (recommended) |
 
 ## Network Architecture
 

@@ -1,9 +1,8 @@
 # Environment variables
 .env
 
-# Traefik SSL certificates and generated config
+# Traefik SSL certificates
 traefik/acme.json
-traefik/config.yml
 
 # Logs
 *.log
