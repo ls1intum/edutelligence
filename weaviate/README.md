@@ -236,12 +236,56 @@ Then restart Traefik: `docker-compose restart traefik`
 
 ### Adjusting Resource Limits
 
-Default resource limits in [`docker-compose.yml`](docker-compose.yml):
+Resource limits are now configurable via environment variables in `.env` to match your hardware:
+
+**Default limits** (production-scale):
 - **Weaviate**: 8 CPUs, 16GB RAM (limits) / 4 CPUs, 8GB RAM (reservations)
 - **Multi2vec-CLIP**: 4 CPUs, 8GB RAM (limits) / 2 CPUs, 4GB RAM (reservations)
 - **Traefik**: 1 CPU, 1GB RAM (limits) / 0.5 CPU, 512MB RAM (reservations)
 
-Adjust these based on your workload requirements.
+**To adjust**, edit `.env` and set:
+```bash
+# Weaviate resource limits
+WEAVIATE_CPU_LIMIT=8
+WEAVIATE_MEMORY_LIMIT=16G
+WEAVIATE_CPU_RESERVATION=4
+WEAVIATE_MEMORY_RESERVATION=8G
+
+# Multi2vec-CLIP resource limits
+CLIP_CPU_LIMIT=4
+CLIP_MEMORY_LIMIT=8G
+CLIP_CPU_RESERVATION=2
+CLIP_MEMORY_RESERVATION=4G
+
+# Traefik resource limits
+TRAEFIK_CPU_LIMIT=1
+TRAEFIK_MEMORY_LIMIT=1G
+TRAEFIK_CPU_RESERVATION=0.5
+TRAEFIK_MEMORY_RESERVATION=512M
+```
+
+**Hardware sizing recommendations:**
+
+| Setup | Total RAM | Weaviate | CLIP | Notes |
+|-------|-----------|----------|------|-------|
+| **Small/Dev** | 8GB | 2 CPUs, 4GB | 1 CPU, 2GB | Development only |
+| **Medium** | 16GB | 4 CPUs, 8GB | 2 CPUs, 4GB | Small production |
+| **Large** | 32GB+ | 8 CPUs, 16GB | 4 CPUs, 8GB | Full production (default) |
+
+**Example for small server (8GB RAM total):**
+```bash
+WEAVIATE_CPU_LIMIT=2
+WEAVIATE_MEMORY_LIMIT=4G
+WEAVIATE_CPU_RESERVATION=1
+WEAVIATE_MEMORY_RESERVATION=2G
+
+CLIP_CPU_LIMIT=1
+CLIP_MEMORY_LIMIT=2G
+CLIP_CPU_RESERVATION=1
+CLIP_MEMORY_RESERVATION=1G
+```
+
+Then restart: `docker-compose up -d`
 
 ## Maintenance
 

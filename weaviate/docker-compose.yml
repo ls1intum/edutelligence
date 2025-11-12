@@ -27,11 +27,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '${TRAEFIK_CPU_LIMIT:-1}'
+          memory: ${TRAEFIK_MEMORY_LIMIT:-1G}
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '${TRAEFIK_CPU_RESERVATION:-0.5}'
+          memory: ${TRAEFIK_MEMORY_RESERVATION:-512M}
 
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:${WEAVIATE_VERSION:-1.30.0}
@@ -92,11 +92,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '8'
-          memory: 16G
+          cpus: '${WEAVIATE_CPU_LIMIT:-8}'
+          memory: ${WEAVIATE_MEMORY_LIMIT:-16G}
         reservations:
-          cpus: '4'
-          memory: 8G
+          cpus: '${WEAVIATE_CPU_RESERVATION:-4}'
+          memory: ${WEAVIATE_MEMORY_RESERVATION:-8G}
     depends_on:
       multi2vec-clip:
         condition: service_healthy
@@ -120,11 +120,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4'
-          memory: 8G
+          cpus: '${CLIP_CPU_LIMIT:-4}'
+          memory: ${CLIP_MEMORY_LIMIT:-8G}
         reservations:
-          cpus: '2'
-          memory: 4G
+          cpus: '${CLIP_CPU_RESERVATION:-2}'
+          memory: ${CLIP_MEMORY_RESERVATION:-4G}
 
 networks:
   weaviate_network:
