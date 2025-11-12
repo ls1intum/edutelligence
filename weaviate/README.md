@@ -299,13 +299,42 @@ The included `backup.sh` script uses Weaviate's native backup API for consistent
 ./backup.sh
 ```
 
-This creates a timestamped backup in the `./backups/` directory (e.g., `backup-20250115-143022.tar.gz`).
+**What it does:**
+1. Reads credentials from `.env` file (uses `WEAVIATE_API_KEY` and `WEAVIATE_DOMAIN`)
+2. Initiates a backup via Weaviate's REST API
+3. Polls the backup status until completion (max 5 minutes)
+4. Copies the backup from the Weaviate container
+5. Creates a compressed archive: `./backups/backup-YYYYMMDD-HHMMSS.tar.gz`
+
+**Output:**
+```
+Starting Weaviate backup: backup-20250115-143022
+Backup URL: https://weaviate.example.com
+
+Initiating backup...
+Backup initiated successfully
+
+Waiting for backup to complete...
+Backup status: TRANSFERRING (attempt 1/60)
+Backup completed successfully!
+
+Copying backup from Weaviate container...
+Creating compressed archive...
+
+======================================
+Backup completed successfully!
+Backup ID: backup-20250115-143022
+Location: ./backups/backup-20250115-143022.tar.gz
+Size: 2.4G
+======================================
+```
 
 **Features:**
-- Uses Weaviate's backup API for consistency
+- Uses Weaviate's backup API for consistency (data is safe during backup)
 - Creates compressed archives automatically
-- Includes backup verification
+- Includes status polling and error handling
 - Safe for production use (no downtime required)
+- Automatic timestamping for easy identification
 
 **Alternative - Volume Backup (Not Recommended):**
 
@@ -337,7 +366,52 @@ Use the included `restore.sh` script to restore from a Weaviate backup:
 ./restore.sh backup-20250115-143022
 ```
 
-**Warning**: Restoring will replace all current data in Weaviate. You will be prompted for confirmation.
+**What it does:**
+1. Checks if the backup file exists in `./backups/`
+2. Prompts for confirmation (shows warning about data replacement)
+3. Extracts the backup archive
+4. Copies the backup to the Weaviate container
+5. Initiates restore via Weaviate's REST API
+6. Polls restore status until completion
+7. Cleans up temporary files
+
+**Example session:**
+```
+Available backups:
+backup-20250115-143022
+backup-20250114-020001
+
+# Run restore
+$ ./restore.sh backup-20250115-143022
+
+======================================
+WARNING: This will restore Weaviate to the state of backup: backup-20250115-143022
+All current data will be replaced!
+======================================
+
+Are you sure you want to continue? (yes/no): yes
+
+Extracting backup archive...
+Copying backup to Weaviate container...
+Initiating restore via Weaviate API...
+Restore initiated successfully
+
+Waiting for restore to complete...
+Restore status: TRANSFERRING (attempt 1/60)
+Restore completed successfully!
+
+======================================
+Restore completed successfully!
+Backup ID: backup-20250115-143022
+======================================
+```
+
+**Important notes:**
+- ⚠️ **Destructive operation**: All current data in Weaviate will be replaced
+- Requires confirmation before proceeding
+- Weaviate must be running (does not require downtime)
+- Uses Weaviate's API for safe, consistent restore
+- Backup file must exist in `./backups/` directory
 
 **Alternative - Volume Restore (Not Recommended):**
 
@@ -379,6 +453,63 @@ docker-compose up -d
    ```
 
 4. **Test Restores**: Periodically test restore procedures to ensure backups work
+
+### Backup/Restore Troubleshooting
+
+**Problem**: `backup.sh` fails with "WEAVIATE_API_KEY not set"
+
+**Solution**: Ensure your `.env` file exists and contains the API key:
+```bash
+cat .env | grep WEAVIATE_API_KEY
+# Should output: WEAVIATE_API_KEY=your-key-here
+```
+
+---
+
+**Problem**: Backup times out after 5 minutes
+
+**Solution**: Large datasets may take longer. The script waits up to 5 minutes (60 checks × 5 seconds). To increase:
+1. Edit `backup.sh`
+2. Change `MAX_RETRIES=60` to a higher value (e.g., `MAX_RETRIES=120` for 10 minutes)
+
+---
+
+**Problem**: "Error: Failed to initiate backup (HTTP 403)"
+
+**Solution**: API key is invalid or doesn't have permission. Verify:
+```bash
+# Test API key
+curl -H "Authorization: Bearer YOUR_API_KEY" https://weaviate.example.com/v1/nodes
+```
+
+---
+
+**Problem**: Restore fails with "backup not found"
+
+**Solution**: The backup must exist in Weaviate's backup directory. Check:
+```bash
+docker exec weaviate ls -la /var/lib/weaviate/backups/filesystem/
+```
+
+---
+
+**Problem**: "Cannot connect to weaviate container"
+
+**Solution**: Container must be running. Check status:
+```bash
+docker ps | grep weaviate
+docker-compose ps weaviate
+```
+
+---
+
+**Problem**: Backup file is very large
+
+**Solutions**:
+- Backups are compressed with gzip (`.tar.gz`)
+- Size depends on your data volume
+- Consider external storage for large backups (S3, NFS, etc.)
+- Implement retention policy to delete old backups
 
 ### Update Services
 
