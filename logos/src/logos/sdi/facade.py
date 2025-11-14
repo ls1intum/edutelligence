@@ -13,7 +13,7 @@ import uuid
 from typing import Dict, List, Optional
 
 from .provider_interface import SchedulingDataProvider
-from .providers import OllamaDataProvider, AzureDataProvider
+from .providers import OllamaDataProvider, AzureDataProvider, extract_azure_deployment_name
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,7 @@ class SchedulingDataFacade:
         provider_name: str,
         provider_type: str,
         model_name: str,
+        model_endpoint: Optional[str] = None,
         ollama_admin_url: Optional[str] = None,
         total_vram_mb: Optional[int] = None,
         refresh_interval: float = 5.0,
@@ -90,6 +91,7 @@ class SchedulingDataFacade:
             provider_name: Provider identifier (e.g., 'openwebui', 'azure')
             provider_type: 'ollama' or 'cloud'
             model_name: Model name as known by the provider (e.g., 'llama3.1:8b')
+            model_endpoint: Full model endpoint URL (for extracting deployment name from Azure URLs)
             ollama_admin_url: Ollama /api/ps endpoint (required if provider_type='ollama')
             total_vram_mb: Total VRAM capacity in MB (required if provider_type='ollama')
             refresh_interval: Polling interval in seconds (default: 5.0)
@@ -135,7 +137,17 @@ class SchedulingDataFacade:
 
             # Register model with provider
             provider = self._providers[provider_key]
-            provider.register_model(model_id, model_name)
+
+            # For cloud providers, extract deployment name from endpoint
+            deployment_name = None
+            if provider_type == 'cloud' and model_endpoint:
+                deployment_name = extract_azure_deployment_name(model_endpoint)
+                if deployment_name:
+                    logger.debug(f"Extracted deployment name '{deployment_name}' from endpoint")
+                else:
+                    logger.warning(f"Could not extract deployment name from endpoint: {model_endpoint}")
+
+            provider.register_model(model_id, model_name, deployment_name=deployment_name)
 
             # Map model to provider key
             self._model_to_provider[model_id] = provider_key
@@ -143,6 +155,7 @@ class SchedulingDataFacade:
             logger.info(
                 f"Registered model {model_id} ('{model_name}') with "
                 f"{provider_type} provider '{provider_name}'"
+                + (f" (deployment: {deployment_name})" if deployment_name else "")
             )
 
     def get_model_status(self, model_id: int) -> Dict:
@@ -323,14 +336,20 @@ class SchedulingDataFacade:
 
         return metrics
 
-    def update_cloud_rate_limits(self, provider_name: str, response_headers: Dict[str, str]) -> None:
+    def update_cloud_rate_limits(
+        self,
+        provider_name: str,
+        deployment_name: str,
+        response_headers: Dict[str, str]
+    ) -> None:
         """
-        Update rate limit information for a cloud provider.
+        Update rate limit information for a specific cloud deployment.
 
         Should be called after each API request to Azure with response headers.
 
         Args:
             provider_name: Cloud provider name ('azure')
+            deployment_name: Deployment identifier (e.g., 'gpt-4o', 'o3-mini')
             response_headers: HTTP response headers from API call
 
         Raises:
@@ -348,7 +367,7 @@ class SchedulingDataFacade:
                 f"Only cloud providers (Azure) support this."
             )
 
-        provider.update_rate_limits(response_headers)
+        provider.update_rate_limits(deployment_name, response_headers)
 
     def get_all_providers(self) -> List[str]:
         """

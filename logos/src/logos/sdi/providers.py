@@ -8,6 +8,7 @@ Concrete implementations of the SchedulingDataProvider interface:
 """
 
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -19,6 +20,24 @@ from .provider_interface import SchedulingDataProvider
 
 
 logger = logging.getLogger(__name__)
+
+
+def extract_azure_deployment_name(endpoint: str) -> Optional[str]:
+    """
+    Extract deployment name from Azure OpenAI endpoint URL.
+
+    Args:
+        endpoint: Azure endpoint URL like:
+                  'https://xxx.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=...'
+
+    Returns:
+        Deployment name (e.g., 'gpt-4o') or None if not found
+    """
+    # Pattern: /deployments/{deployment_name}/
+    match = re.search(r'/deployments/([^/\?]+)', endpoint)
+    if match:
+        return match.group(1)
+    return None
 
 
 class OllamaDataProvider(SchedulingDataProvider):
@@ -39,9 +58,11 @@ class OllamaDataProvider(SchedulingDataProvider):
     """
 
     # Hardcoded defaults (fallback when no database config exists)
-    DEFAULT_PARALLEL_CAPACITY = 1
-    DEFAULT_KEEP_ALIVE_SECONDS = 300
-    DEFAULT_MAX_LOADED_MODELS = 3
+    # Based on Ollama production deployment with 2 GPUs
+    DEFAULT_PARALLEL_CAPACITY = 4  # Matches OLLAMA_NUM_PARALLEL high-memory auto-select
+    DEFAULT_KEEP_ALIVE_SECONDS = 300  # 5 minutes (Ollama default)
+    DEFAULT_MAX_LOADED_MODELS = 6  # 3 models × 2 GPUs
+    DEFAULT_MAX_QUEUE = 512  # Total queue limit (matches OLLAMA_MAX_QUEUE)
 
     def __init__(
         self,
@@ -139,8 +160,15 @@ class OllamaDataProvider(SchedulingDataProvider):
         # Level 3: Use hardcoded default
         return default_value
 
-    def register_model(self, model_id: int, model_name: str) -> None:
-        """Register a model with this provider."""
+    def register_model(self, model_id: int, model_name: str, deployment_name: Optional[str] = None) -> None:
+        """
+        Register a model with this provider.
+
+        Args:
+            model_id: Model ID
+            model_name: Model name
+            deployment_name: Ignored for Ollama (kept for interface compatibility)
+        """
         # Lock protects concurrent access to model registry and queue dicts
         with self._lock:
             self._model_id_to_name[model_id] = model_name
@@ -327,7 +355,11 @@ class CloudDataProvider(SchedulingDataProvider):
     - No cold starts (models always available)
     - Rate limits (tracked via response headers)
 
-    Rate limits are updated by calling update_rate_limits() after each API request.
+    Rate limits are tracked PER DEPLOYMENT internally.
+    Each Azure deployment (gpt-4o, o3-mini, etc.) has separate rate limits
+    stored in the _deployment_limits dictionary.
+
+    Rate limits are updated by calling update_rate_limits(deployment_name, headers).
     """
 
     def __init__(self, name: str):
@@ -339,13 +371,13 @@ class CloudDataProvider(SchedulingDataProvider):
         """
         super().__init__(name)
 
-        # Rate limit data (updated from response headers)
-        self._rate_limit_remaining_requests: Optional[int] = None
-        self._rate_limit_remaining_tokens: Optional[int] = None
-        self._rate_limit_resets_at: Optional[datetime] = None
+        # Per-deployment rate limit tracking
+        # deployment_name → {rate limit data}
+        self._deployment_limits: Dict[str, Dict] = {}
 
         # Model registration
         self._registered_models: Dict[int, str] = {}  # model_id → model_name
+        self._model_to_deployment: Dict[int, str] = {}  # model_id → deployment_name
 
         # Queue tracking
         self._model_queues: Dict[int, int] = {}  # model_id → queue_depth
@@ -353,13 +385,41 @@ class CloudDataProvider(SchedulingDataProvider):
         # Thread safety
         self._lock = threading.RLock()
 
-    def register_model(self, model_id: int, model_name: str) -> None:
-        """Register a model with this provider."""
+    def _ensure_deployment(self, deployment_name: str) -> None:
+        """
+        Ensure deployment tracking exists.
+
+        Args:
+            deployment_name: Deployment identifier
+        """
+        if deployment_name not in self._deployment_limits:
+            self._deployment_limits[deployment_name] = {
+                'remaining_requests': None,
+                'remaining_tokens': None,
+                'total_requests': None,
+                'total_tokens': None,
+                'resets_at': None,
+                'last_update_time': None
+            }
+
+    def register_model(self, model_id: int, model_name: str, deployment_name: Optional[str] = None) -> None:
+        """
+        Register a model with this provider.
+
+        Args:
+            model_id: Model ID
+            model_name: Model name
+            deployment_name: Deployment identifier (for Azure: extracted from endpoint)
+                            If not provided, uses "default"
+        """
         with self._lock:
+            deployment = deployment_name or "default"
             self._registered_models[model_id] = model_name
+            self._model_to_deployment[model_id] = deployment
             if model_id not in self._model_queues:
                 self._model_queues[model_id] = 0
-        logger.info(f"[{self.name}] Registered model {model_id} as '{model_name}'")
+            self._ensure_deployment(deployment)
+        logger.info(f"[{self.name}] Registered model {model_id} as '{model_name}' (deployment: {deployment})")
 
     def get_model_status(self, model_id: int) -> Dict:
         """
@@ -387,75 +447,128 @@ class CloudDataProvider(SchedulingDataProvider):
                 'provider_type': self.name.lower()
             }
 
-    def get_capacity_info(self) -> Dict:
+    def get_capacity_info(self, deployment_name: Optional[str] = None) -> Dict:
         """
-        Return rate limit status.
+        Return rate limit status for a specific deployment.
 
-        Rate limits are updated by calling update_rate_limits() after API requests.
+        Args:
+            deployment_name: Deployment to query. If None, uses "default"
+
+        Returns:
+            Dict with rate limit information including:
+            - deployment_name: Deployment identifier
+            - rate_limit_remaining_requests: Current remaining requests
+            - rate_limit_remaining_tokens: Current remaining tokens
+            - rate_limit_total_requests: Total request limit
+            - rate_limit_total_tokens: Total token limit
+            - last_header_age_seconds: Seconds since last update (None if never updated)
+            - has_capacity: Whether deployment has capacity (>10 requests remaining)
         """
         with self._lock:
+            deployment = deployment_name or "default"
+            self._ensure_deployment(deployment)
+            limits = self._deployment_limits[deployment]
+
+            # Calculate header staleness
+            header_age_seconds = None
+            if limits['last_update_time'] is not None:
+                header_age_seconds = time.time() - limits['last_update_time']
+
             # Consider capacity available if no rate limit data or limits not exceeded
             has_capacity = (
-                self._rate_limit_remaining_requests is None or
-                self._rate_limit_remaining_requests > 10  # Conservative threshold
+                limits['remaining_requests'] is None or
+                limits['remaining_requests'] > 10  # Conservative threshold
             )
 
             return {
-                'rate_limit_remaining_requests': self._rate_limit_remaining_requests,
-                'rate_limit_remaining_tokens': self._rate_limit_remaining_tokens,
-                'rate_limit_resets_at': self._rate_limit_resets_at,
+                'deployment_name': deployment,
+                'rate_limit_remaining_requests': limits['remaining_requests'],
+                'rate_limit_remaining_tokens': limits['remaining_tokens'],
+                'rate_limit_total_requests': limits['total_requests'],
+                'rate_limit_total_tokens': limits['total_tokens'],
+                'rate_limit_resets_at': limits['resets_at'],
+                'last_header_age_seconds': header_age_seconds,
                 'has_capacity': has_capacity
             }
 
-    def update_rate_limits(self, response_headers: Dict[str, str]) -> None:
+    def update_rate_limits(self, deployment_name: str, response_headers: Dict[str, str]) -> None:
         """
-        Parse and update rate limit information from API response headers.
+        Parse and update rate limit information from API response headers for a specific deployment.
 
         Should be called after each request to the cloud provider API.
 
         Args:
+            deployment_name: Deployment identifier (e.g., 'gpt-4o', 'o3-mini')
             response_headers: HTTP response headers from API call
 
-        Common headers:
-            - x-ratelimit-remaining-requests
-            - x-ratelimit-remaining-tokens
-            - x-ratelimit-reset-requests (timestamp or seconds)
+        Common headers (availability varies by provider):
+            - x-ratelimit-remaining-requests (Azure, OpenAI)
+            - x-ratelimit-remaining-tokens (Azure, OpenAI)
+            - x-ratelimit-limit-requests (Azure, OpenAI)
+            - x-ratelimit-limit-tokens (Azure, OpenAI)
+            - x-ratelimit-reset-requests (OpenAI only - Azure does NOT provide)
+
+        Note: Azure OpenAI does not provide reset time headers. Based on
+        experimentation, Azure rate limits use a fixed clock-based window
+        (resets at fixed intervals, likely every minute on the clock).
+        The reset time will remain None for Azure, which is acceptable.
         """
         with self._lock:
-            # Parse remaining requests
+            self._ensure_deployment(deployment_name)
+            limits = self._deployment_limits[deployment_name]
+
+            # Record when this update happened
+            limits['last_update_time'] = time.time()
+
+            # Parse total limits (constant per deployment)
+            limit_requests_str = response_headers.get('x-ratelimit-limit-requests')
+            if limit_requests_str:
+                try:
+                    limits['total_requests'] = int(limit_requests_str)
+                except ValueError:
+                    logger.warning(f"[{self.name}:{deployment_name}] Invalid limit header: {limit_requests_str}")
+
+            limit_tokens_str = response_headers.get('x-ratelimit-limit-tokens')
+            if limit_tokens_str:
+                try:
+                    limits['total_tokens'] = int(limit_tokens_str)
+                except ValueError:
+                    logger.warning(f"[{self.name}:{deployment_name}] Invalid limit header: {limit_tokens_str}")
+
+            # Parse remaining (current snapshot)
             remaining_requests_str = response_headers.get('x-ratelimit-remaining-requests')
             if remaining_requests_str:
                 try:
-                    self._rate_limit_remaining_requests = int(remaining_requests_str)
+                    limits['remaining_requests'] = int(remaining_requests_str)
                 except ValueError:
-                    logger.warning(f"[{self.name}] Invalid rate limit header: {remaining_requests_str}")
+                    logger.warning(f"[{self.name}:{deployment_name}] Invalid remaining header: {remaining_requests_str}")
 
             # Parse remaining tokens
             remaining_tokens_str = response_headers.get('x-ratelimit-remaining-tokens')
             if remaining_tokens_str:
                 try:
-                    self._rate_limit_remaining_tokens = int(remaining_tokens_str)
+                    limits['remaining_tokens'] = int(remaining_tokens_str)
                 except ValueError:
-                    logger.warning(f"[{self.name}] Invalid token limit header: {remaining_tokens_str}")
+                    logger.warning(f"[{self.name}:{deployment_name}] Invalid token header: {remaining_tokens_str}")
 
-            # Parse reset time
+            # Parse reset time (if provided - not available for Azure)
             reset_str = response_headers.get('x-ratelimit-reset-requests')
             if reset_str:
                 try:
                     # Try parsing as ISO8601 timestamp
-                    self._rate_limit_resets_at = datetime.fromisoformat(reset_str.rstrip('Z'))
+                    limits['resets_at'] = datetime.fromisoformat(reset_str.rstrip('Z'))
                 except ValueError:
                     try:
                         # Try parsing as Unix timestamp
                         reset_timestamp = float(reset_str)
-                        self._rate_limit_resets_at = datetime.fromtimestamp(reset_timestamp, tz=timezone.utc)
+                        limits['resets_at'] = datetime.fromtimestamp(reset_timestamp, tz=timezone.utc)
                     except ValueError:
-                        logger.warning(f"[{self.name}] Invalid reset time header: {reset_str}")
+                        logger.warning(f"[{self.name}:{deployment_name}] Invalid reset time header: {reset_str}")
 
         logger.debug(
-            f"[{self.name}] Rate limits updated: "
-            f"requests={self._rate_limit_remaining_requests}, "
-            f"tokens={self._rate_limit_remaining_tokens}"
+            f"[{self.name}:{deployment_name}] Rate limits updated: "
+            f"remaining={limits['remaining_requests']}/{limits['total_requests']}, "
+            f"tokens={limits['remaining_tokens']}/{limits['total_tokens']}"
         )
 
     def refresh_data(self) -> None:
