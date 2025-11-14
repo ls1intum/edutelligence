@@ -139,35 +139,52 @@ class OpenAiLanguageModel(AbstractLanguageModel):
                 schema_dict = wrapped
                 unwrap_key = root_key  # we will unwrap this key from the model output
 
-            # enforce additionalProperties: false on all objects (API requirement)
-            def _enforce_no_additional_props(s: Any) -> None:
+            # enforce additionalProperties: false and all properties required (API requirement)
+            def _enforce_strict_schema(s: Any) -> None:
                 if not isinstance(s, dict):
                     return
+
+                # If this schema has a $ref, remove all other keywords (OpenAI strict mode requirement)
+                if "$ref" in s:
+                    ref_value = s["$ref"]
+                    s.clear()
+                    s["$ref"] = ref_value
+                    return
+
                 t = s.get("type")
                 if t == "object":
                     s["additionalProperties"] = False
+                    # Ensure all properties are in the required array
                     props = s.get("properties")
                     if isinstance(props, dict):
+                        # Add all property keys to required array
+                        existing_required = s.get("required", [])
+                        if not isinstance(existing_required, list):
+                            existing_required = []
+                        all_prop_keys = list(props.keys())
+                        # Merge existing required with all properties, removing duplicates
+                        s["required"] = list(set(existing_required + all_prop_keys))
+                        # Recursively process nested properties
                         for v in props.values():
-                            _enforce_no_additional_props(v)
+                            _enforce_strict_schema(v)
                     pprops = s.get("patternProperties")
                     if isinstance(pprops, dict):
                         for v in pprops.values():
-                            _enforce_no_additional_props(v)
+                            _enforce_strict_schema(v)
                 if t == "array":
-                    _enforce_no_additional_props(s.get("items"))
+                    _enforce_strict_schema(s.get("items"))
                 for key in ("allOf", "anyOf", "oneOf"):
                     arr = s.get(key)
                     if isinstance(arr, list):
                         for sub in arr:
-                            _enforce_no_additional_props(sub)
+                            _enforce_strict_schema(sub)
                 for defs_key in ("$defs", "definitions"):
                     dct = s.get(defs_key)
                     if isinstance(dct, dict):
                         for v in dct.values():
-                            _enforce_no_additional_props(v)
+                            _enforce_strict_schema(v)
 
-            _enforce_no_additional_props(schema_dict)
+            _enforce_strict_schema(schema_dict)
 
             rf = ResponseFormatJSONSchema(
                 type="json_schema",
@@ -182,7 +199,9 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         payload: Dict[str, Any] = {}
         if options:
             payload.update({k: v for k, v in options.items() if k != "temperature"})
-            if options.get("temperature") is not None:
+            if options.get("temperature") is not None and not self._model.startswith(
+                "gpt-5"
+            ):
                 payload["temperature"] = options["temperature"]
         if kwargs:
             payload.update(kwargs)

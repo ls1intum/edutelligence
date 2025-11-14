@@ -62,7 +62,7 @@ class MemorySleepPipelineBuilder:
         """
         Set the tool language model.
         """
-        self._tool_llm = tool_llm or OllamaLanguageModel("mistral-small3.1:24b")
+        self._tool_llm = tool_llm or OllamaLanguageModel("gpt-oss:120b")
         return self
 
     def set_response_llm(

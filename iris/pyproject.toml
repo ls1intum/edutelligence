@@ -35,6 +35,7 @@ types-pyyaml = "^6.0.12.20250809"
 types-pytz = "^2025.2.0.20250809"
 httpx = { version = "^0.28.1", extras = ["http2"] }
 memiris = {path = "../memiris", develop = true}
+apscheduler = "^3.11.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.17.1"

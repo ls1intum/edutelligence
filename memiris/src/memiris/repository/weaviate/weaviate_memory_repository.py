@@ -254,3 +254,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             return [self.object_to_memory(item) for item in result.objects]
         except Exception as e:
             raise ValueError(f"Error retrieving Memory objects by IDs: {e}") from e
+
+    def find_all_tenants(self) -> list[str]:
+        """Find all tenants in the Memory collection."""
+        return list(self.memory_collection.tenants.get().keys())

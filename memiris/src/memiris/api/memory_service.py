@@ -129,3 +129,28 @@ class MemoryService:
         self, tenant: str, vectors: Mapping[str, Sequence[float]], limit: int = 10
     ) -> Sequence[Memory]:
         return self._memory_repository.search_multi(tenant, vectors, limit)
+
+    def has_unslept_memories(self, tenant: str) -> bool:
+        """
+        Find all unslept memories for a given tenant.
+
+        Args:
+            tenant: The tenant to which the memories belong.
+        Returns:
+            list[Memory]: A list of unslept memory objects for the specified tenant.
+        """
+        return len(self._memory_repository.find_unslept_memories(tenant)) > 0
+
+    def find_all_tenants(self) -> list[str]:
+        """
+        Retrieve all tenants that have memory entries.
+
+        Returns:
+            list[str]: A list of tenant identifiers.
+        """
+        if isinstance(self._memory_repository, WeaviateMemoryRepository):
+            return self._memory_repository.find_all_tenants()
+        else:
+            raise NotImplementedError(
+                "find_all_tenants is only implemented for WeaviateMemoryRepository."
+            )
