@@ -1,45 +1,74 @@
-- api_key:
-  api_version: 2024-02-15-preview
-  azure_deployment: gpt-4o
-  capabilities:
-    context_length: 128000
-    gpt_version_equivalent: 4.5
-    image_recognition: true
-    input_cost: 5
-    json_mode: true
-    output_cost: 15
-    privacy_compliance: true
-    self_hosted: false
-    vendor: OpenAI
-  description: GPT 4 Omni on Azure
-  endpoint: "<your-endpoint>"
-  id: azure-gpt-4-omni
-  model: gpt-4o
-  name: GPT 4 Omni
+- api_key: ...
+  api_version: 2023-03-15-preview
+  azure_deployment: gpt-41
+  description: GPT 4.1 on Azure
+  endpoint: "https://endpoint.at.azure.com/"
+  id: azure-gpt-41
+  model: gpt-4.1
+  name: GPT 4.1
   type: azure_chat
-
+  cost_per_million_input_token: 2
+  cost_per_million_output_token: 8
+- api_key: ...
+  api_version: 2023-03-15-preview
+  azure_deployment: gpt-41-mini
+  description: GPT 4.1-mini on Azure
+  endpoint: "https://endpoint.at.azure.com/"
+  id: azure-gpt-41-mini
+  model: gpt-4.1-mini
+  name: GPT 4.1 Mini
+  type: azure_chat
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+- api_key: ...
+  azure_deployment: gpt-41-nano
+  description: GPT 4.1 Nano on OpenAI
+  id: openai-gpt-41-nano
+  model: gpt-4.1-nano
+  name: GPT 4.1 Nano
+  type: openai_chat
+  cost_per_million_input_token: 0.1
+  cost_per_million_output_token: 0.4
+- id: gemma3:27b
+  name: gemma3:27b
+  description: Gemma3:27b model hosted on Ollama
+  type: ollama
+  model: gemma3:27b
+  host: https://gpu.aet.cit.tum.de/ollama/
+  username: "pyris"
+  password: "..."
+  options: {}
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: gpt-oss:20b
+  name: gpt-oss:20b
+  description: OpenAI GPT-OSS 20B model hosted on Ollama
+  type: ollama
+  model: gpt-oss:20b
+  host: https://gpu.aet.cit.tum.de/ollama/
+  api_key: "sk-..." # pragma: allowlist secret
+  username: ""
+  password: ""
+  options: {}
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: gpt-oss:120b
+  name: gpt-oss:120b
+  description: OpenAI GPT-OSS 120B model hosted on Ollama
+  type: ollama
+  model: gpt-oss:120b
+  host: https://gpu.aet.cit.tum.de/ollama/
+  api_key: "sk-..." # pragma: allowlist secret
+  username: ""
+  password: ""
+  options: {}
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
 - id: azure-whisper
   name: Azure Whisper
   type: azure_whisper
-  endpoint: "<your-endpoint>"
+  endpoint: "https://endpoint.at.azure.com/"
   azure_deployment: whisper
-  api_key:
+  model: whisper
+  api_key: ...
   api_version: 2024-06-01
-
-- id: openai-gpt-4o
-  name: GPT 4 Omni (OpenAI)
-  type: openai
-  model: gpt-4o
-  api_key:
-  capabilities:
-    image_recognition: true
-    context_length: 128000
-    gpt_version_equivalent: 4.5
-    input_cost: 5
-    output_cost: 15
-
-- id: openai-whisper
-  name: OpenAI Whisper
-  type: openai_whisper
-  model: whisper-1
-  api_key:

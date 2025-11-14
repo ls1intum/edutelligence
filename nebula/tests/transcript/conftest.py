@@ -4,7 +4,7 @@ import tempfile
 
 import pytest
 
-from nebula.transcript.config import Config
+from nebula.common.config import Config
 
 
 @pytest.fixture(autouse=True)
