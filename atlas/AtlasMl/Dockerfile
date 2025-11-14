@@ -14,17 +14,13 @@ WORKDIR /atlasml
 COPY pyproject.toml poetry.lock README.md  ./ 
 COPY atlasml/ ./atlasml/
 
-# Install with dev group to include uvicorn for running the app
-RUN poetry install --with dev
+# Install only main dependencies (uvicorn is now in main dependencies)
+RUN poetry install --only main --no-root && poetry install --only-root
 
 
 FROM python:3.13-slim AS runtime
 
 WORKDIR /atlasml
-
-RUN apt-get update && apt-get install -y --no-install-recommends  \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment and source code
 COPY --from=builder /atlasml/.venv /atlasml/.venv
