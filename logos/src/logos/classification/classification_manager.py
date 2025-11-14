@@ -57,10 +57,12 @@ class ClassificationManager:
         a weight describing how well the LLM is suited for the given prompt
         and a priority of the given policy.
         """
+        # logging.debug(f"System1: {self.models}")
         if allowed is None:
             allowed = list()
+            current_models = list()
         else:
-            self.models = [model for model in self.models if model["id"] in allowed]
+            current_models = [model for model in self.models if model["id"] in allowed]
         if system is None:
             system = ""
         adjusted_policy = deepcopy(policy)
@@ -82,10 +84,11 @@ class ClassificationManager:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", maximum=False, allowed=allowed)
         logging.debug(f"Policy: {adjusted_policy['id']}")
         logging.debug(f"Models: {allowed}")
+        # logging.debug(f"System2: {current_models}")
         if classifier is None or classifier == "policy":
-            filtered = PolicyClassifier(self.models).classify(prompt, adjusted_policy)
+            filtered = PolicyClassifier(current_models).classify(prompt, adjusted_policy)
         else:
-            filtered = [i for i in self.models]
+            filtered = [i for i in current_models]
         logging.debug(f"Policy-Classification: {[model['id'] for model in filtered]}")
         if classifier is None or classifier == "token":
             # Provide the system prompt instead of the normal user input
