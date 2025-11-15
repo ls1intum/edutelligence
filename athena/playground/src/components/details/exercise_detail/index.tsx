@@ -5,6 +5,7 @@ import Disclosure from "@/components/disclosure";
 import CommonExerciseDetail from "./common";
 import TextExerciseDetail from "./text";
 import ProgrammingExerciseDetail from "./programming";
+import ModelingExerciseDetail from "./modeling";
 
 type ExerciseDetailProps = {
   exercise: Exercise;
@@ -23,6 +24,8 @@ export default function ExerciseDetail({
         return <TextExerciseDetail exercise={exercise} openedInitially={openedInitially} />;
       case "programming":
         return <ProgrammingExerciseDetail exercise={exercise} openedInitially={openedInitially} />;
+      case "modeling":
+        return <ModelingExerciseDetail exercise={exercise} openedInitially={openedInitially} />;
       default:
         return null;
     }

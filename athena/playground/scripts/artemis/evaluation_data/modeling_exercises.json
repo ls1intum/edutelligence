@@ -1,0 +1,120 @@
+{
+  "Introduction to Software Engineering (INHN0006) - Heilbronn": {
+    "semester": "SS22",
+    "course_id": 185,
+    "exercises": [
+      {
+        "id": 7031,
+        "title": "H07E02 Model the Strategy Pattern",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7187,
+        "title": "L09E02 Model an Activity Diagram",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7189,
+        "title": "L09E03 Model Scrum",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7192,
+        "title": "H09E02 Model a Food Delivery Process",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7221,
+        "title": "H10E02 Continuous Deployment",
+        "is_exam_exercise": 0
+      }
+    ]
+  },
+  "Introduction to Software Engineering (IN0006) - Garching SS22": {
+    "semester": "SS22",
+    "course_id": 169,
+    "exercises": [
+      {
+        "id": 7030,
+        "title": "H07E02 Model the Strategy Pattern",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7186,
+        "title": "L09E02 Model an Activity Diagram",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7188,
+        "title": "L09E03 Model Scrum",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7190,
+        "title": "H09E02 Model a Food Delivery Process",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7220,
+        "title": "H10E02 Continuous Deployment",
+        "is_exam_exercise": 0
+      }
+    ]
+  },
+  "Exam: Introduction to Software Engineering (EIST) SS22": {
+    "semester": "SS22",
+    "course_id": 200,
+    "exercises": [
+      {
+        "id": 7632,
+        "title": "Process Modeling",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7642,
+        "title": "Process Modeling",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7643,
+        "title": "Process Modeling",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7631,
+        "title": "Process Modeling",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7633,
+        "title": "Design Patterns",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7634,
+        "title": "Design Patterns",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7635,
+        "title": "Design Patterns",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7636,
+        "title": "Design Patterns",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7637,
+        "title": "Design Patterns",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 7638,
+        "title": "Design Patterns",
+        "is_exam_exercise": 1
+      }
+    ]
+  }
+}
