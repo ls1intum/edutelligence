@@ -20,7 +20,7 @@ module_text_llm = { path = "../modules/text/module_text_llm", develop = true }
 module_modeling_llm = { path = "../modules/modeling/module_modeling_llm", develop = true }
 
 [tool.poetry.group.dev.dependencies]
-prospector = "^1.10.2"
+prospector = "^1.17.3"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
