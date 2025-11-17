@@ -1,16 +1,15 @@
 """
 Simple tests for Scheduling Data Interface (SDI) providers.
 
-Tests OllamaDataProvider and AzureDataProvider with mocked responses,
-following the simple test style from scheduling_test.py.
+Tests OllamaDataProvider and AzureDataProvider with mocked responses.
 
-Usage (inside the logos-server container):
+Usage (recommended - runs in Docker automatically):
 
-    poetry run pytest logos/tests/test_sdi.py -v
+    ./tests/sdi/test_sdi.sh
 
-Or run all SDI tests:
+Or run directly inside the logos-server container:
 
-    poetry run pytest logos/tests/test_sdi.py
+    docker compose exec logos-server poetry run pytest logos/tests/sdi/test_sdi.py -v
 """
 
 import time
@@ -323,32 +322,43 @@ def test_ollama_queue_tracking():
 
 def test_ollama_provider_real():
     """
-    Test with real localhost Ollama instance.
+    Test with real Ollama instance (host or localhost).
 
-    This test is skipped if Ollama is not running on localhost:11434.
+    This test tries to connect to Ollama in the following order:
+    1. host.docker.internal:11434 (when running inside Docker container)
+    2. localhost:11434 (when running on host machine)
+
+    This test is skipped if Ollama is not accessible.
 
     To run Ollama locally:
     1. Download from https://ollama.com
     2. Start: `ollama serve` (runs on http://127.0.0.1:11434 by default)
     3. Pull a model: `ollama pull llama2:7b`
-
-    To use a custom Ollama endpoint:
-    - Change base_url below from "http://127.0.0.1:11434" to your endpoint
-    - Example: "https://ollama.mycompany.com" (remote server)
     """
 
-    # Check if Ollama is available
-    try:
-        response = requests.get("http://127.0.0.1:11434/api/ps", timeout=2.0)
-        if response.status_code != 200:
-            pytest.skip("Ollama not running on localhost:11434")
-    except requests.exceptions.RequestException:
-        pytest.skip("Ollama not running on localhost:11434")
+    # Try to find Ollama (Docker first, then local fallback)
+    ollama_urls = [
+        "http://host.docker.internal:11434",  # Docker container
+        "http://localhost:11434"              # Local testing
+    ]
 
-    # Create provider with real localhost Ollama
+    base_url = None
+    for url in ollama_urls:
+        try:
+            response = requests.get(f"{url}/api/ps", timeout=2.0)
+            if response.status_code == 200:
+                base_url = url
+                break
+        except requests.exceptions.RequestException:
+            continue
+
+    if base_url is None:
+        pytest.skip("Ollama not accessible (tried: Docker host and localhost)")
+
+    # Create provider with real Ollama
     provider = OllamaDataProvider(
         name="localhost-ollama",
-        base_url="http://127.0.0.1:11434",
+        base_url=base_url,
         total_vram_mb=18227,  # 17.8 GiB from M4 Pro
         refresh_interval=5.0
     )
@@ -363,7 +373,8 @@ def test_ollama_provider_real():
     assert capacity['loaded_models_count'] >= 0
     assert isinstance(capacity['loaded_models'], list)
 
-    print(f"✅ Real Ollama test passed - {capacity['loaded_models_count']} models loaded")
+    print(f"✅ Real Ollama test passed - connected to {base_url}")
+    print(f"   Models loaded: {capacity['loaded_models_count']}")
     print(f"   Available VRAM: {capacity['available_vram_mb']} MB")
     if capacity['loaded_models']:
         print(f"   Loaded models: {', '.join(capacity['loaded_models'])}")

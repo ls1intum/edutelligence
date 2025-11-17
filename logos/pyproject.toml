@@ -6,13 +6,13 @@ authors = [
     {name = "Tobias Wasner",email = "tobias.wasner@tum.de"},
     {name = "Florian Briksa",email = "florian.briksa@tum.de"}
 ]
-readme = "README.md"
+readme = "./logos/README.md"
 requires-python = ">=3.13,<4.0.0"
 
 [tool.poetry.dependencies]
 python = ">=3.13,<4.0.0"
 fastapi = {extras = ["standard"], version = "0.115.9"}
-shared = { path = "../shared", develop = true }
+shared = { path = "./shared", develop = true }
 requests = "^2.32.3"
 langchain = ">=0.3.23"
 langchain-community = "^0.3.21"
