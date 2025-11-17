@@ -8,15 +8,14 @@
   "problem_statement": "-> file:problem-statement.md",
   "grading_instructions": "-> file:grading-instructions.md",
   "programming_language": "java",
-  "solution_repository_uri": "{{exerciseDataUrl}}/solution.zip",
-  "template_repository_uri": "{{exerciseDataUrl}}/template.zip",
-  "tests_repository_uri": "{{exerciseDataUrl}}/tests.zip",
+  "solution_repository_uri": "{{exerciseDataUrl}}/solution",
+  "template_repository_uri": "{{exerciseDataUrl}}/template",
+  "tests_repository_uri": "{{exerciseDataUrl}}/tests",
   "meta": {},
-
   "submissions": [
     {
       "id": 101,
-      "repository_uri": "{{exerciseDataUrl}}/submissions/101.zip",
+      "repository_uri": "{{exerciseDataUrl}}/submissions/101",
       "meta": {},
       "feedbacks": [
         {
@@ -43,12 +42,12 @@
     },
     {
       "id": 102,
-      "repository_uri": "{{exerciseDataUrl}}/submissions/102.zip",
+      "repository_uri": "{{exerciseDataUrl}}/submissions/102",
       "meta": {}
     },
     {
       "id": 103,
-      "repository_uri": "{{exerciseDataUrl}}/submissions/103.zip",
+      "repository_uri": "{{exerciseDataUrl}}/submissions/103",
       "meta": {},
       "feedbacks": [
         {

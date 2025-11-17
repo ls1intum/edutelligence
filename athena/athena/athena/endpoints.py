@@ -3,14 +3,14 @@ import inspect
 from fastapi import Depends, BackgroundTasks, Body
 from pydantic import ConfigDict, BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
-from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional
+from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
 from athena.app import app
 from athena.authenticate import authenticated
 from athena.metadata import with_meta
 from athena.module_config import get_dynamic_module_config_factory
 from athena.logger import logger
-from athena.schemas import Exercise, Submission, Feedback, LearnerProfile
+from athena.schemas import Exercise, Submission, Feedback, LearnerProfile, Competency
 from athena.storage import get_stored_submission_meta, get_stored_exercise_meta, get_stored_feedback_meta, \
     store_exercise, store_feedback, store_feedback_suggestions, store_submissions, get_stored_submissions
 
@@ -273,6 +273,8 @@ def feedback_provider(func: Union[
     Callable[[E, S, G, C, LearnerProfile], Coroutine[Any, Any, List[F]]],
     Callable[[E, S, G, C, LearnerProfile, S], List[F]],
     Callable[[E, S, G, C, LearnerProfile, S], Coroutine[Any, Any, List[F]]],
+    Callable[[E, S, G, C, LearnerProfile, S, List[Competency]], List[F]],
+    Callable[[E, S, G, C, LearnerProfile, S, List[Competency]], Coroutine[Any, Any, List[F]]],
 ]):
     """
     Provide feedback to the Assessment Module Manager.
@@ -318,6 +320,14 @@ def feedback_provider(func: Union[
         >>> @feedback_provider
         ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission]):
         ...     # suggest feedback here using module_config and learner_profile and return it as a list
+
+        With competencies (both synchronous and asynchronous forms):
+        >>> @feedback_provider
+        ... def sync_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission], competencies: Optional[List[Competency]]):
+        ...     # suggest feedback here using module_config and learner_profile and return it as a list
+        >>> @feedback_provider
+        ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission], competencies: Optional[List[Competency]]):
+        ...     # suggest feedback here using module_config and learner_profile and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
@@ -325,6 +335,7 @@ def feedback_provider(func: Union[
     is_graded_type = inspect.signature(func).parameters["is_graded"].annotation if "is_graded" in inspect.signature(func).parameters else None
     learner_profile_type = inspect.signature(func).parameters["learner_profile"].annotation if "learner_profile" in inspect.signature(func).parameters else None
     latest_submission_type = inspect.signature(func).parameters["latest_submission"].annotation if "latest_submission" in inspect.signature(func).parameters else None
+    competencies_type = inspect.signature(func).parameters["competencies"].annotation if "competencies" in inspect.signature(func).parameters else None
 
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
@@ -335,6 +346,7 @@ def feedback_provider(func: Union[
             isGraded: is_graded_type = Body(True, alias="isGraded"),
             learner_profile: learner_profile_type = Body(None, alias="learnerProfile"),
             latest_submission: latest_submission_type = Body(None, alias="latestSubmission"),
+            competencies: competencies_type = Body(None, alias="competencies"),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
@@ -358,6 +370,9 @@ def feedback_provider(func: Union[
         if "latest_submission" in inspect.signature(func).parameters:
             kwargs["latest_submission"] = latest_submission
 
+        if "competencies" in inspect.signature(func).parameters:
+            kwargs["competencies"] = competencies
+
         # Filter out unexpected kwargs and log warnings
         accepted_params = set(inspect.signature(func).parameters.keys())
         all_possible_kwargs = {
@@ -365,6 +380,7 @@ def feedback_provider(func: Union[
             "is_graded": isGraded,
             "learner_profile": learner_profile,
             "latest_submission": latest_submission,
+            "competencies": competencies,
         }
 
         # Only pass accepted kwargs

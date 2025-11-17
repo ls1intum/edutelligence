@@ -15,9 +15,16 @@ python = ">=3.12,<4.0.0"
 weaviate-client = "^4.15.4"
 jinja2 = "^3.1.6"
 ollama = "^0.5.1"
+openai = "^1.0.0"
 cachetools = "^6.1.0"
 pylint-per-file-ignores = "^1.4.0"
 langfuse = "^3.1.2"
+langchain = "^0.3.27"
+langchain-core = "^0.3.77"
+langchain-community = "^0.3.30"
+langchain-ollama = "^0.3.8"
+langchain-openai = "^0.3.8"
+langgraph = "^0.6.8"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.10.0"
@@ -32,6 +39,7 @@ detect-secrets = "^1.5.0"
 prettier = "^0.0.7"
 pre-commit = "^4.1.0"
 types-cachetools = "^5.5.0.20240820"
+types-PyYAML = "^6.0.12.20241230"
 testcontainers = {extras = ["weaviate"], version = "^4.10.0"}
 pytest-mock = "^3.14.1"
 
@@ -47,6 +55,10 @@ skips = ["B311"]
 
 [[tool.mypy.overrides]]
 module = "langfuse.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
 ignore_missing_imports = true
 
 [tool.pylint."MESSAGES CONTROL"]
