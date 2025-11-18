@@ -159,9 +159,9 @@ def run_course_chat_pipeline(
 def run_text_exercise_chat_pipeline_worker(dto, variant_id):
     try:
         callback = TextExerciseChatCallback(
-            run_id=dto.execution.settings.authentication_token,
-            base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
         )
         for variant in TextExerciseChatPipeline.get_variants():
             if variant.id == variant_id:
