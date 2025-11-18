@@ -22,7 +22,6 @@ module = "athena:run_module"
 
 [tool.poetry.group.dev.dependencies]
 prospector = "1.17.3"
-setuptools = "80.9.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

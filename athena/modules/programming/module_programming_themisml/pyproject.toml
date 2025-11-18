@@ -23,7 +23,6 @@ torch = [
 types-requests = "2.32.4.20250913"
 pydantic = "2.11.7"
 prospector = "1.17.3"
-setuptools = "80.9.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
