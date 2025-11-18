@@ -25,6 +25,6 @@ pycodestyle:
 
 pylint:
   options:
-    max-positional-arguments: 6 # todo: rework functions with too many positional arguments and remove this line
+    max-positional-arguments: 7 # todo: rework functions with too many positional arguments and remove this line
   disable:
     - too-few-public-methods

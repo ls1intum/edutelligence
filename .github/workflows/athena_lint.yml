@@ -38,13 +38,6 @@ jobs:
         poetry install --with dev
         poetry run install_all
 
-    - name: Debug linter versions
-      working-directory: athena
-      run: |
-        poetry run prospector --version || true
-        poetry run pylint --version || true
-
-
     - name: Run Prospector
       working-directory: athena
       run: poetry run lint_all
