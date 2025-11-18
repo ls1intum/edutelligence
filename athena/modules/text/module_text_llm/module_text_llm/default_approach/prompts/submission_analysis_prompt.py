@@ -5,7 +5,12 @@ system_message = """
 You are an educational evaluator reviewing a student's progress on a text-based exercise.
 
 You will:
-1. Analyze the problem statement, sample solution, and grading instructions to extract core competencies required to solve the task.
+0. Observe if the required competencies are set by the instructor. If they are, move to step 2 and skip the step 1:
+
+Required Competencies:
+{competencies}
+
+1. Only if the required competencies are not provided, then analyze the problem statement, sample solution, and grading instructions to extract core competencies required to solve the task.
     - For each competency, define the expected cognitive level (e.g., Recall, Understand, Apply, Analyze, Evaluate, Create).
     - Reference the grading_instruction_id if relevant.
 

@@ -8,10 +8,10 @@ from memiris.dlo.learning_main_dlo import LearningDLO
 from memiris.dlo.memory_creation_dlo import MemoryCreationDLO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.memory_creator.memory_creator import MemoryCreator
-from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
 from memiris.util.jinja_util import create_template
@@ -24,37 +24,35 @@ class MemoryCreatorMultiModel(MemoryCreator):
     A class to create memories using a large language model.
     """
 
-    tool_llm: str
-    thinking_llm: str
-    response_llm: str
+    tool_llm: AbstractLanguageModel
+    thinking_llm: AbstractLanguageModel
+    response_llm: AbstractLanguageModel
     template: Template
     learning_repository: LearningRepository
     memory_repository: MemoryRepository
     vectorizer: Vectorizer
-    ollama_service: OllamaService
+    ollama_service: None  # Deprecated: use model proxies
 
     def __init__(
         self,
-        tool_llm: str,
-        thinking_llm: str,
-        response_llm: str,
+        tool_llm: AbstractLanguageModel,
+        thinking_llm: AbstractLanguageModel,
+        response_llm: AbstractLanguageModel,
         learning_repository: LearningRepository,
         memory_repository: MemoryRepository,
         vectorizer: Vectorizer,
-        ollama_service: OllamaService,
         template: Optional[str] = None,
     ) -> None:
         """
         Initialize the MemoryCreator
 
         Args:
-            tool_llm: The language model to use for tool operations
-            thinking_llm: The language model to use for thinking operations
-            response_llm: The language model to use for the final JSON response
+            tool_llm: The bound model to use for tool operations
+            thinking_llm: The bound model to use for thinking operations
+            response_llm: The bound model to use for the final JSON response
             learning_repository: The repository for accessing learning data
             memory_repository: The repository for accessing memory data
             vectorizer: The vectorizer service
-            ollama_service: The Ollama service to use for LLM calls
             template: Optional template path
         """
         self.tool_llm = tool_llm
@@ -63,7 +61,7 @@ class MemoryCreatorMultiModel(MemoryCreator):
         self.learning_repository = learning_repository
         self.memory_repository = memory_repository
         self.vectorizer = vectorizer
-        self.ollama_service = ollama_service
+        self.ollama_service = None
 
         self.template = create_template(template, "memory_creator.md.j2")
 
@@ -129,8 +127,7 @@ class MemoryCreatorMultiModel(MemoryCreator):
             messages[0].content = system_message  # type: ignore
 
             # Call the LLM to get the response
-            response = self.ollama_service.chat(
-                model=self.tool_llm if i % 2 == 1 else self.thinking_llm,
+            response = (self.tool_llm if i % 2 == 1 else self.thinking_llm).chat(
                 messages=messages,
                 tools=(list(tools.values()) if i % 2 == 1 else None),
                 options={"temperature": 0.05},
@@ -140,7 +137,14 @@ class MemoryCreatorMultiModel(MemoryCreator):
             if not response or not response.message:
                 break
 
-            messages.append(response.message)
+            # Append assistant message in normalized mapping form
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.message.content or "",
+                    "name": None,
+                }
+            )
 
             print(response.message)
 
@@ -162,10 +166,11 @@ class MemoryCreatorMultiModel(MemoryCreator):
                 if done:
                     break
 
+            phase = "thinking phase" if i % 2 == 1 else "tool phase"
             messages.append(
                 Message(
                     role="user",
-                    content=f"You are now in the {"thinking phase" if i % 2 == 1 else "tool phase"}.\n",
+                    content=f"You are now in the {phase}.\n",
                 )
             )
 
@@ -178,8 +183,7 @@ class MemoryCreatorMultiModel(MemoryCreator):
             **kwargs,
         )
 
-        response = self.ollama_service.chat(
-            model=self.response_llm,
+        response = self.response_llm.chat(
             messages=messages,
             response_format=MemoryCreationDLO.json_array_type().json_schema(),
         )
