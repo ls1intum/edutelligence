@@ -1,44 +1,33 @@
 """
 Scheduling Data Interface (SDI) - Public API
 
-Provides a unified facade for accessing scheduling data from heterogeneous providers.
-Uses /api/ps for Ollama providers and rate limit headers for cloud providers.
+Provides type-safe facades for accessing scheduling data from Ollama and Azure providers.
 
 Architecture:
-- SchedulingDataFacade: Unified entry point for schedulers
-- SchedulingDataProvider: Interface implemented by all providers
+- OllamaSchedulingDataFacade: Type-safe facade for Ollama providers
+- AzureSchedulingDataFacade: Type-safe facade for Azure providers
 - OllamaDataProvider: Queries /api/ps for VRAM and load status
-- CloudDataProvider: Tracks rate limits from response headers
-- AzureDataProvider: Azure-specific implementation
+- AzureDataProvider: Tracks per-deployment rate limits from response headers
 
-Usage:
-    from logos.sdi import SchedulingDataFacade
+Usage (Ollama):
+    from logos.sdi import OllamaSchedulingDataFacade
 
     # Initialize
-    facade = SchedulingDataFacade(db_manager)
+    facade = OllamaSchedulingDataFacade(db_manager)
 
     # Register Ollama model
     facade.register_model(
         model_id=1,
         provider_name='openwebui',
-        provider_type='ollama',
+        ollama_admin_url='http://gpu-vm-1.internal:11434',
         model_name='llama3.3:latest',
-        ollama_admin_url='',  # TODO: Add internal Ollama endpoint (e.g., 'http://gpu-vm-1.internal:11434')
         total_vram_mb=49152  # 48GB
     )
 
-    # Register Azure model
-    facade.register_model(
-        model_id=10,
-        provider_name='azure',
-        provider_type='cloud',
-        model_name='azure-gpt-4-omni'
-    )
-
-    # Query for scheduling decisions
+    # Query for scheduling decisions (returns ModelStatus dataclass)
     status = facade.get_model_status(1)
-    if not status['cold_start_predicted']:
-        # Schedule to this model
+    if status.is_loaded and status.queue_depth < 3:
+        # Good candidate: warm and not overloaded
         ...
 
     # Track request lifecycle
@@ -46,32 +35,54 @@ Usage:
     # ... process request ...
     metrics = facade.on_request_complete('req-123', was_cold_start=False, duration_ms=250)
 
-    # Query provider capacity
-    capacity = facade.get_provider_capacity('openwebui')
-    if capacity['available_vram_mb'] > 4096:
-        # Sufficient VRAM for new model
+Usage (Azure):
+    from logos.sdi import AzureSchedulingDataFacade
+
+    # Initialize
+    facade = AzureSchedulingDataFacade(db_manager)
+
+    # Register Azure model
+    facade.register_model(
+        model_id=10,
+        provider_name='azure',
+        model_name='gpt-4',
+        model_endpoint='https://my.openai.azure.com/openai/deployments/gpt-4o/chat/completions'
+    )
+
+    # Get capacity info (returns AzureCapacity dataclass)
+    capacity = facade.get_capacity_info('azure', 'gpt-4o')
+    if capacity.has_capacity:
+        # Send request
         ...
+
+    # Update rate limits after API call
+    facade.update_rate_limits('azure', 'gpt-4o', response.headers)
 """
 
-from .facade import SchedulingDataFacade
-from .provider_interface import SchedulingDataProvider
+from .ollama_facade import OllamaSchedulingDataFacade
+from .azure_facade import AzureSchedulingDataFacade
 from .providers import (
     OllamaDataProvider,
-    CloudDataProvider,
-    AzureDataProvider
+    AzureDataProvider,
+    extract_azure_deployment_name
 )
-from .models import ModelStatus, OllamaCapacity, CloudCapacity, RequestMetrics
+from .models import ModelStatus, OllamaCapacity, AzureCapacity, RequestMetrics
 
-# Public API (schedulers only need SchedulingDataFacade)
+# Public API
 __all__ = [
-    'SchedulingDataFacade',
-    'SchedulingDataProvider',
+    # Facades
+    'OllamaSchedulingDataFacade',
+    'AzureSchedulingDataFacade',
+
+    # Provider implementations
     'OllamaDataProvider',
-    'CloudDataProvider',
     'AzureDataProvider',
+    'extract_azure_deployment_name',
+
+    # Dataclasses
     'ModelStatus',
     'OllamaCapacity',
-    'CloudCapacity',
+    'AzureCapacity',
     'RequestMetrics',
 ]
 
