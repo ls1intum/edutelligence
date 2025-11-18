@@ -7,15 +7,15 @@ import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
+from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
+    TextExerciseChatPipelineExecutionDTO,
+)
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
-from ...domain.text_exercise_chat_pipeline_execution_dto import (
-    TextExerciseChatPipelineExecutionDTO,
-)
 from ...domain.variant.text_exercise_chat_variant import TextExerciseChatVariant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
