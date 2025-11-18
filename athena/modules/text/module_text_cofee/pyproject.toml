@@ -11,13 +11,13 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena" }
 protobuf = "5.29.4" # if this version is updated, you also need to update it in the Dockerfile
-requests = "^2.32.5"
+requests = "2.32.5"
 
 [tool.poetry.group.dev.dependencies]
-pydantic = "^2.11.7"
-prospector = "^1.17.3"
-types-requests = "^2.32.4.20250913"
-setuptools = "^80.9.0"
+pydantic = "2.11.7"
+prospector = "1.17.3"
+types-requests = "2.32.4.20250913"
+setuptools = "80.9.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"

@@ -12,21 +12,18 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
-# gitpython = "^3.1.45"
 tiktoken = "0.12.0"
-#promptlayer = "^0.1.85" # do we need this?
-# python-dotenv = "^1.2.1"
 nltk = "3.9.2"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "^2.32.4.20250913"
-pydantic = "^2.11.7"
-prospector = "^1.17.3"
-setuptools = "^80.9.0"
+types-requests = "2.32.4.20250913"
+pydantic = "2.11.7"
+prospector = "1.17.3"
+setuptools = "80.9.0"
 
 [tool.poetry.group.test.dependencies]
-pytest = "^8.2.0"
-pytest-asyncio = "^0.26.0"
+pytest = "8.2.0"
+pytest-asyncio = "0.26.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
