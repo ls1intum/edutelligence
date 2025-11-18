@@ -57,7 +57,10 @@ class FastAPIWithStart(FastAPI):
             )
 
 
-app: FastAPIWithStart = FastAPIWithStart()
+app: FastAPIWithStart = FastAPIWithStart(
+    title="Athena Module API",
+    description="API for Athena assessment module",
+)
 
 # Initialize the repository authorization middleware for programming modules (also initializing it for other modules does not hurt)
 init_repo_auth_middleware(app)

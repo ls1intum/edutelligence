@@ -67,7 +67,11 @@ def submissions_consumer(func: Union[
     submission_type = inspect.signature(func).parameters["submissions"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
 
-    @app.post("/submissions", responses=module_responses)
+    @app.post("/submissions", responses={
+        **module_responses,
+        204: {"description": "Submissions successfully received"}
+    },
+    status_code=204, description="Send submissions for an exercise", name="Send Submissions")
     @authenticated
     @with_meta
     async def wrapper(
@@ -154,7 +158,7 @@ def submission_selector(func: Union[
         module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))
         model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
-    @app.post("/select_submission", responses=module_responses)
+    @app.post("/select_submission", responses=module_responses, response_model=int, description="Return the submission that should ideally be assessed next", name="Get next Submission")
     @authenticated
     @with_meta
     async def wrapper(request: SubmissionSelectorRequest):
@@ -231,7 +235,11 @@ def feedback_consumer(func: Union[
     feedback_type = inspect.signature(func).parameters["feedbacks"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
 
-    @app.post("/feedbacks", responses=module_responses)
+    @app.post("/feedbacks", responses={
+        **module_responses,
+        204: {"description": "Feedback successfully received"}
+    },
+    status_code=204, description="Send feedback provided by a human tutor", name="Send Tutor Feedback")
     @authenticated
     @with_meta
     async def wrapper(
@@ -337,7 +345,13 @@ def feedback_provider(func: Union[
     latest_submission_type = inspect.signature(func).parameters["latest_submission"].annotation if "latest_submission" in inspect.signature(func).parameters else None
     competencies_type = inspect.signature(func).parameters["competencies"].annotation if "competencies" in inspect.signature(func).parameters else None
 
-    @app.post("/feedback_suggestions", responses=module_responses)
+    @app.post("/feedback_suggestions", responses={
+        **module_responses,
+        200: {
+            "description": "List of feedback suggestions for the submission",
+            "model": List[F]
+        }
+    }, description="Get feedback suggestions for a given submission", name="Get Feedback Suggestions")
     @authenticated
     @with_meta
     async def wrapper(
@@ -423,7 +437,7 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
     except ValidationError as exc:
         raise TypeError(f'Cannot initialize {cls.__name__} without parameters, please provide default values for all parameters') from exc
 
-    @app.get("/config_schema")
+    @app.get("/config_schema", response_model=dict, description="Get the configuration schema for this module", name="Get Module Configuration Schema")
     async def wrapper():
         return cls.model_json_schema()
 
@@ -464,7 +478,7 @@ def evaluation_provider(func: Union[
     submission_type = inspect.signature(func).parameters["submission"].annotation
     feedback_type = inspect.signature(func).parameters["predicted_feedbacks"].annotation.__args__[0]
 
-    @app.post("/evaluation", responses=module_responses)
+    @app.post("/evaluation", responses=module_responses, description="Evaluate feedback suggestions", name="Evaluate Feedback")
     @authenticated
     @with_meta
     async def wrapper(
