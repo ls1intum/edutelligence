@@ -19,7 +19,7 @@ export default function ModelingExerciseDetail({
     return () => {
       editor?.destroy();
     }
-  }, []);
+  }, [editor]);
 
   useEffect(() => {
     const Apollon = require("@ls1intum/apollon");

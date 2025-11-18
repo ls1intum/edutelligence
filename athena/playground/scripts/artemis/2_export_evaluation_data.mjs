@@ -104,7 +104,7 @@ async function exportAllExercises(config) {
     }
 
     if (exerciseTypes.includes("modeling")) {
-      // Export text exercises
+      // Export modeling exercises
       await exportExercises(
         connection,
         modeling.queryPath,

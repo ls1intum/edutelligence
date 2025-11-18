@@ -77,8 +77,9 @@ export default function ModelingSubmissionDetail({
   });
 
   (async () => {
-    await editor.nextRender; 
-    editor.model = modelObject; 
+    const renderDone = editor.nextRender;
+    editor.model = modelObject;
+    await renderDone;
   })();
 }, [feedbacks, submission, editor]);
 
