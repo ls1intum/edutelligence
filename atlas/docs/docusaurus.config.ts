@@ -19,12 +19,12 @@ const config: Config = {
   // Extract base URL without path (ReadTheDocs includes /en/version/ in the canonical URL)
   url: process.env.READTHEDOCS_CANONICAL_URL
     ? new URL(process.env.READTHEDOCS_CANONICAL_URL).origin
-    : 'https://docs.atlas.ase.cit.tum.de',
+    : 'https://ls1intum.github.io',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For ReadTheDocs, extract the path from canonical URL
   baseUrl: process.env.READTHEDOCS_CANONICAL_URL
     ? new URL(process.env.READTHEDOCS_CANONICAL_URL).pathname
-    : '/',
+    : '/edutelligence/atlas/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
