@@ -1,13 +1,17 @@
-import React, {useEffect, useRef, useState}  from 'react';
+import React, { useEffect, useRef, useState } from "react";
+import type { UMLElementType, UMLRelationshipType } from "@ls1intum/apollon";
 
-import type {ModelingSubmission} from "@/model/submission";
-import type {Feedback} from "@/model/feedback";
-import {createFeedbackItemUpdater, createNewFeedback, getFeedbackReferenceType} from "@/model/feedback";
-import type {ManualRating} from "@/model/manual_rating";
-import {createManualRatingItemUpdater} from "@/model/manual_rating";
+import type { ModelingSubmission } from "@/model/submission";
+import type { Feedback, ModelingFeedback } from "@/model/feedback";
+import {
+  createFeedbackItemUpdater,
+  createNewFeedback,
+  getFeedbackReferenceType,
+} from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
+import { createManualRatingItemUpdater } from "@/model/manual_rating";
 
 import InlineFeedback from "@/components/details/editor/inline_feedback";
-
 
 type ModelingSubmissionDetailProps = {
   identifier?: string;
@@ -21,69 +25,108 @@ type ModelingSubmissionDetailProps = {
 export default function ModelingSubmissionDetail({
   identifier,
   submission,
-  feedbacks,
+  feedbacks = [],
   onFeedbacksChange,
-  manualRatings,
+  manualRatings = [],
   onManualRatingsChange,
 }: ModelingSubmissionDetailProps) {
-  const unreferencedFeedbacks = feedbacks?.filter(
-    (feedback) => getFeedbackReferenceType(feedback) === "unreferenced"
-  );
-
   const editorRef = useRef<HTMLDivElement>(null);
-
   const [editor, setEditor] = useState<any>();
 
+  // Initialize Apollon editor once
   useEffect(() => {
+    const { ApollonEditor } = require("@ls1intum/apollon");
 
-    const Apollon = require("@ls1intum/apollon");
+    if (!editorRef.current) return;
 
-    if (!editorRef?.current) {
-      return;
-    }
+    const modelObject = JSON.parse(submission.model);
 
-    setEditor(new Apollon.ApollonEditor(editorRef.current!, {
-      model: JSON.parse(submission.model),
+    const newEditor = new ApollonEditor(editorRef.current, {
+      model: modelObject,
       readonly: true,
-      scale: 0.8
-    }));
+      mode: "Assessment",
+      scale: 0.8,
+    });
 
-  }, [editorRef, submission]);
+    setEditor(newEditor);
+    
+  }, [submission]);
+
+  // Update assessments when feedbacks change
+  useEffect(() => {
+  if (!editor) return;
+
+  const { addOrUpdateAssessment } = require("@ls1intum/apollon");
+  const modelObject = JSON.parse(submission.model);
+
+  const referencedFeedbacks = feedbacks.filter(
+    (f) => getFeedbackReferenceType(f) === "referenced"
+  );
+
+  referencedFeedbacks.forEach((feedback) => {
+    const modelingFeedback = feedback as ModelingFeedback;
+    const [referenceType, referenceId] =
+      modelingFeedback.reference?.split(":") ?? [];
+
+    addOrUpdateAssessment(modelObject, {
+      modelElementId: referenceId,
+      elementType: referenceType as UMLElementType | UMLRelationshipType,
+      score: modelingFeedback.credits,
+      feedback: modelingFeedback.description,
+    });
+  });
+
+  (async () => {
+    const renderDone = editor.nextRender;
+    editor.model = modelObject;
+    await renderDone;
+  })();
+}, [feedbacks, submission, editor]);
+
+  // Filter unreferenced feedbacks once
+  const unreferencedFeedbacks = feedbacks.filter(
+    (f) => getFeedbackReferenceType(f) === "unreferenced"
+  );
 
   return (
     <>
       <div className="border border-gray-100 rounded-lg overflow-hidden">
-        <div key={identifier} ref={editorRef} style={{height: 400}} />
+        <div key={identifier} ref={editorRef} style={{ height: 400 }} />
       </div>
-      {((unreferencedFeedbacks && unreferencedFeedbacks.length > 0) ||
-        onFeedbacksChange) && (
+      {(unreferencedFeedbacks.length > 0 || onFeedbacksChange) && (
         <div className="space-y-2 mt-5">
           <h3 className="ml-2 text-lg font-medium">Unreferenced Feedback</h3>
-          {feedbacks?.map(
-            (feedback) =>
-              getFeedbackReferenceType(feedback) === "unreferenced" && (
-                <InlineFeedback
-                  key={feedback.id}
-                  feedback={feedback}
-                  manualRating={manualRatings?.find(
-                    (manualRating) => manualRating.feedbackId === feedback.id
-                  )}
-                  onFeedbackChange={
-                    onFeedbacksChange &&
-                    createFeedbackItemUpdater(feedback, feedbacks, onFeedbacksChange)
-                  }
-                  onManualRatingChange={
-                    onManualRatingsChange &&
-                    createManualRatingItemUpdater(feedback.id, manualRatings, onManualRatingsChange)
-                  }
-                />
-              )
-          )}
+
+          {unreferencedFeedbacks.map((feedback) => (
+            <InlineFeedback
+              key={feedback.id}
+              feedback={feedback}
+              manualRating={manualRatings.find(
+                (mr) => mr.feedbackId === feedback.id
+              )}
+              onFeedbackChange={
+                onFeedbacksChange &&
+                createFeedbackItemUpdater(feedback, feedbacks, onFeedbacksChange)
+              }
+              onManualRatingChange={
+                onManualRatingsChange &&
+                createManualRatingItemUpdater(
+                  feedback.id,
+                  manualRatings,
+                  onManualRatingsChange
+                )
+              }
+            />
+          ))}
+
           {onFeedbacksChange && (
             <button
               className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
               onClick={() =>
-                onFeedbacksChange([...(feedbacks ?? []), createNewFeedback(submission)])
+                onFeedbacksChange([
+                  ...feedbacks,
+                  createNewFeedback(submission),
+                ])
               }
             >
               Add feedback
