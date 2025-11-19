@@ -10,7 +10,7 @@ from module_modeling_llm.config import Configuration
 from module_modeling_llm.core.filter_feedback import filter_feedback
 from module_modeling_llm.core.generate_suggestions import generate_suggestions
 from module_modeling_llm.core.get_structured_grading_instructions import get_structured_grading_instructions
-from module_modeling_llm.utils.convert_to_athana_feedback_model import convert_to_athana_feedback_model
+from module_modeling_llm.utils.convert_to_athena_feedback_model import convert_to_athena_feedback_model
 from module_modeling_llm.utils.get_exercise_model import get_exercise_model
 
 
@@ -53,7 +53,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
     if is_graded is False:
         feedback = await filter_feedback(exercise_model, feedback, module_config.approach, module_config.debug)
 
-    return convert_to_athana_feedback_model(feedback, exercise_model)
+    return convert_to_athena_feedback_model(feedback, exercise_model, structured_grading_instructions.criteria, is_graded)
 
 
 

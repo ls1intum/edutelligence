@@ -10,7 +10,9 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 | --------------- | --------------------- | --------- |
 | 8.0.x           | 1.0.x                 | ✅ Stable |
 | 8.1.0 - 8.2.4   | 1.1.x                 | ✅ Stable |
-| 8.3.x           | 1.3.x                 | ✅ Stable |
+| 8.3.0 - 8.3.4   | 1.3.x                 | ✅ Stable |
+| 8.4.0 - 8.4.4   | 1.4.x                 | ✅ Stable |
+| 8.5.x           | 1.5.x                 | ✅ Stable |
 
 > **Note:** Always ensure you're using compatible versions for optimal integration and functionality.
 
@@ -80,6 +82,8 @@ A comprehensive LLM Engineering Platform that provides centralized management an
 - **Scheduling & Monitoring**: Advanced scheduling and real-time monitoring
 
 **Technology Stack:** Python 3.13, Poetry, FastAPI, Docker
+
+[More information](https://logos.ase.cit.tum.de/)
 
 ### 🌌 [Nebula](./nebula/) - [In Development]
 
