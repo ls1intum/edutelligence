@@ -11,7 +11,7 @@ RUN pip install --upgrade pip
 COPY ./logos/pyproject.toml ./logos/poetry.lock* ./
 
 COPY ./logos/src/ ./src/
-COPY ./logos/tests/ ./logos/tests/
+COPY ./logos/tests/ ./tests/
 COPY ./logos/db/ ./logos/db/
 COPY ../shared/ ./shared/
 COPY ./logos/README.md ./logos/README.md

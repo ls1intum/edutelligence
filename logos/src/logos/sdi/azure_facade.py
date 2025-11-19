@@ -8,10 +8,9 @@ Handles per-deployment rate limit tracking.
 
 import logging
 import threading
-import time
 from typing import Dict, List, Optional
 
-from .models import ModelStatus, AzureCapacity, RequestMetrics
+from .models import ModelStatus, AzureCapacity
 from .providers import AzureDataProvider, extract_azure_deployment_name
 
 
@@ -25,8 +24,10 @@ class AzureSchedulingDataFacade:
     Simplifies scheduler interaction by:
     - Managing Azure provider lifecycle
     - Tracking per-deployment rate limits
-    - Tracking request metrics (queue wait times)
     - Providing type-safe responses via dataclasses
+
+    Note: Azure is a cloud provider with no visibility into queue state or active requests.
+    For local queue tracking, see OllamaSchedulingDataFacade.
 
     Usage:
         facade = AzureSchedulingDataFacade(db_manager)
@@ -42,9 +43,7 @@ class AzureSchedulingDataFacade:
 
         # Query for scheduling decisions (returns ModelStatus dataclass)
         status = facade.get_model_status(5)
-        if status.queue_depth < 10:
-            # Schedule to this model
-            ...
+        # Note: Azure models are always loaded (status.is_loaded == True)
 
         # Get rate limit info for a deployment (returns AzureCapacity dataclass)
         capacity = facade.get_capacity_info('azure', 'gpt-4o')
@@ -54,11 +53,6 @@ class AzureSchedulingDataFacade:
 
         # Update rate limits after API response
         facade.update_rate_limits('azure', 'gpt-4o', response.headers)
-
-        # Track request lifecycle
-        facade.on_request_start('req-456', model_id=5, priority='high')
-        # ... process request ...
-        metrics = facade.on_request_complete('req-456', was_cold_start=False, duration_ms=180)
     """
 
     def __init__(self, db_manager=None):
@@ -73,9 +67,6 @@ class AzureSchedulingDataFacade:
         # Provider management (Azure providers only)
         self._providers: Dict[str, AzureDataProvider] = {}  # provider_name → provider
         self._model_to_provider: Dict[int, str] = {}  # model_id → provider_name
-
-        # Request tracking
-        self._request_tracking: Dict[str, Dict] = {}  # request_id → tracking_data
 
         # Thread safety
         self._lock = threading.RLock()
@@ -161,19 +152,8 @@ class AzureSchedulingDataFacade:
             raise KeyError(f"Provider '{provider_name}' not found")
 
         provider = self._providers[provider_name]
-        capacity_dict = provider.get_capacity_info(deployment_name=deployment_name)
-
-        # Convert dict to dataclass
-        return AzureCapacity(
-            deployment_name=capacity_dict['deployment_name'],
-            rate_limit_remaining_requests=capacity_dict['rate_limit_remaining_requests'],
-            rate_limit_remaining_tokens=capacity_dict['rate_limit_remaining_tokens'],
-            rate_limit_total_requests=capacity_dict['rate_limit_total_requests'],
-            rate_limit_total_tokens=capacity_dict['rate_limit_total_tokens'],
-            rate_limit_resets_at=capacity_dict['rate_limit_resets_at'],
-            last_header_age_seconds=capacity_dict['last_header_age_seconds'],
-            has_capacity=capacity_dict['has_capacity']
-        )
+        # Provider already returns AzureCapacity dataclass
+        return provider.get_capacity_info(deployment_name=deployment_name)
 
     def update_rate_limits(
         self,
@@ -214,115 +194,10 @@ class AzureSchedulingDataFacade:
         """
         return [self.get_model_status(mid) for mid in model_ids]
 
-    def on_request_start(self, request_id: str, model_id: int, priority: str = 'normal') -> None:
-        """
-        Track request arrival and increment queue depth.
-
-        Args:
-            request_id: Unique request identifier
-            model_id: Model handling the request
-            priority: Request priority level
-        """
-        with self._lock:
-            provider = self._get_provider_for_model(model_id)
-            provider.enqueue_request(model_id)
-
-            # Get queue depth snapshot after increment
-            queue_depth_snapshot = provider.get_queue_depth(model_id)
-
-            # Track request metadata
-            self._request_tracking[request_id] = {
-                'model_id': model_id,
-                'arrival_time': time.time(),
-                'priority': priority,
-                'queue_depth_at_arrival': queue_depth_snapshot
-            }
-
-        logger.debug(
-            f"Request {request_id} started for model {model_id} "
-            f"(priority={priority}, queue_depth={queue_depth_snapshot})"
-        )
-
-    def on_request_begin_processing(self, request_id: str) -> None:
-        """
-        Track when a request begins processing (moves from queue to active).
-
-        Optional method for 3-stage lifecycle tracking:
-        1. on_request_start() - Request enters queue
-        2. on_request_begin_processing() - Request starts processing (queue → active)
-        3. on_request_complete() - Request finishes
-
-        Args:
-            request_id: Request identifier (same as on_request_start)
-
-        Raises:
-            KeyError: If request_id not found
-        """
-        with self._lock:
-            if request_id not in self._request_tracking:
-                raise KeyError(f"Request {request_id} not found in tracking")
-
-            tracking_data = self._request_tracking[request_id]
-            model_id = tracking_data['model_id']
-
-            # Move from queue to active
-            provider = self._get_provider_for_model(model_id)
-            provider.begin_processing(model_id)
-
-            # Record processing start time
-            tracking_data['processing_start_time'] = time.time()
-
-        logger.debug(f"Request {request_id} began processing on model {model_id}")
-
-    def on_request_complete(
-        self,
-        request_id: str,
-        was_cold_start: bool,
-        duration_ms: float
-    ) -> RequestMetrics:
-        """
-        Track request completion and return metrics.
-
-        Args:
-            request_id: Request that finished
-            was_cold_start: Always False for Azure (no cold starts)
-            duration_ms: End-to-end request duration
-
-        Returns:
-            RequestMetrics dataclass with collected metrics
-
-        Raises:
-            KeyError: If request_id not found
-        """
-        with self._lock:
-            if request_id not in self._request_tracking:
-                raise KeyError(f"Request {request_id} not found in tracking")
-
-            tracking_data = self._request_tracking.pop(request_id)
-            model_id = tracking_data['model_id']
-
-            # Calculate metrics
-            queue_wait_ms = (time.time() - tracking_data['arrival_time']) * 1000 - duration_ms
-
-            # Complete request (decrement active count)
-            provider = self._get_provider_for_model(model_id)
-            provider.complete_request(model_id)
-
-            # Create metrics dataclass
-            metrics = RequestMetrics(
-                queue_wait_ms=max(0, queue_wait_ms),  # Clamp to 0 if negative
-                was_cold_start=was_cold_start,
-                duration_ms=duration_ms,
-                queue_depth_at_arrival=tracking_data['queue_depth_at_arrival'],
-                priority=tracking_data['priority']
-            )
-
-            logger.debug(
-                f"Request {request_id} completed: "
-                f"duration={duration_ms:.1f}ms, queue_wait={metrics.queue_wait_ms:.1f}ms"
-            )
-
-            return metrics
+    # NOTE: Cloud providers (Azure) manage queues internally.
+    # We have no visibility into their queue state, active requests, or queue depth.
+    # Therefore, request lifecycle tracking methods are not applicable for Azure.
+    # For Ollama providers with local queue visibility, see OllamaSchedulingDataFacade.
 
     def _get_provider_for_model(self, model_id: int) -> AzureDataProvider:
         """

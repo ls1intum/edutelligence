@@ -1,15 +1,27 @@
 """
-Replay a scheduling workload CSV (see tests/fixtures/scheduling/README.md) against a running Logos API
+Replay a scheduling workload CSV (see tests/performance/workloads/README.md) against a running Logos API
 instance and aggregate per-request metrics. Generates a detailed CSV plus latency charts.
 
-Usage (inside the logos-server container):
+RECOMMENDED USAGE (shell script wrapper):
 
-    poetry run python logos/tests/support/scheduling/run_api_workload.py \
+    ./tests/performance/test_scheduling_performance.sh \
         --logos-key YourLogosApiKey \
-        --workload logos/tests/fixtures/scheduling/sample_workload.csv \
+        --workload tests/performance/workloads/sample_workload_mixed.csv \
+        --latency-slo-ms 10000
+
+    This script handles Docker container startup, waits for API readiness,
+    and persists results to your local repo via volume mounts.
+
+DIRECT PYTHON USAGE (advanced - requires manual Docker setup):
+
+    docker compose exec logos-server poetry run python tests/performance/run_api_workload.py \
+        --logos-key YourLogosApiKey \
+        --workload tests/performance/workloads/sample_workload_mixed.csv \
         --api-base http://localhost:8080 \
         --latency-slo-ms 10000 \
-        --output logos/tests/results/scheduling/api_benchmark.csv
+        --output tests/performance/results/api_benchmark.csv
+
+For full documentation, see tests/performance/README.md
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Test script for SDI (Scheduling Data Interface)
-# Starts Docker containers and runs pytest for SDI tests
+# Integration test runner for Queue + SDI + Scheduler
+# Runs comprehensive integration tests in Docker
 
 set -Eeuo pipefail
 
@@ -17,7 +17,8 @@ ok() { printf "[\033[1;32m OK \033[0m] %s\n" "$*"; }
 err() { printf "[\033[1;31mFAIL\033[0m] %s\n" "$*"; }
 
 echo "======================================"
-echo "SDI Test Suite"
+echo "SDI Integration Test Suite (Docker)"
+echo "Scheduling Data Interface Tests"
 echo "======================================"
 echo ""
 
@@ -59,17 +60,26 @@ while [ $attempts -lt $max_attempts ]; do
 done
 
 echo ""
-log "Running SDI tests..."
+log "Running integration tests..."
 echo ""
 
 test_exit_code=0
-docker compose exec "$CONTAINER_NAME" poetry run pytest logos/tests/sdi/test_sdi.py -v || test_exit_code=$?
+docker compose exec "$CONTAINER_NAME" poetry run pytest tests/scheduling_data/test_scheduling_data.py -v || test_exit_code=$?
 
 echo ""
 echo "======================================"
 
 if [ $test_exit_code -eq 0 ]; then
-    printf "\n\033[1;32m✅ Success!\033[0m All SDI tests passed.\n\n"
+    printf "\n\033[1;32m✅ Success!\033[0m All 21 integration tests passed.\n\n"
+    log "Test coverage:"
+    log "  - Mixed workload scenarios (1 test)"
+    log "  - Rate limit handling (1 test)"
+    log "  - Cold start scenarios (3 tests)"
+    log "  - High traffic burst (3 tests)"
+    log "  - SDI integration (3 tests)"
+    log "  - SDI data usage (5 tests) ← CRITICAL"
+    log "  - Request lifecycle (5 tests) ← CRITICAL"
+    printf "\n"
 else
     printf "\n\033[1;31m❌ Failed!\033[0m Tests failed with exit code: %s\n\n" "$test_exit_code"
 fi

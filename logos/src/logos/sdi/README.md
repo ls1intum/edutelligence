@@ -1,7 +1,5 @@
 # Scheduling Data Interface (SDI)
 
-**Version 1.1** - Type-safe facades for Ollama and Azure providers
-
 ## Overview
 
 SDI provides a **pure data interface** for accessing real-time scheduling information from heterogeneous providers. It does NOT implement scheduling algorithms - it provides data that schedulers use to make decisions.
@@ -61,10 +59,12 @@ SDI provides a **pure data interface** for accessing real-time scheduling inform
 ### Option 1: Ollama Facade (Multiple Servers)
 
 ```python
+from logos.queue import PriorityQueueManager
 from logos.sdi import OllamaSchedulingDataFacade
 
-# Initialize facade
-facade = OllamaSchedulingDataFacade(db_manager)
+# Initialize queue manager and facade
+queue_mgr = PriorityQueueManager()
+facade = OllamaSchedulingDataFacade(queue_mgr, db_manager)
 
 # Register models from multiple Ollama servers
 facade.register_model(
@@ -134,12 +134,9 @@ if capacity.has_capacity and capacity.rate_limit_remaining_requests > 10:
 # Update rate limits after API call
 facade.update_rate_limits('azure', 'gpt-4o', response.headers)
 
-# Track request lifecycle (3 stages)
-facade.on_request_start('req-456', model_id=10, priority='high')
-# ... request queued ...
-facade.on_request_begin_processing('req-456')
-# ... request processing ...
-metrics = facade.on_request_complete('req-456', was_cold_start=False, duration_ms=180)
+# Note: Azure facades do not support request lifecycle tracking
+# (on_request_start, on_request_begin_processing, on_request_complete)
+# Cloud providers manage queues internally - no visibility into queue state
 ```
 
 ## Key Methods
@@ -149,9 +146,9 @@ metrics = facade.on_request_complete('req-456', was_cold_start=False, duration_m
 - `get_model_status(model_id)` → `ModelStatus` - Get current status (returns dataclass)
 - `get_capacity_info(provider_name)` → `OllamaCapacity` - Get VRAM availability (returns dataclass)
 - `get_scheduling_data(model_ids)` → `List[ModelStatus]` - Batch query multiple models
-- `on_request_start(request_id, model_id, priority)` - Track request arrival (→ queue)
-- `on_request_begin_processing(request_id)` - Track processing start (queue → active)
-- `on_request_complete(request_id, was_cold_start, duration_ms)` → `RequestMetrics` - Track completion
+- `on_request_start(request_id: str, model_id: int, priority: str = 'normal')` - Track request arrival (→ queue)
+- `on_request_begin_processing(request_id: str)` - Track processing start (queue → active)
+- `on_request_complete(request_id: str, was_cold_start: bool, duration_ms: int)` → `RequestMetrics` - Track completion
 
 **AzureSchedulingDataFacade API:**
 - `register_model(model_id, provider_name, model_name, model_endpoint)` - Register Azure model
@@ -159,9 +156,8 @@ metrics = facade.on_request_complete('req-456', was_cold_start=False, duration_m
 - `get_capacity_info(provider_name, deployment_name)` → `AzureCapacity` - Get rate limits (returns dataclass)
 - `get_scheduling_data(model_ids)` → `List[ModelStatus]` - Batch query multiple models
 - `update_rate_limits(provider_name, deployment_name, response_headers)` - Update rate limits from API response
-- `on_request_start(request_id, model_id, priority)` - Track request arrival (→ queue)
-- `on_request_begin_processing(request_id)` - Track processing start (queue → active)
-- `on_request_complete(request_id, was_cold_start, duration_ms)` → `RequestMetrics` - Track completion
+
+**Note:** Azure facade does not support request lifecycle tracking (cloud providers manage queues internally)
 
 **Note:** SDI provides raw data only. Schedulers derive predictions (e.g., cold starts) from this data.
 
@@ -244,7 +240,7 @@ Updates after each API call:
 
 ```python
 response = requests.post(azure_url, ...)
-sdi.update_cloud_rate_limits('azure', response.headers)
+facade.update_rate_limits('azure', 'gpt-4o', response.headers)
 ```
 
 **Parsed headers:**
@@ -298,50 +294,6 @@ CREATE TABLE model_provider_config (
 2. `providers` table (provider defaults)
 3. Hardcoded defaults in `OllamaDataProvider`
 
-## Testing
-
-### Manual Testing with /api/ps
-
-```bash
-# Check current state
-curl http://gpu-vm-1:11434/api/ps | jq
-
-# Load a model
-curl -X POST http://gpu-vm-1:11434/api/generate \
-  -d '{"model": "llama3.3:latest", "prompt": "test", "keep_alive": "5m"}'
-
-# Verify it's loaded
-curl http://gpu-vm-1:11434/api/ps | jq
-```
-
-### Integration Testing
-
-```python
-from logos.sdi import SchedulingDataFacade
-
-# Setup
-sdi = SchedulingDataFacade(db_manager)
-sdi.register_model(
-    model_id=1,
-    provider_name='openwebui',
-    provider_type='ollama',
-    model_name='llama3.3:latest',
-    ollama_admin_url='http://gpu-vm-1:11434',
-    total_vram_mb=49152
-)
-
-# Test cold start prediction
-status = sdi.get_model_status(1)
-assert status['cold_start_predicted'] == True  # Not loaded yet
-
-# Load model, then re-check
-# ... (send request to load model) ...
-status = sdi.get_model_status(1)
-assert status['cold_start_predicted'] == False  # Now warm
-assert status['is_loaded'] == True
-assert status['vram_mb'] > 0
-```
-
 ## Two-URL Architecture
 
 **Important distinction for Ollama:**
@@ -355,3 +307,122 @@ assert status['vram_mb'] > 0
    - Used by SDI for monitoring only
 
 Cloud providers only need `base_url` (no monitoring URL).
+
+## Queue Integration
+
+### Overview
+
+SDI provides priority-aware queue state tracking. The `ModelStatus` dataclass includes queue depth breakdown by priority level, enabling schedulers to make more informed decisions.
+
+### Queue State Per Priority
+
+The `queue_state` field provides detailed queue information:
+
+```python
+from logos.sdi import OllamaSchedulingDataFacade
+
+facade = OllamaSchedulingDataFacade(...)
+status = facade.get_model_status(1)
+
+# Access queue state
+print(f"LOW priority:    {status.queue_state.low}")
+print(f"NORMAL priority: {status.queue_state.normal}")
+print(f"HIGH priority:   {status.queue_state.high}")
+print(f"Total:           {status.queue_state.total}")
+
+# Convenience property: queue_depth (sum of all priorities)
+print(f"Total depth: {status.queue_depth}")  # Same as queue_state.total
+```
+
+### ModelStatus
+
+```python
+@dataclass
+class ModelStatus:
+    model_id: int
+    is_loaded: bool
+    vram_mb: int
+    expires_at: datetime | None
+    queue_state: QueueStatePerPriority  # Detailed breakdown
+    active_requests: int
+    provider_type: str
+
+    @property
+    def queue_depth(self) -> int:
+        """Convenience property: returns sum of all priority levels"""
+        return self.queue_state.total
+```
+
+### QueueStatePerPriority
+
+```python
+@dataclass
+class QueueStatePerPriority:
+    low: int = 0
+    normal: int = 0
+    high: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.low + self.normal + self.high
+```
+
+### Integration with Priority Queue Manager
+
+OllamaSchedulingDataFacade requires a PriorityQueueManager for accurate queue state tracking:
+
+```python
+from logos.queue import PriorityQueueManager
+from logos.sdi import OllamaSchedulingDataFacade
+
+# Create queue manager
+queue_mgr = PriorityQueueManager()
+
+# Initialize facade with queue manager (REQUIRED for Ollama)
+facade = OllamaSchedulingDataFacade(queue_mgr, db_manager)
+
+# Queue state accurately reflects 3 priority levels (LOW/NORMAL/HIGH)
+# from the queue manager
+```
+
+### Scheduling with Queue State
+
+Schedulers can use detailed queue state for better decisions:
+
+```python
+# Query multiple models
+models = [1, 2, 3]
+statuses = [facade.get_model_status(mid) for mid in models]
+
+# Score based on priority queue state
+def score_model(status):
+    score = 0
+    
+    # Prefer models with less HIGH priority load
+    score -= status.queue_state.high * 10
+    
+    # Penalize NORMAL priority load
+    score -= status.queue_state.normal * 5
+    
+    # Slightly penalize LOW priority load
+    score -= status.queue_state.low * 1
+    
+    # Prefer warm models (no cold start)
+    if not status.is_loaded:
+        score -= 50
+    
+    # Prefer less active requests
+    score -= status.active_requests * 3
+    
+    return score
+
+# Select best model
+best_model = max(statuses, key=score_model)
+print(f"Selected model {best_model.model_id}")
+```
+
+### Related Documentation
+
+- Priority Queue Subsystem: `src/logos/queue/README.md`
+- Priority Scheduler: `src/logos/scheduling/simple_priority_scheduler.py`
+- Integration Tests: `tests/scheduling_data/` (comprehensive Queue + SDI + Scheduler tests)

@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List
 
+# Import queue state from queue subsystem
+from logos.queue.models import QueueStatePerPriority
+
 
 @dataclass
 class ModelStatus:
@@ -19,15 +22,36 @@ class ModelStatus:
     For example, to predict cold starts:
     - Ollama: Check if is_loaded=False or expires_at < now
     - Cloud: Always False (no cold starts in cloud providers)
+
+    Queue State:
+    - queue_state: Breakdown of queue depth by priority level
+      * Ollama: Real 3-level breakdown (we control the queue)
+      * Cloud: None (they control the queue, we have no visibility)
+    - queue_depth: Total queue depth (computed property)
+      * Returns 0 if queue_state is None (cloud providers)
     """
 
     model_id: int
     is_loaded: bool
     vram_mb: int
     expires_at: Optional[datetime]
-    queue_depth: int
+    queue_state: Optional[QueueStatePerPriority]  # None for cloud providers
     active_requests: int
     provider_type: str  # 'ollama' | 'azure'
+
+    @property
+    def queue_depth(self) -> int:
+        """
+        Total queue depth across all priority levels.
+
+        Returns 0 for cloud providers (no queue visibility).
+        For Ollama providers, returns sum of all priority queues.
+
+        This is a computed property for backward compatibility.
+        """
+        if self.queue_state is None:
+            return 0  # Cloud providers: no queue control
+        return self.queue_state.total
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -36,7 +60,13 @@ class ModelStatus:
             'is_loaded': self.is_loaded,
             'vram_mb': self.vram_mb,
             'expires_at': self.expires_at.isoformat() if self.expires_at else None,
-            'queue_depth': self.queue_depth,
+            'queue_depth': self.queue_depth,  # Computed property
+            'queue_state': {
+                'low': self.queue_state.low,
+                'normal': self.queue_state.normal,
+                'high': self.queue_state.high,
+                'total': self.queue_state.total,
+            } if self.queue_state else None,
             'active_requests': self.active_requests,
             'provider_type': self.provider_type
         }

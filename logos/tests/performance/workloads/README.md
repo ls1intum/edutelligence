@@ -1,6 +1,12 @@
 # Scheduling Workload CSVs
 
-Each workload lives in this directory and must be a UTF-8 CSV with the following header row:
+Workload CSV files that can be replayed against the Logos API for performance testing.
+
+For information on how to run these workloads, see `../README.md`.
+
+## CSV Format
+
+Each workload CSV must be UTF-8 encoded with the following header row:
 
 ```
 request_id,arrival_offset,mode,priority,body_json

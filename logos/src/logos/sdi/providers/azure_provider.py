@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from ..models import ModelStatus, AzureCapacity
+from ..models import ModelStatus, AzureCapacity, QueueStatePerPriority
 
 
 logger = logging.getLogger(__name__)
@@ -79,9 +79,7 @@ class AzureDataProvider:
         self._registered_models: Dict[int, str] = {}  # model_id → model_name
         self._model_to_deployment: Dict[int, str] = {}  # model_id → deployment_name
 
-        # Request tracking (separate queue and active)
-        self._model_queues: Dict[int, int] = {}  # model_id → requests waiting in queue
-        self._model_active: Dict[int, int] = {}  # model_id → requests currently processing
+        # NO queue/active tracking - cloud providers manage this internally
 
         # Thread safety
         self._lock = threading.RLock()
@@ -120,10 +118,6 @@ class AzureDataProvider:
         with self._lock:
             self._registered_models[model_id] = model_name
             self._model_to_deployment[model_id] = deployment_name
-            if model_id not in self._model_queues:
-                self._model_queues[model_id] = 0
-            if model_id not in self._model_active:
-                self._model_active[model_id] = 0
             self._ensure_deployment(deployment_name)
         logger.info(f"[{self.name}] Registered model {model_id} as '{model_name}' (deployment: {deployment_name})")
 
@@ -148,19 +142,15 @@ class AzureDataProvider:
                 f"Call register_model() first."
             )
 
-        with self._lock:
-            queue_depth = self._model_queues.get(model_id, 0)
-            active_requests = self._model_active.get(model_id, 0)
-
-            return ModelStatus(
-                model_id=model_id,
-                is_loaded=True,  # Always available in cloud
-                vram_mb=0,  # No VRAM constraints
-                expires_at=None,  # No expiration
-                queue_depth=queue_depth,
-                active_requests=active_requests,
-                provider_type=self.name.lower()
-            )
+        return ModelStatus(
+            model_id=model_id,
+            is_loaded=True,  # Always available in cloud
+            vram_mb=0,  # No VRAM constraints
+            expires_at=None,  # No expiration
+            queue_state=None,  # Cloud manages queues - no visibility
+            active_requests=0,  # Cloud manages this - no visibility
+            provider_type=self.name.lower()
+        )
 
     def get_capacity_info(self, deployment_name: str) -> AzureCapacity:
         """
@@ -267,49 +257,6 @@ class AzureDataProvider:
             f"tokens={limits['remaining_tokens']}/{limits['total_tokens']}"
         )
 
-    def enqueue_request(self, model_id: int) -> None:
-        """
-        Enqueue a request (increment queue depth).
-
-        Called by on_request_start() when a new request enters the system.
-
-        Args:
-            model_id: Model receiving the request
-        """
-        with self._lock:
-            self._model_queues[model_id] = self._model_queues.get(model_id, 0) + 1
-
-    def begin_processing(self, model_id: int) -> None:
-        """
-        Move request from queue to active processing.
-
-        Called when a request starts being processed by the model.
-        Decrements queue_depth and increments active_requests.
-        """
-        with self._lock:
-            # Decrement queue
-            current_queue = self._model_queues.get(model_id, 0)
-            self._model_queues[model_id] = max(0, current_queue - 1)
-
-            # Increment active
-            self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
-
-    def complete_request(self, model_id: int) -> None:
-        """
-        Decrement active requests when request completes.
-
-        Called by on_request_complete() when a request finishes processing.
-        """
-        with self._lock:
-            current_active = self._model_active.get(model_id, 0)
-            self._model_active[model_id] = max(0, current_active - 1)
-
-    def get_queue_depth(self, model_id: int) -> int:
-        """Get current queue depth for a model."""
-        with self._lock:
-            return self._model_queues.get(model_id, 0)
-
-    def get_active_requests(self, model_id: int) -> int:
-        """Get current active requests for a model."""
-        with self._lock:
-            return self._model_active.get(model_id, 0)
+    # NO queue/active tracking methods for cloud providers
+    # Cloud providers (Azure, OpenAI, etc.) manage queues internally
+    # We have no visibility into their queue state or active request count

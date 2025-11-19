@@ -17,7 +17,13 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from ..models import ModelStatus, OllamaCapacity
+from ..models import ModelStatus, OllamaCapacity, QueueStatePerPriority
+
+# Import queue manager for type hints
+try:
+    from logos.queue import PriorityQueueManager
+except ImportError:
+    PriorityQueueManager = None  # Type hint only
 
 
 logger = logging.getLogger(__name__)
@@ -42,7 +48,7 @@ class OllamaDataProvider:
 
     # Hardcoded defaults (fallback when no database config exists)
     # Based on Ollama production deployment with 2 GPUs
-    #TODO: develop better solution for trackign the current parallel capacity
+    #TODO: develop better solution for tracking the current parallel capacity
     DEFAULT_PARALLEL_CAPACITY = 1  # OLLAMA_NUM_PARALLEL in default configuration has auto values between 1 and 4 
     DEFAULT_KEEP_ALIVE_SECONDS = 300  # 5 minutes (Ollama default)
     DEFAULT_MAX_LOADED_MODELS = 6  # 3 models × 2 GPUs
@@ -53,6 +59,7 @@ class OllamaDataProvider:
         name: str,
         base_url: str,
         total_vram_mb: int,
+        queue_manager: "PriorityQueueManager",  # REQUIRED
         refresh_interval: float = 5.0,
         provider_id: Optional[int] = None,
         db_manager = None
@@ -64,6 +71,7 @@ class OllamaDataProvider:
             name: Provider identifier (e.g., 'openwebui')
             base_url: Ollama API base URL
             total_vram_mb: Total VRAM capacity in MB (e.g., 49152 for 48GB)
+            queue_manager: PriorityQueueManager instance (REQUIRED for Ollama)
             refresh_interval: Seconds between /api/ps polls (default: 5.0)
             provider_id: Database provider ID (for config lookups)
             db_manager: Database manager instance (for config lookups)
@@ -71,6 +79,7 @@ class OllamaDataProvider:
         self.name = name
         self.base_url = base_url.rstrip('/')
         self.total_vram_mb = total_vram_mb
+        self.queue_manager = queue_manager  # Store queue manager reference
         self.refresh_interval = refresh_interval
         self.provider_id = provider_id
         self._db = db_manager
@@ -82,8 +91,7 @@ class OllamaDataProvider:
         self._loaded_models: Dict[str, Dict] = {}  # model_name → {'size_vram': int, 'expires_at': datetime}
         self._last_refresh: float = 0.0
 
-        # Request tracking (separate queue and active)
-        self._model_queues: Dict[int, int] = {}  # model_id → requests waiting in queue
+        # Track active requests (NOT queue - queue is in queue_manager)
         self._model_active: Dict[int, int] = {}  # model_id → requests currently processing
 
         # Thread safety
@@ -156,8 +164,6 @@ class OllamaDataProvider:
         # Lock protects concurrent access to model registry and tracking dicts
         with self._lock:
             self._model_id_to_name[model_id] = model_name
-            if model_id not in self._model_queues:
-                self._model_queues[model_id] = 0
             if model_id not in self._model_active:
                 self._model_active[model_id] = 0
         logger.info(f"[{self.name}] Registered model {model_id} as '{model_name}'")
@@ -237,7 +243,11 @@ class OllamaDataProvider:
 
         with self._lock:
             loaded_info = self._loaded_models.get(model_name)
-            queue_depth = self._model_queues.get(model_id, 0)
+
+            # Query queue state from queue_manager (real 3-level breakdown)
+            queue_state = self.queue_manager.get_state(model_id)
+
+            # Track active requests separately
             active_requests = self._model_active.get(model_id, 0)
 
             if loaded_info:
@@ -250,7 +260,7 @@ class OllamaDataProvider:
                     is_loaded=not is_expired,
                     vram_mb=loaded_info['size_vram'] // (1024 * 1024),
                     expires_at=loaded_info['expires_at'],
-                    queue_depth=queue_depth,
+                    queue_state=queue_state,  # Real 3-level breakdown from queue_manager
                     active_requests=active_requests,
                     provider_type='ollama'
                 )
@@ -261,7 +271,7 @@ class OllamaDataProvider:
                     is_loaded=False,
                     vram_mb=0,
                     expires_at=None,
-                    queue_depth=queue_depth,
+                    queue_state=queue_state,  # Real 3-level breakdown from queue_manager
                     active_requests=active_requests,
                     provider_type='ollama'
                 )
@@ -291,50 +301,38 @@ class OllamaDataProvider:
                 loaded_models=list(self._loaded_models.keys())
             )
 
-    def enqueue_request(self, model_id: int) -> None:
+    def increment_active(self, model_id: int) -> None:
         """
-        Enqueue a request (increment queue depth).
+        Track when a request starts processing.
 
-        Called by on_request_start() when a new request enters the system.
+        Called when a request begins execution (after being dequeued from queue_manager).
 
         Args:
-            model_id: Model receiving the request
+            model_id: Model handling the request
         """
         with self._lock:
-            self._model_queues[model_id] = self._model_queues.get(model_id, 0) + 1
-
-    def begin_processing(self, model_id: int) -> None:
-        """
-        Move request from queue to active processing.
-
-        Called when a request starts being processed by the model.
-        Decrements queue_depth and increments active_requests.
-        """
-        with self._lock:
-            # Decrement queue
-            current_queue = self._model_queues.get(model_id, 0)
-            self._model_queues[model_id] = max(0, current_queue - 1)
-
-            # Increment active
             self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
 
-    def complete_request(self, model_id: int) -> None:
+    def decrement_active(self, model_id: int) -> None:
         """
-        Decrement active requests when request completes.
+        Track when a request completes processing.
 
-        Called by on_request_complete() when a request finishes processing.
+        Called when a request finishes execution.
+
+        Args:
+            model_id: Model that handled the request
         """
         with self._lock:
             current_active = self._model_active.get(model_id, 0)
             self._model_active[model_id] = max(0, current_active - 1)
 
-    def get_queue_depth(self, model_id: int) -> int:
-        """Get current queue depth for a model."""
-        with self._lock:
-            return self._model_queues.get(model_id, 0)
+    def get_active_count(self, model_id: int) -> int:
+        """
+        Get number of currently active requests for a model.
 
-    def get_active_requests(self, model_id: int) -> int:
-        """Get current active requests for a model."""
+        Returns:
+            Number of requests currently being processed
+        """
         with self._lock:
             return self._model_active.get(model_id, 0)
 

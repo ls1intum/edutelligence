@@ -27,10 +27,12 @@ class OllamaSchedulingDataFacade:
     - Providing type-safe responses via dataclasses
 
     Usage:
-        facade = OllamaSchedulingDataFacade(db_manager)
+        queue_manager = PriorityQueueManager()
+        facade = OllamaSchedulingDataFacade(queue_manager, db_manager)
 
         # Register models
-        facade.register_model(1, 'openwebui', 'http://gpu:11434', 'llama3.1:8b')
+        facade.register_model(1, 'openwebui', 'http://gpu:11434', 'llama3.1:8b',
+                             total_vram_mb=49152)
 
         # Query for scheduling decisions (returns ModelStatus dataclass)
         status = facade.get_model_status(1)
@@ -40,23 +42,27 @@ class OllamaSchedulingDataFacade:
 
         # Get capacity info (returns OllamaCapacity dataclass)
         capacity = facade.get_capacity_info('openwebui')
-        if capacity.can_load_new_model:
-            # Load new model
+        if capacity.available_vram_mb > 8000:
+            # Can load new model
             ...
 
-        # Track request lifecycle
+        # Track request lifecycle (for metrics only)
         facade.on_request_start('req-123', model_id=1, priority='high')
-        # ... process request ...
+        # ... scheduler dequeues and processes request ...
+        facade.on_request_begin_processing('req-123')
+        # ... request completes ...
         metrics = facade.on_request_complete('req-123', was_cold_start=False, duration_ms=250)
     """
 
-    def __init__(self, db_manager=None):
+    def __init__(self, queue_manager, db_manager=None):
         """
         Initialize Ollama scheduling data facade.
 
         Args:
+            queue_manager: PriorityQueueManager instance (REQUIRED for Ollama)
             db_manager: Optional database manager for configuration lookups
         """
+        self.queue_manager = queue_manager
         self._db = db_manager
 
         # Provider management (Ollama providers only)
@@ -102,9 +108,10 @@ class OllamaSchedulingDataFacade:
                     name=provider_name,
                     base_url=ollama_admin_url,
                     total_vram_mb=total_vram_mb,
+                    queue_manager=self.queue_manager,
                     refresh_interval=refresh_interval,
-                    db_manager=self._db,
-                    provider_id=provider_id
+                    provider_id=provider_id,
+                    db_manager=self._db
                 )
                 self._providers[provider_name] = provider
                 logger.info(f"Created Ollama provider '{provider_name}' at {ollama_admin_url}")
@@ -169,7 +176,10 @@ class OllamaSchedulingDataFacade:
 
     def on_request_start(self, request_id: str, model_id: int, priority: str = 'normal') -> None:
         """
-        Track request arrival and increment queue depth.
+        Track request arrival (for metrics only).
+
+        Note: Queue operations are handled by the scheduler, not the facade.
+        This method only tracks arrival time and snapshots queue depth for metrics.
 
         Args:
             request_id: Unique request identifier
@@ -177,11 +187,10 @@ class OllamaSchedulingDataFacade:
             priority: Request priority level
         """
         with self._lock:
+            # Query current queue depth from provider (provider queries queue_manager)
             provider = self._get_provider_for_model(model_id)
-            provider.enqueue_request(model_id)
-
-            # Get queue depth snapshot after increment
-            queue_depth_snapshot = provider.get_queue_depth(model_id)
+            status = provider.get_model_status(model_id)
+            queue_depth_snapshot = status.queue_depth
 
             # Track request metadata
             self._request_tracking[request_id] = {
@@ -201,9 +210,9 @@ class OllamaSchedulingDataFacade:
         Track when a request begins processing (moves from queue to active).
 
         Optional method for 3-stage lifecycle tracking:
-        1. on_request_start() - Request enters queue
-        2. on_request_begin_processing() - Request starts processing (queue → active)
-        3. on_request_complete() - Request finishes
+        1. on_request_start() - Request arrival (metrics only)
+        2. on_request_begin_processing() - Request starts processing (increment active count)
+        3. on_request_complete() - Request finishes (decrement active count)
 
         Args:
             request_id: Request identifier (same as on_request_start)
@@ -218,9 +227,9 @@ class OllamaSchedulingDataFacade:
             tracking_data = self._request_tracking[request_id]
             model_id = tracking_data['model_id']
 
-            # Move from queue to active
+            # Increment active request count for this model
             provider = self._get_provider_for_model(model_id)
-            provider.begin_processing(model_id)
+            provider.increment_active(model_id)
 
             # Record processing start time
             tracking_data['processing_start_time'] = time.time()
@@ -235,6 +244,8 @@ class OllamaSchedulingDataFacade:
     ) -> RequestMetrics:
         """
         Track request completion and return metrics.
+
+        Decrements the active request count for the model.
 
         Args:
             request_id: Request that finished
@@ -257,9 +268,9 @@ class OllamaSchedulingDataFacade:
             # Calculate metrics
             queue_wait_ms = (time.time() - tracking_data['arrival_time']) * 1000 - duration_ms
 
-            # Complete request (decrement active count)
+            # Decrement active request count
             provider = self._get_provider_for_model(model_id)
-            provider.complete_request(model_id)
+            provider.decrement_active(model_id)
 
             # Create metrics dataclass
             metrics = RequestMetrics(
