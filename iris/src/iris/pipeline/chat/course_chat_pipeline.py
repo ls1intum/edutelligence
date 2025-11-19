@@ -15,6 +15,7 @@ from iris.pipeline.session_title_generation_pipeline import (
 
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
+from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
@@ -37,7 +38,10 @@ from ...tools import (
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
-from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
+from ..abstract_agent_pipeline import (
+    AbstractAgentPipeline,
+    AgentPipelineExecutionState,
+)
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     datetime_to_string,
@@ -347,6 +351,28 @@ class CourseChatPipeline(
         if not dto.user:
             raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
+
+    def get_memiris_reference(self, dto: CourseChatPipelineExecutionDTO):
+        """
+        Return the reference to use for the Memiris learnings created in a course chat.
+        It is simply the id of last user message in the chat history with a prefix.
+
+        Returns:
+            str: The reference identifier
+        """
+        last_message: Optional[PyrisMessage] = next(
+            (
+                m
+                for m in reversed(dto.chat_history or [])
+                if m.sender == IrisMessageRole.USER
+            ),
+            None,
+        )
+        return (
+            f"session-messages/{last_message.id}"
+            if last_message and last_message.id
+            else "session-messages/unknown"
+        )
 
     # ========================================
     # === CAN override (optional methods) ===
