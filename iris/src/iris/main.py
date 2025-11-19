@@ -32,13 +32,12 @@ async def lifespan(_: FastAPI):
 
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
-    memory_sleep_task()
-    print("Memory Sleep scheduler started (lifespan style)")
+    logging.info("Memory Sleep scheduler started (lifespan style)")
 
     yield
 
     scheduler.shutdown()
-    print("Memory Sleep Scheduler stopped gracefully")
+    logging.info("Memory Sleep Scheduler stopped gracefully")
 
 
 app = FastAPI(default_response_class=ORJSONResponse, lifespan=lifespan)

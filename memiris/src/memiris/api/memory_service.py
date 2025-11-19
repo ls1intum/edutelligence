@@ -132,12 +132,12 @@ class MemoryService:
 
     def has_unslept_memories(self, tenant: str) -> bool:
         """
-        Find all unslept memories for a given tenant.
+        Check if there are any unslept memories for a given tenant.
 
         Args:
             tenant: The tenant to which the memories belong.
         Returns:
-            list[Memory]: A list of unslept memory objects for the specified tenant.
+            bool: True if there are unslept memories, False otherwise.
         """
         return len(self._memory_repository.find_unslept_memories(tenant)) > 0
 

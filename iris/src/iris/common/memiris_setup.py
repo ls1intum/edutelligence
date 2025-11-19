@@ -28,6 +28,7 @@ from memiris.service.vectorizer import Vectorizer
 from memiris.util.uuid_util import is_valid_uuid, to_uuid
 from weaviate import WeaviateClient
 
+from iris.config import settings
 from iris.llm import AzureOpenAIChatModel, OllamaModel
 from iris.llm.external.openai_chat import OpenAIChatModel
 from iris.llm.llm_manager import LlmManager
@@ -310,7 +311,11 @@ class MemirisWrapper:
             )
             self.enabled = False
             return
-        self.enabled = True
+        if not settings.memiris.enabled:
+            logging.info("Memiris is disabled in settings.")
+            self.enabled = False
+        else:
+            self.enabled = True
         self._memiris_embedding_models = [
             OllamaLanguageModel("mxbai-embed-large:latest"),
             OllamaLanguageModel("nomic-embed-text:latest"),
@@ -618,6 +623,9 @@ def memory_sleep_task():
     """
     A periodic task to sleep memories for all users.
     """
+    if not settings.memiris.enabled or not settings.memiris.sleep_enabled:
+        logging.info("Memiris memory sleep task is disabled. Skipping execution.")
+        return
     logging.info("Running memory sleep task for all users.")
     vector_db = VectorDatabase().static_client_instance
     if not vector_db:
