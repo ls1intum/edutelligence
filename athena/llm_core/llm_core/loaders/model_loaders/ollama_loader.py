@@ -8,20 +8,16 @@ from athena.logger import logger
 OLLAMA_PREFIX = "ollama_"
 
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434")
-GPU_USER = os.getenv("GPU_USER")
-GPU_PASSWORD = os.getenv("GPU_PASSWORD")
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
 
-_auth = (GPU_USER, GPU_PASSWORD) if GPU_USER and GPU_PASSWORD else None
 _headers = (
-    {"Authorization": requests.auth._basic_auth_str(GPU_USER, GPU_PASSWORD)}  # type: ignore
-    if _auth
-    else None
+    {"Authorization": "Bearer " + OLLAMA_API_KEY} if OLLAMA_API_KEY else None
 )
 
 
 def _discover_ollama_models() -> List[str]:
     try:
-        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", auth=_auth, timeout=15)
+        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", headers=_headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         return [m["name"] for m in data.get("models", [])]
