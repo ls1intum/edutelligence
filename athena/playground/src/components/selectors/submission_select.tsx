@@ -54,7 +54,10 @@ export default function SubmissionSelect({
               ✨ All submissions
             </option>
           )}
-        {data?.map((sub: Submission) => {
+        {data
+          ?.slice() // create a shallow copy to avoid mutating original data
+          .sort((a: Submission, b: Submission) => a.id - b.id)
+          .map((sub: Submission) => {
           const contentPreview =
             (sub as TextSubmission)?.text ||
             (sub as ProgrammingSubmission)?.repository_uri ||

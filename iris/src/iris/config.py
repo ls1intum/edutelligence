@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class APIKeyConfig(BaseModel):
@@ -15,12 +15,18 @@ class WeaviateSettings(BaseModel):
     grpc_port: int
 
 
+class MemirisSettings(BaseModel):
+    enabled: bool = Field(default=True)
+    sleep_enabled: bool = Field(default=True)
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
     api_keys: list[APIKeyConfig]
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
+    memiris: MemirisSettings
 
     @classmethod
     def get_settings(cls):
