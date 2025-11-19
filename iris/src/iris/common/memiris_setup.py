@@ -372,7 +372,7 @@ class MemirisWrapper:
             return []
         if use_cloud_models:
             return self.memory_creation_pipeline_openai.create_memories(
-                self.tenant, text
+                self.tenant, text, reference
             )
         else:
             return self.memory_creation_pipeline_ollama.create_memories(
