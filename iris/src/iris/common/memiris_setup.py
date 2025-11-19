@@ -349,7 +349,7 @@ class MemirisWrapper:
         self.tenant = tenant
 
     def create_memories(
-        self, text: str, use_cloud_models: bool = False
+        self, text: str, use_cloud_models: bool = True
     ) -> Sequence[Memory]:
         """
         Creates memories for the given text using the memory creation pipeline.
@@ -373,7 +373,7 @@ class MemirisWrapper:
             )
 
     def create_memories_in_separate_thread(
-        self, text: str, result_storage: list[Memory], use_cloud_models: bool = False
+        self, text: str, result_storage: list[Memory], use_cloud_models: bool = True
     ) -> Thread:
         """
         Creates memories for the given text in a separate thread and stores the results in the provided storage.
@@ -399,7 +399,7 @@ class MemirisWrapper:
         thread.start()
         return thread
 
-    def sleep_memories(self, use_cloud_models: bool = False) -> None:
+    def sleep_memories(self, use_cloud_models: bool = True) -> None:
         """
         Sleeps memories for the tenant using the memory sleep pipeline.
 
