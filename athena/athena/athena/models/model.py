@@ -16,4 +16,4 @@ class Model:
         return getattr(schema_module, schema_class_name)
 
     def to_schema(self):
-        return type(self).get_schema_class().from_orm(self)
+        return type(self).get_schema_class().model_validate(self)
