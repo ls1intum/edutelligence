@@ -93,14 +93,14 @@ jobs:
       
       - name: Upload JUnit Test Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: junit-results
           path: athena/test-results/*_mock.xml
       
       - name: Upload Coverage Reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-reports
           path: |
