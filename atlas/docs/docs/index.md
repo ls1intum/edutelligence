@@ -9,5 +9,5 @@ Atlas main features
 ## Documentation Sections
 
 - **[User Guide](./user/index.md)** - Learn how to use Atlas
-- **[Contributor Guide](./dev/index.md)** - Contribute to Atlas development
+- **[Contributor Guide](./dev/development-process/index.md)** - Contribute to Atlas development
 - **[Administration Guide](./admin/index.md)** - Administer and deploy Atlas

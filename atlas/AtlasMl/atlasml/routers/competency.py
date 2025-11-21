@@ -1,3 +1,15 @@
+"""
+Competency endpoints for AtlasML.
+
+This router exposes endpoints to:
+- Suggest competencies similar to a given description
+- Persist competencies and exercises with an operation type
+- Suggest competency relations (currently generated heuristically)
+
+All endpoints are versioned under `/api/v1/competency`.
+Request/response models are defined in `atlasml.models.competency`.
+"""
+
 import logging
 import random
 from fastapi import APIRouter, HTTPException, Depends
@@ -35,16 +47,16 @@ async def suggest_competencies(
     request: SuggestCompetencyRequest,
 ) -> SuggestCompetencyResponse:
     """
-    Suggest competencies based on similarity to the provided description.
+    Suggest competencies based on semantic similarity of the input description.
 
     Args:
-        request: Request containing description for competency suggestion
+        request: Pydantic model with `description` and `course_id`.
 
     Returns:
-        SuggestCompetencyResponse with suggested competencies
+        SuggestCompetencyResponse: A list of matching `Competency` items.
 
     Raises:
-        HTTPException: 400 for validation errors, 500 for server errors
+        HTTPException: 400 on validation errors, 500 on internal failures.
     """
     try:
         logger.info(
@@ -75,16 +87,17 @@ async def suggest_competencies(
 @router.post("/save", dependencies=[Depends(TokenValidator())])
 async def save_competencies(request: SaveCompetencyRequest):
     """
-    Save competencies and/or exercises with the specified operation type.
+    Save competencies and/or a single exercise with an operation type.
 
     Args:
-        request: Request containing competency/exercise data and operation type
+        request: Pydantic model with optional `competencies`, optional `exercise`,
+            and an `operation_type` (UPDATE/DELETE).
 
     Returns:
-        200 OK HTTP response on successful save
+        200 OK on success with an empty body.
 
     Raises:
-        HTTPException: 400 for validation errors, 500 for server errors
+        HTTPException: 400 on validation errors, 500 on internal failures.
     """
     try:
         logger.info(
@@ -149,8 +162,10 @@ async def save_competencies(request: SaveCompetencyRequest):
 )
 async def suggest_competency_relations(course_id: int) -> CompetencyRelationSuggestionResponse:
     """
-    Suggest competency relations for a given course.
-    Currently generates random directed relations between competencies of the course.
+    Suggest directed relations between competencies for a course.
+
+    The current implementation relies on the pipeline to produce relation
+    suggestions; it may (temporarily) be heuristic.
     """
     try:
         logger.info(f"Suggesting competency relations for course_id={course_id}")

@@ -41,6 +41,8 @@ const config: Config = {
     locales: ['en'],
   },
 
+  themes: ['@docusaurus/theme-mermaid'], // This is correct
+
   presets: [
     [
       'classic',
@@ -60,6 +62,10 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
+
+  markdown: {
+    mermaid: true,
+  },
 
   themeConfig: {
     // Replace with your project's social card
@@ -111,7 +117,7 @@ const config: Config = {
             },
             {
               label: 'Contributor Guide',
-              to: '/dev',
+              to: '/dev/development-process',
             },
             {
               label: 'Admin Guide',
@@ -134,6 +140,9 @@ const config: Config = {
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
+    },
+    mermaid: {
+      theme: {light: 'default', dark: 'dark'},
     },
   } satisfies Preset.ThemeConfig,
 };
