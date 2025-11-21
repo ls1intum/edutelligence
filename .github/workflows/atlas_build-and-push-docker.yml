@@ -114,7 +114,7 @@ jobs:
           echo "IMAGE_NAME=${image//\//-}" >> $GITHUB_ENV
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-${{ env.IMAGE_NAME }}-*
