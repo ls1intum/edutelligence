@@ -151,9 +151,15 @@ class MemorySleeper:
             if connection.connection_type == ConnectionType.DUPLICATE
         ]
 
-        # 3. TODO: Filter out connections that contain memories with a CONFLICT connection
+        # 3. Mark recent memories as slept on
+        for memory in recent_memories:
+            memory.slept_on = True
 
-        # 4. Deduplicate memories using LLM
+        self.memory_repository.save_all(tenant, recent_memories)
+
+        # 4. TODO: Filter out connections that contain memories with a CONFLICT connection
+
+        # 5. Deduplicate memories using LLM
         self._deduplicate_memories(duplicate_connections, tenant, **kwargs)
 
     @observe(name="memory-cleanup")
