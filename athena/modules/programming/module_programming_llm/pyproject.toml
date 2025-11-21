@@ -12,21 +12,18 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
-gitpython = "^3.1.41"
-tiktoken = "0.7.0"
-promptlayer = "^0.1.85"
-python-dotenv = "^1.0.0"
-nltk = "3.9.1"
+gitpython = "3.1.45"
+tiktoken = "0.12.0"
+nltk = "3.9.2"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "^2.31.0.8"
-pydantic = "^2.11.7"
-prospector = "^1.10.2"
-setuptools = "^69.0.0"
+types-requests = "2.32.4.20250913"
+pydantic = "2.11.7"
+prospector = "1.17.3"
 
 [tool.poetry.group.test.dependencies]
-pytest = "^8.2.0"
-pytest-asyncio = "^0.26.0"
+pytest = "8.2.0"
+pytest-asyncio = "0.26.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"

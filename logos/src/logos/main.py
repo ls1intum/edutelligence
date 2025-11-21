@@ -346,13 +346,29 @@ async def logos_service(path: str, request: Request):
     :param request: Request
     :return: The response from Endpoints
     """
+    return await work(path, request)
+
+
+@app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def logos_service_long(path: str, request: Request):
+    """
+    Dynamic proxy for Endpoints
+    :param path: Path to Endpoint
+    :param request: Request
+    :return: The response from Endpoints
+    """
+    return await work(path, request)
+
+
+async def work(path:str, request: Request):
     headers = dict(request.headers)
     # Read request
     data = await request.body()
     json_data = request2json(data)
     # logos-API-check
     logos_key = headers["logos_key"] if "logos_key" in headers else (
-        headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
+        headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else (headers["authorization"].replace("Bearer ", "") if "authorization" in headers else ""))
+    # logging.info("Headers: %s", headers)
     with DBManager() as db:
         r, c = db.get_process_id(logos_key)
         if c != 200:
@@ -393,7 +409,7 @@ async def logos_service(path: str, request: Request):
     # Forward Request
     # Try multiple requesting methods. Start with streaming
     try:
-        if "stream" not in json_data or json_data["stream"]:
+        if "stream" in json_data and json_data["stream"]:     # "stream" not in json_data or
             logging.info("Sending Streaming Request")
             json_data["stream"] = True
             return get_streaming_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id, classified)
@@ -417,5 +433,4 @@ def request2json(request_data: bytes) -> dict:
     """
     if not request_data:
         return {}
-    string = request_data.decode('utf8').replace("'", '"')
-    return json.loads(string)
+    return json.loads(request_data)

@@ -510,7 +510,9 @@ class MemoryCreationPipeline:
         self._vectorizer = vectorizer
 
     @observe(name="memiris.memory_creation_pipeline.create_memories")
-    def create_memories(self, tenant: str, content: str, **kwargs) -> list[Memory]:
+    def create_memories(
+        self, tenant: str, content: str, reference: str, **kwargs
+    ) -> list[Memory]:
         """
         Create memories from the provided content by extracting learnings, deduplicating them,
         and creating memory entries.
@@ -518,6 +520,7 @@ class MemoryCreationPipeline:
         Args:
             tenant: The tenant to which the memories belong.
             content: The content from which learnings will be extracted.
+            reference: A reference string associated with the learnings.
             **kwargs: Additional keyword arguments that may be used by the extractors or deduplicators.
 
         Returns:
@@ -533,9 +536,12 @@ class MemoryCreationPipeline:
                 deduplicated_learnings.extend(
                     deduplicator.deduplicate(learnings, **kwargs)
                 )
+        else:
+            deduplicated_learnings = learnings
 
         for learning in deduplicated_learnings:
             learning.vectors = self._vectorizer.vectorize(learning.content)
+            learning.reference = reference
 
         saved_learnings = self._learning_repository.save_all(
             tenant=tenant, entities=deduplicated_learnings
