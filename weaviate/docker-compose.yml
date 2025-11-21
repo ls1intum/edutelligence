@@ -1,0 +1,134 @@
+services:
+  traefik:
+    image: traefik:v3.2
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - weaviate_network
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/traefik.yml:ro
+      - ./traefik/acme.json:/acme.json:rw
+      - ./traefik/config.yml:/config.yml:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '${TRAEFIK_CPU_LIMIT:-1}'
+          memory: ${TRAEFIK_MEMORY_LIMIT:-1G}
+        reservations:
+          cpus: '${TRAEFIK_CPU_RESERVATION:-0.5}'
+          memory: ${TRAEFIK_MEMORY_RESERVATION:-512M}
+
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:${WEAVIATE_VERSION:-1.30.0}
+    container_name: weaviate
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - weaviate_network
+    ports:
+      - "50051:50051"  # gRPC port
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --scheme
+      - http
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: '${WEAVIATE_API_KEY}'
+      AUTHENTICATION_APIKEY_USERS: '${WEAVIATE_API_USER:-admin}'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      ENABLE_MODULES: 'multi2vec-clip'
+      ENABLE_API_BASED_MODULES: 'true'
+      CLIP_INFERENCE_API: 'http://multi2vec-clip:8080'
+      CLUSTER_HOSTNAME: 'node1'
+      LOG_LEVEL: '${WEAVIATE_LOG_LEVEL:-info}'
+      LOG_FORMAT: 'json'
+      BACKUP_FILESYSTEM_PATH: '/var/lib/weaviate/backups'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.weaviate.entrypoints=http"
+      - "traefik.http.routers.weaviate.rule=Host(`${WEAVIATE_DOMAIN}`)"
+      - "traefik.http.middlewares.weaviate-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.weaviate.middlewares=weaviate-https-redirect"
+      - "traefik.http.routers.weaviate-secure.entrypoints=https"
+      - "traefik.http.routers.weaviate-secure.rule=Host(`${WEAVIATE_DOMAIN}`)"
+      - "traefik.http.routers.weaviate-secure.tls=true"
+      - "traefik.http.routers.weaviate-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.weaviate-secure.tls.options=default@file"
+      # IP Whitelist middleware (only applied if ALLOWED_IPS is set)
+      - "traefik.http.middlewares.weaviate-ipwhitelist.ipallowlist.sourcerange=${ALLOWED_IPS:-0.0.0.0/0}"
+      # Apply middlewares (IP whitelist only used if explicitly enabled)
+      - "traefik.http.routers.weaviate-secure.middlewares=default-headers,rate-limit${ALLOWED_IPS:+,weaviate-ipwhitelist}"
+      - "traefik.http.routers.weaviate-secure.service=weaviate"
+      - "traefik.http.services.weaviate.loadbalancer.server.port=8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '${WEAVIATE_CPU_LIMIT:-8}'
+          memory: ${WEAVIATE_MEMORY_LIMIT:-16G}
+        reservations:
+          cpus: '${WEAVIATE_CPU_RESERVATION:-4}'
+          memory: ${WEAVIATE_MEMORY_RESERVATION:-8G}
+    depends_on:
+      multi2vec-clip:
+        condition: service_healthy
+
+  multi2vec-clip:
+    image: cr.weaviate.io/semitechnologies/multi2vec-clip:sentence-transformers-clip-ViT-B-32-multilingual-v1
+    container_name: multi2vec-clip
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - weaviate_network
+    environment:
+      ENABLE_CUDA: '0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8080/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '${CLIP_CPU_LIMIT:-4}'
+          memory: ${CLIP_MEMORY_LIMIT:-8G}
+        reservations:
+          cpus: '${CLIP_CPU_RESERVATION:-2}'
+          memory: ${CLIP_MEMORY_RESERVATION:-4G}
+
+networks:
+  weaviate_network:
+    driver: bridge
+
+volumes:
+  weaviate_data:

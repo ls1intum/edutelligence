@@ -1,6 +1,6 @@
 services:
   traefik:
-    image: traefik:v2.10
+    image: traefik:v3.6.1
     container_name: traefik
     restart: unless-stopped
     command:
@@ -35,6 +35,7 @@ services:
         condition: service_healthy
     volumes:
       - data_volume:/src/logos
+      - ./tests/results/scheduling:/app/logos/tests/results/scheduling
     environment:
       PROVIDER_NAME: azure
       BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
@@ -51,6 +52,14 @@ services:
       - "traefik.http.routers.logos-server-v1.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-v1.service=logos-server"
       - "traefik.http.routers.logos-server-v1.priority=100"
+
+      # === Routing: /openai ===
+      - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
+      - "traefik.http.routers.logos-server-openai.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-openai.tls=true"
+      - "traefik.http.routers.logos-server-openai.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-openai.service=logos-server"
+      - "traefik.http.routers.logos-server-openai.priority=100"
 
       # === Routing: /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
