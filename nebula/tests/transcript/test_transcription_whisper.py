@@ -6,10 +6,7 @@ import pytest
 import nebula.transcript.whisper_utils as wu
 
 # Functions under test
-from nebula.transcript.whisper_utils import (
-    transcribe_with_azure_whisper,
-    transcribe_with_openai_whisper,
-)
+from nebula.transcript.whisper_utils import transcribe_audio_chunks
 
 # ---- Global speed-ups for this file -------------------------------------------------
 
@@ -34,13 +31,6 @@ def fast_retries(monkeypatch):
         monkeypatch.setattr(wu.time, "sleep", lambda s: None, raising=True)
 
 
-@pytest.fixture(autouse=True)
-def avoid_config_file(monkeypatch):
-    monkeypatch.setattr(
-        wu.Config, "get_whisper_llm_id", lambda: "test-llm", raising=True
-    )
-
-
 # ---- Test fixtures ------------------------------------------------------------------
 
 
@@ -50,8 +40,8 @@ def fake_chunks(tmp_path, monkeypatch):
     Create two tiny wav "chunks" and force the code under test to use them.
     Also stub get_audio_duration to 3.0s so the second chunk’s segments are offset by >= 3.0.
     """
-    c1 = tmp_path / "c1.wav"
-    c2 = tmp_path / "c2.wav"
+    c1 = tmp_path / "c1.mp3"
+    c2 = tmp_path / "c2.mp3"
     c1.write_bytes(b"\x00" * 10)
     c2.write_bytes(b"\x00" * 10)
 
@@ -69,27 +59,36 @@ def fake_chunks(tmp_path, monkeypatch):
 @pytest.fixture()
 def llm_config_openai(monkeypatch):
     """Make OpenAI path use a deterministic config."""
+    config = {
+        "type": "openai_whisper",
+        "api_key": "sk-test",  # pragma: allowlist secret
+        "model": "whisper-1",
+    }
     monkeypatch.setattr(
         wu,
         "load_llm_config",
-        lambda llm_id=None: {"api_key": "sk-test", "model": "whisper-1"},
+        lambda *args, **kwargs: config,
         raising=True,
     )
+    return config
 
 
 @pytest.fixture()
 def llm_config_azure(monkeypatch):
     """Make Azure path use a deterministic config."""
+    config = {
+        "type": "azure_whisper",
+        "api_key": "az-key",  # pragma: allowlist secret
+        "endpoint": "https://example.azure.com",
+        "api_version": "2024-06-01",
+    }
     monkeypatch.setattr(
         wu,
         "load_llm_config",
-        lambda llm_id=None: {
-            "api_key": "az-key",  # pragma: allowlist secret
-            "endpoint": "https://example.azure.com",
-            "api_version": "2024-06-01",
-        },
+        lambda *args, **kwargs: config,
         raising=True,
     )
+    return config
 
 
 # ---- Helpers -----------------------------------------------------------------------
@@ -149,10 +148,10 @@ def test_openai_transcribe_happy_path(
         ],
     )
 
-    audio_path = tmp_path / "audio.wav"
+    audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"\x00" * 100)
 
-    out = transcribe_with_openai_whisper(str(audio_path), llm_id="test-llm")
+    out = transcribe_audio_chunks(str(audio_path), llm_config_openai)
     assert "segments" in out
     texts = [s["text"] for s in out["segments"]]
     assert texts == ["Hello", "World"]
@@ -176,10 +175,10 @@ def test_azure_transcribe_happy_path(
         ],
     )
 
-    audio_path = tmp_path / "a.wav"
+    audio_path = tmp_path / "a.mp3"
     audio_path.write_bytes(b"\x00" * 10)
 
-    out = transcribe_with_azure_whisper(str(audio_path), llm_id="test-llm")
+    out = transcribe_audio_chunks(str(audio_path), llm_config_azure)
     texts = [s["text"] for s in out["segments"]]
     assert texts == ["Foo", "Bar"]
     assert out["segments"][1]["start"] >= 3.0
@@ -190,11 +189,11 @@ def test_openai_transcribe_max_retries_exhausted(
 ):
     _mock_requests_sequence(monkeypatch, [{"status_code": 429}])
 
-    audio_path = tmp_path / "audio.wav"
+    audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"\x00" * 10)
 
     with pytest.raises(RuntimeError):
-        transcribe_with_openai_whisper(str(audio_path), llm_id="test-llm")
+        transcribe_audio_chunks(str(audio_path), llm_config_openai)
 
 
 def test_get_audio_duration(monkeypatch):
@@ -202,4 +201,4 @@ def test_get_audio_duration(monkeypatch):
         return {"format": {"duration": "12.34"}}
 
     monkeypatch.setattr(wu.ffmpeg, "probe", mock_probe, raising=True)
-    assert wu.get_audio_duration("whatever.wav") == 12.34
+    assert wu.get_audio_duration("whatever.mp3") == 12.34

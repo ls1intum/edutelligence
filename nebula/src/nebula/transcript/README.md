@@ -192,10 +192,10 @@ The service uses temporary storage with automatic cleanup:
 ```
 temp/
 ├── {uuid}.mp4         # Downloaded video
-├── {uuid}.wav         # Extracted audio
+├── {uuid}.mp3         # Extracted audio
 └── chunks_{uuid}/     # Audio chunks for Whisper
-    ├── chunk_0000.wav
-    ├── chunk_0001.wav
+    ├── chunk_0000.mp3
+    ├── chunk_0001.mp3
     └── ...
 ```
 

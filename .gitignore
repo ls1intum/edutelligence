@@ -78,6 +78,15 @@ Desktop.ini
 ######################
 /bin/
 /deploy/
+node_modules/
+
+######################
+# Tool caches
+######################
+.prettiercache
+.prettier-cache
+**/.prettier-cache/
+**/.prettier-caches/
 
 ######################
 # Logs

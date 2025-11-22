@@ -1,12 +1,10 @@
 import logging
+import re
 
-from nebula.transcript.config import Config
-from nebula.transcript.llm_utils import get_openai_client
+from nebula.common.llm_config import get_openai_client
 
 
-def ask_gpt_for_slide_number(
-    image_b64: str, llm_id: str | None = None, job_id: str | None = None
-) -> int | None:
+def ask_gpt_for_slide_number(image_b64: str, job_id: str | None = None) -> int | None:
     """
     Use GPT Vision to detect the slide number from a base64 image.
     """
@@ -14,20 +12,23 @@ def ask_gpt_for_slide_number(
         if job_id:
             logging.info("▶ [Job %s] Sending image to GPT Vision...", job_id)
 
-        # Use configured LLM if not explicitly given
-        llm_id = llm_id or Config.get_gpt_vision_llm_id()
-        client, model_or_deployment = get_openai_client(llm_id)
+        model = "gpt-4.1-mini"
+        client, model_or_deployment = get_openai_client(model)
 
         response = client.chat.completions.create(
             model=model_or_deployment,
             messages=[
                 {
+                    "role": "system",
+                    "content": (
+                        "You are an AI that can read slide numbers from images of presentation slides. "
+                        "Respond only with the slide number as an integer, or 'null' if no slide number is visible."
+                        "If the image does not look like a part of a presentation slide, respond with 'null'."
+                    ),
+                },
+                {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": "What slide number is visible? Only number, or 'Null'.",
-                        },
                         {
                             "type": "image_url",
                             "image_url": {
@@ -36,19 +37,20 @@ def ask_gpt_for_slide_number(
                             },
                         },
                     ],
-                }
+                },
             ],
         )
 
         if job_id:
             logging.info("[Job %s] GPT Vision responded", job_id)
 
-        content = response.choices[0].message.content.strip().lower()
+        message_content = response.choices[0].message.content or ""
+        content = message_content.strip().lower()
         if "null" in content or "unknown" in content:
             return None
 
-        digits = "".join(filter(str.isdigit, content))
-        return int(digits) if digits else None
+        m = re.search(r"\d+", content)
+        return int(m.group(0)) if m else None
 
     except Exception as e:
         logging.warning("GPT Vision failed: %s", e)
