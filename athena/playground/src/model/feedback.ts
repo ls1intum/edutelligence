@@ -35,7 +35,7 @@ export type ProgrammingFeedback = FeedbackBase & {
 
 export type ModelingFeedback = FeedbackBase & {
   type: "modeling";
-  element_ids?: string[];
+  reference?: string;
 };
 
 export type Feedback = TextFeedback | ProgrammingFeedback | ModelingFeedback;
@@ -72,8 +72,8 @@ export function formatReference(feedback: Feedback): string {
       break;
 
     case "modeling":
-      if (feedback.element_ids) {
-        return `[${feedback.element_ids.join(", ")}]`
+      if (feedback.reference) {
+        return `[${feedback.reference}]`
       }
       break;
     }
@@ -160,13 +160,11 @@ export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceT
       }
       break;
 
-    /*
     case "modeling":
-      if (feedback.element_id) {
+      if (feedback.reference) {
         return "referenced";
       }
       break;
-     */
   }
 
   return "unreferenced";

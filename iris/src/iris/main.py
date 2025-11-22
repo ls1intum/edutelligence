@@ -1,5 +1,7 @@
 import logging
+from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, ORJSONResponse
@@ -18,7 +20,27 @@ settings.set_env_vars()
 
 sentry.init()
 
-app = FastAPI(default_response_class=ORJSONResponse)
+scheduler = BackgroundScheduler()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Import here to avoid circular imports
+    from iris.common.memiris_setup import (  # noqa: E402 pylint: disable=import-outside-toplevel
+        memory_sleep_task,
+    )
+
+    scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
+    scheduler.start()
+    logging.info("Memory Sleep scheduler started (lifespan style)")
+
+    yield
+
+    scheduler.shutdown()
+    logging.info("Memory Sleep Scheduler stopped gracefully")
+
+
+app = FastAPI(default_response_class=ORJSONResponse, lifespan=lifespan)
 
 
 def custom_openapi():
@@ -84,6 +106,7 @@ app.include_router(ingestion_status_router)
 app.include_router(memiris_router)
 
 # Initialize the LLM manager
+# Import here to avoid circular imports
 from iris.llm.llm_manager import LlmManager  # noqa: E402
 
 LlmManager()
