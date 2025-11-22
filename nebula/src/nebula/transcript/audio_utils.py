@@ -38,12 +38,9 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
 
     logger.info("Splitting audio using FFmpeg: %s", audio_path)
 
-    result = subprocess.run(
+    subprocess.run(
         command, shell=False, capture_output=True, text=True, check=True
     )  # nosec B603
-
-    if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg split failed: {result.stderr}")
 
     chunk_files = sorted(
         [

@@ -23,9 +23,12 @@ def test_detect_slide_timestamps_resolves_changes(monkeypatch):
     }
 
     # Avoid real video I/O: stub frame cache to no-op.
-    def fake_frame_cache_init(self, video_path, segs, capacity=16):
+    def fake_frame_cache_init(
+        self, video_path, segs, capture_offset_ratio=0.2, capacity=16
+    ):
         self.video_path = video_path
         self.segments = segs
+        self.capture_offset_ratio = capture_offset_ratio
         self.capacity = capacity
         self.fps = 30.0
         self._cache = OrderedDict()
