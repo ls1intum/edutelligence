@@ -8,6 +8,8 @@ DROP TYPE IF EXISTS logging_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
 DROP TABLE IF EXISTS policies CASCADE;
 DROP TABLE IF EXISTS model_api_keys CASCADE;
+DROP TABLE IF EXISTS model_provider_config CASCADE;
+DROP TABLE IF EXISTS provider_config CASCADE;
 DROP TABLE IF EXISTS model_provider CASCADE;
 DROP TABLE IF EXISTS models CASCADE;
 DROP TABLE IF EXISTS providers CASCADE;
@@ -54,8 +56,20 @@ CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
+    provider_type VARCHAR(20) DEFAULT 'cloud',  -- 'ollama' or 'cloud'
     auth_name TEXT NOT NULL,
-    auth_format TEXT NOT NULL
+    auth_format TEXT NOT NULL,
+
+    -- SDI: Ollama-specific monitoring fields (NULL for cloud providers)
+    ollama_admin_url TEXT DEFAULT '',  -- TODO: For Ollama providers, add internal admin endpoint when avaliable
+    total_vram_mb INTEGER DEFAULT NULL,  -- Total VRAM capacity (e.g., 49152 for 48GB)
+
+    -- SDI: Configuration defaults for this provider
+    parallel_capacity INTEGER DEFAULT 1,
+    keep_alive_seconds INTEGER DEFAULT 300,
+    max_loaded_models INTEGER DEFAULT 3,
+
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
@@ -86,6 +100,33 @@ CREATE TABLE model_provider (
     id SERIAL PRIMARY KEY,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
+);
+
+-- SDI: Per-model per-provider configuration for scheduling
+-- Lookup chain: model_provider_config (here) → providers table → hardcoded defaults
+CREATE TABLE model_provider_config (
+    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+    provider_name VARCHAR(50) NOT NULL,
+
+    -- SDI Configuration (per-model overrides)
+    cold_start_threshold_ms REAL DEFAULT 1000.0,
+    parallel_capacity INTEGER DEFAULT NULL,  -- NULL = use providers.parallel_capacity → default 1
+    keep_alive_seconds INTEGER DEFAULT NULL,  -- NULL = use providers.keep_alive_seconds → default 300
+
+    -- Observed statistics (auto-learned from actual requests)
+    observed_avg_cold_load_ms REAL DEFAULT NULL,
+    observed_avg_warm_load_ms REAL DEFAULT NULL,
+    observed_cold_std_dev_ms REAL DEFAULT NULL,
+    observed_warm_std_dev_ms REAL DEFAULT NULL,
+
+    -- Counters for auto-learning
+    cold_start_count INTEGER DEFAULT 0,
+    warm_hit_count INTEGER DEFAULT 0,
+    total_requests INTEGER DEFAULT 0,
+
+    last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (model_id, provider_name)
 );
 
 CREATE TABLE profile_model_permissions (
@@ -126,7 +167,15 @@ CREATE TABLE log_entry (
     provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
     model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
     policy_id INTEGER REFERENCES policies(id) ON DELETE SET NULL,
-    classification_statistics JSONB
+    classification_statistics JSONB,
+
+    -- SDI: Scheduling and performance metrics
+    priority VARCHAR(10) DEFAULT 'medium',
+    queue_depth_at_arrival INTEGER,
+    utilization_at_arrival REAL,
+    queue_wait_ms REAL,
+    was_cold_start BOOLEAN DEFAULT FALSE,
+    load_duration_ms REAL
 );
 
 CREATE TABLE token_types (
