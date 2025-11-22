@@ -355,7 +355,7 @@ class MemirisWrapper:
         self.tenant = tenant
 
     def create_memories(
-        self, text: str, reference: str, use_cloud_models: bool = False
+        self, text: str, reference: str, use_cloud_models: bool = True
     ) -> Sequence[Memory]:
         """
         Creates memories for the given text using the memory creation pipeline.
@@ -372,7 +372,7 @@ class MemirisWrapper:
             return []
         if use_cloud_models:
             return self.memory_creation_pipeline_openai.create_memories(
-                self.tenant, text
+                self.tenant, text, reference
             )
         else:
             return self.memory_creation_pipeline_ollama.create_memories(
@@ -384,7 +384,7 @@ class MemirisWrapper:
         text: str,
         reference: str,
         result_storage: list[Memory],
-        use_cloud_models: bool = False,
+        use_cloud_models: bool = True,
     ) -> Thread:
         """
         Creates memories for the given text in a separate thread and stores the results in the provided storage.
@@ -411,7 +411,7 @@ class MemirisWrapper:
         thread.start()
         return thread
 
-    def sleep_memories(self, use_cloud_models: bool = False) -> None:
+    def sleep_memories(self, use_cloud_models: bool = True) -> None:
         """
         Sleeps memories for the tenant using the memory sleep pipeline.
 
@@ -609,8 +609,11 @@ class MemirisWrapper:
             if connected_memory_ids
             else []
         )
+        # Filter out deleted memories and memories that don't exist
         connected_memory_map: dict[UUID, Memory] = {
-            memory.id: memory for memory in connected_memories if memory.id is not None
+            mem.id: mem
+            for mem in connected_memories
+            if mem is not None and mem.id is not None and not mem.deleted
         }
 
         # Build DTOs
@@ -619,12 +622,18 @@ class MemirisWrapper:
 
         connection_dtos = []
         for conn in connections:
+            # Only include memories that exist and are not deleted
             cm = [
                 MemoryDTO.from_memory(connected_memory_map[mid])
                 for mid in conn.memories
                 if mid in connected_memory_map
             ]
-            connection_dtos.append(MemoryConnectionDTO.from_connection(conn, cm))
+            # Filter out the current memory from the connection to check if there are other memories
+            other_memories = [m for m in cm if m.id != str(memory.id)]
+
+            # Only include connection if it has at least one other valid memory besides the current one
+            if len(other_memories) > 0:
+                connection_dtos.append(MemoryConnectionDTO.from_connection(conn, cm))
 
         return MemoryWithRelationsDTO(
             memory=memory_dto, learnings=learning_dtos, connections=connection_dtos
