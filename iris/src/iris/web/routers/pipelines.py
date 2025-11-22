@@ -17,14 +17,14 @@ from iris.domain import (
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
+from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
+    TextExerciseChatPipelineExecutionDTO,
+)
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
-)
-from iris.domain.text_exercise_chat_pipeline_execution_dto import (
-    TextExerciseChatPipelineExecutionDTO,
 )
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm.external.model import LanguageModel
@@ -159,9 +159,9 @@ def run_course_chat_pipeline(
 def run_text_exercise_chat_pipeline_worker(dto, variant_id):
     try:
         callback = TextExerciseChatCallback(
-            run_id=dto.execution.settings.authentication_token,
-            base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
         )
         for variant in TextExerciseChatPipeline.get_variants():
             if variant.id == variant_id:
@@ -211,9 +211,7 @@ def run_lecture_chat_pipeline_worker(dto, variant):
     dependencies=[Depends(TokenValidator())],
 )
 def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
-    variant = validate_pipeline_variant(
-        dto.execution.settings, TextExerciseChatPipeline
-    )
+    variant = validate_pipeline_variant(dto.settings, TextExerciseChatPipeline)
 
     thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
     thread.start()
