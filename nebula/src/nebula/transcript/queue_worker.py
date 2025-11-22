@@ -9,13 +9,9 @@ from typing import Tuple
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
 from nebula.transcript.jobs import cleanup_finished_jobs, fail_job, save_job_result
-from nebula.transcript.slide_utils import ask_gpt_for_slide_number
+from nebula.transcript.slide_turn_detector import detect_slide_timestamps
 from nebula.transcript.transcriber_config import VIDEO_STORAGE_PATH
-from nebula.transcript.video_utils import (
-    download_video,
-    extract_audio,
-    extract_frames_at_timestamps,
-)
+from nebula.transcript.video_utils import download_video, extract_audio
 from nebula.transcript.whisper_utils import transcribe_with_whisper
 
 # FIFO queue of (job_id, request)
@@ -40,7 +36,7 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
     # Unique temp paths
     uid = str(uuid.uuid4())
     video_path = os.path.join(VIDEO_STORAGE_PATH, f"{uid}.mp4")
-    audio_path = os.path.join(VIDEO_STORAGE_PATH, f"{uid}.wav")
+    audio_path = os.path.join(VIDEO_STORAGE_PATH, f"{uid}.mp3")
 
     try:
         # Run blocking work in threads so the event loop stays responsive
@@ -81,17 +77,22 @@ async def _light_phase(
     frames -> GPT-Vision -> align -> save -> cleanup.
     """
     try:
-        logging.debug("[Job %s] Extracting frames for GPT...", job_id)
-        timestamps = [s["start"] for s in transcription["segments"]]
-        frames = extract_frames_at_timestamps(video_path, timestamps)  #
-
-        slide_timestamps = []
-        for ts, img_b64 in frames:
-            # You already planned to add job_id logging inside ask_gpt_for_slide_number
-            slide_num = ask_gpt_for_slide_number(img_b64, job_id=job_id)  #
-            if slide_num is not None:
-                slide_timestamps.append((ts, slide_num))
-            await asyncio.sleep(2)  # existing throttle
+        logging.debug("[Job %s] Detecting slide change points...", job_id)
+        # Offload GPT-backed slide detection so the event loop stays responsive.
+        slide_timestamps = await asyncio.to_thread(
+            detect_slide_timestamps,
+            video_path,
+            transcription["segments"],
+            50,
+            1,
+            job_id,
+        )
+        logging.info(
+            "[Job %s] Slide detection complete: change_points=%d",
+            job_id,
+            len(slide_timestamps),
+        )
+        await asyncio.sleep(0)
 
         logging.debug("[Job %s] Aligning slides with transcript...", job_id)
         aligned_segments = align_slides_with_segments(

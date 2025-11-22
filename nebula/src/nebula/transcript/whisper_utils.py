@@ -65,7 +65,7 @@ def _get_retry_wait_time(config: Any, attempt: int) -> int:
     """Get provider-specific retry wait time for rate limiting."""
     llm_type = config.get("type")
     if llm_type == "azure_whisper":
-        return 60 * (attempt + 1)
+        return 30 * (attempt + 1)
     if llm_type == "openai_whisper":
         return 10 * (attempt + 1)
     return 30 * (attempt + 1)  # Default fallback
@@ -77,7 +77,7 @@ def transcribe_audio_chunks(audio_path: str, config: Any) -> dict:
 
     uid = os.path.splitext(os.path.basename(audio_path))[0]
     chunks_dir = os.path.join(os.path.dirname(audio_path), f"chunks_{uid}")
-    chunk_paths = split_audio_ffmpeg(audio_path, chunks_dir, chunk_duration=180)
+    chunk_paths = split_audio_ffmpeg(audio_path, chunks_dir, chunk_duration=900)
 
     all_segments = []
     offset = 0.0
@@ -100,7 +100,7 @@ def transcribe_audio_chunks(audio_path: str, config: Any) -> dict:
                     response = requests.post(
                         url=url,
                         headers=headers,
-                        files={"file": (os.path.basename(chunk_path), f, "audio/wav")},
+                        files={"file": (os.path.basename(chunk_path), f, "audio/mp3")},
                         data=data,
                         timeout=60,
                     )

@@ -10,11 +10,11 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
 
     # Clean old chunks
     for f in os.listdir(output_dir):
-        if f.endswith(".wav"):
+        if f.endswith(".mp3"):
             os.remove(os.path.join(output_dir, f))
 
     filename_base = os.path.splitext(os.path.basename(audio_path))[0]
-    output_template = os.path.join(output_dir, f"{filename_base}_%03d.wav")
+    output_template = os.path.join(output_dir, f"{filename_base}_%03d.mp3")
 
     command = [
         "ffmpeg",
@@ -25,19 +25,22 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
         "-segment_time",
         str(chunk_duration),
         "-acodec",
-        "pcm_s16le",  # WAV format for Azure Whisper
+        "libmp3lame",  # MP3 encoder
+        "-b:a",
+        "64k",  # small size, still ok for speech
         "-ar",
-        "16000",  # 16 kHz sampling rate
+        "16000",  # 16 kHz for Whisper
         "-ac",
-        "1",  # mono channel
+        "1",  # mono
         output_template,
         "-y",
     ]
 
     logger.info("Splitting audio using FFmpeg: %s", audio_path)
+
     result = subprocess.run(
-        command, shell=False, capture_output=True, text=True, check=True  # nosec B603
-    )
+        command, shell=False, capture_output=True, text=True, check=True
+    )  # nosec B603
 
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg split failed: {result.stderr}")
@@ -46,7 +49,7 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
         [
             os.path.join(output_dir, f)
             for f in os.listdir(output_dir)
-            if f.endswith(".wav")
+            if f.endswith(".mp3")
         ]
     )
 

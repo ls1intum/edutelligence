@@ -40,8 +40,8 @@ def fake_chunks(tmp_path, monkeypatch):
     Create two tiny wav "chunks" and force the code under test to use them.
     Also stub get_audio_duration to 3.0s so the second chunk’s segments are offset by >= 3.0.
     """
-    c1 = tmp_path / "c1.wav"
-    c2 = tmp_path / "c2.wav"
+    c1 = tmp_path / "c1.mp3"
+    c2 = tmp_path / "c2.mp3"
     c1.write_bytes(b"\x00" * 10)
     c2.write_bytes(b"\x00" * 10)
 
@@ -148,7 +148,7 @@ def test_openai_transcribe_happy_path(
         ],
     )
 
-    audio_path = tmp_path / "audio.wav"
+    audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"\x00" * 100)
 
     out = transcribe_audio_chunks(str(audio_path), llm_config_openai)
@@ -175,7 +175,7 @@ def test_azure_transcribe_happy_path(
         ],
     )
 
-    audio_path = tmp_path / "a.wav"
+    audio_path = tmp_path / "a.mp3"
     audio_path.write_bytes(b"\x00" * 10)
 
     out = transcribe_audio_chunks(str(audio_path), llm_config_azure)
@@ -189,7 +189,7 @@ def test_openai_transcribe_max_retries_exhausted(
 ):
     _mock_requests_sequence(monkeypatch, [{"status_code": 429}])
 
-    audio_path = tmp_path / "audio.wav"
+    audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"\x00" * 10)
 
     with pytest.raises(RuntimeError):
@@ -201,4 +201,4 @@ def test_get_audio_duration(monkeypatch):
         return {"format": {"duration": "12.34"}}
 
     monkeypatch.setattr(wu.ffmpeg, "probe", mock_probe, raising=True)
-    assert wu.get_audio_duration("whatever.wav") == 12.34
+    assert wu.get_audio_duration("whatever.mp3") == 12.34

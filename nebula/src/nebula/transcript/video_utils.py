@@ -6,8 +6,8 @@ import cv2
 
 
 def download_video(video_url: str, video_path: str) -> None:
-    """Download video from a given URL using ffmpeg."""
     logging.info("Downloading video...")
+
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -17,16 +17,32 @@ def download_video(video_url: str, video_path: str) -> None:
         "file,http,https,tcp,tls",
         "-i",
         video_url,
+        "-c",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
         "-y",
         video_path,
     ]
 
     result = subprocess.run(
-        command, shell=False, capture_output=True, text=True, check=True
+        command,
+        shell=False,
+        capture_output=True,
+        text=True,
+        check=True,
     )  # nosec B603
 
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
+
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg download failed: {result.stderr}")
+        raise RuntimeError(
+            f"FFmpeg download failed with exit {result.returncode}: {result.stderr}"
+        )
+
     logging.info("Download complete.")
 
 
