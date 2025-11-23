@@ -9,9 +9,9 @@ license = "MIT"
 python = "3.11.*"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
 athena = { path = "../../../athena", develop = true }
-#athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena" }
-antlr4-python3-runtime = "^4.13.1"
-code-bert-score = "^0.4.1"
+#athena = { git = "https://github.com/ls1intum/Athena.git", rev = "6316d30", subdirectory = "athena" }
+antlr4-python3-runtime = "4.13.1"
+code-bert-score = "0.4.1"
 torch = [
     { url = "https://download.pytorch.org/whl/cpu/torch-2.5.0%2Bcpu-cp311-cp311-linux_x86_64.whl", platform = "linux", python = ">=3.11 <3.12", markers = "platform_machine == \"x86_64\"" },
     { url = "https://download.pytorch.org/whl/cpu/torch-2.5.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", platform = "linux", python = ">=3.11 <3.12", markers = "platform_machine == \"aarch64\"" },
@@ -20,10 +20,9 @@ torch = [
 ]
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "^2.31.0.8"
-pydantic = "^2.11.7"
-prospector = "^1.10.2"
-setuptools = "^69.0.0"
+types-requests = "2.32.4.20250913"
+pydantic = "2.11.7"
+prospector = "1.17.3"
 
 [tool.poetry.scripts]
 module = "athena:run_module"

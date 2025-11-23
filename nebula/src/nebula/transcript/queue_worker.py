@@ -7,9 +7,8 @@ import uuid
 from typing import Tuple
 
 from nebula.transcript.align_utils import align_slides_with_segments
-from nebula.transcript.config import Config
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
-from nebula.transcript.jobs import (
+    from nebula.transcript.jobs import (
     cancel_job,
     cleanup_finished_jobs,
     fail_job,
@@ -17,17 +16,10 @@ from nebula.transcript.jobs import (
     remove_from_cancelled,
     save_job_result,
 )
-from nebula.transcript.llm_utils import load_llm_config
-from nebula.transcript.slide_utils import ask_gpt_for_slide_number
-from nebula.transcript.video_utils import (
-    download_video,
-    extract_audio,
-    extract_frames_at_timestamps,
-)
-from nebula.transcript.whisper_utils import (
-    transcribe_with_azure_whisper,
-    transcribe_with_openai_whisper,
-)
+from nebula.transcript.slide_turn_detector import detect_slide_timestamps
+from nebula.transcript.transcriber_config import VIDEO_STORAGE_PATH
+from nebula.transcript.video_utils import download_video, extract_audio
+from nebula.transcript.whisper_utils import transcribe_with_whisper
 
 # FIFO queue of (job_id, request)
 _job_queue: "asyncio.Queue[Tuple[str, TranscribeRequestDTO]]" = asyncio.Queue()
@@ -133,8 +125,8 @@ def _cleanup_temp_files(
         # Remove chunk directories
         if uid:
             chunk_dir_prefix = f"chunks_{uid}"
-            for entry in os.listdir(Config.VIDEO_STORAGE_PATH):
-                full = os.path.join(Config.VIDEO_STORAGE_PATH, entry)
+            for entry in os.listdir(VIDEO_STORAGE_PATH):
+                full = os.path.join(VIDEO_STORAGE_PATH, entry)
                 if entry.startswith(chunk_dir_prefix) and os.path.isdir(full):
                     shutil.rmtree(full)
                     logging.debug("Removed chunk directory: %s", full)
@@ -151,8 +143,8 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
 
     # Unique temp paths
     uid = str(uuid.uuid4())
-    video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
-    audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
+    video_path = os.path.join(VIDEO_STORAGE_PATH, f"{uid}.mp4")
+    audio_path = os.path.join(VIDEO_STORAGE_PATH, f"{uid}.mp3")
 
     # Track this job as processing
     async with _processing_lock:
@@ -170,7 +162,7 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
 
         # Run blocking work in threads so the event loop stays responsive
         logging.debug("[Job %s] Downloading video...", job_id)
-        await asyncio.to_thread(download_video, req.videoUrl, video_path)  #
+        await asyncio.to_thread(download_video, req.videoUrl, video_path)
 
         # Check for cancellation after download
         if await is_job_cancelled(job_id):
@@ -178,26 +170,17 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
             raise asyncio.CancelledError("Job was cancelled")
 
         logging.debug("[Job %s] Extracting audio...", job_id)
-        await asyncio.to_thread(extract_audio, video_path, audio_path)  #
+        await asyncio.to_thread(extract_audio, video_path, audio_path)
 
         # Check for cancellation after audio extraction
         if await is_job_cancelled(job_id):
             logging.info("[Job %s] Job cancelled after audio extraction", job_id)
             raise asyncio.CancelledError("Job was cancelled")
 
-        whisper_config = load_llm_config(llm_id=Config.get_whisper_llm_id())  #
-        if whisper_config["type"] == "azure_whisper":
-            logging.debug(" [Job %s] Transcribing with Azure Whisper...", job_id)
-            transcription = await asyncio.to_thread(
-                transcribe_with_azure_whisper, audio_path, whisper_config["id"]
-            )  # requests loop, blocking
-        elif whisper_config["type"] == "openai_whisper":
-            logging.debug(" [Job %s] Transcribing with OpenAI Whisper...", job_id)
-            transcription = await asyncio.to_thread(
-                transcribe_with_openai_whisper, audio_path, whisper_config["id"]
-            )  # requests loop, blocking
-        else:
-            raise ValueError(f'Unsupported Whisper type: {whisper_config["type"]}')
+        logging.debug(" [Job %s] Transcribing with Whisper...", job_id)
+        transcription = await asyncio.to_thread(
+            transcribe_with_whisper, audio_path
+        )  # requests loop, blocking
 
         # Check for cancellation after transcription
         if await is_job_cancelled(job_id):
@@ -239,24 +222,26 @@ async def _light_phase(
             logging.info("[Job %s] Job cancelled at light phase start", job_id)
             return
 
-        logging.debug("[Job %s] Extracting frames for GPT...", job_id)
-        timestamps = [s["start"] for s in transcription["segments"]]
-        frames = extract_frames_at_timestamps(video_path, timestamps)  #
+        logging.debug("[Job %s] Detecting slide change points...", job_id)
+        # Offload GPT-backed slide detection so the event loop stays responsive.
+        slide_timestamps = await asyncio.to_thread(
+            detect_slide_timestamps,
+            video_path,
+            transcription["segments"],
+            50,
+            1,
+            job_id,
+        )
+        logging.info(
+            "[Job %s] Slide detection complete: change_points=%d",
+            job_id,
+            len(slide_timestamps),
+        )
 
-        slide_timestamps = []
-        for ts, img_b64 in frames:
-            # Check for cancellation during GPT processing
-            if await is_job_cancelled(job_id):
-                logging.info("[Job %s] Job cancelled during GPT processing", job_id)
-                return
-
-            # You already planned to add job_id logging inside ask_gpt_for_slide_number
-            slide_num = ask_gpt_for_slide_number(
-                img_b64, llm_id=Config.get_gpt_vision_llm_id(), job_id=job_id
-            )  #
-            if slide_num is not None:
-                slide_timestamps.append((ts, slide_num))
-            await asyncio.sleep(2)  # existing throttle
+        # Check for cancellation after slide detection
+        if await is_job_cancelled(job_id):
+            logging.info("[Job %s] Job cancelled after slide detection", job_id)
+            return
 
         logging.debug("[Job %s] Aligning slides with transcript...", job_id)
         aligned_segments = align_slides_with_segments(
@@ -279,7 +264,20 @@ async def _light_phase(
         await fail_job(job_id, str(e))
     finally:
         # Cleanup temp files and chunk dirs (same logic as your current cleanup)
-        _cleanup_temp_files(video_path, audio_path, uid)
+        try:
+            for path in (video_path, audio_path):
+                if path and os.path.exists(path):
+                    os.remove(path)
+                    logging.debug("[Job %s] Removed temp file: %s", job_id, path)
+            # remove chunk dirs
+            chunk_dir_prefix = f"chunks_{uid}"
+            for entry in os.listdir(VIDEO_STORAGE_PATH):
+                full = os.path.join(VIDEO_STORAGE_PATH, entry)
+                if entry.startswith(chunk_dir_prefix) and os.path.isdir(full):
+                    shutil.rmtree(full)
+                    logging.debug("[Job %s] Removed chunk directory: %s", job_id, full)
+        except Exception as ce:
+            logging.warning("[Job %s] Cleanup issue: %s", job_id, ce)
         # Remove from cancelled set if it was there
         await remove_from_cancelled(job_id)
 
@@ -291,6 +289,7 @@ async def _worker_loop():
         video_path = None
         audio_path = None
         uid = None
+
         try:
             bundle = await _heavy_pipeline(job_id, req)
             video_path = bundle["video_path"]
