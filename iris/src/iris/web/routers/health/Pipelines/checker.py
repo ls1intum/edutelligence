@@ -10,14 +10,14 @@ from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
 
 def _get_default_variant(variants: Iterable) -> AbstractVariant | None:
     variants = list(variants)
-    return next((v for v in variants if getattr(v, "id", None) == "default"), None)
+    return next((v for v in variants if "default" in getattr(v, "id", "")), None)
 
 
 def _get_advanced_required_models(variants: Iterable[AbstractVariant]) -> set[str]:
     return {
         m
         for v in variants
-        if getattr(v, "id", None) != "default"
+        if "default" not in getattr(v, "id", "")
         for m in v.required_models()
     }
 

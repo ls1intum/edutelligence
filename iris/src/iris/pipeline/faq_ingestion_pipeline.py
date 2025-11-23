@@ -40,9 +40,10 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
         self.client = client
         self.collection = init_faq_schema(client)
         self.dto = dto
+        local = dto.settings.artemis_llm_selection
         self.callback = callback
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        self.llm_embedding = ModelVersionRequestHandler("nomic-embed-text:latest" if local else "text-embedding-3-small")
+        request_handler = ModelVersionRequestHandler(version="gemma3:27b" if local else "gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -65,6 +66,13 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
                 description="Default FAQ ingestion variant using efficient models.",
                 chat_model="gpt-4.1-mini",
                 embedding_model="text-embedding-3-small",
+            ),
+            FaqIngestionVariant(
+                variant_id="default_local",
+                name="Default",
+                description="Default FAQ ingestion variant using efficient local models.",
+                chat_model="gpt-oss:120b",
+                embedding_model="nomic-embed-text:latest",
             )
         ]
 

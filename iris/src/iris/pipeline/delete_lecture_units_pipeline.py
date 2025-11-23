@@ -150,4 +150,9 @@ class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
                 name="Default",
                 description="Standard lecture unit deletion with no model requirements.",
             ),
+            LectureUnitDeletionVariant(
+                variant_id="default_local",
+                name="Default",
+                description="Standard lecture unit deletion with no model requirements.",
+            ),
         ]

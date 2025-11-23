@@ -57,13 +57,13 @@ class InteractionSuggestionPipeline(SubPipeline):
     variant: str
     tokens: TokenUsageDTO
 
-    def __init__(self, variant: str = "default"):
+    def __init__(self, variant: str = "default_local", local: bool = True):
         super().__init__(implementation_id="interaction_suggestion_pipeline")
 
         self.variant = variant
 
         # Set the langchain chat model
-        model = "gpt-4.1-nano"  # Default model for all variants
+        model = "gemma3:4b" if local else "gpt-4.1-nano"  # Default model for all variants
 
         request_handler = ModelVersionRequestHandler(version=model)
         completion_args = CompletionArguments(

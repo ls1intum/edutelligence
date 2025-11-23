@@ -43,20 +43,20 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
     callback: RewritingCallback
     request_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
-    variant: Literal["faq", "problem_statement"]
+    variant: Literal["faq", "problem_statement", "faq_local", "problem_statement_local"]
 
     def __init__(
         self,
         callback: RewritingCallback,
-        variant: Literal["faq", "problem_statement"],
+        variant: Literal["faq", "problem_statement", "faq_local", "problem_statement_local"],
     ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
         self.db = VectorDatabase()
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
+        self.request_handler = ModelVersionRequestHandler(version="gpt-oss:120b" if "local" in variant else "gpt-4.1")
         self.tokens = []
         self.variant = variant
-        self.faq_retriever = FaqRetrieval(self.db.client)
+        self.faq_retriever = FaqRetrieval(self.db.client, local="local" in variant)
 
     def __call__(
         self,
@@ -187,6 +187,19 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
                 name="Default Variant",
                 description="Default Problem statement rewriting variant.",
                 rewriting_model="gpt-4.1",
+            ),
+            RewritingVariant(
+                variant_id="faq_local",
+                name="Default FAQ Variant",
+                description="Default FAQ rewriting variant.",
+                rewriting_model="gpt-oss:120b",
+                consistency_model="gpt-oss:120b",
+            ),
+            RewritingVariant(
+                variant_id="problem_statement_local",
+                name="Default Variant",
+                description="Default Problem statement rewriting variant.",
+                rewriting_model="gpt-oss:120b",
             ),
         ]
 

@@ -47,15 +47,16 @@ class TextExerciseChatPipeline(
     jinja_env: Environment
     system_prompt_template: Any
 
-    def __init__(self):
+    def __init__(self, local: bool = True):
         """
         Initialize the text exercise chat pipeline.
         """
         super().__init__(implementation_id="text_exercise_chat_pipeline")
+        self.local = local
 
         # Initialize pipelines
-        self.citation_pipeline = CitationPipeline()
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
+        self.citation_pipeline = CitationPipeline(local=local)
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -95,6 +96,18 @@ class TextExerciseChatPipeline(
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
                 agent_model="gpt-4.1",
+            ),
+            TextExerciseChatVariant(
+                variant_id="default_local",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gemma3:27b",
+            ),
+            TextExerciseChatVariant(
+                variant_id="advanced_local",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-oss:120b",
             ),
         ]
 
@@ -190,7 +203,7 @@ class TextExerciseChatPipeline(
         # Add lecture content retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_lecture_tool(state.db, dto.exercise.course.id):
-                lecture_retriever = LectureRetrieval(state.db.client)
+                lecture_retriever = LectureRetrieval(state.db.client, local=self.local)
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_lecture_content_retrieval(
@@ -211,7 +224,7 @@ class TextExerciseChatPipeline(
         # Add FAQ retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_faq_tool(state.db, dto.exercise.course.id):
-                faq_retriever = FaqRetrieval(state.db.client)
+                faq_retriever = FaqRetrieval(state.db.client, local=self.local)
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_faq_content_retrieval(

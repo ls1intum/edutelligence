@@ -135,7 +135,7 @@ class TutorSuggestionPipeline(
                 create_tool_get_last_artifact(state.dto.chat_history, callback)
             )
         if allow_lecture_tools:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            self.lecture_retriever = LectureRetrieval(state.db.client, local="local" in state.dto.settings.artemis_llm_selection == "LOCAL_AI")
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -149,7 +149,7 @@ class TutorSuggestionPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            self.faq_retriever = FaqRetrieval(state.db.client, local="local" in state.dto.settings.artemis_llm_selection == "LOCAL_AI")
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -393,6 +393,19 @@ class TutorSuggestionPipeline(
             ),
             TutorSuggestionVariant(
                 variant_id="advanced",
+                name="Advanced",
+                description="Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
+                agent_model="gpt-oss:120b",
+            ),
+            # Needed for consistency
+            TutorSuggestionVariant(
+                variant_id="default_local",
+                name="Default",
+                description="Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
+                agent_model="gpt-oss:20b",
+            ),
+            TutorSuggestionVariant(
+                variant_id="advanced_local",
                 name="Advanced",
                 description="Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
                 agent_model="gpt-oss:120b",

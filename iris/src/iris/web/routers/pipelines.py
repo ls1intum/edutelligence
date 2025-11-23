@@ -72,7 +72,7 @@ def run_exercise_chat_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = ExerciseChatAgentPipeline()
+        pipeline = ExerciseChatAgentPipeline(local=dto.settings.artemis_llm_selection == "LOCAL_AI")
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -124,7 +124,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(event=event)
+        pipeline = CourseChatPipeline(event=event, local="local" in variant_id)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -168,7 +168,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TextExerciseChatPipeline()
+        pipeline = TextExerciseChatPipeline(dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -240,7 +240,7 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = CompetencyExtractionPipeline(callback=callback)
+        pipeline = CompetencyExtractionPipeline(callback=callback, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline: %s", e)
         logger.error(traceback.format_exc())

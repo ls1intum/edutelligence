@@ -62,14 +62,14 @@ class LecturePageChunkRetrieval(SubPipeline):
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = True):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(version="gemma3:27b" if local else "gpt-4o-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("nomic-embed-text:latest" if local else "text-embedding-3-small")
         self.cohere_client = RerankRequestHandler("cohere")
 
         self.pipeline = self.llm | StrOutputParser()

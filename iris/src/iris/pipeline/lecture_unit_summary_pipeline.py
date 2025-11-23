@@ -32,13 +32,14 @@ class LectureUnitSummaryPipeline(SubPipeline):
         client: WeaviateClient,
         lecture_unit_dto: LectureUnitDTO,
         lecture_unit_segment_summaries: List[str],
+        local: bool = True
     ) -> None:
         super().__init__()
         self.client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.lecture_unit_segment_summaries = lecture_unit_segment_summaries
 
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        request_handler = ModelVersionRequestHandler(version="gemma3:27b" if local else "gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         self.llm = IrisLangchainChatModel(

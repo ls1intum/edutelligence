@@ -88,7 +88,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         self,
         callback: LectureChatCallback,
         dto: LectureChatPipelineExecutionDTO,
-        variant: str = "default",
+        variant: str = "default_local",
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
 
@@ -98,10 +98,16 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
-        if variant == "advanced":
-            model = "gpt-4.1"
+        if "local" not in variant:
+            if variant == "advanced":
+                model = "gpt-4.1"
+            else:
+                model = "gpt-4.1-mini"
         else:
-            model = "gpt-4.1-mini"
+            if variant == "advanced_local":
+                model = "gpt-oss:120b"
+            else:
+                model = "gemma3:27b"
 
         request_handler = ModelVersionRequestHandler(version=model)
 
@@ -110,10 +116,10 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         )
         # Create the pipelines
         self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
+        self.retriever = LectureRetrieval(self.db.client, local="local" in variant)
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local="local" in variant)
         self.pipeline = self.llm | StrOutputParser()
-        self.citation_pipeline = CitationPipeline()
+        self.citation_pipeline = CitationPipeline(local="local" in variant)
         self.tokens = []
 
     @classmethod
@@ -132,6 +138,20 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                 description="Uses a larger chat model, balancing speed and quality.",
                 agent_model="gpt-4.1",
                 citation_model="gpt-4.1-mini",
+            ),
+            LectureChatVariant(
+                variant_id="default_local",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gemma3:27b",
+                citation_model="gemma3:4b",
+            ),
+            LectureChatVariant(
+                variant_id="advanced_local",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-oss:120b",
+                citation_model="gemma3:27b",
             ),
         ]
 

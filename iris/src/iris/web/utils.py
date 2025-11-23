@@ -24,6 +24,10 @@ def validate_pipeline_variant(
         HTTPException: If the variant is not available or required models are missing
     """
     variant = settings.variant
+    if settings.artemis_llm_selection == "LOCAL_AI" and "local" not in variant:
+        # Wrong variant, adjust
+        variant += "_local"
+        settings.variant = variant
 
     # Get all variants for the pipeline
     all_variants = pipeline_class.get_variants()

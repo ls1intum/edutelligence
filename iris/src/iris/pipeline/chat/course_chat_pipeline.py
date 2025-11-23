@@ -73,6 +73,7 @@ class CourseChatPipeline(
     def __init__(
         self,
         event: Optional[str] = None,
+            local: bool = True
     ):
         """
         Initialize the course chat pipeline.
@@ -83,13 +84,14 @@ class CourseChatPipeline(
         super().__init__(implementation_id="course_chat_pipeline")
 
         self.event = event
+        self.local = local
 
         # Initialize retrievers and pipelines (db will be created in abstract pipeline)
         self.lecture_retriever = None
         self.faq_retriever = None
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
-        self.citation_pipeline = CitationPipeline()
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
+        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course", local=local)
+        self.citation_pipeline = CitationPipeline(local=local)
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -198,7 +200,7 @@ class CourseChatPipeline(
             )
 
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=self.local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -212,7 +214,7 @@ class CourseChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            self.faq_retriever = FaqRetrieval(state.db.client, local=self.local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -615,5 +617,19 @@ class CourseChatPipeline(
                 description="Uses a larger chat model, balancing speed and quality.",
                 agent_model="gpt-4.1",
                 citation_model="gpt-4.1-mini",
+            ),
+            CourseChatVariant(
+                variant_id="default_local",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gemma3:27b",
+                citation_model="gemma3:27b",
+            ),
+            CourseChatVariant(
+                variant_id="advanced_local",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-oss:120b",
+                citation_model="gemma3:27b",
             ),
         ]
