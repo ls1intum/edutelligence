@@ -30,7 +30,7 @@ jobs:
       has_images: ${{ steps.set-matrix.outputs.has_images }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Set Matrix
         id: set-matrix
         run: |
@@ -54,7 +54,7 @@ jobs:
         image: ${{fromJson(needs.find_images_to_build.outputs.matrix)}}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build athena image
         id: set-image
