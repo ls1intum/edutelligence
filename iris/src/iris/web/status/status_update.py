@@ -439,7 +439,8 @@ class LectureChatCallback(StatusCallback):
         super().__init__(
             url,
             run_id,
-            LectureChatStatusUpdateDTO(stages=stages, result=""),
+            # result should not be "" by default since empty done messages are sent but should not be shown as message
+            LectureChatStatusUpdateDTO(stages=stages),
             stages[stage],
             stage,
         )
