@@ -73,7 +73,7 @@ class CourseChatPipeline(
     def __init__(
         self,
         event: Optional[str] = None,
-            local: bool = True
+            local: bool = False
     ):
         """
         Initialize the course chat pipeline.
@@ -582,7 +582,7 @@ class CourseChatPipeline(
             logger.info("Running course chat pipeline...")
 
             # Call the parent __call__ method which handles the complete execution
-            super().__call__(dto, variant, callback)
+            super().__call__(dto, variant, callback, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
 
         except Exception as e:
             logger.error(
@@ -608,28 +608,18 @@ class CourseChatPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1-mini",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gemma3:27b",
+                local_citation_model="gemma3:27b",
             ),
             CourseChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-                citation_model="gpt-4.1-mini",
-            ),
-            CourseChatVariant(
-                variant_id="default_local",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gemma3:27b",
-                citation_model="gemma3:27b",
-            ),
-            CourseChatVariant(
-                variant_id="advanced_local",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-oss:120b",
-                citation_model="gemma3:27b",
+                cloud_agent_model="gpt-4.1",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="gemma3:27b",
             ),
         ]

@@ -21,12 +21,12 @@ class LectureUnitPipeline(SubPipeline):
     then updating the vector database with the processed lecture unit information.
     """
 
-    def __init__(self, local: bool = True):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="lecture_unit_pipeline")
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
-        self.llm_embedding = ModelVersionRequestHandler("nomic-embed-text:latest" if local else "text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.local = local
 
     def __call__(self, lecture_unit: LectureUnitDTO):

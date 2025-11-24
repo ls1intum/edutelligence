@@ -36,7 +36,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
     request_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
 
-    def __init__(self, callback: Optional[CompetencyExtractionCallback] = None, local: bool = True):
+    def __init__(self, callback: Optional[CompetencyExtractionCallback] = None, local: bool = False):
         super().__init__(
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
@@ -121,13 +121,8 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
             CompetencyExtractionVariant(
                 variant_id="default",
                 name="Default",
-                description="Default competency extraction variant using GPT-4.1",
-                agent_model="gpt-4.1",
-            ),
-            CompetencyExtractionVariant(
-                variant_id="default_local",
-                name="Default",
-                description="Default competency extraction variant using GPT-OSS",
-                agent_model="gpt-oss:120b",
+                description="Default competency extraction variant",
+                cloud_agent_model="gpt-4.1",
+                local_agent_model="gpt-oss:120b",
             ),
         ]

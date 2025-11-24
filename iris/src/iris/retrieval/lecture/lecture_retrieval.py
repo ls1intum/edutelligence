@@ -80,14 +80,14 @@ class LectureRetrieval(SubPipeline):
     It combines various sources of lecture-related data and formats them into a single DTO for further processing.
     """
 
-    def __init__(self, client: WeaviateClient, local: bool = True):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = ModelVersionRequestHandler(version="gemma3:27b" if local else "gpt-4o-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("nomic-embed-text:latest" if local else "text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.pipeline = self.llm | StrOutputParser()
 
         self.lecture_unit_collection = init_lecture_unit_schema(client)

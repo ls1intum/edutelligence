@@ -47,7 +47,7 @@ class TextExerciseChatPipeline(
     jinja_env: Environment
     system_prompt_template: Any
 
-    def __init__(self, local: bool = True):
+    def __init__(self, local: bool = False):
         """
         Initialize the text exercise chat pipeline.
         """
@@ -89,25 +89,15 @@ class TextExerciseChatPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1-mini",
+                local_agent_model="gemma3:27b",
             ),
             TextExerciseChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-            ),
-            TextExerciseChatVariant(
-                variant_id="default_local",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gemma3:27b",
-            ),
-            TextExerciseChatVariant(
-                variant_id="advanced_local",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-oss:120b",
+                cloud_agent_model="gpt-4.1",
+                local_agent_model="gpt-oss:120b",
             ),
         ]
 
@@ -515,7 +505,7 @@ class TextExerciseChatPipeline(
             logger.info("Running text exercise chat pipeline...")
 
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback)
+            super().__call__(dto, variant, callback, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
 
         except Exception as e:
             logger.error("Error in text exercise chat pipeline", exc_info=e)

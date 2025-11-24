@@ -79,7 +79,7 @@ class BaseRetrieval(SubPipeline, ABC):
     def __call__(self, *args, **kwargs):
         """Muss in der konkreten Implementierung überschrieben werden"""
 
-    def __init__(self, client: WeaviateClient, schema_init_func, local: bool = True, **kwargs):
+    def __init__(self, client: WeaviateClient, schema_init_func, local: bool = False, **kwargs):
         super().__init__(
             implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
         )
@@ -88,7 +88,7 @@ class BaseRetrieval(SubPipeline, ABC):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("nomic-embed-text:latest" if local else "text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.pipeline = self.llm | StrOutputParser()
         self.collection = schema_init_func(client)
         self.tokens = []

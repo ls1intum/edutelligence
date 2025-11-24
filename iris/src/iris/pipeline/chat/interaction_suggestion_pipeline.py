@@ -57,7 +57,7 @@ class InteractionSuggestionPipeline(SubPipeline):
     variant: str
     tokens: TokenUsageDTO
 
-    def __init__(self, variant: str = "default_local", local: bool = True):
+    def __init__(self, variant: str = "default_local", local: bool = False):
         super().__init__(implementation_id="interaction_suggestion_pipeline")
 
         self.variant = variant

@@ -57,9 +57,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
         self.dto = dto
         self.callback = callback
         self.collection = init_lecture_transcription_schema(client)
-        self.llm_embedding = ModelVersionRequestHandler("nomic-embed-text:latest" if dto.settings.artemis_llm_selection == "LOCAL_AI" else "text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
-        request_handler = ModelVersionRequestHandler(version="gemma3:27b" if dto.settings.artemis_llm_selection == "LOCAL_AI" else "gpt-4.1-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

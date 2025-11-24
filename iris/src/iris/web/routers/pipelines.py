@@ -124,7 +124,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(event=event, local="local" in variant_id)
+        pipeline = CourseChatPipeline(event=event, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -280,7 +280,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
         )
         match variant:
             case "faq" | "problem_statement":
-                pipeline = RewritingPipeline(callback=callback, variant=variant)
+                pipeline = RewritingPipeline(callback=callback, variant=variant, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
@@ -321,7 +321,7 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = InconsistencyCheckPipeline(callback=callback)
+        pipeline = InconsistencyCheckPipeline(callback=callback, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline: %s", e)
 

@@ -49,7 +49,7 @@ class CodeFeedbackPipeline(SubPipeline):
     variant: str
 
     def __init__(
-        self, callback: Optional[StatusCallback] = None, variant: str = "default_local"
+        self, callback: Optional[StatusCallback] = None, variant: str = "default", local: bool = False
     ):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
         self.callback = callback
@@ -60,16 +60,16 @@ class CodeFeedbackPipeline(SubPipeline):
             temperature=0, max_tokens=1024, response_format="text"
         )
 
-        if "local" not in variant:
+        if local:
+            if variant == "advanced":
+                model = "gpt-oss:120b"
+            else:
+                model = "gemma3:27b"
+        else:
             if variant == "advanced":
                 model = "gpt-4.1"
             else:
                 model = "gpt-4.1-mini"
-        else:
-            if variant == "advanced_local":
-                model = "gpt-oss:120b"
-            else:
-                model = "gemma3:27b"
 
         request_handler = ModelVersionRequestHandler(version=model)
         self.llm = IrisLangchainChatModel(

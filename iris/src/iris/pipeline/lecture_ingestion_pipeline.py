@@ -108,11 +108,10 @@ class LectureUnitPageIngestionPipeline(
         super().__init__()
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        local = dto.settings.artemis_llm_selection == "LOCAL_AI"
-        self.llm_chat = ModelVersionRequestHandler("gemma3:27b" if local else "gpt-4.1-mini")
-        self.llm_embedding = ModelVersionRequestHandler("nomic-embed-text:latest" if local else "text-embedding-3-small")
+        self.llm_chat = ModelVersionRequestHandler("gpt-4.1-mini")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gemma3:27b" if local else "gpt-4.1-mini")
+        request_handler = ModelVersionRequestHandler("gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -144,21 +143,6 @@ class LectureUnitPageIngestionPipeline(
                 description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
                 chat_model="gpt-4.1",
                 embedding_model="text-embedding-3-large",
-            ),
-            LectureUnitPageIngestionVariant(
-                variant_id="default_local",
-                name="Default",
-                description="Default lecture ingestion variant using efficient models "
-                "for text processing and embeddings.",
-                chat_model="gemma3:27b",
-                embedding_model="nomic-embed-text:latest",
-            ),
-            LectureUnitPageIngestionVariant(
-                variant_id="advanced_local",
-                name="Advanced",
-                description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
-                chat_model="gpt-oss:120b",
-                embedding_model="mxbai-embed-large:latest",
             ),
         ]
 

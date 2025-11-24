@@ -178,13 +178,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 return message
         return None
 
-    def execute_agent(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> str:
+    def execute_agent(self, state: AgentPipelineExecutionState[DTO, VARIANT], local: bool = False) -> str:
         """
         Default agent execution: uses the LLM from state, prompt, tools and runs the agent loop.
 
         Subclasses customize behavior by implementing get_tools, build_system_message,
         get_agent_params, and using on_agent_step/post_agent_hook hooks.
         """
+        # Local models: simple execution without tools
+        if local:
+            return self._execute_simple_llm(state)
+        # Cloud models: full agent execution with tools
 
         params = self.get_agent_params(state)
 
@@ -200,7 +204,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         return output or ""
 
     def assemble_prompt_with_history(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str, local: bool = False
     ) -> ChatPromptTemplate:
         """
         Combine the prefix prompt with converted chat history and add the agent scratchpad.
@@ -214,11 +218,15 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             convert_iris_message_to_langchain_message(message)
             for message in state.message_history
         ]
-        combined = (
-            prefix_messages
-            + history_lc_messages
-            + [("placeholder", "{agent_scratchpad}")]
-        )
+        # For local models, don't add agent_scratchpad placeholder
+        if local:
+            combined = prefix_messages + history_lc_messages
+        else:
+            combined = (
+                    prefix_messages
+                    + history_lc_messages
+                    + [("placeholder", "{agent_scratchpad}")]
+            )
         return ChatPromptTemplate.from_messages(combined)
 
     def pre_agent_hook(
@@ -250,6 +258,34 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # ================================================
     # === MUST NOT override (private/final methods) ===
     # ================================================
+    def _execute_simple_llm(
+            self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> str:
+        """
+        Execute LLM without tools for local models.
+
+        This is used when state.local=True, bypassing the agent executor
+        and using a simple LLM chain instead.
+        """
+        try:
+            # Format the prompt with the message history
+            formatted_messages = state.prompt.format_messages()
+
+            # Invoke the LLM directly
+            response = state.llm.invoke(formatted_messages)
+
+            # Track tokens if available
+            if hasattr(state.llm, "tokens") and state.llm.tokens:
+                state.tokens.append(state.llm.tokens)
+
+            # Extract content from response
+            if hasattr(response, "content"):
+                return response.content
+            return str(response)
+
+        except Exception as e:
+            logger.error("Error in simple LLM execution for local model", exc_info=e)
+            raise
 
     def _create_agent_executor(
         self,
@@ -335,7 +371,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             traceback.print_exc()
             return None
 
-    def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback):
+    def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback, local: bool = False):
         """
         Call the agent pipeline with the provided arguments.
         """
@@ -357,6 +393,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             state.db.client, self.get_memiris_tenant(state.dto)
         )
 
+
         # 1. Prepare message history, user query, LLM, prompt and tools
         state.message_history = self.get_recent_history_from_dto(state)
         user_query = self.get_text_of_latest_user_message(state)
@@ -365,16 +402,16 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
         state.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(
-                version=state.variant.agent_model
+                version=state.variant.local_agent_model if local else state.variant.cloud_agent_model
             ),
             completion_args=completion_args,
         )
 
         system_message = self.build_system_message(state)
         state.prompt = self.assemble_prompt_with_history(
-            state=state, system_prompt=system_message
+            state=state, system_prompt=system_message, local=local
         )
-        state.tools = self.get_tools(state)
+        state.tools = self.get_tools(state) if not local else []        # Don't add tools when using small local LLMs
 
         # 4. Start memory creation if enabled
         if self.is_memiris_memory_creation_enabled(state):
@@ -389,7 +426,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         self.pre_agent_hook(state)
 
         # 7.2. Run the agent with the provided DTO
-        state.result = self.execute_agent(state)
+        state.result = self.execute_agent(state, local)
 
         # 7.3. Run post agent hook
         self.post_agent_hook(state)

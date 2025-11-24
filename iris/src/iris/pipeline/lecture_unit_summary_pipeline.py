@@ -32,7 +32,7 @@ class LectureUnitSummaryPipeline(SubPipeline):
         client: WeaviateClient,
         lecture_unit_dto: LectureUnitDTO,
         lecture_unit_segment_summaries: List[str],
-        local: bool = True
+        local: bool = False
     ) -> None:
         super().__init__()
         self.client = client

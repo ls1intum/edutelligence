@@ -27,7 +27,7 @@ class FaqRetrieval(BaseRetrieval):
     retrieval pipelines (basic and hypothetical), and merges them to return the final FAQ list.
     """
 
-    def __init__(self, client: WeaviateClient, local: bool = True, **kwargs):
+    def __init__(self, client: WeaviateClient, local: bool = False, **kwargs):
         super().__init__(
             client, init_faq_schema, local=local, implementation_id="faq_retrieval_pipeline"
         )

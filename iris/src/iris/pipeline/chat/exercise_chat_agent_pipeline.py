@@ -66,7 +66,7 @@ class ExerciseChatAgentPipeline(
     system_prompt_template: Any
     guide_prompt_template: Any
 
-    def __init__(self, local: bool = True):
+    def __init__(self, local: bool = False):
         """
         Initialize the exercise chat agent pipeline.
         """
@@ -76,7 +76,7 @@ class ExerciseChatAgentPipeline(
         # Create the pipelines
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise", local=local)
-        self.code_feedback_pipeline = CodeFeedbackPipeline()
+        self.code_feedback_pipeline = CodeFeedbackPipeline(local=local)
         self.citation_pipeline = CitationPipeline(local=local)
 
         # Setup Jinja2 template environment
@@ -112,29 +112,19 @@ class ExerciseChatAgentPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1-mini",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gemma3:27b",
+                local_citation_model="gemma3:27b",
             ),
             ExerciseChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-                citation_model="gpt-4.1-mini",
-            ),
-            ExerciseChatVariant(
-                variant_id="default_local",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gemma3:27b",
-                citation_model="gemma3:27b",
-            ),
-            ExerciseChatVariant(
-                variant_id="advanced_local",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-oss:120b",
-                citation_model="gemma3:27b",
+                cloud_agent_model="gpt-4.1",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="gemma3:27b",
             ),
         ]
 
@@ -569,7 +559,7 @@ class ExerciseChatAgentPipeline(
             self.event = event
 
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback)
+            super().__call__(dto, variant, callback, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
 
         except Exception as e:
             logger.error("Error in exercise chat pipeline", exc_info=e)
