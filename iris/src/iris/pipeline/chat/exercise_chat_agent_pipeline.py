@@ -71,7 +71,6 @@ class ExerciseChatAgentPipeline(
         Initialize the exercise chat agent pipeline.
         """
         super().__init__(implementation_id="exercise_chat_pipeline")
-        self.local = local
 
         # Create the pipelines
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
@@ -225,7 +224,7 @@ class ExerciseChatAgentPipeline(
 
         # Add lecture content retrieval if available
         if should_allow_lecture_tool(state.db, dto.course.id):
-            lecture_retriever = LectureRetrieval(state.db.client, local=self.local)
+            lecture_retriever = LectureRetrieval(state.db.client, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     lecture_retriever,
@@ -240,7 +239,7 @@ class ExerciseChatAgentPipeline(
 
         # Add FAQ retrieval if available
         if should_allow_faq_tool(state.db, dto.course.id):
-            faq_retriever = FaqRetrieval(state.db.client, local=self.local)
+            faq_retriever = FaqRetrieval(state.db.client, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     faq_retriever,
@@ -388,7 +387,7 @@ class ExerciseChatAgentPipeline(
             # Create small LLM for refinement
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version="gemma3:27b" if self.local else "gpt-4.1-mini"),
+                request_handler=ModelVersionRequestHandler(version="gemma3:27b" if state.dto.settings.artemis_llm_selection == "LOCAL_AI" else "gpt-4.1-mini"),
                 completion_args=completion_args,
             )
 

@@ -11,8 +11,8 @@ class RewritingVariant(AbstractVariant):
         description: str,
         cloud_rewriting_model: str,
         local_rewriting_model: str,
-        cloud_consistency_model: str = None,
-        local_consistency_model: str = None,
+        cloud_consistency_model: str | None = None,
+        local_consistency_model: str | None = None,
     ):
         super().__init__(
             variant_id=variant_id,

@@ -168,7 +168,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TextExerciseChatPipeline(dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+        pipeline = TextExerciseChatPipeline(local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())

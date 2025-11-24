@@ -84,7 +84,6 @@ class CourseChatPipeline(
         super().__init__(implementation_id="course_chat_pipeline")
 
         self.event = event
-        self.local = local
 
         # Initialize retrievers and pipelines (db will be created in abstract pipeline)
         self.lecture_retriever = None
@@ -200,7 +199,7 @@ class CourseChatPipeline(
             )
 
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client, local=self.local)
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=state.dto.settings.artemis_llm_selection == "LOCAL_AI")
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -214,7 +213,7 @@ class CourseChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client, local=self.local)
+            self.faq_retriever = FaqRetrieval(state.db.client, local=state.dto.settings.artemis_llm_selection == "LOCAL_AI")
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,

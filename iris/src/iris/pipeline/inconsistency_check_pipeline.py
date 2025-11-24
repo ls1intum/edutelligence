@@ -138,6 +138,6 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
                 name="Default",
                 description="Standard inconsistency check implementation with efficient model usage",
                 cloud_solver_model="gpt-o3-mini",
-                local_solver_model="gemma3:27b",
+                local_solver_model="gemma3:4b",
             ),
         ]
