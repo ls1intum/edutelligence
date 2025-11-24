@@ -20,14 +20,8 @@ from iris.domain.communication.communication_tutor_suggestion_status_update_dto 
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
-from iris.domain.status.inconsistency_check_status_update_dto import (
-    InconsistencyCheckStatusUpdateDTO,
-)
 from iris.domain.status.lecture_chat_status_update_dto import (
     LectureChatStatusUpdateDTO,
-)
-from iris.domain.status.rewriting_status_update_dto import (
-    RewritingStatusUpdateDTO,
 )
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
@@ -367,52 +361,6 @@ class CompetencyExtractionCallback(StatusCallback):
             )
         )
         status = CompetencyExtractionStatusUpdateDTO(stages=stages)
-        stage = stages[-1]
-        super().__init__(url, run_id, status, stage, len(stages) - 1)
-
-
-class RewritingCallback(StatusCallback):
-    """Status callback for rewriting pipelines."""
-
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
-        url = f"{base_url}/{self.api_url}/rewriting/runs/{run_id}/status"
-        stages = initial_stages or []
-        stages.append(
-            StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Generating Rewritting",
-            )
-        )
-        status = RewritingStatusUpdateDTO(stages=stages)
-        stage = stages[-1]
-        super().__init__(url, run_id, status, stage, len(stages) - 1)
-
-
-class InconsistencyCheckCallback(StatusCallback):
-    """Status callback for inconsistency check pipelines."""
-
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
-        url = f"{base_url}/{self.api_url}/inconsistency-check/runs/{run_id}/status"
-        stages = initial_stages or []
-        stages.append(
-            StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Checking for inconsistencies",
-            )
-        )
-        status = InconsistencyCheckStatusUpdateDTO(stages=stages)
         stage = stages[-1]
         super().__init__(url, run_id, status, stage, len(stages) - 1)
 
