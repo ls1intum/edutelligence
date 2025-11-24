@@ -222,9 +222,11 @@ class ExerciseChatAgentPipeline(
             ),
         ]
 
+        is_local = bool(dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI")
+
         # Add lecture content retrieval if available
         if should_allow_lecture_tool(state.db, dto.course.id):
-            lecture_retriever = LectureRetrieval(state.db.client, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
+            lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     lecture_retriever,
@@ -239,7 +241,7 @@ class ExerciseChatAgentPipeline(
 
         # Add FAQ retrieval if available
         if should_allow_faq_tool(state.db, dto.course.id):
-            faq_retriever = FaqRetrieval(state.db.client, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
+            faq_retriever = FaqRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     faq_retriever,

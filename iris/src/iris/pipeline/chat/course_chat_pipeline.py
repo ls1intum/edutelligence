@@ -198,8 +198,10 @@ class CourseChatPipeline(
                 )
             )
 
+        is_local = bool(state.dto.settings and state.dto.settings.artemis_llm_selection == "LOCAL_AI")
+
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client, local=state.dto.settings.artemis_llm_selection == "LOCAL_AI")
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -213,7 +215,7 @@ class CourseChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client, local=state.dto.settings.artemis_llm_selection == "LOCAL_AI")
+            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,

@@ -72,7 +72,8 @@ def run_exercise_chat_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = ExerciseChatAgentPipeline(local=dto.settings.artemis_llm_selection == "LOCAL_AI")
+        is_local = bool(dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI")
+        pipeline = ExerciseChatAgentPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -124,7 +125,8 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(event=event, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
+        is_local = bool(dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI")
+        pipeline = CourseChatPipeline(event=event, local=is_local)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -168,7 +170,8 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TextExerciseChatPipeline(local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+        is_local = bool(dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI")
+        pipeline = TextExerciseChatPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -240,7 +243,8 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = CompetencyExtractionPipeline(callback=callback, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+        is_local = bool(dto.execution.settings and dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+        pipeline = CompetencyExtractionPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -280,7 +284,8 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
         )
         match variant:
             case "faq" | "problem_statement":
-                pipeline = RewritingPipeline(callback=callback, variant=variant, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+                is_local = bool(dto.execution.settings and dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+                pipeline = RewritingPipeline(callback=callback, variant=variant, local=is_local)
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
@@ -321,7 +326,8 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = InconsistencyCheckPipeline(callback=callback, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+        is_local = bool(dto.execution.settings and dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+        pipeline = InconsistencyCheckPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline: %s", e)
 
