@@ -583,7 +583,9 @@ class CourseChatPipeline(
             logger.info("Running course chat pipeline...")
 
             # Call the parent __call__ method which handles the complete execution
-            super().__call__(dto, variant, callback, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
+
+            is_local = bool(dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI")
+            super().__call__(dto, variant, callback, local=is_local)
 
         except Exception as e:
             logger.error(
