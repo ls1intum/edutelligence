@@ -16,6 +16,7 @@ class TutorSuggestionVariant(AbstractAgentVariant):
             variant_id=variant_id,
             name=name,
             description=description,
+            cloud_agent_model=cloud_agent_model,
             local_agent_model=local_agent_model,
         )
 
