@@ -269,6 +269,11 @@ class ExerciseChatAgentPipeline(
         dto = state.dto
         query = self.get_latest_user_message(state)
 
+        # Extract user language with fallback
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
         exercise_title: str = dto.exercise.name if dto.exercise else ""
         programming_language = (
@@ -284,6 +289,7 @@ class ExerciseChatAgentPipeline(
         # Build system prompt using Jinja2 template
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
             "exercise_title": exercise_title,
             "problem_statement": problem_statement,
             "programming_language": programming_language,
@@ -427,6 +433,11 @@ class ExerciseChatAgentPipeline(
         Returns:
             The result with citations added.
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             # Add FAQ citations
             faq_storage = getattr(state, "faq_storage", {})
@@ -440,6 +451,7 @@ class ExerciseChatAgentPipeline(
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 
@@ -455,6 +467,7 @@ class ExerciseChatAgentPipeline(
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 
@@ -484,12 +497,19 @@ class ExerciseChatAgentPipeline(
             state: The current pipeline execution state.
             result: The final result string.
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             if result:
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
-                suggestions = self.suggestion_pipeline(suggestion_dto)
+                suggestions = self.suggestion_pipeline(
+                    suggestion_dto, user_language=user_language
+                )
 
                 if self.suggestion_pipeline.tokens is not None:
                     self._track_tokens(state, self.suggestion_pipeline.tokens)

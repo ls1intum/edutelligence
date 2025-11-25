@@ -52,11 +52,14 @@ def chat_history_system_prompt():
     responses. The student can reference the messages you've already written."""
 
 
-def lecture_initial_prompt():
+def lecture_initial_prompt(user_language: str = "en"):
     """
-    Returns the initial prompt for the lecture chat
+    Returns the initial prompt for the lecture chat with language-specific instructions.
+
+    Args:
+        user_language: The user's preferred language ("en" or "de")
     """
-    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the
+    base_prompt = """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the
      Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to answer the student's
      questions about the lectures. To provide the best possible answer, the following relevant lecture content is
      provided to you: lecture slides, lecture transcriptions, and lecture segments. Lecture segments contain a
@@ -64,10 +67,16 @@ def lecture_initial_prompt():
      student's question. If the context provided to you is not enough to formulate an answer to the student question
      you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
      you that is relevant to the student's question. If the user greets you greet him back,
-     and ask him how you can help.
-     Always respond in the same language as the user. If they use English, you use English.
-     If they use German, you use German, but then always use "du" instead of "Sie".
-     """
+     and ask him how you can help."""
+
+    if user_language == "de":
+        language_instruction = """
+     You must respond in German. Always use "du" (never "Sie") when addressing the student."""
+    else:
+        language_instruction = """
+     You must respond in English."""
+
+    return base_prompt + language_instruction
 
 
 class LectureChatPipeline(Pipeline[LectureChatVariant]):
@@ -147,9 +156,14 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         Runs the pipeline
         :param dto:  execution data transfer object
         """
+        # Extract user language with fallback
+        user_language = "en"
+        if dto.user and dto.user.lang_key:
+            user_language = dto.user.lang_key
+
         self.prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", lecture_initial_prompt()),
+                ("system", lecture_initial_prompt(user_language)),
                 ("system", chat_history_system_prompt()),
             ]
         )
@@ -185,6 +199,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                 self.lecture_content,
                 response,
                 variant=self.variant,
+                user_language=user_language,
                 base_url=dto.settings.artemis_base_url,
             )
             self.tokens.extend(self.citation_pipeline.tokens)
@@ -198,7 +213,9 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                 first_user_msg = dto.chat_history[0].contents[0].text_content
                 try:
                     session_title = self.session_title_pipeline(
-                        first_user_msg, response_with_citation
+                        first_user_msg,
+                        response_with_citation,
+                        user_language=user_language,
                     )
                     if self.session_title_pipeline.tokens is not None:
                         self.tokens.append(self.session_title_pipeline.tokens)
