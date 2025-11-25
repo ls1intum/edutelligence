@@ -40,11 +40,13 @@ class LectureTranscriptionRetrieval(SubPipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_transcription_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        self.cohere_client = RerankRequestHandler("cohere")
+        self.cohere_client = RerankRequestHandler(model_id="cohere")
         self.tokens = []
 
     def __call__(

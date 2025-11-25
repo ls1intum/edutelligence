@@ -9,13 +9,14 @@ from langsmith import traceable
 from pydantic import BaseModel
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...llm import (
     CompletionArguments,
+    CompletionArgumentsResponseFormat,
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
@@ -42,10 +43,9 @@ class CodeFeedbackPipeline(SubPipeline):
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    callback: StatusCallback
+    callback: Optional[StatusCallback]
     default_prompt: PromptTemplate
     output_parser: StrOutputParser
-    tokens: TokenUsageDTO
     variant: str
 
     def __init__(
@@ -54,10 +54,13 @@ class CodeFeedbackPipeline(SubPipeline):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
         self.callback = callback
         self.variant = variant
+        self.tokens = []
 
         # Set up the language model
         completion_args = CompletionArguments(
-            temperature=0, max_tokens=1024, response_format="text"
+            temperature=0,
+            max_tokens=1024,
+            response_format=CompletionArgumentsResponseFormat.TEXT,
         )
 
         if variant == "advanced":
@@ -111,7 +114,9 @@ class CodeFeedbackPipeline(SubPipeline):
             if not build_failed
             else (
                 "\n".join(
-                    str(log) for log in build_logs if "~~~~~~~~~" not in log.message
+                    str(log)
+                    for log in build_logs
+                    if log.message and "~~~~~~~~~" not in log.message
                 )
             )
         )
@@ -134,7 +139,7 @@ class CodeFeedbackPipeline(SubPipeline):
             for message in chat_history
             if message.contents
             and len(message.contents) > 0
-            and message.contents[0].text_content
+            and isinstance(message.contents[0], TextMessageContentDTO)
         )
         response = (
             (self.default_prompt | self.pipeline)
@@ -150,7 +155,8 @@ class CodeFeedbackPipeline(SubPipeline):
                 }
             )
         )
-        token_usage = self.llm.tokens
-        token_usage.pipeline = PipelineEnum.IRIS_CODE_FEEDBACK
-        self.tokens = token_usage
+        if self.llm.tokens:
+            token_usage = self.llm.tokens
+            token_usage.pipeline = PipelineEnum.IRIS_CODE_FEEDBACK
+            self.tokens.append(token_usage)
         return response.replace("{", "{{").replace("}", "}}")

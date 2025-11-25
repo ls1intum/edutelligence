@@ -1,5 +1,5 @@
 from asyncio.log import logger
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
@@ -41,14 +41,16 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
         self.collection = init_faq_schema(client)
         self.dto = dto
         self.callback = callback
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
         request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
-        self.tokens = []
+        self.tokens: List[Any] = []
 
     @classmethod
     def get_variants(cls) -> List[FaqIngestionVariant]:
@@ -70,6 +72,9 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
 
     def __call__(self) -> bool:
         try:
+            if self.dto is None:
+                raise ValueError("DTO must be provided")
+
             self.callback.in_progress("Deleting old faq from database...")
             self.delete_faq(
                 self.dto.faq.faq_id,
@@ -152,4 +157,4 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
         """
         Faqs are so small, they do not need to be chunked into smaller parts
         """
-        return
+        return []

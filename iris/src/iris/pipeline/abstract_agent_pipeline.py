@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from threading import Thread
 from typing import Any, Callable, Generic, List, Optional, TypeVar
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from memiris.domain.memory import Memory
 
@@ -16,6 +16,7 @@ from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractAgentVariant
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_manager import LlmManager
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.vector_database.database import VectorDatabase
@@ -189,6 +190,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         params = self.get_agent_params(state)
 
         # Create and run agent using the LLM from state
+        if state.prompt is None:
+            raise ValueError("Prompt is required")
         agent_executor, _ = self._create_agent_executor(
             llm=state.llm,
             prompt=state.prompt,
@@ -365,7 +368,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
         state.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(
-                version=state.variant.agent_model
+                llm_manager=LlmManager(), version=state.variant.agent_model
             ),
             completion_args=completion_args,
         )

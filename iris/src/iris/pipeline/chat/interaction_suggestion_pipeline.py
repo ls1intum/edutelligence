@@ -12,7 +12,6 @@ from langsmith import traceable
 from pydantic.v1 import BaseModel, Field
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
@@ -23,6 +22,7 @@ from ...common.message_converters import (
 from ...common.pyris_message import PyrisMessage
 from ...llm import (
     CompletionArguments,
+    CompletionArgumentsResponseFormat,
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
@@ -55,19 +55,21 @@ class InteractionSuggestionPipeline(SubPipeline):
     pipeline: Runnable
     prompt: ChatPromptTemplate
     variant: str
-    tokens: TokenUsageDTO
 
     def __init__(self, variant: str = "default"):
         super().__init__(implementation_id="interaction_suggestion_pipeline")
 
         self.variant = variant
+        self.tokens = []
 
         # Set the langchain chat model
         model = "gpt-4.1-nano"  # Default model for all variants
 
         request_handler = ModelVersionRequestHandler(version=model)
         completion_args = CompletionArguments(
-            temperature=0.6, max_tokens=2000, response_format="JSON"
+            temperature=0.6,
+            max_tokens=2000,
+            response_format=CompletionArgumentsResponseFormat.JSON,
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -144,8 +146,10 @@ class InteractionSuggestionPipeline(SubPipeline):
                 self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 
                 response: dict = (self.prompt | self.pipeline).invoke({})
-                self.tokens = self.llm.tokens
-                self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
+                if self.llm.tokens:
+                    token_usage = self.llm.tokens
+                    token_usage.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
+                    self.tokens.append(token_usage)
                 return response["questions"]
             else:
                 raise ValueError("No last message provided")

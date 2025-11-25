@@ -8,7 +8,6 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.prompts.session_title_generation_prompt import (
@@ -26,10 +25,10 @@ class SessionTitleGenerationPipeline(SubPipeline):
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    tokens: TokenUsageDTO
 
     def __init__(self):
         super().__init__(implementation_id="session_title_generation_pipeline")
+        self.tokens = []
 
         # Set the langchain chat model
         model = "gpt-4.1-nano"
@@ -60,8 +59,12 @@ class SessionTitleGenerationPipeline(SubPipeline):
             session_title = (prompt | self.pipeline).invoke(
                 {"first_user_msg": first_user_msg, "llm_response": llm_response}
             )
-            self.tokens = self.llm.tokens
-            self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
+            if self.llm.tokens:
+                token_usage = self.llm.tokens
+                token_usage.pipeline = (
+                    PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
+                )
+                self.tokens.append(token_usage)
             return session_title
         except Exception as e:
             logger.error(

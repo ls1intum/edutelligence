@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Set
+from typing import Iterable, Sequence, Set
 
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.web.routers.health.Pipelines.features import Features
@@ -41,7 +41,7 @@ def evaluate_feature(feature: Features, available: Set[str]) -> FeatureResult:
             feature, wired=False, has_default=False, missing_models=frozenset()
         )
     try:
-        variants: list[AbstractVariant] = pipeline_cls.get_variants()
+        variants: Sequence[AbstractVariant] = pipeline_cls.get_variants()
     except (TypeError, ValueError):
         return FeatureResult(
             feature, wired=True, has_default=False, missing_models=frozenset()

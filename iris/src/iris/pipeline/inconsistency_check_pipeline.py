@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
@@ -14,6 +14,7 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
+from iris.llm.llm_manager import LlmManager
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
@@ -33,7 +34,7 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
     """
 
     llm: IrisLangchainChatModel
-    callback: InconsistencyCheckCallback
+    callback: Optional[InconsistencyCheckCallback]
 
     solver: Runnable
     prettify: Runnable
@@ -43,7 +44,9 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="gpt-o3-mini"),
+            request_handler=ModelVersionRequestHandler(
+                llm_manager=LlmManager(), version="gpt-o3-mini"
+            ),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)
@@ -56,7 +59,9 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         self.tokens = []
 
     @traceable(name="Inconsistency Check Pipeline")
-    def __call__(self, dto: InconsistencyCheckPipelineExecutionDTO, **kwargs):
+    def __call__(
+        self, dto: InconsistencyCheckPipelineExecutionDTO, **kwargs: Any
+    ) -> None:
         """
         Runs the pipeline to check for inconsistencies in the exercise
         :param dto: execution data transfer object
@@ -68,7 +73,8 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
             raise ValueError("Exercise is required")
 
         logger.info("Running inconsistency check pipeline...")
-        self.callback.in_progress()
+        if self.callback:
+            self.callback.in_progress()
 
         # First, for each file in the exercise, we will check for consistency issues via the solver pipeline
         consistency_issues: Dict[str, str] = {}
@@ -121,8 +127,10 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         result = re.sub(r"^#\s.*?\n", "", result)
         result = re.sub(r"^#+.*?Summary of Consistency Issues\s*\n", "", result)
 
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
-        self.callback.done(final_result=result, tokens=self.tokens)
+        if self.llm.tokens:
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
+        if self.callback:
+            self.callback.done(final_result=result, tokens=self.tokens)
 
     @classmethod
     def get_variants(cls) -> List[InconsistencyCheckVariant]:

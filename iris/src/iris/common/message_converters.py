@@ -17,6 +17,7 @@ from iris.common.pyris_message import (
     PyrisMessage,
     PyrisToolMessage,
 )
+from iris.domain.data.message_content_dto import MessageContentDto
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
@@ -36,14 +37,18 @@ def convert_iris_message_to_langchain_message(
             return HumanMessage(content=message.text_content)
         case IrisMessageRole.ASSISTANT:
             if isinstance(iris_message, PyrisAIMessage):
-                tool_calls = [
-                    ToolCall(
-                        name=tc.function.name,
-                        args=tc.function.arguments,
-                        id=tc.id,
-                    )
-                    for tc in iris_message.tool_calls
-                ]
+                tool_calls = (
+                    [
+                        ToolCall(
+                            name=tc.function.name,
+                            args=tc.function.arguments,
+                            id=tc.id,
+                        )
+                        for tc in iris_message.tool_calls
+                    ]
+                    if iris_message.tool_calls is not None
+                    else []
+                )
                 return AIMessage(content=message.text_content, tool_calls=tool_calls)
             return AIMessage(content=message.text_content)
         case IrisMessageRole.SYSTEM:
@@ -85,7 +90,7 @@ def convert_langchain_tool_calls_to_iris_tool_calls(
                 name=tc["name"],
                 arguments=json.dumps(tc["args"]),
             ),
-            id=tc["id"],
+            id=tc["id"] or "",
         )
         for tc in tool_calls
     ]
@@ -106,38 +111,55 @@ def convert_langchain_message_to_iris_message(
         raise ValueError(f"Unknown message type: {base_message.type}")
 
     if isinstance(base_message, (HumanMessage, SystemMessage)):
-        contents = [TextMessageContentDTO(textContent=base_message.content)]
+        content_str = (
+            base_message.content
+            if isinstance(base_message.content, str)
+            else str(base_message.content)
+        )
+        contents: List[MessageContentDto] = [
+            TextMessageContentDTO(textContent=content_str)
+        ]
     elif isinstance(base_message, AIMessage):
+        content_str = (
+            base_message.content
+            if isinstance(base_message.content, str)
+            else str(base_message.content)
+        )
         if base_message.tool_calls:
-            contents = [TextMessageContentDTO(textContent=base_message.content)]
+            contents = [TextMessageContentDTO(textContent=content_str)]
             tool_calls = convert_langchain_tool_calls_to_iris_tool_calls(
                 base_message.tool_calls
             )
             return PyrisAIMessage(
                 contents=contents,
-                tool_calls=tool_calls,
-                send_at=datetime.now(),
+                toolCalls=tool_calls,
+                sentAt=datetime.now(),
             )
         else:
-            contents = [TextMessageContentDTO(textContent=base_message.content)]
+            contents = [TextMessageContentDTO(textContent=content_str)]
     elif isinstance(base_message, ToolMessage):
-        contents = [
+        tool_content_str = (
+            base_message.content
+            if isinstance(base_message.content, str)
+            else str(base_message.content)
+        )
+        tool_contents: List[ToolMessageContentDTO] = [
             ToolMessageContentDTO(
-                toolContent=base_message.content,
-                toolName=base_message.additional_kwargs["name"],
-                toolCallId=base_message.tool_call_id,
+                toolContent=tool_content_str,
+                toolName=base_message.additional_kwargs.get("name", ""),
+                toolCallId=base_message.tool_call_id or "",
             )
         ]
         return PyrisToolMessage(
-            contents=contents,
-            send_at=datetime.now(),
+            contents=tool_contents,
+            sentAt=datetime.now(),
         )
     else:
         raise ValueError(f"Unknown message type: {type(base_message)}")
     return PyrisMessage(
         contents=contents,
         sender=role,
-        send_at=datetime.now(),
+        sentAt=datetime.now(),
     )
 
 

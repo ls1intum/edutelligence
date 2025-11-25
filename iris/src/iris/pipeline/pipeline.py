@@ -3,9 +3,9 @@ from typing import Generic, List, TypeVar
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain.variant.abstract_variant import AbstractAgentVariant, AbstractVariant
+from iris.domain.variant.abstract_variant import AbstractVariant
 
-VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
+VARIANT = TypeVar("VARIANT", bound=AbstractVariant)
 
 
 class Pipeline(Generic[VARIANT], metaclass=ABCMeta):
@@ -24,9 +24,10 @@ class Pipeline(Generic[VARIANT], metaclass=ABCMeta):
         return f"{self.__class__.__name__}"
 
     @abstractmethod
-    def __call__(self, **kwargs):
+    def __call__(self, *args, **kwargs):
         """
-        Extracts the required parameters from the kwargs runs the pipeline.
+        Extracts the required parameters from the args/kwargs and runs the pipeline.
+        Subclasses should override with their specific signature.
         """
         raise NotImplementedError("Subclasses must implement the __call__ method.")
 
@@ -43,7 +44,7 @@ class Pipeline(Generic[VARIANT], metaclass=ABCMeta):
 
     @classmethod
     @abstractmethod
-    def get_variants(cls) -> List[AbstractVariant]:
+    def get_variants(cls) -> List[VARIANT]:
         """
         Returns a list of all variants for this pipeline.
         This method should be implemented by subclasses to provide specific variants.

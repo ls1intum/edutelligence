@@ -56,14 +56,14 @@ class StatusCallback(ABC):
         self,
         url: str,
         run_id: str,
-        status: StatusUpdateDTO = None,
-        stage: StageDTO = None,
+        status: Optional[StatusUpdateDTO] = None,
+        stage: Optional[StageDTO] = None,
         current_stage_index: Optional[int] = None,
     ):
         self.url = url
         self.run_id = run_id
-        self.status = status
-        self.stage = stage
+        self.status = status  # type: ignore[assignment]
+        self.stage = stage  # type: ignore[assignment]
         self.current_stage_index = current_stage_index
 
     def on_status_update(self):
@@ -85,7 +85,10 @@ class StatusCallback(ABC):
     def get_next_stage(self):
         """Return the next stage in the status, or None if there are no more stages."""
         # Increment the current stage index
-        self.current_stage_index += 1
+        if self.current_stage_index is not None:
+            self.current_stage_index += 1
+        else:
+            self.current_stage_index = 0
 
         # Check if the current stage index is out of bounds
         if self.current_stage_index >= len(self.status.stages):
@@ -132,7 +135,8 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.DONE
         self.stage.message = message
         self.status.tokens = tokens or self.status.tokens
-        self.status.result = final_result
+        if hasattr(self.status, "result"):
+            self.status.result = final_result
         if hasattr(self.status, "session_title"):
             self.status.session_title = session_title
         if hasattr(self.status, "suggestions"):
@@ -166,7 +170,8 @@ class StatusCallback(ABC):
 
         self.on_status_update()
 
-        self.status.result = None
+        if hasattr(self.status, "result"):
+            self.status.result = None
         if hasattr(self.status, "session_title"):
             self.status.session_title = None
         if hasattr(self.status, "suggestions"):
@@ -190,13 +195,16 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
-        self.status.result = None
+        if hasattr(self.status, "result"):
+            self.status.result = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
-            self.current_stage_index + 1
+            (self.current_stage_index + 1)
+            if self.current_stage_index is not None
+            else 1
         )  # Black and flake8 are conflicting with each other if this expression gets used in list comprehension
         for stage in self.status.stages[rest_of_index:]:
             stage.state = StageStateEnum.SKIPPED
@@ -225,7 +233,8 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.SKIPPED
         self.stage.message = message
-        self.status.result = None
+        if hasattr(self.status, "result"):
+            self.status.result = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         next_stage = self.get_next_stage()
@@ -240,7 +249,10 @@ class CourseChatStatusCallback(StatusCallback):
     """Status callback for course chat pipelines."""
 
     def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: Optional[List[StageDTO]] = None,
     ):
         url = f"{base_url}/{self.api_url}/course-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
@@ -270,7 +282,10 @@ class ExerciseChatStatusCallback(StatusCallback):
     """Status callback for exercise chat pipelines."""
 
     def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: Optional[List[StageDTO]] = None,
     ):
         url = (
             f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
@@ -296,7 +311,10 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
     """Status callback for ChatGPT wrapper pipelines."""
 
     def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: Optional[List[StageDTO]] = None,
     ):
         url = (
             f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"

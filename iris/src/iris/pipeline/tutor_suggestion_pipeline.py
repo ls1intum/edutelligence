@@ -99,7 +99,7 @@ class TutorSuggestionPipeline(
                     state.dto.programming_exercise, callback
                 ),
             ]
-            if state.dto.submission is not None:
+            if state.dto.submission is not None and state.dto.programming_exercise:
                 submission = state.dto.submission
                 programming_exercise_tools.extend(
                     [
@@ -115,7 +115,7 @@ class TutorSuggestionPipeline(
                 )
             tool_list.extend(programming_exercise_tools)
 
-        if is_text_exercise:
+        if is_text_exercise and state.dto.text_exercise:
             text_exercise_tools = [
                 create_tool_get_problem_statement(
                     state.dto.text_exercise, state.callback
@@ -150,12 +150,14 @@ class TutorSuggestionPipeline(
 
         if allow_faq_tool:
             self.faq_retriever = FaqRetrieval(state.db.client)
+            artemis_base_url = state.dto.settings.artemis_base_url
+            course_name = state.dto.course.name or ""
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
                     state.dto.course.id,
-                    state.dto.course.name,
-                    (state.dto.settings.artemis_base_url if state.dto.settings else ""),
+                    course_name,
+                    artemis_base_url,
                     callback,
                     query_text,
                     state.message_history,

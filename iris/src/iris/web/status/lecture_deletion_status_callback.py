@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Optional
 
 from ...domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -17,7 +17,10 @@ class LecturesDeletionStatusCallback(StatusCallback):
     """
 
     def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: Optional[List[StageDTO]] = None,
     ):
         url = f"{base_url}/api/iris/internal/webhooks/ingestion/runs/{run_id}/status"
 

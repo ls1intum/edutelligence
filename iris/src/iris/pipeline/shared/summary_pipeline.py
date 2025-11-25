@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -55,7 +56,7 @@ class SummaryPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def __call__(self, query: str, **kwargs) -> str:
+    def __call__(self, query: str, **kwargs: Any) -> str:
         """
         Runs the pipeline
             :param query: The query

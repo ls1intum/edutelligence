@@ -46,13 +46,17 @@ class FaqRetrieval(BaseRetrieval):
         chat_history: list[PyrisMessage],
         student_query: str,
         result_limit: int,
-        course_name: str = None,
-        course_id: int = None,
-        problem_statement: str = None,
-        exercise_title: str = None,
-        base_url: str = None,
+        course_name: str | None = None,
+        course_id: int | None = None,
+        problem_statement: str | None = None,
+        exercise_title: str | None = None,
+        base_url: str | None = None,
     ) -> List[dict]:
-        course_language = self.fetch_course_language(course_id)
+        course_language = (
+            self.fetch_course_language(course_id)
+            if course_id is not None
+            else "english"
+        )
 
         response, response_hyde = self.run_parallel_rewrite_tasks(
             chat_history=chat_history,
@@ -80,7 +84,7 @@ class FaqRetrieval(BaseRetrieval):
     def get_faqs_from_db(
         self,
         course_id: int,
-        search_text: str = None,
+        search_text: str | None = None,
         result_limit: int = 10,
         hybrid_factor: float = 0.75,
     ) -> List[dict]:

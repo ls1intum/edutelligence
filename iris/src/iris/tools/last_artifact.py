@@ -1,6 +1,7 @@
 from typing import Callable, List
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.web.status.status_update import StatusCallback
 
 
@@ -28,7 +29,10 @@ def create_tool_get_last_artifact(
             for message in reversed(chat_history):
                 if message.sender == IrisMessageRole.ARTIFACT:
                     if message.contents:
-                        return message.contents[0].text_content
+                        content = message.contents[0]
+                        if isinstance(content, TextMessageContentDTO):
+                            return content.text_content
+                        return "Artifact message content is not text."
                     return "Artifact message has no content."
         return "No artifact found in chat history."
 

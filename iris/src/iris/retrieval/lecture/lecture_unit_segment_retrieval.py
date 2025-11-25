@@ -40,11 +40,13 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        self.cohere_client = RerankRequestHandler("cohere")
+        self.cohere_client = RerankRequestHandler(model_id="cohere")
         self.tokens = []
 
     def __call__(
@@ -151,16 +153,22 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         lecture_unit_segment_retrieval_dto = LectureUnitSegmentRetrievalDTO(
             uuid=uuid,
             course_id=lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value],
-            course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
-            course_description=lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
+            course_name=str(lecture_unit[LectureUnitSchema.COURSE_NAME.value]),
+            course_description=str(
+                lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value]
+            ),
             lecture_id=lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value],
-            lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+            lecture_name=str(lecture_unit[LectureUnitSchema.LECTURE_NAME.value]),
             lecture_unit_id=lecture_unit_segment[
                 LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
             ],
-            lecture_unit_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-            lecture_unit_link=lecture_unit[LectureUnitSchema.LECTURE_UNIT_LINK.value],
-            video_link=lecture_unit.get(LectureUnitSchema.VIDEO_LINK.value),
+            lecture_unit_name=str(
+                lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value]
+            ),
+            lecture_unit_link=str(
+                lecture_unit[LectureUnitSchema.LECTURE_UNIT_LINK.value]
+            ),
+            video_link=str(lecture_unit.get(LectureUnitSchema.VIDEO_LINK.value, "")),
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],

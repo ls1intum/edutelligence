@@ -20,6 +20,7 @@ from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.exercise_chat_variant import ExerciseChatVariant
 from ...llm import (
     CompletionArguments,
@@ -99,7 +100,7 @@ class ExerciseChatAgentPipeline(
         return f"{self.__class__.__name__}()"
 
     @classmethod
-    def get_variants(cls) -> List[ExerciseChatVariant]:  # type: ignore[override]
+    def get_variants(cls) -> List[ExerciseChatVariant]:
         """
         Get available variants for the exercise chat pipeline.
 
@@ -240,8 +241,8 @@ class ExerciseChatAgentPipeline(
                 create_tool_faq_content_retrieval(
                     faq_retriever,
                     dto.course.id,
-                    dto.course.name,
-                    dto.settings.artemis_base_url if dto.settings else "",
+                    dto.course.name or "",
+                    dto.settings.artemis_base_url,
                     callback,
                     query_text,
                     state.message_history,
@@ -269,8 +270,8 @@ class ExerciseChatAgentPipeline(
         dto = state.dto
         query = self.get_latest_user_message(state)
 
-        problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
-        exercise_title: str = dto.exercise.name if dto.exercise else ""
+        problem_statement = dto.exercise.problem_statement if dto.exercise else ""
+        exercise_title = dto.exercise.name if dto.exercise else ""
         programming_language = (
             dto.exercise.programming_language.lower()
             if dto.exercise and dto.exercise.programming_language
@@ -492,7 +493,8 @@ class ExerciseChatAgentPipeline(
                 suggestions = self.suggestion_pipeline(suggestion_dto)
 
                 if self.suggestion_pipeline.tokens is not None:
-                    self._track_tokens(state, self.suggestion_pipeline.tokens)
+                    for token in self.suggestion_pipeline.tokens:
+                        self._track_tokens(state, token)
 
                 state.callback.done(
                     final_result=None,
@@ -528,7 +530,11 @@ class ExerciseChatAgentPipeline(
             The generated session title or None if not applicable
         """
         if len(dto.chat_history) == 1:
-            first_user_msg = dto.chat_history[0].contents[0].text_content
+            first_user_msg = ""
+            if dto.chat_history[0].contents and isinstance(
+                dto.chat_history[0].contents[0], TextMessageContentDTO
+            ):
+                first_user_msg = dto.chat_history[0].contents[0].text_content
             return super()._create_session_title(state, output, first_user_msg)
         return None
 

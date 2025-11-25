@@ -49,6 +49,10 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
     Run the exercise chat pipeline in a separate thread
     """
     try:
+        if dto.settings is None:
+            raise ValueError("dto.settings must not be None")
+        if dto.initial_stages is None:
+            raise ValueError("dto.initial_stages must not be None")
         callback = LecturesDeletionStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
@@ -74,6 +78,10 @@ def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
     """
     with semaphore:
         try:
+            if dto.settings is None:
+                raise ValueError("dto.settings must not be None")
+            if dto.initial_stages is None:
+                raise ValueError("dto.initial_stages must not be None")
             callback = FaqIngestionStatus(
                 run_id=dto.settings.authentication_token,
                 base_url=dto.settings.artemis_base_url,
@@ -99,6 +107,10 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
     """
     with semaphore:
         try:
+            if dto.settings is None:
+                raise ValueError("dto.settings must not be None")
+            if dto.initial_stages is None:
+                raise ValueError("dto.initial_stages must not be None")
             callback = FaqIngestionStatus(
                 run_id=dto.settings.authentication_token,
                 base_url=dto.settings.artemis_base_url,
@@ -147,6 +159,8 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
     """
     Webhook endpoint to trigger the lecture deletion
     """
+    if dto.settings is None:
+        raise ValueError("dto.settings must not be None")
     validate_pipeline_variant(dto.settings, LectureUnitDeletionPipeline)
 
     thread = Thread(target=run_lecture_deletion_pipeline_worker, args=(dto,))
@@ -178,6 +192,8 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     """
     Webhook endpoint to trigger the faq deletion pipeline
     """
+    if dto.settings is None:
+        raise ValueError("dto.settings must not be None")
     validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))

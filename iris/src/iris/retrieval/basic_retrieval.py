@@ -88,7 +88,9 @@ class BaseRetrieval(SubPipeline, ABC):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
         self.pipeline = self.llm | StrOutputParser()
         self.collection = schema_init_func(client)
         self.tokens = []
@@ -155,8 +157,9 @@ class BaseRetrieval(SubPipeline, ABC):
         try:
             response = (prompt | self.pipeline).invoke({})
             token_usage = self.llm.tokens
-            token_usage.pipeline = pipeline_enum
-            self.tokens.append(self.llm.tokens)
+            if token_usage is not None:
+                token_usage.pipeline = pipeline_enum
+                self.tokens.append(token_usage)
             return response
         except Exception as e:
             raise e

@@ -1,6 +1,10 @@
 from enum import Enum
+from typing import Optional
 
-CompletionArgumentsResponseFormat = Enum("TEXT", "JSON")
+
+class CompletionArgumentsResponseFormat(str, Enum):
+    TEXT = "TEXT"
+    JSON = "JSON"
 
 
 class CompletionArguments:
@@ -8,10 +12,10 @@ class CompletionArguments:
 
     def __init__(
         self,
-        max_tokens: int = None,
-        temperature: float = None,
-        stop: list[str] = None,
-        response_format: CompletionArgumentsResponseFormat = "TEXT",
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        stop: Optional[list[str]] = None,
+        response_format: CompletionArgumentsResponseFormat = CompletionArgumentsResponseFormat.TEXT,
     ):
         self.max_tokens = max_tokens
         self.temperature = temperature

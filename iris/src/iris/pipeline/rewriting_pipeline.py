@@ -1,8 +1,8 @@
 import json
 import logging
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
 )
@@ -18,6 +18,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.llm.llm_manager import LlmManager
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
@@ -53,7 +54,9 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
         self.db = VectorDatabase()
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
+        self.request_handler = ModelVersionRequestHandler(
+            llm_manager=LlmManager(), version="gpt-4.1"
+        )
         self.tokens = []
         self.variant = variant
         self.faq_retriever = FaqRetrieval(self.db.client)
@@ -62,8 +65,8 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         self,
         dto: RewritingPipelineExecutionDTO,
         prompt: Optional[ChatPromptTemplate] = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         if not dto.to_be_rewritten:
             raise ValueError("You need to provide a text to rewrite")
 
@@ -71,47 +74,48 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             "faq": system_prompt_faq,
             "problem_statement": system_prompt_problem_statement,
         }
-        prompt = variant_prompts[self.variant].format(
+        formatted_prompt = variant_prompts[self.variant].format(
             rewritten_text=dto.to_be_rewritten,
         )
-        prompt = PyrisMessage(
+        system_message = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
-            contents=[TextMessageContentDTO(text_content=prompt)],
+            contents=[TextMessageContentDTO(textContent=formatted_prompt)],
         )
 
         response = self.request_handler.chat(
-            [prompt], CompletionArguments(temperature=0.4), tools=None
+            [system_message], CompletionArguments(temperature=0.4), tools=None
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
-        response = response.contents[0].text_content
+        response_text = cast(TextMessageContentDTO, response.contents[0]).text_content
 
         # remove ``` from start and end if exists
-        if response.startswith("```") and response.endswith("```"):
-            response = response[3:-3]
-            if response.startswith("markdown"):
-                response = response[8:]
-            response = response.strip()
+        if response_text.startswith("```") and response_text.endswith("```"):
+            response_text = response_text[3:-3]
+            if response_text.startswith("markdown"):
+                response_text = response_text[8:]
+            response_text = response_text.strip()
 
-        final_result = response
-        inconsistencies = []
+        final_result = response_text
+        inconsistencies: List[str] = []
         improvement = ""
-        suggestions = []
+        suggestions: List[Any] = []
 
         if self.variant == "faq":
             faqs = self.faq_retriever.get_faqs_from_db(
-                course_id=dto.course_id, search_text=response, result_limit=10
+                course_id=dto.course_id, search_text=response_text, result_limit=10
             )
             consistency_result = self.check_faq_consistency(faqs, final_result)
             faq_type = consistency_result.get("type", "").lower()
             if "inconsistent" in faq_type:
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
-                inconsistencies = parse_faq_inconsistencies(
-                    consistency_result.get("faqs", [])
-                )
+                faq_list: Any = consistency_result.get("faqs", [])
+                if isinstance(faq_list, list):
+                    inconsistencies = parse_faq_inconsistencies(faq_list)
                 improvement = consistency_result.get("improved version", "")
-                suggestions = consistency_result.get("suggestion", [])
+                suggestion_result: Any = consistency_result.get("suggestion", [])
+                if isinstance(suggestion_result, list):
+                    suggestions = suggestion_result
 
-        final_result = response
         self.callback.done(
             final_result=final_result,
             tokens=self.tokens,
@@ -140,17 +144,17 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             faqs=properties_list, final_result=final_result
         )
 
-        prompt = PyrisMessage(
+        consistency_message = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
-            contents=[TextMessageContentDTO(text_content=consistency_prompt)],
+            contents=[TextMessageContentDTO(textContent=consistency_prompt)],
         )
 
         response = self.request_handler.chat(
-            [prompt], CompletionArguments(temperature=0.0), tools=None
+            [consistency_message], CompletionArguments(temperature=0.0), tools=None
         )
 
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
-        result = response.contents[0].text_content
+        result = cast(TextMessageContentDTO, response.contents[0]).text_content
 
         if result.startswith("```json"):
             result = result.removeprefix("```json").removesuffix("```").strip()

@@ -1,8 +1,9 @@
-from typing import Literal
+from typing import Any, Literal, Optional
 
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
+from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...llm.external.model import CompletionModel
 from ..completion_arguments import CompletionArguments
 
@@ -14,7 +15,14 @@ class OpenAICompletionModel(CompletionModel):
     api_key: str
     _client: OpenAI
 
-    def complete(self, prompt: str, arguments: CompletionArguments) -> any:
+    def complete(
+        self,
+        prompt: str,
+        arguments: CompletionArguments,
+        image: Optional[
+            ImageMessageContentDTO
+        ] = None,  # Not used - OpenAI completions API doesn't support images
+    ) -> Any:
         response = self._client.completions.create(
             model=self.model,
             prompt=prompt,

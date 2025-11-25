@@ -1,7 +1,7 @@
 import concurrent.futures
 from asyncio.log import logger
 from enum import Enum
-from typing import List
+from typing import List, cast
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -87,7 +87,9 @@ class LectureRetrieval(SubPipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
         self.pipeline = self.llm | StrOutputParser()
 
         self.lecture_unit_collection = init_lecture_unit_schema(client)
@@ -104,18 +106,18 @@ class LectureRetrieval(SubPipeline):
         self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(client)
         self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(client)
 
-        self.cohere_client = RerankRequestHandler("cohere")
+        self.cohere_client = RerankRequestHandler(model_id="cohere")
 
     def __call__(
         self,
         query: str,
         course_id: int,
         chat_history: List[PyrisMessage],
-        problem_statement: str = None,
-        exercise_title: str = None,
-        lecture_id: int = None,
-        lecture_unit_id: int = None,
-        base_url: str = None,
+        problem_statement: str | None = None,
+        exercise_title: str | None = None,
+        lecture_id: int | None = None,
+        lecture_unit_id: int | None = None,
+        base_url: str | None = None,
     ) -> LectureRetrievalDTO:
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
@@ -194,9 +196,9 @@ class LectureRetrieval(SubPipeline):
     def get_lecture_unit(
         self,
         course_id: int,
-        lecture_id: int = None,
-        lecture_unit_id: int = None,
-        base_url: str = None,
+        lecture_id: int | None = None,
+        lecture_unit_id: int | None = None,
+        base_url: str | None = None,
     ):
         lecture_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
             course_id
@@ -224,28 +226,90 @@ class LectureRetrieval(SubPipeline):
             lecture_unit = lecture_units[0].properties
             lecture_unit_uuid = str(lecture_units[0].uuid)
 
+            # Cast Weaviate properties to expected types
+            course_id_val = lecture_unit[LectureUnitSchema.COURSE_ID.value]
+            if not isinstance(course_id_val, int):
+                raise TypeError(
+                    f"Expected int for course_id, got {type(course_id_val)}"
+                )
+            course_name_val = lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+            if not isinstance(course_name_val, str):
+                raise TypeError(
+                    f"Expected str for course_name, got {type(course_name_val)}"
+                )
+            course_description_val = lecture_unit[
+                LectureUnitSchema.COURSE_DESCRIPTION.value
+            ]
+            if not isinstance(course_description_val, str):
+                raise TypeError(
+                    f"Expected str for course_description, got {type(course_description_val)}"
+                )
+            course_language_val = lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value]
+            if not isinstance(course_language_val, str):
+                raise TypeError(
+                    f"Expected str for course_language, got {type(course_language_val)}"
+                )
+            lecture_unit_summary_val = lecture_unit[
+                LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
+            ]
+            if not isinstance(lecture_unit_summary_val, str):
+                raise TypeError(
+                    f"Expected str for lecture_unit_summary, got {type(lecture_unit_summary_val)}"
+                )
+
+            lecture_id_val = lecture_unit.get(LectureUnitSchema.LECTURE_ID.value)
+            lecture_id_int = (
+                cast(int, lecture_id_val) if lecture_id_val is not None else None
+            )
+            lecture_name_val = lecture_unit.get(
+                LectureUnitSchema.LECTURE_UNIT_NAME.value
+            )
+            lecture_name_str = (
+                cast(str, lecture_name_val) if lecture_name_val is not None else None
+            )
+            lecture_unit_id_val = lecture_unit.get(
+                LectureUnitSchema.LECTURE_UNIT_ID.value
+            )
+            lecture_unit_id_int = (
+                cast(int, lecture_unit_id_val)
+                if lecture_unit_id_val is not None
+                else None
+            )
+            lecture_unit_name_val = lecture_unit.get(
+                LectureUnitSchema.LECTURE_UNIT_NAME.value
+            )
+            lecture_unit_name_str = (
+                cast(str, lecture_unit_name_val)
+                if lecture_unit_name_val is not None
+                else None
+            )
+            lecture_unit_link_val = lecture_unit.get(
+                LectureUnitSchema.LECTURE_UNIT_LINK.value
+            )
+            lecture_unit_link_str = (
+                cast(str, lecture_unit_link_val)
+                if lecture_unit_link_val is not None
+                else None
+            )
+            video_link_val = lecture_unit.get(LectureUnitSchema.VIDEO_LINK.value)
+            video_link_str = (
+                cast(str, video_link_val) if video_link_val is not None else None
+            )
+
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
-                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
-                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
-                course_description=lecture_unit[
-                    LectureUnitSchema.COURSE_DESCRIPTION.value
-                ],
-                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
-                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-                lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
-                lecture_unit_name=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value
-                ],
-                lecture_unit_link=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value
-                ],
-                video_link=lecture_unit[LectureUnitSchema.VIDEO_LINK.value],
-                base_url=base_url,
-                lecture_unit_summary=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
-                ],
+                course_id=course_id_val,
+                course_name=course_name_val,
+                course_description=course_description_val,
+                course_language=course_language_val,
+                lecture_id=lecture_id_int,
+                lecture_name=lecture_name_str,
+                lecture_unit_id=lecture_unit_id_int,
+                lecture_unit_name=lecture_unit_name_str,
+                lecture_unit_link=lecture_unit_link_str,
+                video_link=video_link_str,
+                base_url=base_url or "",
+                lecture_unit_summary=lecture_unit_summary_val,
             )
 
         elif lecture_id is not None:
@@ -262,24 +326,62 @@ class LectureRetrieval(SubPipeline):
             lecture_unit = lecture_units[0].properties
             lecture_unit_uuid = str(lecture_units[0].uuid)
 
+            # Cast Weaviate properties to expected types
+            course_id_val = lecture_unit[LectureUnitSchema.COURSE_ID.value]
+            if not isinstance(course_id_val, int):
+                raise TypeError(
+                    f"Expected int for course_id, got {type(course_id_val)}"
+                )
+            course_name_val = lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+            if not isinstance(course_name_val, str):
+                raise TypeError(
+                    f"Expected str for course_name, got {type(course_name_val)}"
+                )
+            course_description_val = lecture_unit[
+                LectureUnitSchema.COURSE_DESCRIPTION.value
+            ]
+            if not isinstance(course_description_val, str):
+                raise TypeError(
+                    f"Expected str for course_description, got {type(course_description_val)}"
+                )
+            course_language_val = lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value]
+            if not isinstance(course_language_val, str):
+                raise TypeError(
+                    f"Expected str for course_language, got {type(course_language_val)}"
+                )
+            lecture_unit_summary_val = lecture_unit[
+                LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
+            ]
+            if not isinstance(lecture_unit_summary_val, str):
+                raise TypeError(
+                    f"Expected str for lecture_unit_summary, got {type(lecture_unit_summary_val)}"
+                )
+
+            lecture_id_val = lecture_unit.get(LectureUnitSchema.LECTURE_ID.value)
+            lecture_id_int = (
+                cast(int, lecture_id_val) if lecture_id_val is not None else None
+            )
+            lecture_name_val = lecture_unit.get(
+                LectureUnitSchema.LECTURE_UNIT_NAME.value
+            )
+            lecture_name_str = (
+                cast(str, lecture_name_val) if lecture_name_val is not None else None
+            )
+
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
-                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
-                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
-                course_description=lecture_unit[
-                    LectureUnitSchema.COURSE_DESCRIPTION.value
-                ],
-                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
-                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                course_id=course_id_val,
+                course_name=course_name_val,
+                course_description=course_description_val,
+                course_language=course_language_val,
+                lecture_id=lecture_id_int,
+                lecture_name=lecture_name_str,
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,
                 video_link=None,
-                base_url=base_url,
-                lecture_unit_summary=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
-                ],
+                base_url=base_url or "",
+                lecture_unit_summary=lecture_unit_summary_val,
             )
 
         else:
@@ -292,24 +394,51 @@ class LectureRetrieval(SubPipeline):
             lecture_unit = lecture_units[0].properties
             lecture_unit_uuid = str(lecture_units[0].uuid)
 
+            # Cast Weaviate properties to expected types
+            course_id_val = lecture_unit[LectureUnitSchema.COURSE_ID.value]
+            if not isinstance(course_id_val, int):
+                raise TypeError(
+                    f"Expected int for course_id, got {type(course_id_val)}"
+                )
+            course_name_val = lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+            if not isinstance(course_name_val, str):
+                raise TypeError(
+                    f"Expected str for course_name, got {type(course_name_val)}"
+                )
+            course_description_val = lecture_unit[
+                LectureUnitSchema.COURSE_DESCRIPTION.value
+            ]
+            if not isinstance(course_description_val, str):
+                raise TypeError(
+                    f"Expected str for course_description, got {type(course_description_val)}"
+                )
+            course_language_val = lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value]
+            if not isinstance(course_language_val, str):
+                raise TypeError(
+                    f"Expected str for course_language, got {type(course_language_val)}"
+                )
+            lecture_unit_summary_val = lecture_unit[
+                LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
+            ]
+            if not isinstance(lecture_unit_summary_val, str):
+                raise TypeError(
+                    f"Expected str for lecture_unit_summary, got {type(lecture_unit_summary_val)}"
+                )
+
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
-                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
-                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
-                course_description=lecture_unit[
-                    LectureUnitSchema.COURSE_DESCRIPTION.value
-                ],
-                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
+                course_id=course_id_val,
+                course_name=course_name_val,
+                course_description=course_description_val,
+                course_language=course_language_val,
                 lecture_id=None,
                 lecture_name=None,
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,
                 video_link=None,
-                base_url=base_url,
-                lecture_unit_summary=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
-                ],
+                base_url=base_url or "",
+                lecture_unit_summary=lecture_unit_summary_val,
             )
 
     @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
@@ -318,9 +447,9 @@ class LectureRetrieval(SubPipeline):
         chat_history: list[PyrisMessage],
         student_query: str,
         course_language: str,
-        course_name: str = None,
-        problem_statement: str = None,
-        exercise_title: str = None,
+        course_name: str | None = None,
+        problem_statement: str | None = None,
+        exercise_title: str | None = None,
     ):
         """
         Run the rewrite tasks in parallel.
@@ -423,16 +552,16 @@ class LectureRetrieval(SubPipeline):
                 )
 
                 # Get the results once both tasks are complete
-                rewritten_lecture_pages_query: str = (
+                rewritten_lecture_pages_query = (
                     rewritten_lecture_pages_query_future.result()
                 )
-                rewritten_lecture_transcriptions_query: str = (
+                rewritten_lecture_transcriptions_query = (
                     rewritten_lecture_transcriptions_query_future.result()
                 )
-                hypothetical_lecture_pages_answer_query: str = (
+                hypothetical_lecture_pages_answer_query = (
                     hypothetical_lecture_pages_answer_query_future.result()
                 )
-                hypothetical_lecture_transcriptions_answer_query: str = (
+                hypothetical_lecture_transcriptions_answer_query = (
                     hypothetical_lecture_transcriptions_answer_query_future.result()
                 )
 
@@ -478,8 +607,9 @@ class LectureRetrieval(SubPipeline):
         try:
             response = (prompt | self.pipeline).invoke({})
             token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
+            if token_usage is not None:
+                token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
+                self.tokens.append(token_usage)
             logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
@@ -526,8 +656,9 @@ class LectureRetrieval(SubPipeline):
         try:
             response = (prompt | self.pipeline).invoke({})
             token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
+            if token_usage is not None:
+                token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
+                self.tokens.append(token_usage)
             logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
@@ -574,8 +705,9 @@ class LectureRetrieval(SubPipeline):
         try:
             response = (prompt | self.pipeline).invoke({})
             token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
+            if token_usage is not None:
+                token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
+                self.tokens.append(token_usage)
             logger.info("Response from retirval pipeline: %s", response)
             return response
         except Exception as e:
@@ -627,8 +759,9 @@ class LectureRetrieval(SubPipeline):
         try:
             response = (prompt | self.pipeline).invoke({})
             token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
+            if token_usage is not None:
+                token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
+                self.tokens.append(token_usage)
             logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
@@ -731,39 +864,65 @@ class LectureRetrieval(SubPipeline):
             ).objects
         )
 
-        return [
-            LectureTranscriptionRetrievalDTO(
-                uuid=str(transcription.uuid),
-                course_id=lecture_unit_segment.course_id,
-                course_name=lecture_unit_segment.course_name,
-                course_description=lecture_unit_segment.course_description,
-                lecture_id=lecture_unit_segment.lecture_id,
-                lecture_name=lecture_unit_segment.lecture_name,
-                lecture_unit_id=lecture_unit_segment.lecture_unit_id,
-                lecture_unit_name=lecture_unit_segment.lecture_unit_name,
-                video_link=lecture_unit_segment.video_link,
-                language=transcription.properties[
-                    LectureTranscriptionSchema.LANGUAGE.value
-                ],
-                segment_start_time=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_START_TIME.value
-                ],
-                segment_end_time=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_END_TIME.value
-                ],
-                page_number=transcription.properties[
-                    LectureTranscriptionSchema.PAGE_NUMBER.value
-                ],
-                segment_summary=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_SUMMARY.value
-                ],
-                segment_text=transcription.properties[
-                    LectureTranscriptionSchema.SEGMENT_TEXT.value
-                ],
-                base_url=lecture_unit_segment.base_url,
+        result = []
+        for transcription in lecture_transcriptions:
+            props = transcription.properties
+            language_val = props[LectureTranscriptionSchema.LANGUAGE.value]
+            if not isinstance(language_val, str):
+                raise TypeError(f"Expected str for language, got {type(language_val)}")
+            segment_start_time_val = props[
+                LectureTranscriptionSchema.SEGMENT_START_TIME.value
+            ]
+            if not isinstance(segment_start_time_val, (int, float)):
+                raise TypeError(
+                    f"Expected int/float for segment_start_time, got {type(segment_start_time_val)}"
+                )
+            segment_end_time_val = props[
+                LectureTranscriptionSchema.SEGMENT_END_TIME.value
+            ]
+            if not isinstance(segment_end_time_val, (int, float)):
+                raise TypeError(
+                    f"Expected int/float for segment_end_time, got {type(segment_end_time_val)}"
+                )
+            page_number_val = props[LectureTranscriptionSchema.PAGE_NUMBER.value]
+            if not isinstance(page_number_val, int):
+                raise TypeError(
+                    f"Expected int for page_number, got {type(page_number_val)}"
+                )
+            segment_summary_val = props[
+                LectureTranscriptionSchema.SEGMENT_SUMMARY.value
+            ]
+            if not isinstance(segment_summary_val, str):
+                raise TypeError(
+                    f"Expected str for segment_summary, got {type(segment_summary_val)}"
+                )
+            segment_text_val = props[LectureTranscriptionSchema.SEGMENT_TEXT.value]
+            if not isinstance(segment_text_val, str):
+                raise TypeError(
+                    f"Expected str for segment_text, got {type(segment_text_val)}"
+                )
+
+            result.append(
+                LectureTranscriptionRetrievalDTO(
+                    uuid=str(transcription.uuid),
+                    course_id=lecture_unit_segment.course_id,
+                    course_name=lecture_unit_segment.course_name,
+                    course_description=lecture_unit_segment.course_description,
+                    lecture_id=lecture_unit_segment.lecture_id,
+                    lecture_name=lecture_unit_segment.lecture_name,
+                    lecture_unit_id=lecture_unit_segment.lecture_unit_id,
+                    lecture_unit_name=lecture_unit_segment.lecture_unit_name,
+                    video_link=lecture_unit_segment.video_link,
+                    language=language_val,
+                    segment_start_time=float(segment_start_time_val),
+                    segment_end_time=float(segment_end_time_val),
+                    page_number=page_number_val,
+                    segment_summary=segment_summary_val,
+                    segment_text=segment_text_val,
+                    base_url=lecture_unit_segment.base_url,
+                )
             )
-            for transcription in lecture_transcriptions
-        ]
+        return result
 
     def get_lecture_page_chunks_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
@@ -790,21 +949,44 @@ class LectureRetrieval(SubPipeline):
             ).objects
         )
 
-        return [
-            LectureUnitPageChunkRetrievalDTO(
-                str(chunk.uuid),
-                lecture_unit_segment.course_id,
-                lecture_unit_segment.course_name,
-                lecture_unit_segment.course_description,
-                lecture_unit_segment.lecture_id,
-                lecture_unit_segment.lecture_name,
-                lecture_unit_segment.lecture_unit_id,
-                lecture_unit_segment.lecture_unit_name,
-                lecture_unit_segment.lecture_unit_link,
-                chunk.properties[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
-                chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
-                chunk.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value],
-                lecture_unit_segment.base_url,
+        result = []
+        for chunk in lecture_page_chunks:
+            props = chunk.properties
+            course_language_val = props[
+                LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
+            ]
+            if not isinstance(course_language_val, str):
+                raise TypeError(
+                    f"Expected str for course_language, got {type(course_language_val)}"
+                )
+            page_number_val = props[LectureUnitPageChunkSchema.PAGE_NUMBER.value]
+            if not isinstance(page_number_val, int):
+                raise TypeError(
+                    f"Expected int for page_number, got {type(page_number_val)}"
+                )
+            page_text_content_val = props[
+                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
+            ]
+            if not isinstance(page_text_content_val, str):
+                raise TypeError(
+                    f"Expected str for page_text_content, got {type(page_text_content_val)}"
+                )
+
+            result.append(
+                LectureUnitPageChunkRetrievalDTO(
+                    str(chunk.uuid),
+                    lecture_unit_segment.course_id,
+                    lecture_unit_segment.course_name,
+                    lecture_unit_segment.course_description,
+                    lecture_unit_segment.lecture_id,
+                    lecture_unit_segment.lecture_name,
+                    lecture_unit_segment.lecture_unit_id,
+                    lecture_unit_segment.lecture_unit_name,
+                    lecture_unit_segment.lecture_unit_link,
+                    course_language_val,
+                    page_number_val,
+                    page_text_content_val,
+                    lecture_unit_segment.base_url,
+                )
             )
-            for chunk in lecture_page_chunks
-        ]
+        return result

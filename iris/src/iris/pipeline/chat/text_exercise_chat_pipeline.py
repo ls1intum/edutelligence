@@ -76,7 +76,7 @@ class TextExerciseChatPipeline(
         return f"{self.__class__.__name__}()"
 
     @classmethod
-    def get_variants(cls) -> List[TextExerciseChatVariant]:  # type: ignore[override]
+    def get_variants(cls) -> List[TextExerciseChatVariant]:
         """
         Get available variants for the text exercise chat pipeline.
 
@@ -217,12 +217,8 @@ class TextExerciseChatPipeline(
                     create_tool_faq_content_retrieval(
                         faq_retriever,
                         dto.exercise.course.id,
-                        dto.exercise.course.name,
-                        (
-                            dto.execution.settings.artemis_base_url
-                            if dto.execution.settings
-                            else ""
-                        ),
+                        dto.exercise.course.name or "",
+                        dto.execution.settings.artemis_base_url,
                         callback,
                         query_text,
                         state.message_history,
@@ -478,7 +474,11 @@ class TextExerciseChatPipeline(
             The generated session title or None if not applicable
         """
         if len(dto.conversation) == 1:
-            first_user_msg = dto.conversation[0].contents[0].text_content
+            first_user_msg = ""
+            if dto.conversation[0].contents and isinstance(
+                dto.conversation[0].contents[0], TextMessageContentDTO
+            ):
+                first_user_msg = dto.conversation[0].contents[0].text_content
             return super()._create_session_title(state, output, first_user_msg)
         return None
 

@@ -69,8 +69,10 @@ class LecturePageChunkRetrieval(SubPipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-        self.cohere_client = RerankRequestHandler("cohere")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
+        self.cohere_client = RerankRequestHandler(model_id="cohere")
 
         self.pipeline = self.llm | StrOutputParser()
         self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(

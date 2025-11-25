@@ -1,6 +1,6 @@
 """Tool for retrieving lecture content using RAG."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, cast
 
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
@@ -50,8 +50,8 @@ def create_tool_lecture_content_retrieval(
             query=query_text,
             course_id=course_id,
             chat_history=history,
-            lecture_id=None,
-            lecture_unit_id=None,
+            lecture_id=cast(int, None),
+            lecture_unit_id=cast(int, None),
             base_url=base_url,
         )
 
@@ -66,17 +66,17 @@ def create_tool_lecture_content_retrieval(
             )
 
         result += "Lecture transcription content:\n"
-        for paragraph in lecture_content.lecture_transcriptions:
+        for transcription in lecture_content.lecture_transcriptions:
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+                f"Lecture: {transcription.lecture_name}, Unit: {transcription.lecture_unit_name}, "
+                f"Page: {transcription.page_number}\nContent:\n---{transcription.segment_text}---\n\n"
             )
 
         result += "Lecture segment content:\n"
-        for paragraph in lecture_content.lecture_unit_segments:
+        for segment in lecture_content.lecture_unit_segments:
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
+                f"Lecture: {segment.lecture_name}, Unit: {segment.lecture_unit_name}, "
+                f"Page: {segment.page_number}\nContent:\n---{segment.segment_summary}---\n\n"
             )
 
         return result

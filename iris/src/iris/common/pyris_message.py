@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,7 +25,7 @@ class PyrisMessage(BaseModel):
     token_usage: TokenUsageDTO = Field(default_factory=TokenUsageDTO)
     sent_at: datetime | None = Field(alias="sentAt", default=None)
     sender: IrisMessageRole
-    contents: List[MessageContentDto] = Field(default=[])
+    contents: Sequence[MessageContentDto] = Field(default=[])
 
     def __str__(self):
         return f"{self.sender.lower()}: {self.contents}"
@@ -34,10 +34,10 @@ class PyrisMessage(BaseModel):
 class PyrisAIMessage(PyrisMessage):
     model_config = ConfigDict(populate_by_name=True)
     sender: IrisMessageRole = IrisMessageRole.ASSISTANT
-    tool_calls: Optional[List[ToolCallDTO]] = Field(alias="toolCalls")
+    tool_calls: Optional[List[ToolCallDTO]] = Field(alias="toolCalls", default=None)
 
 
 class PyrisToolMessage(PyrisMessage):
     model_config = ConfigDict(populate_by_name=True)
     sender: IrisMessageRole = IrisMessageRole.TOOL
-    contents: List[ToolMessageContentDTO] = Field(default=[])
+    contents: Sequence[ToolMessageContentDTO] = Field(default=[])

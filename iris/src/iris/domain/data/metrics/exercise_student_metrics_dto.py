@@ -4,10 +4,12 @@ from pydantic import BaseModel, Field
 
 
 class ExerciseStudentMetricsDTO(BaseModel):
-    average_score: Dict[int, float] = Field({}, alias="averageScore")
-    score: Dict[int, float] = Field({})
+    average_score: Dict[int, float] = Field(default_factory=dict, alias="averageScore")
+    score: Dict[int, float] = Field(default_factory=dict)
     average_latest_submission: Dict[int, float] = Field(
-        {}, alias="averageLatestSubmission"
+        default_factory=dict, alias="averageLatestSubmission"
     )
-    latest_submission: Dict[int, float] = Field({}, alias="latestSubmission")
-    completed: Set[int] = Field({})
+    latest_submission: Dict[int, float] = Field(
+        default_factory=dict, alias="latestSubmission"
+    )
+    completed: Set[int] = Field(default_factory=set)

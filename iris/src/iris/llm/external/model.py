@@ -1,11 +1,11 @@
 from abc import ABCMeta, abstractmethod
-from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
 
 from langchain_core.tools import BaseTool
-from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel
 
 from ...common.pyris_message import PyrisMessage
+from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...llm import CompletionArguments
 
 
@@ -26,8 +26,13 @@ class CompletionModel(LanguageModel, metaclass=ABCMeta):
         return hasattr(subclass, "complete") and callable(subclass.complete)
 
     @abstractmethod
-    def complete(self, prompt: str, arguments: CompletionArguments) -> str:
-        """Create a completion from the prompt"""
+    def complete(
+        self,
+        prompt: str,
+        arguments: CompletionArguments,
+        image: Optional[ImageMessageContentDTO] = None,
+    ) -> str:
+        """Create a completion from the prompt, with optional image for vision models."""
         raise NotImplementedError(f"The LLM {str(self)} does not support completion")
 
 
@@ -49,7 +54,7 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
         tools: Optional[
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
-    ) -> ChatCompletionMessage:
+    ) -> PyrisMessage:
         """Create a completion from the chat messages"""
         raise NotImplementedError(
             f"The LLM {str(self)} does not support chat completion"
@@ -69,6 +74,20 @@ class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
     def embed(self, text: str) -> list[float]:
         """Create an embedding from the text"""
         raise NotImplementedError(f"The LLM {str(self)} does not support embeddings")
+
+    def split_text_semantically(
+        self,
+        text: str,
+        breakpoint_threshold_type: Literal[
+            "percentile", "standard_deviation", "interquartile", "gradient"
+        ] = "gradient",
+        breakpoint_threshold_amount: float = 95.0,
+        min_chunk_size: int = 512,
+    ):
+        """Split text semantically using embeddings. Optional method, not all embedding models support this."""
+        raise NotImplementedError(
+            f"The LLM {str(self)} does not support semantic text splitting"
+        )
 
 
 class ImageGenerationModel(LanguageModel, metaclass=ABCMeta):

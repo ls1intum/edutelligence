@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from typing import (
     Any,
+    Callable,
     Dict,
     Literal,
     Optional,
@@ -70,7 +71,7 @@ def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
             Message(
                 role=map_role_to_str(message.sender),
                 content=text_content,
-                images=convert_to_ollama_images(images),
+                images=convert_to_ollama_images(images),  # type: ignore[arg-type]
             )
         )
     return messages_to_return
@@ -82,7 +83,7 @@ def convert_to_iris_message(
     """
     Convert a Message to a PyrisMessage
     """
-    contents = [TextMessageContentDTO(text_content=message["content"])]
+    contents = [TextMessageContentDTO(textContent=message["content"])]
     tokens = TokenUsageDTO(
         numInputTokens=num_input_tokens,
         numOutputTokens=num_output_tokens,
@@ -158,7 +159,7 @@ class OllamaModel(
     def _build_tooling(
         self,
         tools: Optional[
-            Sequence[Union[Dict[str, Any], Type[BaseModel], callable, BaseTool]]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ):
         """
@@ -178,7 +179,7 @@ class OllamaModel(
             return None, {}
 
         tools_for_client: list = []
-        executors: Dict[str, callable] = {}
+        executors: Dict[str, Callable] = {}
 
         for tool in tools:
             # 1) Plain Python function: pass through unchanged + bind executor
@@ -258,7 +259,7 @@ class OllamaModel(
 
         return tools_for_client, executors
 
-    def _execute_tool(self, executors: Dict[str, callable], name: str, raw_args: Any):
+    def _execute_tool(self, executors: Dict[str, Callable], name: str, raw_args: Any):
         # Ollama may return arguments as a JSON string or a dict
         args = raw_args
         if isinstance(raw_args, str):
@@ -283,7 +284,7 @@ class OllamaModel(
         messages: list,  # list[PyrisMessage]
         arguments,  # CompletionArguments
         tools: Optional[
-            Sequence[Union[Dict[str, Any], Type[BaseModel], callable, BaseTool]]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ):
         # Build the list for Ollama and the local executors
@@ -312,14 +313,14 @@ class OllamaModel(
             tool_calls = msg.get("tool_calls") or []
             if tool_calls:
                 # Add the model's tool-call message to the conversation
-                ollama_messages.append(msg)
+                ollama_messages.append(msg)  # type: ignore[arg-type]
 
                 # Execute each tool and append the tool result
                 for call in tool_calls:
                     fn = call.get("function") or {}
                     name = fn.get("name")
                     args = fn.get("arguments")
-                    result = self._execute_tool(executors, name, args)
+                    result = self._execute_tool(executors, name or "", args)
 
                     content = (
                         result
@@ -332,16 +333,16 @@ class OllamaModel(
                             "role": "tool",
                             "name": name,
                             "content": content,
-                        }
+                        }  # type: ignore[arg-type]
                     )
                 # Loop again so the model can see tool outputs
                 continue
 
             # No tool calls → we have the final assistant message
             if msg:
-                ollama_messages.append(msg)
+                ollama_messages.append(msg)  # type: ignore[arg-type]
             return convert_to_iris_message(
-                msg,
+                msg,  # type: ignore[arg-type]
                 total_prompt_eval,
                 total_eval,
                 response.get("model", model_used),
@@ -349,7 +350,7 @@ class OllamaModel(
 
         # Safety valve: max rounds reached; return whatever the last msg was
         return convert_to_iris_message(
-            msg if "msg" in locals() else {},
+            msg if "msg" in locals() else {},  # type: ignore[arg-type]
             total_prompt_eval,
             total_eval,
             model_used,
@@ -359,7 +360,7 @@ class OllamaModel(
         response = self._client.embeddings(
             model=self.model, prompt=text, options=self.options
         )
-        return list(response)
+        return response.get("embedding", [])  # type: ignore[return-value]
 
     def __str__(self):
         return f"Ollama('{self.model}')"

@@ -1,6 +1,6 @@
 from asyncio.log import logger
 from functools import reduce
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -57,7 +57,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
         self.dto = dto
         self.callback = callback
         self.collection = init_lecture_transcription_schema(client)
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
 
         request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
@@ -65,10 +67,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
-        self.tokens = []
+        self.tokens: List[Any] = []
 
-    def __call__(self) -> (str, []):
+    def __call__(self) -> Tuple[str, List[Any]]:
         try:
+            if self.dto is None:
+                raise ValueError("DTO must be provided")
+
             self.callback.in_progress("Deleting existing transcription data")
             self.delete_existing_transcription_data(self.dto.lecture_unit)
             self.callback.done("Old slides deleted")
@@ -87,7 +92,10 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
-            return self.dto.lecture_unit.transcription.language, self.tokens
+            transcription = self.dto.lecture_unit.transcription
+            if transcription is None:
+                return "", self.tokens
+            return transcription.language, self.tokens
         except Exception as e:
             logger.error("Error processing transcription ingestion pipeline: %s", e)
             self.callback.error(
@@ -98,6 +106,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
             return "", []
 
     def delete_existing_transcription_data(self, transcription: LectureUnitPageDTO):
+        if self.dto is None:
+            return
+
         self.collection.data.delete_many(
             where=Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
                 transcription.course_id
@@ -133,9 +144,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO
     ) -> List[Dict[str, Any]]:
-        chunks = []
+        if self.dto is None or transcription.transcription is None:
+            return []
 
-        slide_chunks = {}
+        chunks: List[Dict[str, Any]] = []
+
+        slide_chunks: Dict[str, Dict[str, Any]] = {}
         for segment in transcription.transcription.segments:
             slide_key = f"{transcription.lecture_id}_{transcription.lecture_unit_id}_{segment.slide_number}"
 
@@ -161,20 +175,22 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value
                 ] = segment.end_time
 
-        for i, segment in enumerate(slide_chunks.values()):
+        for i, slide_chunk in enumerate(slide_chunks.values()):
+            segment_text = slide_chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
+            # Cast to str to satisfy mypy - Weaviate returns union types
+            segment_text_str = str(segment_text)
+
             # If the segment is shorter than 1200 characters, we can just add it as is
-            if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
+            if len(segment_text_str) < 1200:
                 # Add the segment to the chunks list and replace the chunk separator character with a space
-                segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = (
-                    self.replace_separator_char(
-                        segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]
-                    )
+                slide_chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value] = (
+                    self.replace_separator_char(segment_text_str)
                 )
-                chunks.append(segment)
+                chunks.append(slide_chunk)
                 continue
 
             semantic_chunks = self.llm_embedding.split_text_semantically(
-                segment[LectureTranscriptionSchema.SEGMENT_TEXT.value],
+                segment_text_str,
                 breakpoint_threshold_type="gradient",
                 breakpoint_threshold_amount=60.0,
                 min_chunk_size=512,
@@ -182,7 +198,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
             # Calculate the offset of the current slide chunk to the start of the transcript
             offset_slide_chunk = reduce(
-                lambda acc, txt: acc + len(self.remove_separator_char(txt)),
+                lambda acc, txt: acc + len(self.remove_separator_char(str(txt))),
                 map(
                     lambda seg: seg[LectureTranscriptionSchema.SEGMENT_TEXT.value],
                     list(slide_chunks.values())[:i],
@@ -202,7 +218,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
                 chunks.append(
                     {
-                        **segment,
+                        **slide_chunk,
                         LectureTranscriptionSchema.SEGMENT_START_TIME.value: start_time,
                         LectureTranscriptionSchema.SEGMENT_END_TIME.value: end_time,
                         LectureTranscriptionSchema.SEGMENT_TEXT.value: self.cleanup_chunk(
@@ -244,6 +260,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
         return self.replace_separator_char(text, "")
 
     def summarize_chunks(self, chunks: List[Dict[str, Any]]):
+        if self.dto is None:
+            return chunks
+
         chunks_with_summaries = []
         for chunk in chunks:
             self.prompt = ChatPromptTemplate.from_messages(
@@ -261,10 +280,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.prompt = ChatPromptTemplate.from_messages(prompt_val)
             try:
                 response = (self.prompt | self.pipeline).invoke({})
-                self._append_tokens(
-                    self.llm.tokens,
-                    PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION,
-                )
+                if self.llm.tokens:
+                    self._append_tokens(
+                        self.llm.tokens,
+                        PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION,
+                    )
                 chunks_with_summaries.append(
                     {
                         **chunk,

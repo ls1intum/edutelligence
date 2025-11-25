@@ -21,6 +21,7 @@ from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.course_chat_variant import CourseChatVariant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
@@ -217,8 +218,8 @@ class CourseChatPipeline(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
                     state.dto.course.id,
-                    state.dto.course.name,
-                    state.dto.settings.artemis_base_url if state.dto.settings else "",
+                    state.dto.course.name or "",
+                    state.dto.settings.artemis_base_url,
                     callback,
                     query_text,
                     state.message_history,
@@ -517,7 +518,8 @@ class CourseChatPipeline(
                 suggestions = self.suggestion_pipeline(suggestion_dto)
 
                 if self.suggestion_pipeline.tokens is not None:
-                    self._track_tokens(state, self.suggestion_pipeline.tokens)
+                    for token in self.suggestion_pipeline.tokens:
+                        self._track_tokens(state, token)
 
                 return suggestions
             else:
@@ -555,9 +557,12 @@ class CourseChatPipeline(
         # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
         # - or directly with the user's first message (len == 1)
         if len(dto.chat_history) in (1, 2):
-            first_user_msg = (
-                dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
-            )
+            first_user_msg = ""
+            last_msg = dto.chat_history[len(dto.chat_history) - 1]
+            if last_msg.contents and isinstance(
+                last_msg.contents[0], TextMessageContentDTO
+            ):
+                first_user_msg = last_msg.contents[0].text_content
             return super()._create_session_title(state, output, first_user_msg)
         return None
 
@@ -594,7 +599,7 @@ class CourseChatPipeline(
             )
 
     @classmethod
-    def get_variants(cls) -> List[CourseChatVariant]:  # type: ignore[override]
+    def get_variants(cls) -> List[CourseChatVariant]:
         """
         Get available variants for the course chat pipeline.
 

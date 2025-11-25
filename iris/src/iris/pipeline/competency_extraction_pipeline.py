@@ -1,7 +1,7 @@
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
 )
@@ -18,6 +18,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.llm.llm_manager import LlmManager
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
 from iris.web.status.status_update import CompetencyExtractionCallback
@@ -32,7 +33,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
     and handles errors during parsing, appending tokens, and final result notification.
     """
 
-    callback: CompetencyExtractionCallback
+    callback: Optional[CompetencyExtractionCallback]
     request_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
 
@@ -41,7 +42,9 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
+        self.request_handler = ModelVersionRequestHandler(
+            llm_manager=LlmManager(), version="gpt-4.1"
+        )
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 
@@ -49,8 +52,8 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
         self,
         dto: CompetencyExtractionPipelineExecutionDTO,
         prompt: Optional[ChatPromptTemplate] = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         if not dto.course_description:
             raise ValueError("Course description is required")
         if not dto.taxonomy_options:
@@ -68,29 +71,29 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
                 f"Do not repeat these competencies.\n"
             )
 
-        prompt = system_prompt.format(
+        formatted_prompt = system_prompt.format(
             taxonomy_list=taxonomy_options,
             course_description=dto.course_description,
             max_n=dto.max_n,
             current_competencies=current_competencies,
         )
-        prompt = PyrisMessage(
+        system_message = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
-            contents=[TextMessageContentDTO(text_content=prompt)],
+            contents=[TextMessageContentDTO(textContent=formatted_prompt)],
         )
 
         response = self.request_handler.chat(
-            [prompt], CompletionArguments(temperature=0.4), tools=None
+            [system_message], CompletionArguments(temperature=0.4), tools=None
         )
         self._append_tokens(
             response.token_usage, PipelineEnum.IRIS_COMPETENCY_GENERATION
         )
-        response = response.contents[0].text_content
+        response_text = cast(TextMessageContentDTO, response.contents[0]).text_content
 
         generated_competencies: list[Competency] = []
 
         # Find all competencies in the response up to the max_n
-        competencies = response.split("\n\n")[: dto.max_n]
+        competencies = response_text.split("\n\n")[: dto.max_n]
         for i, competency in enumerate(competencies):
             logger.debug("Processing competency %s: %s", i + 1, competency)
             if "{" not in competency or "}" not in competency:
@@ -107,7 +110,8 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
                 continue
             logger.debug("Generated competency: %s", competency)
             generated_competencies.append(competency)
-        self.callback.done(final_result=generated_competencies, tokens=self.tokens)
+        if self.callback:
+            self.callback.done(final_result=generated_competencies, tokens=self.tokens)  # type: ignore[arg-type]
 
     @classmethod
     def get_variants(cls) -> List[CompetencyExtractionVariant]:

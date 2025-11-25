@@ -1,7 +1,7 @@
 import logging
 import traceback
 from threading import Thread
-from typing import List
+from typing import List, Sequence
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
@@ -455,12 +455,12 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
 
 
 def get_available_variants(
-    all_variants: List[AbstractVariant], available_llms: List[LanguageModel]
+    all_variants: Sequence[AbstractVariant], available_llms: List[LanguageModel]
 ) -> List[FeatureDTO]:
     """
     Returns available variants for this pipeline based on available LLMs.
 
-    :param all_variants: List of all variants for the pipeline
+    :param all_variants: Sequence of all variants for the pipeline
     :param available_llms: List of available language models
 
     :return: List of FeatureDTO objects for supported variants

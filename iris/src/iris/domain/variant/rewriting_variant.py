@@ -1,3 +1,5 @@
+from typing import Optional
+
 from .abstract_variant import AbstractVariant
 
 
@@ -10,7 +12,7 @@ class RewritingVariant(AbstractVariant):
         name: str,
         description: str,
         rewriting_model: str,
-        consistency_model: str = None,
+        consistency_model: Optional[str] = None,
     ):
         super().__init__(
             variant_id=variant_id,
