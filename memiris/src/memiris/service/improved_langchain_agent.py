@@ -1,6 +1,6 @@
 from typing import Any
 
-from langchain.agents.agent import RunnableMultiActionAgent
+from langchain_classic.agents.agent import RunnableMultiActionAgent
 from langchain_core.agents import AgentAction, AgentFinish
 
 

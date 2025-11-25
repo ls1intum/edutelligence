@@ -3,10 +3,10 @@ import re
 from typing import Any, Callable, List, Optional
 
 from jinja2 import Template
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.tools import StructuredTool
+from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import StructuredTool
 from langfuse import observe
 
 from memiris.dlo.learning_main_dlo import LearningDLO
