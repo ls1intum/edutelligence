@@ -7,29 +7,6 @@ from module_modeling_llm.apollon_transformer.schema_converter import SchemaConve
 class ApollonJSONTransformer:
 
     @staticmethod
-    def _convert_v2_to_v3(model_dict: dict) -> dict:
-        """
-        Converts an Apollon JSON model from version 2.0.0 to 3.0.0.
-        Changes 'elements' and 'relationships' from lists to dicts.
-        """
-        model_dict["version"] = "3.0.0"
-
-        model_dict["elements"] = {
-            element["id"]: element for element in model_dict.get("elements", [])
-        }
-
-        model_dict["relationships"] = {
-            rel["id"]: rel for rel in model_dict.get("relationships", [])
-        }
-
-        model_dict["interactive"] = {
-            "elements": {},
-            "relationships": {}
-        }
-
-        return model_dict
-
-    @staticmethod
     def transform_json(model: str) -> tuple[str, dict[str, str], str, dict[str, str]]:
         """
         Serialize a given Apollon diagram model to a string representation.
@@ -43,12 +20,8 @@ class ApollonJSONTransformer:
 
         model_dict = json.loads(model)
 
-        # Convert legacy version 2.0.0 to version 3.0.0 if needed
-        if model_dict.get("version") == "2.0.0":
-            model_dict = ApollonJSONTransformer._convert_v2_to_v3(model_dict)
-        # Convert Apollon Editor v3+ format (nodes/edges or nested model) to v3.0.0 format
-        else:
-            model_dict = SchemaConverter.normalize_to_v3(model_dict)
+        # Normalize to v3.0.0 format for input version (v2, v3,v4)
+        model_dict = SchemaConverter.normalize_to_v3(model_dict)
 
         parser = UMLParser(model_dict)
 

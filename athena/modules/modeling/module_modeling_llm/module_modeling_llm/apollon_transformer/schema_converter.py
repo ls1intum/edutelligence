@@ -10,6 +10,16 @@ class SchemaConverter:
     """Converts between different Apollon schema versions"""
 
     @staticmethod
+    def is_v2_schema(data: dict) -> bool:
+        """
+        Check if the data is in v2.0.0 schema format.
+        
+        :param data: The schema data to check
+        :return: True if v2 schema, False otherwise
+        """
+        return data.get("version") == "2.0.0"
+
+    @staticmethod
     def is_v3_schema(data: dict) -> bool:
         """
         Check if the data is in v3.0.0 schema format.
@@ -43,6 +53,33 @@ class SchemaConverter:
         # Convert hyphenated lowercase to PascalCase
         parts = handle.split("-")
         return "".join(part.capitalize() for part in parts)
+
+    @staticmethod
+    def convert_v2_to_v3(v2_data: dict) -> dict:
+        """
+        Convert v2.0.0 schema to v3.0.0 schema format.
+        Changes 'elements' and 'relationships' from lists to dicts.
+        
+        :param v2_data: Schema data in v2.0.0 format
+        :return: Schema data in v3.0.0 format
+        """
+        v3_data = v2_data.copy()
+        v3_data["version"] = "3.0.0"
+
+        v3_data["elements"] = {
+            element["id"]: element for element in v2_data.get("elements", [])
+        }
+
+        v3_data["relationships"] = {
+            rel["id"]: rel for rel in v2_data.get("relationships", [])
+        }
+
+        v3_data["interactive"] = {
+            "elements": {},
+            "relationships": {}
+        }
+
+        return v3_data
 
     @staticmethod
     def _capitalize_type(type_name: str) -> str:
@@ -175,6 +212,10 @@ class SchemaConverter:
         :param data: Schema data in any supported format
         :return: Schema data in v3.0.0 format
         """
+        # If it's v2, convert it first
+        if SchemaConverter.is_v2_schema(data):
+            return SchemaConverter.convert_v2_to_v3(data)
+        
         # If it's already v3 with nested model, extract it
         if SchemaConverter.is_v3_schema(data):
             return data["model"]
