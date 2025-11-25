@@ -107,7 +107,10 @@ export const useFetchFilemap = (url: string) => {
   const [filesMap, setFilesMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!url) return;
+    if (!url) {
+      setFilesMap({});
+      return;
+    }
 
     const controller = new AbortController();
 
@@ -133,6 +136,7 @@ export const useFetchFilemap = (url: string) => {
       } catch (err) {
         if ((err as any)?.name !== "AbortError") {
           console.error("Error fetching repository filemap:", err);
+          setFilesMap({});
           setIsError(true);
         }
       } finally {
