@@ -3,55 +3,70 @@ import type { DataMode } from "@/model/data_mode";
 
 import { promises as fs } from "fs";
 import { join } from "path";
-import Archiver from "archiver";
 import { validateDataModeMiddleware } from "@/helpers/validate_data_mode_middleware";
 import { getDataModeParts } from "@/helpers/get_data";
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
-  const { dataMode, exerciseId, path } = req.query as {
-    dataMode: DataMode;
-    exerciseId: string;
-    path: string[];
-  };
-  // example for path: ['submissions', '1.zip'] or just ['solution.zip']
+  try {
+    const { dataMode, exerciseId, path } = req.query as {
+      dataMode: DataMode;
+      exerciseId: string;
+      path: string[];
+    };
+    // example for path: ['submissions', '1'] or just ['solution']
 
-  // remove ".zip" from the last path element
-  const filename = path[path.length - 1].replace(".zip", "");
-  path[path.length - 1] = filename;
+    // Get the folder path
+    const folderPath = join(
+      process.cwd(),
+      "data",
+      ...getDataModeParts(dataMode),
+      "exercise-" + exerciseId,
+      ...path
+    );
 
-  // Get the folder path
-  const folderPath = join(
-    process.cwd(),
-    "data",
-    ...getDataModeParts(dataMode),
-    "exercise-" + exerciseId,
-    ...path
-  );
+    // Check if the folder exists
+    await fs.access(folderPath);
 
-  // Check if the folder exists
-  await fs.access(folderPath);
+    const fileMap: Record<string, string> = {};
 
-  res.setHeader("Content-Type", "application/zip");
-  res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    // walk directory recursively and collect files as UTF-8 text
+    const walk = async (dir: string, relativePrefix = "") => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        const relPath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          await walk(fullPath, relPath);
+        } else if (entry.isFile()) {
+          const buf = await fs.readFile(fullPath);
+          fileMap[relPath] = buf.toString("utf8");
+        }
+      }
+    };
 
-  // Create zip archive
-  const archive = Archiver("zip", {
-    zlib: { level: 9 },
-  });
+    await walk(folderPath);
 
-  // Pipe the archive data to the response
-  archive.pipe(res);
-
-  // Append the folder to the archive
-  archive.directory(folderPath, false);
-
-  // Finalize the archive and send the response
-  await archive.finalize();
+    res.setHeader("Content-Type", "application/json");
+    res.status(200).json(fileMap);
+  } catch (err: any) {
+    if (err && err.code === "ENOENT") {
+      res.status(404).json({ error: "Folder not found" });
+    } else {
+      console.error("Error building filemap:", err);
+      res.status(500).json({ error: "Failed to build filemap" });
+    }
+  }
 };
 
-export default function handlerWithMiddleware(
+export default async function handlerWithMiddleware(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  validateDataModeMiddleware(req, res, () => handler(req, res));
+  await new Promise<void>((resolve, reject) => {
+    validateDataModeMiddleware(req, res, () => {
+      Promise.resolve(handler(req, res))
+        .then(() => resolve())
+        .catch(reject);
+    });
+  });
 }
