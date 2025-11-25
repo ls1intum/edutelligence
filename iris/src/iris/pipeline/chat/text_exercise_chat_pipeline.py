@@ -7,15 +7,15 @@ import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
+from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
+    TextExerciseChatPipelineExecutionDTO,
+)
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
-from ...domain.text_exercise_chat_pipeline_execution_dto import (
-    TextExerciseChatPipelineExecutionDTO,
-)
 from ...domain.variant.text_exercise_chat_variant import TextExerciseChatVariant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
@@ -140,7 +140,7 @@ class TextExerciseChatPipeline(
         last_message: Optional[PyrisMessage] = next(
             (
                 m
-                for m in reversed(dto.conversation or [])
+                for m in reversed(dto.chat_history or [])
                 if m.sender == IrisMessageRole.USER
             ),
             None,
@@ -196,11 +196,7 @@ class TextExerciseChatPipeline(
                     create_tool_lecture_content_retrieval(
                         lecture_retriever,
                         dto.exercise.course.id,
-                        (
-                            dto.execution.settings.artemis_base_url
-                            if dto.execution.settings
-                            else ""
-                        ),
+                        (dto.settings.artemis_base_url if dto.settings else ""),
                         callback,
                         query_text,
                         state.message_history,
@@ -218,7 +214,7 @@ class TextExerciseChatPipeline(
                         faq_retriever,
                         dto.exercise.course.id,
                         dto.exercise.course.name or "",
-                        dto.execution.settings.artemis_base_url,
+                        (dto.settings.artemis_base_url if dto.settings else ""),
                         callback,
                         query_text,
                         state.message_history,
@@ -261,10 +257,8 @@ class TextExerciseChatPipeline(
 
         # Extract custom instructions if available from execution
         custom_instructions = ""
-        if hasattr(dto.execution, "settings") and dto.execution.settings:
-            custom_instructions = getattr(
-                dto.execution.settings, "custom_instructions", ""
-            )
+        if hasattr(dto, "settings") and dto.settings:
+            custom_instructions = getattr(dto.settings, "custom_instructions", "")
 
         custom_instructions = format_custom_instructions(custom_instructions)
 
@@ -291,7 +285,7 @@ class TextExerciseChatPipeline(
         limit: int | None = None,
     ) -> list[PyrisMessage]:
         """
-        Convert the conversation from DTO to message history format.
+        Convert the chat_history from DTO to message history format.
 
         Args:
             state: The current pipeline execution state.
@@ -300,10 +294,10 @@ class TextExerciseChatPipeline(
         Returns:
             List of PyrisMessage objects.
         """
-        # Use the conversation field from the DTO
-        conversation = state.dto.conversation or []
+        # Use the chat_history field from the DTO
+        chat_history = state.dto.chat_history or []
         effective_limit = limit if limit is not None else self.get_history_limit(state)
-        return conversation[-effective_limit:] if conversation else []
+        return chat_history[-effective_limit:] if chat_history else []
 
     def get_text_of_latest_user_message(
         self,
@@ -312,7 +306,7 @@ class TextExerciseChatPipeline(
         ],
     ) -> str:
         """
-        Extract the latest user's text input from the conversation.
+        Extract the latest user's text input from the chat_history.
 
         Args:
             state: The current pipeline execution state.
@@ -320,9 +314,9 @@ class TextExerciseChatPipeline(
         Returns:
             The text content of the latest user message.
         """
-        if state.dto.conversation:
-            # Get the last message in the conversation
-            last_message = state.dto.conversation[-1]
+        if state.dto.chat_history:
+            # Get the last message in the chat_history
+            last_message = state.dto.chat_history[-1]
             if last_message.sender == IrisMessageRole.USER and last_message.contents:
                 # Extract text content
                 if isinstance(last_message.contents[0], dict):
@@ -411,9 +405,7 @@ class TextExerciseChatPipeline(
             if faq_storage.get("faqs"):
                 state.callback.in_progress("Adding FAQ references...")
                 base_url = (
-                    state.dto.execution.settings.artemis_base_url
-                    if state.dto.execution.settings
-                    else ""
+                    state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
                 result = self.citation_pipeline(
                     faq_storage["faqs"],
@@ -428,9 +420,7 @@ class TextExerciseChatPipeline(
             if lecture_content_storage.get("content"):
                 state.callback.in_progress("Adding lecture references...")
                 base_url = (
-                    state.dto.execution.settings.artemis_base_url
-                    if state.dto.execution.settings
-                    else ""
+                    state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
                 result = self.citation_pipeline(
                     lecture_content_storage["content"],
@@ -473,12 +463,12 @@ class TextExerciseChatPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if len(dto.conversation) == 1:
+        if dto.chat_history and len(dto.chat_history) == 1:
             first_user_msg = ""
-            if dto.conversation[0].contents and isinstance(
-                dto.conversation[0].contents[0], TextMessageContentDTO
+            if dto.chat_history[0].contents and isinstance(
+                dto.chat_history[0].contents[0], TextMessageContentDTO
             ):
-                first_user_msg = dto.conversation[0].contents[0].text_content
+                first_user_msg = dto.chat_history[0].contents[0].text_content
             return super()._create_session_title(state, output, first_user_msg)
         return None
 
