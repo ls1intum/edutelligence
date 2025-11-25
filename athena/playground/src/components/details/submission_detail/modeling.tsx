@@ -3,7 +3,6 @@ import { createFeedbackItemUpdater, createNewFeedback, getFeedbackReferenceType 
 import type { ManualRating } from "@/model/manual_rating";
 import { createManualRatingItemUpdater } from "@/model/manual_rating";
 import type { ModelingSubmission } from "@/model/submission";
-import '@tumaet/apollon/dist/assets/style.css';
 import { useEffect, useRef, useState } from 'react';
 
 import InlineFeedback from "@/components/details/editor/inline_feedback";
