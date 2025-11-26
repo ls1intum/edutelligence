@@ -1,196 +1,28 @@
-name: AtlasML - Build and Push Docker Image natively
+name: AtlasML - Build Docker Images
 
 on:
-  workflow_call:
-    inputs:
-        image-name:
-          type: string
-          default: ${{ github.repository }}/atlasml
-          description: "The name for the docker image (Default: Repository name)"
-        registry:
-          type: string
-          default: ghcr.io
-          description: "The registry to push the image to (Default: ghcr.io)"
-        labels:
-          type: string
-          description: "Label that should be appended to the image"
-          required: false
-        tags:
-          type: string
-          description: |
-            Tags for the image. Supports flexible formats:
-            - Comma-separated simple tags (e.g., "v1.0,latest,stable")
-            - Full docker/metadata-action tag configuration (e.g., "type=semver,pattern={{version}}")
-            - Mixed format with multiple lines (e.g., "v1.0,stable" on one line and "type=semver,pattern={{version}}" on another)
-          required: false
-    outputs:
-      image_tag: 
-        description: "The tag of the image that was built"
-        value: ${{ jobs.merge.outputs.image_tag }}
-    secrets:
-      registry-user:
-        required: false
-      registry-password:
-        required: false
-
+  push:
+    paths:
+      - 'atlas/**'
+      - '.github/workflows/atlas_build-and-push-docker.yml'
+  release:
+    types:
+      - created
 
 jobs:
   build:
-    name: Build ${{ matrix.platform }} Docker Image for AtlasML
+    name: ${{ matrix.name }}
+    if: github.actor != 'dependabot[bot]'
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04
-          # - platform: linux/arm64
-          #   runner: ubuntu-24.04-arm
-
-    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
-    steps:
-      # Git Checkout
-      - name: Git Checkout (specific ref)
-        uses: actions/checkout@v6
-        with:
-          ref: main
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
-
-      - name: Log in to the Container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ inputs.registry }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ inputs.registry }}/${{ inputs.image-name }}
-
-      - name: Build and push Docker Image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: ./atlas/AtlasMl
-          file: ./atlas/AtlasMl/Dockerfile
-          tags: ${{ inputs.registry }}/${{ inputs.image-name }}
-          outputs: type=image,"name=${{ inputs.image-name }}",push-by-digest=true,name-canonical=true,push=true
-
-      - name: Prepare
-        run: |
-          platform=${{ matrix.platform }}
-          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
-          image="${{ inputs.image-name }}"
-          echo "IMAGE_NAME=${image//\//-}" >> $GITHUB_ENV
-
-      - name: Export digest
-        run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"          
-  
-      - name: Upload digest
-        uses: actions/upload-artifact@v5
-        with:
-          name: digests-${{ env.IMAGE_NAME }}-${{ env.PLATFORM_PAIR }}
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
-          retention-days: 1
-  merge:
-    runs-on: ubuntu-latest
-    outputs: 
-      image_tag: ${{ steps.output-image-tag.outputs.image_tag }}
-    needs:
-      - build
-    steps:
-      - name: Prepare
-        run: |
-          image="${{ inputs.image-name }}"
-          echo "IMAGE_NAME=${image//\//-}" >> $GITHUB_ENV
-
-      - name: Download digests
-        uses: actions/download-artifact@v6
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-${{ env.IMAGE_NAME }}-*
-          merge-multiple: true
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ inputs.registry }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Process tags input to support both simple tags and advanced configuration
-      - name: Prepare tag configuration
-        id: tag_config
-        run: |
-          # Use TAGS_CONFIG environment variable to store tags configuration
-          echo "TAGS_CONFIG<<EOF" >> $GITHUB_ENV
-          
-          # Default tagging configuration
-          echo "type=raw,value=latest,enable={{is_default_branch}}" >> $GITHUB_ENV
-          echo "type=ref,event=branch" >> $GITHUB_ENV
-          echo "type=ref,event=pr" >> $GITHUB_ENV
-          
-          # Check if tags input is provided
-          if [ -n "${{ inputs.tags }}" ]; then
-            # Process input line by line
-            echo "${{ inputs.tags }}" | while IFS= read -r line || [[ -n "$line" ]]; do
-              # Trim whitespace
-              line=$(echo "$line" | xargs)
-          
-              if [ -n "$line" ]; then
-                if [[ "$line" == *"type="* ]]; then
-                  # Line contains configuration, add it directly
-                  echo "$line" >> $GITHUB_ENV
-                else
-                  # Line contains simple tags, process as comma-separated list
-                  IFS=',' read -ra TAG_ARRAY <<< "$line"
-                  for tag in "${TAG_ARRAY[@]}"; do
-                    # Trim whitespace from each tag
-                    tag=$(echo "$tag" | xargs)
-                    if [ -n "$tag" ]; then
-                      echo "type=raw,value=${tag}" >> $GITHUB_ENV
-                    fi
-                  done
-                fi
-              fi
-            done
-          fi
-          
-          echo "EOF" >> $GITHUB_ENV
-
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ inputs.registry }}/${{ inputs.image-name }}
-          tags: |
-            ${{ env.TAGS_CONFIG }}
-          labels: |
-            ${{ inputs.labels }}        
-
-      - name: Create manifest list and push
-        working-directory: ${{ runner.temp }}/digests
-        run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ inputs.registry }}/${{ inputs.image-name }}@sha256:%s ' *)          
-
-      - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ${{ inputs.registry }}/${{ inputs.image-name }}:${{ steps.meta.outputs.version }}
-          
-      - id: output-image-tag
-        run: |
-          echo "image_tag=${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
+          - name: AtlasML
+            dockerfile: ./atlas/AtlasMl/Dockerfile
+            image: ghcr.io/ls1intum/edutelligence/atlasml
+            context: ./atlas/AtlasMl
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@feat/minor-build-improvements
+    with:
+      image-name: ${{ matrix.image }}
+      docker-file: ${{ matrix.dockerfile }}
+      docker-context: ${{ matrix.context }}

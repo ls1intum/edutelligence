@@ -1,0 +1,49 @@
+name: AtlasML - Deploy to Test 1
+
+on:
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        type: string
+        description: 'Image tag to deploy (default: pr-<number> if PR exists, latest for default branch)'
+      deploy-atlasml:
+        type: boolean
+        default: true
+        description: (Re-)deploys AtlasML.
+
+jobs:
+  provision-env:
+    runs-on: ubuntu-latest
+    environment: 'Atlas - Test 1'
+    steps:
+      - name: Write .env to remote host
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            sudo mkdir -p /opt/atlasml
+            cat << EOF | sudo tee /opt/atlasml/.env > /dev/null
+            PYTHONPATH='${{ secrets.PYTHONPATH }}'
+            WEAVIATE_HOST='${{ secrets.WEAVIATE_HOST }}'
+            WEAVIATE_PORT='${{ secrets.WEAVIATE_PORT }}'
+            WEAVIATE_GRPC_PORT='${{ secrets.WEAVIATE_GRPC_PORT }}'
+            OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}'
+            OPENAI_API_URL='${{ secrets.OPENAI_API_URL }}'
+            ATLAS_API_KEYS='${{ secrets.ATLAS_API_KEYS }}'
+            SENTRY_DSN='${{ secrets.SENTRY_DSN }}'
+            ENV='${{ secrets.ENV }}'
+            EOF
+            sudo chmod 600 /opt/atlasml/.env
+  deploy-atlasml:
+    needs: provision-env
+    if: ${{ inputs.deploy-atlasml }}
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+    with:
+      environment: 'AtlasML - Test 1'
+      docker-compose-file: './atlas/compose.atlas.yaml'
+      main-image-name: ls1intum/edutelligence/atlasml
+      image-tag: ${{ inputs.image-tag }}
+      deployment-base-path: '/opt/atlasml'
+    secrets: inherit
