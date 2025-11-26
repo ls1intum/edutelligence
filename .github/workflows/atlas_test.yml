@@ -5,12 +5,12 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - 'atlas/AtlasMl/**'
-      - '.github/workflows/atlasml_test-and-build.yml'
+      - '.github/workflows/atlas_test.yml'
     branches: [main]
   push:
     paths:
       - 'atlas/AtlasMl/**'
-      - '.github/workflows/atlasml_test-and-build.yml'
+      - '.github/workflows/atlas_test.yml'
     branches: [main]
   workflow_dispatch:
 
@@ -48,6 +48,7 @@ jobs:
           echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
 
       - name: Post Coverage Comment
+        if: github.event_name == 'pull_request'
         uses: thollander/actions-comment-pull-request@v2
         with:
           message: |
