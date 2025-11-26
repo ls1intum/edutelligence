@@ -5,12 +5,12 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - 'atlas/AtlasMl/**'
-      - '.github/workflows/atlasml_test-and-build.yml'
+      - '.github/workflows/atlas_test.yml'
     branches: [main]
   push:
     paths:
       - 'atlas/AtlasMl/**'
-      - '.github/workflows/atlasml_test-and-build.yml'
+      - '.github/workflows/atlas_test.yml'
     branches: [main]
   workflow_dispatch:
 
