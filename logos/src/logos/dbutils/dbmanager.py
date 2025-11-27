@@ -614,13 +614,18 @@ class DBManager:
 
         # Build UPDATE clause for conflict resolution (exclude PK columns)
         update_columns = [col for col in columns if col not in ["model_id", "provider_name"]]
-        update_clause = ", ".join([f"{col} = EXCLUDED.{col}" for col in update_columns])
+        if update_columns:
+            set_expressions = ", ".join(f"{col} = EXCLUDED.{col}" for col in update_columns)
+            set_clause = f"{set_expressions}, last_updated = CURRENT_TIMESTAMP"
+        else:
+            # Only PKs present; still advance timestamp on conflict
+            set_clause = "last_updated = CURRENT_TIMESTAMP"
 
         sql = text(f"""
             INSERT INTO model_provider_config ({', '.join(columns)})
             VALUES ({', '.join(placeholders)})
             ON CONFLICT (model_id, provider_name)
-            DO UPDATE SET {update_clause}, last_updated = CURRENT_TIMESTAMP
+            DO UPDATE SET {set_clause}
             RETURNING model_id, provider_name
         """)
 
