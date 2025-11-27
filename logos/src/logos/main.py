@@ -1,19 +1,23 @@
+import asyncio
 import json
 import logging
 import os
-import traceback
+from typing import Any, Dict
 
 import grpc
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
-from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup, \
+from logos.jobs.job_service import JobService, JobSubmission
+from logos.responses import get_standard_response, get_client_ip, request_setup, \
     proxy_behaviour, resource_behaviour
 from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
@@ -102,6 +106,7 @@ async def stop_grpc():
         await _grpc_server.stop(0)
     sm = SchedulingManager(FCFSScheduler())
     sm.stop()
+
 
 
 @app.post("/logosdb/setup")
@@ -346,7 +351,7 @@ async def logos_service(path: str, request: Request):
     :param request: Request
     :return: The response from Endpoints
     """
-    return await work(path, request)
+    return await submit_job_request(path, request)
 
 
 @app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
@@ -357,79 +362,128 @@ async def logos_service_long(path: str, request: Request):
     :param request: Request
     :return: The response from Endpoints
     """
-    return await work(path, request)
+    return await submit_job_request(path, request)
 
 
-async def work(path:str, request: Request):
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: int):
+    """
+    Return current state of a submitted job, including result or error when finished.
+    """
+    job = JobService.fetch(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "result": job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None,
+        "error": job["error_message"] if job["status"] == JobStatus.FAILED.value else None,
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+
+async def submit_job_request(path: str, request: Request) -> JSONResponse:
+    """
+    Accept a proxy request, persist it as a job, and launch async processing.
+    """
     headers = dict(request.headers)
-    # Read request
-    data = await request.body()
-    json_data = request2json(data)
+    raw_body = await request.body()
+    try:
+        json_data = request2json(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    if json_data is None:
+        json_data = dict()
+    if not isinstance(json_data, dict):
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
+    client_ip = get_client_ip(request)
+    # Persist job and run it asynchronously
+    job_payload = JobSubmission(
+        path=path,
+        method=request.method,
+        headers=headers,
+        body=json_data,
+        client_ip=client_ip,
+    )
+    job_id = JobService.create_job(job_payload)
+    # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
+    asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip))
+    status_url = str(request.url_for("get_job_status", job_id=job_id))
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url})
+
+
+async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str):
+    """
+    Execute a job and persist success or failure.
+    """
+    try:
+        JobService.mark_running(job_id)
+        result = await execute_proxy_job(path, headers, json_data, client_ip)
+        JobService.mark_success(job_id, result)
+    except Exception as e:
+        logging.exception("Job %s failed", job_id)
+        JobService.mark_failed(job_id, str(e))
+
+
+async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str) -> Dict[str, Any]:
+    """
+    Execute the long-running proxy workflow and return serialized result.
+    """
+    headers = headers or dict()
+    json_data = json_data or dict()
     # logos-API-check
     logos_key = headers["logos_key"] if "logos_key" in headers else (
-        headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else (headers["authorization"].replace("Bearer ", "") if "authorization" in headers else ""))
-    # logging.info("Headers: %s", headers)
+        headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else (
+            headers["authorization"].replace("Bearer ", "") if "authorization" in headers else ""))
     with DBManager() as db:
         r, c = db.get_process_id(logos_key)
         if c != 200:
             logging.info("Error while logging a request: %s", r)
             usage_id = None
         else:
-            r, c = db.log_usage(int(r["result"]), get_client_ip(request), json_data, headers)
+            r, c = db.log_usage(int(r["result"]), client_ip, json_data, headers)
             if c != 200:
                 usage_id = None
             else:
                 usage_id = int(r["log-id"])
-    # Check if Logos is used as proxy or resource
     models = request_setup(headers, logos_key)
+    if isinstance(models, tuple) and len(models) == 2 and isinstance(models[0], dict) and "error" in models[0]:
+        status_code = models[1] if isinstance(models[1], int) else 500
+        return {"status_code": status_code, "data": models[0]}
     if not models:
         with DBManager() as db:
-            # Get available providers for this key
             providers = db.get_providers(logos_key)
-        # Find most suitable provider
         out = proxy_behaviour(headers, providers, path)
         if isinstance(out[0], dict) and "error" in out[0]:
-            return out
+            status_code = out[1] if len(out) > 1 else 500
+            return {"status_code": status_code, "data": out[0]}
         proxy_headers, forward_url, provider_id = out
         model_id, model_name = None, None
         provider_name = ""
         policy_id = -1
         classified = dict()
     else:
-        out = resource_behaviour(logos_key, headers, json_data, models)
+        # Offload blocking classification/scheduling to a thread to keep the event loop responsive.
+        out = await asyncio.to_thread(resource_behaviour, logos_key, headers, json_data, models)
         if isinstance(out[0], dict) and "error" in out[0]:
-            return out
+            status_code = out[1] if len(out) > 1 else 500
+            return {"status_code": status_code, "data": out[0]}
         proxy_headers, forward_url, model_id, model_name, provider_id, provider_name, policy_id, classified = out
-    # OpenWebUI expects the model name not in the endpoint but in the data
     if "openwebui" in provider_name.lower():
         json_data["model"] = model_name
     with DBManager() as db:
         if usage_id is not None:
             db.set_forward_timestamp(usage_id)
-    # Forward Request
-    # Try multiple requesting methods. Start with streaming
-    try:
-        if "stream" in json_data and json_data["stream"]:     # "stream" not in json_data or
-            logging.info("Sending Streaming Request")
-            json_data["stream"] = True
-            return get_streaming_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id, classified)
-    except:
-        traceback.print_exc()
-    # Fall back to naive request method
-    try:
-        logging.info("Falling back to Standard Request")
-        json_data["stream"] = False
-        return await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id, classified)
-    except:
-        traceback.print_exc()
-    return {"error": "provider not reachable"}, 500
+    json_data["stream"] = False
+    response = await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id,
+                                           policy_id, classified)
+    return {"status_code": 200, "data": response}
 
 
-def request2json(request_data: bytes) -> dict:
+def request2json(request_data: bytes) -> Dict[str, Any]:
     """
-    Decode request payload into json
-    :param request_data: Request payload as bytes
-    :return: Json String of the given bytes
+    Decode request payload bytes into a JSON object.
     """
     if not request_data:
         return {}
