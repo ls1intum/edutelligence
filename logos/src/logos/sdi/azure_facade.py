@@ -107,6 +107,18 @@ class AzureSchedulingDataFacade:
 
             # Extract deployment name from endpoint
             deployment_name = extract_azure_deployment_name(model_endpoint)
+            if not deployment_name:
+                logger.error(
+                    "Failed to extract Azure deployment name",
+                    extra={
+                        "model_id": model_id,
+                        "provider_name": provider_name,
+                        "model_endpoint": model_endpoint,
+                    },
+                )
+                raise ValueError(
+                    f"Invalid Azure model_endpoint for model {model_id} / provider '{provider_name}': {model_endpoint}"
+                )
 
             # Register model with provider (includes deployment name)
             provider = self._providers[provider_name]
