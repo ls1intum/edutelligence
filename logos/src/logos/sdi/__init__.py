@@ -11,9 +11,11 @@ Architecture:
 
 Usage (Ollama):
     from logos.sdi import OllamaSchedulingDataFacade
+    from logos.scheduling.priority_queue_manager import PriorityQueueManager
 
     # Initialize
-    facade = OllamaSchedulingDataFacade(db_manager)
+    queue_manager = PriorityQueueManager()
+    facade = OllamaSchedulingDataFacade(queue_manager, db_manager=db_manager)
 
     # Register Ollama model
     facade.register_model(
