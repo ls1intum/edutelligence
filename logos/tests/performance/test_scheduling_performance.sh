@@ -85,7 +85,7 @@ attempts=0
 max_attempts=$((MAX_WAIT_SECONDS / 2))
 
 while [ $attempts -lt $max_attempts ]; do
-    if docker compose ps "$CONTAINER_NAME" 2>/dev/null | grep -q "Up\|running"; then
+    if docker compose ps "$CONTAINER_NAME" 2>/dev/null | grep -qE "Up|running"; then
         if docker compose exec -T "$CONTAINER_NAME" poetry --version >/dev/null 2>&1; then
             ok "Container is ready (${attempts} attempts, $((attempts * 2))s)"
             break
