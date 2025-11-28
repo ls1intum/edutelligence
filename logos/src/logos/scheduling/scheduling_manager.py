@@ -5,9 +5,10 @@ import functools
 import logging
 import time
 from threading import Thread, Event
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Optional
 
 from logos.scheduling.scheduler import Scheduler, Task
+from logos.monitoring.recorder import MonitoringRecorder
 
 
 def singleton(cls):
@@ -27,7 +28,7 @@ def singleton(cls):
 
 @singleton
 class SchedulingManager:
-    def __init__(self, scheduler: Scheduler):
+    def __init__(self, scheduler: Scheduler, monitoring_recorder: Optional[MonitoringRecorder] = None):
         self.__scheduler = scheduler
         self.__thread = None
         self.__return_value = None
@@ -37,12 +38,30 @@ class SchedulingManager:
         self.__ticket = 0
         self.__finished_ticket = -1
         self.__is_free = dict()
+        self.__monitoring = monitoring_recorder or MonitoringRecorder()
 
     def add_request(self, data: dict, models: List[Tuple[int, float, int, int]]):
         for (mid, _, _, par) in models:
             if mid not in self.__is_free:
                 self.__is_free[mid] = par
-        self.__scheduler.enqueue(Task(data, models, self.__ticket))
+        task = Task(data, models, self.__ticket)
+        self.__scheduler.enqueue(task)
+
+        if self.__monitoring and models:
+            model_id, _, priority_int, _ = models[0]
+            queue_depth = self.__scheduler.get_depth_for_model(model_id)
+            timeout_s = data.get("timeout_s") if isinstance(data, dict) else None
+            # TODO: if model reassignment between queues is added, capture the reassignment timestamp and depth.
+            # provider_id is unknown here because model→provider resolution happens after scheduling.
+            self.__monitoring.record_enqueue(
+                request_id=str(task.get_id()),
+                model_id=model_id,
+                provider_id=None,
+                initial_priority=str(priority_int),
+                queue_depth=queue_depth,
+                timeout_s=timeout_s,
+            )
+
         self.__ticket += 1
         return self.__ticket - 1
 
@@ -75,6 +94,18 @@ class SchedulingManager:
                         self.__has_finished = True
                         self.__finished_ticket = task.get_id()
                         self.__is_free[mid] -= 1
+
+                        if self.__monitoring and mid is not None:
+                            depth_after_dequeue = self.__scheduler.get_depth_for_model(mid)
+                            queue_depth_at_schedule = depth_after_dequeue + 1  # account for the dequeued task
+                            priority_int = task.models[0][2] if task.models else None
+                            self.__monitoring.record_scheduled(
+                                request_id=str(task.get_id()),
+                                model_id=mid,
+                                priority_when_scheduled=str(priority_int) if priority_int is not None else None,
+                                queue_depth_at_schedule=queue_depth_at_schedule,
+                            )
+
                         logging.info(f"Task {task.get_id()} scheduled for model {mid}")
                 else:
                     # No tasks in queue
@@ -98,3 +129,7 @@ class SchedulingManager:
 
     def is_finished(self, tid: int) -> bool:
         return self.__has_finished and self.__finished_ticket == tid
+
+    def get_monitoring(self) -> MonitoringRecorder:
+        """Expose the monitoring recorder used by this manager."""
+        return self.__monitoring

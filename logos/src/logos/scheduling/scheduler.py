@@ -32,3 +32,11 @@ class Scheduler:
     
     def is_empty(self):
         return all(len(q) == 0 for q in self.tasks.values())
+
+    def get_depth_for_model(self, model_id: int) -> int:
+        """
+        Return current queued depth for a model. Subclasses with custom queue
+        implementations should override this for accurate metrics.
+        """
+        queue = self.tasks.get(model_id)
+        return len(queue) if queue else 0

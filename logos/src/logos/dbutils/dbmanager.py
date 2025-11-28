@@ -73,6 +73,52 @@ class DBManager:
         self.session.commit()
         return result.inserted_primary_key[0]
 
+    def upsert_request_event(self, request_id: str, **fields: Any) -> None:
+        """
+        Insert or update a request_events row identified by request_id.
+
+        Only provided fields are updated; omitted fields remain unchanged.
+        """
+        allowed_fields = {
+            "model_id",
+            "provider_id",
+            "initial_priority",
+            "priority_when_scheduled",
+            "queue_depth_at_enqueue",
+            "queue_depth_at_schedule",
+            "timeout_s",
+            "enqueue_ts",
+            "scheduled_ts",
+            "request_complete_ts",
+            "available_vram_mb",
+            "azure_rate_remaining_requests",
+            "azure_rate_remaining_tokens",
+            "cold_start",
+            "result_status",
+            "error_message",
+        }
+
+        payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
+        columns = ["request_id"] + list(payload.keys())
+        params = {"request_id": request_id, **payload}
+
+        if payload:
+            assignments = ", ".join(f"{col}=EXCLUDED.{col}" for col in payload.keys())
+            placeholders = ", ".join(f":{col}" for col in columns)
+            sql = text(
+                f"INSERT INTO request_events ({', '.join(columns)}) "
+                f"VALUES ({placeholders}) "
+                f"ON CONFLICT (request_id) DO UPDATE SET {assignments}"
+            )
+        else:
+            sql = text(
+                "INSERT INTO request_events (request_id) VALUES (:request_id) "
+                "ON CONFLICT (request_id) DO NOTHING"
+            )
+
+        self.session.execute(sql, params)
+        self.session.commit()
+
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         update_stmt = table.update().where(table.c.id == record_id).values(**data)

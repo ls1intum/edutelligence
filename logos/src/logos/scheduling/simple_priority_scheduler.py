@@ -121,3 +121,7 @@ class SimplePriorityScheduler(Scheduler):
     def is_empty(self) -> bool:
         """Check if all queues are empty."""
         return self.queue_manager.is_empty()
+
+    def get_depth_for_model(self, model_id: int) -> int:
+        """Queue depth for a specific model (all priorities)."""
+        return self.queue_manager.get_total_depth(model_id)

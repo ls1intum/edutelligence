@@ -5,6 +5,7 @@ ALTER DATABASE logosdb OWNER TO postgres;
 
 DROP TYPE IF EXISTS threshold_enum CASCADE;
 DROP TYPE IF EXISTS logging_enum CASCADE;
+DROP TYPE IF EXISTS result_status_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
 DROP TABLE IF EXISTS policies CASCADE;
 DROP TABLE IF EXISTS model_api_keys CASCADE;
@@ -35,6 +36,7 @@ CREATE TABLE services (
 );
 
 CREATE TYPE logging_enum as ENUM ('BILLING', 'FULL');
+CREATE TYPE result_status_enum as ENUM ('success', 'error', 'timeout');
 
 CREATE TABLE process (
     id SERIAL PRIMARY KEY,
@@ -196,4 +198,31 @@ CREATE TABLE token_prices (
     type_id INTEGER NOT NULL REFERENCES token_types(id) ON DELETE CASCADE,
     valid_from TIMESTAMPTZ NOT NULL,
     price_per_k_token NUMERIC(10, 6) NOT NULL
+);
+
+-- Request-level monitoring (one row per request)
+CREATE TABLE request_events (
+    request_id TEXT PRIMARY KEY,
+    model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
+    provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
+
+    initial_priority TEXT,
+    priority_when_scheduled TEXT,
+
+    queue_depth_at_enqueue INTEGER,
+    queue_depth_at_schedule INTEGER,
+
+    timeout_s INTEGER,
+
+    enqueue_ts TIMESTAMPTZ,
+    scheduled_ts TIMESTAMPTZ,
+    request_complete_ts TIMESTAMPTZ,
+
+    available_vram_mb INTEGER,
+    azure_rate_remaining_requests INTEGER,
+    azure_rate_remaining_tokens INTEGER,
+
+    cold_start BOOLEAN,
+    result_status result_status_enum,
+    error_message TEXT
 );

@@ -335,6 +335,11 @@ def resource_behaviour(logos_key, headers, data, models):
             model = db.get_model(model_id)
             provider = db.get_provider_to_model(model_id)
             api_key = db.get_key_to_model_provider(model_id, provider["id"])
+        # Monitoring: attach provider_id once resolved (scheduler didn't know it)
+        try:
+            sm.get_monitoring().record_provider(str(tid), int(provider["id"]))
+        except Exception:
+            logging.debug("Monitoring provider binding failed for request %s", tid)
         if api_key is None:
             logging.error(f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}")
             out.models = out.models[1:]
