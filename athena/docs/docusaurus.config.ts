@@ -6,7 +6,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'Athena Documentation',
-  tagline: 'Automated Assessment and Feedback Platform',
+  tagline: 'Automated Assessment and Feedback System',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
