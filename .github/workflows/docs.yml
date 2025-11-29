@@ -11,8 +11,6 @@ on:
     - main
     paths:
     - 'athena/docs/**'
-    - 'athena/athena/athena/**' # Function docstrings might change
-    - 'athena/assessment_module_manager/assessment_module_manager/**' # Function docstrings might change
     - 'atlas/docs/**'
     - '.github/workflows/docs.yml'
   workflow_dispatch:
@@ -29,12 +27,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Build Athena documentation with Sphinx
-      - name: Build Athena documentation
-        uses: ammaraskar/sphinx-action@master
+      # Build Athena documentation with Docusaurus
+      - name: Setup Node.js for Athena documentation
+        uses: actions/setup-node@v6
         with:
-          docs-folder: "athena/docs/"
-          build-command: make dirhtml
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: athena/docs/package-lock.json
+
+      - name: Install Athena documentation dependencies
+        run: |
+          cd athena/docs
+          npm ci
+
+      - name: Build Athena documentation
+        run: |
+          cd athena/docs
+          npm run build
 
       # Build Atlas documentation with Docusaurus
       - name: Setup Node.js for Atlas
@@ -59,7 +68,7 @@ jobs:
         run: |
           mkdir -p site/athena
           mkdir -p site/atlas
-          cp -r athena/docs/_build/dirhtml/* site/athena/
+          cp -r athena/docs/build/* site/athena/
           cp -r atlas/docs/build/* site/atlas/
 
       # Create landing page
