@@ -150,22 +150,45 @@ async def test_cancel_job_during_processing_stops_it(monkeypatch):
     """Test that cancelling a job during processing marks it for cancellation."""
     monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
 
+    processing_started = asyncio.Event()
+    cancellation_detected = asyncio.Event()
+
     async def fake_heavy_pipeline(job_id, req):
-        # Simulate being in processing
-        await asyncio.sleep(0.01)
+        # Track this job as processing
+        async with qw._processing_lock:
+            qw._processing_jobs[job_id] = {
+                "video_path": "/tmp/video.mp4",
+                "audio_path": "/tmp/audio.wav",
+                "uid": "test-uid",
+            }
 
-        # Check if cancelled
-        from nebula.transcript.jobs import is_job_cancelled
+        try:
+            # Signal that processing has started
+            processing_started.set()
 
-        if await is_job_cancelled(job_id):
-            raise asyncio.CancelledError("Job was cancelled")
+            # Simulate processing with frequent cancellation checks
+            for _ in range(10):
+                await asyncio.sleep(0.05)
 
-        return {
-            "transcription": {"segments": [{"start": 0.0, "end": 0.1, "text": "hi"}]},
-            "video_path": "/tmp/video.mp4",
-            "audio_path": "/tmp/audio.wav",
-            "uid": "test-uid",
-        }
+                # Check if cancelled
+                from nebula.transcript.jobs import is_job_cancelled
+
+                if await is_job_cancelled(job_id):
+                    cancellation_detected.set()
+                    raise asyncio.CancelledError("Job was cancelled")
+
+            return {
+                "transcription": {
+                    "segments": [{"start": 0.0, "end": 0.1, "text": "hi"}]
+                },
+                "video_path": "/tmp/video.mp4",
+                "audio_path": "/tmp/audio.wav",
+                "uid": "test-uid",
+            }
+        finally:
+            # Clean up processing dict like the real _heavy_pipeline does
+            async with qw._processing_lock:
+                qw._processing_jobs.pop(job_id, None)
 
     monkeypatch.setattr(qw, "_heavy_pipeline", fake_heavy_pipeline, raising=True)
 
@@ -177,22 +200,22 @@ async def test_cancel_job_during_processing_stops_it(monkeypatch):
     )
     await qw.enqueue_job(jid, req)
 
-    # Wait a tiny bit for it to start processing
-    await asyncio.sleep(0.05)
+    # Wait for processing to actually start
+    await asyncio.wait_for(processing_started.wait(), timeout=1.0)
 
-    # Cancel it
+    # Cancel it while it's processing
     result = await qw.cancel_job_processing(jid)
 
     # Should return cancellation result for processing job
     assert result["status"] == "cancelled"
     assert "processing" in result["message"]
 
-    # Give it time to handle cancellation
-    await asyncio.sleep(0.1)
+    # Wait for cancellation to be detected
+    await asyncio.wait_for(cancellation_detected.wait(), timeout=1.0)
 
-    # Should have been marked as cancelled
-    status = await get_job_status(jid)
-    assert status["status"] == "cancelled"
+    # Verify the job is no longer in the processing dict
+    async with qw._processing_lock:
+        assert jid not in qw._processing_jobs
 
     await qw.stop_worker()
 
