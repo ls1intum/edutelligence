@@ -185,9 +185,15 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
             "uid": uid,
         }
 
+    except asyncio.CancelledError:
+        # Clean up temp files on cancellation
+        logging.info("[Job %s] Cleaning up temp files after cancellation", job_id)
+        _cleanup_temp_files(video_path, audio_path, uid)
+        raise
     except Exception as e:
         logging.error("[Job %s] Heavy pipeline failed: %s", job_id, e, exc_info=True)
-        # Let caller clean up
+        # Clean up temp files on failure
+        _cleanup_temp_files(video_path, audio_path, uid)
         raise
     finally:
         # Remove from processing tracking
@@ -277,25 +283,18 @@ async def _worker_loop():
     while True:
         job_id, req = await _job_queue.get()  # strict FIFO
         logging.info("[Job %s] Dequeued — starting heavy pipeline", job_id)
-        video_path = None
-        audio_path = None
-        uid = None
 
         try:
             bundle = await _heavy_pipeline(job_id, req)
-            video_path = bundle["video_path"]
-            audio_path = bundle["audio_path"]
-            uid = bundle["uid"]
         except asyncio.CancelledError:
             # Job was cancelled during heavy pipeline
+            # Temp files are already cleaned up by _heavy_pipeline
             logging.info("[Job %s] Cancelled during heavy pipeline", job_id)
-            # Clean up any temp files that might have been created
-            if video_path or audio_path or uid:
-                _cleanup_temp_files(video_path, audio_path, uid)
             await remove_from_cancelled(job_id)
             _job_queue.task_done()
             continue
         except Exception as e:
+            # Temp files are already cleaned up by _heavy_pipeline
             await fail_job(job_id, str(e))
             _job_queue.task_done()
             continue
