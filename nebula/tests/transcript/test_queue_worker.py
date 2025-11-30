@@ -320,10 +320,6 @@ async def test_heavy_pipeline_checks_cancellation(monkeypatch):
 
     monkeypatch.setattr("nebula.transcript.queue_worker.download_video", fake_download)
 
-    # Try to run the heavy pipeline
-    try:
+    # Should raise CancelledError when checking cancellation
+    with pytest.raises(asyncio.CancelledError):
         await qw._heavy_pipeline(job_id, req)
-        assert False, "Should have raised CancelledError"
-    except asyncio.CancelledError:
-        # Expected
-        pass

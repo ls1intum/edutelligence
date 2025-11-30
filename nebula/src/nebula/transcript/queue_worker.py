@@ -52,14 +52,15 @@ async def remove_job_from_queue(job_id: str) -> bool:
             current_job = _job_queue.get_nowait()
             if current_job[0] == job_id:
                 found = True
-                _job_queue.task_done()
                 logging.info("[Job %s] Removed from queue", job_id)
             else:
                 temp_jobs.append(current_job)
+            # Mark this queue entry as processed
+            _job_queue.task_done()
         except asyncio.QueueEmpty:
             break
 
-    # Put back the jobs that weren't removed
+    # Put back the jobs that weren't removed (creates fresh queue entries)
     for job in temp_jobs:
         await _job_queue.put(job)
 
