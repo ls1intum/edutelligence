@@ -147,10 +147,8 @@ async def test_cancel_job_in_queue_removes_it(monkeypatch):
 
 @pytest.mark.anyio
 async def test_cancel_job_during_processing_stops_it(monkeypatch):
-    """Test that cancelling a job during processing stops it and cleans up."""
+    """Test that cancelling a job during processing marks it for cancellation."""
     monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
-
-    cleanup_called = []
 
     async def fake_heavy_pipeline(job_id, req):
         # Simulate being in processing
@@ -169,11 +167,7 @@ async def test_cancel_job_during_processing_stops_it(monkeypatch):
             "uid": "test-uid",
         }
 
-    def fake_cleanup(video_path, audio_path, uid):
-        cleanup_called.append((video_path, audio_path, uid))
-
     monkeypatch.setattr(qw, "_heavy_pipeline", fake_heavy_pipeline, raising=True)
-    monkeypatch.setattr(qw, "_cleanup_temp_files", fake_cleanup, raising=True)
 
     qw.start_worker()
 
@@ -187,7 +181,11 @@ async def test_cancel_job_during_processing_stops_it(monkeypatch):
     await asyncio.sleep(0.05)
 
     # Cancel it
-    await qw.cancel_job_processing(jid)
+    result = await qw.cancel_job_processing(jid)
+
+    # Should return cancellation result for processing job
+    assert result["status"] == "cancelled"
+    assert "processing" in result["message"]
 
     # Give it time to handle cancellation
     await asyncio.sleep(0.1)

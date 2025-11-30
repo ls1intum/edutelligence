@@ -77,19 +77,10 @@ async def cancel_job_processing(job_id: str) -> dict:
     # Check if job is currently processing
     async with _processing_lock:
         if job_id in _processing_jobs:
-            # Job is currently processing, clean up temp files
-            job_info = _processing_jobs[job_id]
-            _cleanup_temp_files(
-                job_info.get("video_path"),
-                job_info.get("audio_path"),
-                job_info.get("uid"),
-            )
-            logging.info(
-                "[Job %s] Cancelled while processing, cleaned up temp files", job_id
-            )
+            logging.info("[Job %s] Marked for cancellation while processing", job_id)
             return {
                 "status": "cancelled",
-                "message": "Job was processing and has been stopped",
+                "message": "Job is processing and will be stopped at next checkpoint",
             }
 
     # Try to remove from queue

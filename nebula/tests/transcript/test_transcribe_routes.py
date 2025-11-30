@@ -106,7 +106,7 @@ def test_cancel_endpoint_cancels_processing_job(monkeypatch):
     async def fake_cancel_job_processing(job_id: str):
         return {
             "status": "cancelled",
-            "message": "Job was processing and has been stopped",
+            "message": "Job is processing and will be stopped at next checkpoint",
         }
 
     # Neutralize worker lifecycle
