@@ -24,28 +24,34 @@ const sidebars: SidebarsConfig = {
   devSidebar: [
     {
       type: 'doc',
-      id: 'dev/index',
-      label: 'Developer Guide',
-    },
-    {
-      type: 'category',
+      id: 'dev/development-process/index',
       label: 'Development Process',
-      items: [
-        'dev/development-process/index',
-      ],
     },
     {
-      type: 'category',
+      type: 'doc',
+      id: 'dev/system-design',
       label: 'System Design',
-      items: [
-        'dev/system-design/index',
-      ],
+    },
+    {
+      type: 'doc',
+      id: 'dev/setup',
+      label: 'Setup',
+    },
+    {
+      type: 'doc',
+      id: 'dev/testing',
+      label: 'Test Guide',
     },
     {
       type: 'category',
-      label: 'Setup',
+      label: 'Code Reference',
       items: [
-        'dev/setup/index',
+        'dev/code-reference/modules',
+        'dev/code-reference/rest-api',
+        'dev/code-reference/endpoints',
+        'dev/code-reference/middleware',
+        'dev/code-reference/weaviate',
+        'dev/code-reference/ml-pipelines',
       ],
     },
   ],
@@ -55,6 +61,31 @@ const sidebars: SidebarsConfig = {
       type: 'doc',
       id: 'admin/index',
       label: 'Admin Guide',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-installation',
+      label: 'Installation',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-configuration',
+      label: 'Configuration',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-deployment',
+      label: 'Deployment',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-monitoring',
+      label: 'Monitoring',
+    },
+    {
+      type: 'doc',
+      id: 'admin/atlasml-troubleshooting',
+      label: 'Troubleshooting',
     },
   ],
 };

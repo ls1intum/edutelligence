@@ -1,3 +1,24 @@
+"""
+Weaviate client wrapper for AtlasML.
+
+This module provides:
+- A typed, singleton-backed `WeaviateClient` for connection management
+- Schema bootstrap for core collections (Exercise, Competency, SemanticCluster)
+- High-level CRUD/search helpers that return simple Python structures
+
+Connection configuration is provided by `atlasml.config.WeaviateSettings`.
+The client defaults to `weaviate.connect_to_local` using host/ports from env.
+
+Typical usage within request handlers:
+    from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
+
+    client = get_weaviate_client()
+    items = client.get_all_embeddings(CollectionNames.COMPETENCY.value)
+
+All operations raise `WeaviateOperationError` on failure and avoid leaking
+low-level exceptions to the API layer.
+"""
+
 import logging
 from enum import Enum
 from typing import Optional, Dict, List, Any
@@ -14,6 +35,7 @@ from atlasml.config import WeaviateSettings, get_settings
 # If you define all the collections here all the collections will be created
 # automatically when you run the project.
 class CollectionNames(str, Enum):
+    """Canonical collection names used by AtlasML in Weaviate."""
     EXERCISE = "Exercise"
     COMPETENCY = "Competency"
     SEMANTIC_CLUSTER = "SemanticCluster"
@@ -77,6 +99,12 @@ class WeaviateOperationError(Exception):
 
 
 class WeaviateClient:
+    """High-level Weaviate client with schema initialization and helpers.
+
+    The constructor establishes a connection and ensures required collections
+    exist with the configured schema. Access the underlying SDK via
+    `self.client` if you need advanced operations not covered here.
+    """
     def __init__(self, weaviate_settings: WeaviateSettings = None):
         if weaviate_settings is None:
             weaviate_settings = get_settings().weaviate
@@ -181,7 +209,7 @@ class WeaviateClient:
             raise
 
     def is_alive(self):
-        """Check if the Weaviate client is alive."""
+        """Return True if the Weaviate service responds to liveness checks."""
         try:
             return self.client.is_live()
         except Exception as e:
@@ -189,7 +217,7 @@ class WeaviateClient:
             return False
 
     def close(self):
-        """Close the Weaviate client."""
+        """Close the underlying Weaviate client connection."""
         self.client.close()
 
     def add_embeddings(
@@ -199,8 +227,7 @@ class WeaviateClient:
         properties: dict | None = None,
     ) -> str:
         """
-        Add an embedding with a custom ID, description,
-        and additional properties to the specified collection.
+        Insert a vector and optional properties into a collection.
 
         Args:
             collection_name: Name of the collection to add embeddings to.
@@ -208,7 +235,7 @@ class WeaviateClient:
             properties: Additional properties to store with the embedding (optional).
 
         Returns:
-            UUID of the inserted object.
+            UUID string of the inserted object.
 
         Raises:
             WeaviateOperationError: If the operation fails.
@@ -248,7 +275,7 @@ class WeaviateClient:
             raise WeaviateOperationError(f"Unexpected error adding embedding: {e}")
 
     def get_embeddings(self, collection_name: str, id: str):
-        """Get embeddings for a given ID from the specified collection."""
+        """Get vector and metadata for an object by UUID from a collection."""
         logger.info(
             f"--- GETTING EMBEDDINGS FROM WEAVIATE COLLECTION '{collection_name}' ---"
         )
@@ -264,7 +291,7 @@ class WeaviateClient:
         self, collection_name: str = CollectionNames.COMPETENCY.value
     ) -> List[Dict[str, Any]]:
         """
-        Fetch all objects and their vectors from the specified collection using REST
+        Fetch all objects and their vectors from a collection.
 
         Args:
             collection_name: Name of the collection to fetch embeddings from.
@@ -316,7 +343,7 @@ class WeaviateClient:
         self, collection_name: str, property_name: str, property_value: int | str
     ) -> List[Dict[str, Any]]:
         """
-        Fetch objects and their vectors from the collection that match a property value.
+        Fetch objects and vectors filtered by a property equality filter.
 
         Args:
             collection_name: Name of the collection to fetch embeddings from.
@@ -377,7 +404,7 @@ class WeaviateClient:
         self, collection_name: str, property_filters: dict
     ):
         """
-        Search for objects that match multiple property filters.
+        Search for objects that match multiple property equality filters.
 
         Args:
             collection_name: Name of the collection to search in.
@@ -455,12 +482,12 @@ class WeaviateClient:
         return results
 
     def _check_if_collection_exists(self, collection_name: str):
-        """Check if a collection exists and create it if it doesn't."""
+        """Raise ValueError if the collection does not exist."""
         if not self.client.collections.exists(collection_name):
             raise ValueError(f"Collection '{collection_name}' does not exist")
 
     def delete_all_data_from_collection(self, collection_name: str):
-        """Delete all data from a collection."""
+        """Delete and recreate a collection, effectively wiping all data."""
 
         self._check_if_collection_exists(collection_name)
         logger.info(f"{collection_name} ---> ALL DATA DELETED")
@@ -470,7 +497,7 @@ class WeaviateClient:
         self.recreate_collection(collection_name)
 
     def recreate_collection(self, collection_name: str):
-        """Recreate a collection after it has been deleted."""
+        """Create a collection from its schema after deletion."""
         logger.info(f"--- RECREATING COLLECTION '{collection_name}' ---")
         if collection_name not in COLLECTION_SCHEMAS:
             raise ValueError(f"No schema defined for collection '{collection_name}'")
@@ -492,21 +519,20 @@ class WeaviateClient:
         properties: dict,
         vector: Optional[List[float]] = None,
     ) -> bool:
-        """
-        Update a property by ID.
+        """Update properties and optionally the vector for an object by UUID.
 
         Args:
-            collection_name: Name of the collection.
-            id: UUID of the object to update.
-            properties: Properties to update.
-            vector: Optional new vector.
+            collection_name: Target collection name
+            id: Object UUID to update
+            properties: Property dictionary to merge/update
+            vector: Optional replacement vector
 
         Returns:
-            True if successful.
+            True if the update call succeeds
 
         Raises:
-            WeaviateOperationError: If the operation fails.
-            ValueError: If collection doesn't exist or parameters are invalid.
+            WeaviateOperationError: On query failure
+            ValueError: If input is invalid or collection missing
         """
         try:
             if not id or not properties:
@@ -542,20 +568,9 @@ class WeaviateClient:
         property_name: str,
         property_value: str | int,
     ) -> int:
-        """
-        Delete objects from the collection that match a property value.
+        """Delete objects where property_name equals property_value.
 
-        Args:
-            collection_name: Name of the collection to delete from.
-            property_name: The property name to filter by (e.g., 'name', 'course_id').
-            property_value: The value of the property to match.
-
-        Returns:
-            Number of objects deleted.
-
-        Raises:
-            WeaviateOperationError: If the operation fails.
-            ValueError: If collection doesn't exist or parameters are invalid.
+        Returns the number of successfully deleted objects.
         """
         try:
             logger.info(
@@ -601,7 +616,7 @@ class WeaviateClientSingleton:
 
     @classmethod
     def get_instance(cls, weaviate_settings: WeaviateSettings = None) -> WeaviateClient:
-        """Get a Weaviate client instance using singleton pattern."""
+        """Get a cached `WeaviateClient` instance keyed by settings."""
         if weaviate_settings is None:
             weaviate_settings = get_settings().weaviate
 
@@ -615,19 +630,19 @@ class WeaviateClientSingleton:
 
 
 def get_weaviate_settings() -> WeaviateSettings:
-    """Dependency to get Weaviate settings."""
+    """Return resolved Weaviate settings from the global config."""
     return get_settings().weaviate
 
 
 def get_weaviate_client(weaviate_settings: WeaviateSettings = None) -> WeaviateClient:
-    """Get a Weaviate client instance using singleton pattern."""
+    """Convenience accessor for the shared `WeaviateClient` instance."""
     return WeaviateClientSingleton.get_instance(weaviate_settings)
 
 
 def create_weaviate_client(
     weaviate_settings: WeaviateSettings = None,
 ) -> WeaviateClient:
-    """Dependency to create a Weaviate client instance."""
+    """Create or fetch a `WeaviateClient` using provided or global settings."""
     if weaviate_settings is None:
         weaviate_settings = get_settings().weaviate
     return get_weaviate_client(weaviate_settings)
