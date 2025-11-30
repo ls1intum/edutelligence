@@ -150,7 +150,6 @@ async def test_cancel_job_during_processing_stops_it(monkeypatch):
     """Test that cancelling a job during processing stops it and cleans up."""
     monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
 
-    cancel_event = asyncio.Event()
     cleanup_called = []
 
     async def fake_heavy_pipeline(job_id, req):
@@ -188,14 +187,12 @@ async def test_cancel_job_during_processing_stops_it(monkeypatch):
     await asyncio.sleep(0.05)
 
     # Cancel it
-    result = await qw.cancel_job_processing(jid)
+    await qw.cancel_job_processing(jid)
 
     # Give it time to handle cancellation
     await asyncio.sleep(0.1)
 
     # Should have been marked as cancelled
-    from nebula.transcript.jobs import get_job_status
-
     status = await get_job_status(jid)
     assert status["status"] == "cancelled"
 
@@ -246,7 +243,7 @@ async def test_cancel_job_already_completed(monkeypatch):
     """Test cancelling a job that has already completed."""
     monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
 
-    from nebula.transcript.jobs import create_job, save_job_result
+    from nebula.transcript.jobs import create_job
 
     job_id = await create_job()
     await save_job_result(job_id, {"result": "done"})
@@ -271,10 +268,8 @@ async def test_cleanup_temp_files_removes_files(monkeypatch, tmp_path):
     chunk_dir.mkdir()
     (chunk_dir / "chunk1.mp4").write_text("chunk")
 
-    # Mock Config.VIDEO_STORAGE_PATH to our tmp_path
-    from nebula.transcript.config import Config
-
-    monkeypatch.setattr(Config, "VIDEO_STORAGE_PATH", tmp_path)
+    # Mock VIDEO_STORAGE_PATH to our tmp_path
+    monkeypatch.setattr("nebula.transcript.queue_worker.VIDEO_STORAGE_PATH", tmp_path)
 
     # Call cleanup
     qw._cleanup_temp_files(str(video_path), str(audio_path), "test-uid")

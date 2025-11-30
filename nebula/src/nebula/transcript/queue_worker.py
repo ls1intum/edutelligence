@@ -8,7 +8,7 @@ from typing import Tuple
 
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
-    from nebula.transcript.jobs import (
+from nebula.transcript.jobs import (
     cancel_job,
     cleanup_finished_jobs,
     fail_job,
