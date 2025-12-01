@@ -247,7 +247,7 @@ will compare the different feedback types.
 ![Defining metrics](./playground/images/expert_evaluation/define_metrics.png)
 </figure>
 
-Afterwards, the researcher adds a link for each expert participating in
+Afterward, the researcher adds a link for each expert participating in
 the evaluation. This link should then be shared with the corresponding
 expert. After finishing the configuration, the researcher can define the
 experiment and start the *Expert Evaluation*.
