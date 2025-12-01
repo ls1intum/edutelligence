@@ -43,13 +43,15 @@ Docker Compose 2.0+
 
 ---
 
-## Installation Methods
+## Installation with Docker Compose
 
-### Method 1: Docker Compose (Recommended)
+Docker Compose is the **only supported method** for production deployments.
 
-This is the simplest method for single-server deployments.
+:::warning
+For local development setup, see the [Development Setup Guide](/dev/setup). Manual installation is not supported for production.
+:::
 
-#### Step 1: Install Docker
+### Step 1: Install Docker
 
 ```bash
 # Update packages
@@ -68,7 +70,7 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-#### Step 2: Install Docker Compose
+### Step 2: Install Docker Compose
 
 ```bash
 # Download Docker Compose
@@ -82,7 +84,7 @@ docker-compose --version
 # Should show: Docker Compose version 2.0+ or higher
 ```
 
-#### Step 3: Create Installation Directory
+### Step 3: Create Installation Directory
 
 ```bash
 # Create directory
@@ -93,7 +95,7 @@ cd /opt/atlasml
 sudo chown $USER:$USER /opt/atlasml
 ```
 
-#### Step 4: Download Compose File
+### Step 4: Download Compose File
 
 ```bash
 # Download from GitHub
@@ -140,7 +142,7 @@ networks:
 EOF
 ```
 
-#### Step 5: Install Weaviate
+### Step 5: Install Weaviate
 
 AtlasML requires Weaviate as its vector database.
 
@@ -187,7 +189,7 @@ curl http://localhost:8085/v1/.well-known/ready
 # Should return: {"status":"ok"}
 ```
 
-#### Step 6: Create Environment File
+### Step 6: Create Environment File
 
 See [Configuration Guide](./atlasml-configuration.md) for detailed explanation of each variable.
 
@@ -226,7 +228,7 @@ chmod 600 /opt/atlasml/.env
 Never commit the `.env` file to version control. Keep your API keys secure.
 :::
 
-#### Step 7: Pull and Start AtlasML
+### Step 7: Pull and Start AtlasML
 
 ```bash
 cd /opt/atlasml
@@ -247,7 +249,7 @@ NAME      IMAGE                                   STATUS    PORTS
 atlasml   ghcr.io/ls1intum/edutelligence/atlasml  healthy   0.0.0.0:80->8000/tcp
 ```
 
-#### Step 8: Verify Installation
+### Step 8: Verify Installation
 
 ```bash
 # Check health endpoint
@@ -261,34 +263,6 @@ docker logs atlasml
 # Should see:
 # INFO:     Started server process
 # INFO:     Uvicorn running on http://0.0.0.0:8000
-```
-
----
-
-### Method 2: Manual Docker Run
-
-For simple deployments without docker-compose:
-
-```bash
-# Pull image
-docker pull ghcr.io/ls1intum/edutelligence/atlasml:main
-
-# Run container
-docker run -d \
-  --name atlasml \
-  --restart unless-stopped \
-  -p 80:8000 \
-  -e WEAVIATE_HOST=localhost \
-  -e WEAVIATE_PORT=8085 \
-  -e WEAVIATE_GRPC_PORT=50051 \
-  -e ATLAS_API_KEYS='["your-api-key"]' \
-  -e OPENAI_API_KEY=your-openai-key \
-  -e OPENAI_API_URL=https://your-resource.openai.azure.com \
-  -e ENV=production \
-  ghcr.io/ls1intum/edutelligence/atlasml:main
-
-# Verify
-curl http://localhost/api/v1/health
 ```
 
 ---

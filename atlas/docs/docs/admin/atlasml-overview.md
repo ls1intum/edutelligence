@@ -97,23 +97,20 @@ graph LR
 
 ## Deployment Options
 
-### Option 1: Docker Compose (Recommended)
+### Docker Compose (Production)
 
 - Simple single-server deployment
 - Includes Weaviate and AtlasML
 - Automatic restarts
 - Log rotation
 - Health checks
+- **Only supported production deployment method**
 
-**Best for**: Single institution, moderate load
+**Best for**: All production environments
 
-### Option 2: Manual Installation
-
-- Direct Python installation
-- More control
-- Requires manual updates
-
-**Best for**: Development or testing only
+:::warning Manual Installation Not Supported
+Manual installation without Docker is not supported for production environments. For local development setup, see the [Development Setup Guide](/dev/setup).
+:::
 
 ---
 
