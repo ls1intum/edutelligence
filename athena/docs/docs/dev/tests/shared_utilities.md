@@ -32,8 +32,9 @@ tests/modules/
 
 ## Mock Configuration Utilities
 
-**MockApproachConfig** Provides standardized mock configuration objects
-for testing:
+### MockApproachConfig
+
+Provides standardized mock configuration objects for testing:
 
 ``` python
 class MockApproachConfig:
@@ -45,7 +46,9 @@ class MockApproachConfig:
         self.type = type
 ```
 
-**MockModelConfig** Standardized mock model configuration:
+### MockModelConfig
+
+Standardized mock model configuration:
 
 ``` python
 class MockModelConfig:
@@ -58,8 +61,9 @@ class MockModelConfig:
 
 ## Mock LLM Implementations
 
-**MockLanguageModel** Base mock LLM implementation with configurable
-responses:
+### MockLanguageModel 
+
+Base mock LLM implementation with configurable responses:
 
 ``` python
 class MockLanguageModel:
@@ -81,8 +85,9 @@ class MockLanguageModel:
         return self.responses["default"]
 ```
 
-**MockStructuredMockLanguageModel** Specialized mock for structured
-output testing:
+### MockStructuredMockLanguageModel 
+
+Specialized mock for structured output testing:
 
 ``` python
 class MockStructuredMockLanguageModel(MockLanguageModel):
@@ -101,8 +106,9 @@ class MockStructuredMockLanguageModel(MockLanguageModel):
         }
 ```
 
-**MockAssessmentModel** Mock implementation for assessment and
-evaluation testing:
+### MockAssessmentModel 
+
+Mock implementation for assessment and evaluation testing:
 
 ``` python
 class MockAssessmentModel:
@@ -119,8 +125,9 @@ class MockAssessmentModel:
 
 ## Environment Mocking Utilities
 
-**Mock Environment Variables** Standardized environment variable
-mocking:
+### Mock Environment Variables 
+
+Standardized environment variable mocking:
 
 ``` python
 @pytest.fixture(autouse=True)
@@ -138,7 +145,9 @@ def mock_env_vars(monkeypatch):
         monkeypatch.setenv(key, value)
 ```
 
-**Mock API Configuration** Mock API client configurations:
+### Mock API Configuration 
+
+Mock API client configurations:
 
 ``` python
 class MockOpenAI:
@@ -161,8 +170,9 @@ class MockOpenAI:
 
 # Fixture Utilities
 
-**Pytest Fixtures** Standardized pytest fixtures for consistent test
-setup:
+## Pytest Fixtures 
+
+Standardized pytest fixtures for consistent test setup:
 
 ``` python
 @pytest.fixture
@@ -190,7 +200,9 @@ def mock_config():
     )
 ```
 
-**Session-Level Fixtures** Fixtures that persist across test sessions:
+## Session-Level Fixtures 
+
+Fixtures that persist across test sessions:
 
 ``` python
 @pytest.fixture(scope="session", autouse=True)
@@ -207,8 +219,9 @@ def setup_test_environment():
 
 # Test Data Utilities
 
-**Exercise Data Loaders** Utilities for loading and managing test
-exercise data:
+## Exercise Data Loaders 
+
+Utilities for loading and managing test exercise data:
 
 ``` python
 class PlaygroundExerciseLoader:
@@ -245,8 +258,9 @@ class PlaygroundExerciseLoader:
         )
 ```
 
-**Submission Data Utilities** Utilities for creating and managing test
-submissions:
+## Submission Data Utilities
+
+Utilities for creating and managing test submissions:
 
 ``` python
 def create_mock_submission(submission_id=1, text="Mock submission text"):
@@ -274,7 +288,7 @@ def create_mock_feedback(feedback_id=1, title="Mock Feedback", credits=1.0):
 
 # Module-Specific Utilities
 
-**Text Module Utilities**
+## Text Module Utilities
 
 ``` python
 class TextModuleTestUtils:
@@ -304,7 +318,7 @@ class TextModuleTestUtils:
         )
 ```
 
-**Modeling Module Utilities**
+## Modeling Module Utilities
 
 ``` python
 class ModelingModuleTestUtils:
@@ -334,7 +348,7 @@ class ModelingModuleTestUtils:
         )
 ```
 
-**Programming Module Utilities**
+## Programming Module Utilities
 
 ``` python
 class ProgrammingModuleTestUtils:

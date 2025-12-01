@@ -36,7 +36,7 @@ To conduct an experiment in the Athena Playground, follow these steps:
       running automatic evaluations.
     - If training submissions are provided, you will need to manually
       continue the experiment by pressing "Continue".
-    - If automatic evaluations is enabled, for instance LLM-as-a-judge
+    - If automatic evaluation is enabled, for instance LLM-as-a-judge
       for text exercises, you will also need to manually confirm it.
     - Export and import the experiment results as needed using the
       "Export" and "Import" buttons, respectively.

@@ -10,8 +10,7 @@ simulating interaction with a learning management system (LMS).
 # Preparation
 
 To run Playground, make sure you have [Node.js](https://nodejs.org/en/)
-installed on your machine. It is recommended to use the latest LTS
-version (\>=18.14.0 \< 19)
+installed on your machine. It is recommended to use Node.js 20.0 or higher.
 
 # Dependency Installation
 

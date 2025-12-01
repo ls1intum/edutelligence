@@ -3,7 +3,7 @@ title: Playground
 ---
 
 Welcome to the Athena Playground Interface, a versatile tool designed
-for developing, testing, and evaluation Athena modules. This document
+for developing, testing, and evaluating Athena modules. This document
 provides an overview of the Playground's features, illustrating its
 capabilities and how to use them effectively.
 
@@ -68,7 +68,7 @@ Athena Playground](./playground/images/module_requests/send_submissions.png)
 
 Selecting submissions is crucial for improving the efficiency of
 generated feedback suggestions. This feature allows modules to propose a
-specific submissions, which can then be used to generate feedback
+specific submission, which can then be used to generate feedback
 suggestions. For instance, CoFee uses this to select the submission with
 the highest information gain so it can generate more relevant feedback
 suggestions for the remaining submissions.

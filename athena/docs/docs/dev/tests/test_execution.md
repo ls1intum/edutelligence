@@ -27,14 +27,14 @@ Athena provides multiple ways to execute tests depending on your needs:
 
 From the `athena/tests/` directory:
 
-**Mock Tests Only**
+### Mock Tests Only
 
 ``` bash
 cd athena/tests
 poetry run test_all
 ```
 
-**Include Real Tests**
+### Include Real Tests
 
 ``` bash
 cd athena/tests
@@ -50,7 +50,7 @@ For targeted testing of specific modules, navigate to the module
 directory and use its virtual environment. Here are examples for
 `module_text_llm`, for other modules,proceed analogously:
 
-**Text Module Testing**
+### Text Module Testing
 
 ``` bash
 # Navigate to the text module
@@ -115,18 +115,18 @@ Mock tests use programmatically generated test data:
 
 Common Issues and Solutions:
 
-**Import Errors**
+## Import Errors
 
 - Ensure you're using the correct virtual environment
 - Check that all dependencies are installed with `poetry install`
 
-**API Configuration Errors**
+## API Configuration Errors
 
 - Verify environment variables are set correctly
 - Check API key permissions and quotas
 - Ensure network connectivity for real tests
 
-**Test Data Issues**
+## Test Data Issues
 
 - Verify JSON files are valid and properly formatted
 - Check file paths and permissions

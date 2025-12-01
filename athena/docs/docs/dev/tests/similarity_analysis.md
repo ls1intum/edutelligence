@@ -159,7 +159,7 @@ def calculate_bertscore_similarity(self, baseline_texts: List[str], test_texts: 
 - **F1 Score**: Harmonic mean of precision and recall
 - **Semantic Similarity**: Overall quality similarity score
 
-Step 3: Credit Difference Analysis ---------------------------------
+## Step 3: Credit Difference Analysis
 
 Compare credit assignments between generated and baseline feedback:
 
@@ -231,7 +231,7 @@ The analysis generates comprehensive reports stored in
 }
 ```
 
-Check against the thresholds ---------------------
+## Check against the thresholds
 
 ``` python
 baseline_info = analysis_results.get("baseline_info", {})

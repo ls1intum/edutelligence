@@ -25,10 +25,10 @@ Playground:
 
 2. **Local setup:**  
 - **Pro:** We cannot access your data this way.
-- **Con:** You setup the everything locally, configure the environment, and carry the cost of the models.
-- Set up the Athena Assessment Module Manager and all Athena Modules you want to evaluate locally. (See `setup_install`, then see `run_local` or see `run_docker`)
+- **Con:** You set up everything locally, configure the environment, and carry the cost of the models.
+- Set up the Athena Assessment Module Manager and all Athena Modules you want to evaluate locally. (See [Install](../../../dev/setup/install.md), then see [Run Local](../../../dev/run/local.md) or see [Run Docker](../../../dev/run/docker.md))
 - In `.env.example`, you will find example environment variables that need to be set in `.env` (duplicate the file, rename it to `.env`, then edit).
-- Run the Athena Playground. (See `run_playground`).
+- Run the Athena Playground. (See [Run Playground](../../../dev/run/playground.md)).
 
 Connect to Athena Instance through the Playground
 --------------------------

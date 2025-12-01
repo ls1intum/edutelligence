@@ -136,7 +136,7 @@ SELECT JSON_OBJECT(
         ),
         'participations', JSON_ARRAYAGG(
             (SELECT JSON_ARRAYAGG(p.id)
-             FROM anonymized_artemis.participation p -- Note: This contains also participations that are maybe unneccessary  
+             FROM anonymized_artemis.participation p -- Note: This contains also participations that are maybe unnecessary  
              WHERE p.exercise_id = e.id)
         )
     )

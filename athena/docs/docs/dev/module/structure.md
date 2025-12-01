@@ -129,10 +129,10 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
     ]
 ```
 
-Provide Config Schema (Optional)
-\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~~ Get a schema for config
-options of the module as json schema. The config complying to the schema
-can then be provided in the header of a request
+## Provide Config Schema (Optional)
+
+Get a schema for config options of the module as json schema. 
+The config complying to the schema can then be provided in the header of a request
 <span class="title-ref">X-Module-Config</span> to override the default
 values. The module can decorate one pydantic model with
 `@config_schema_provider` to provide the schema and should have default
@@ -150,8 +150,8 @@ class Configuration(BaseModel):
     ...
 ```
 
-Provide Evaluation (Optional) \~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~\~~ Get an
-arbitrary evaluation for a submission with historical `true_feedback`
+## Provide Evaluation (Optional)
+Get an arbitrary evaluation for a submission with historical `true_feedback`
 and feedback suggestions `predicted_feedback`. The Playground would
 usually call this when conducting an evaluation during an experiment.
 The module will receive the request at the function annotated with

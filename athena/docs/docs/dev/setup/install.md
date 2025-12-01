@@ -25,7 +25,7 @@ project:
 The `psycopg2` module needs PostgreSQL to be installed on your
 system. You can find installation instructions on the [PostgreSQL
 website](https://www.postgresql.org/download/). 
-Example to install it on MacOS: `brew install postgresql`
+Example to install it on macOS: `brew install postgresql`
 :::
 
 You can find more information about Poetry in the [Poetry

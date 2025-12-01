@@ -40,7 +40,7 @@ mock/
 
 ## Key Mock Components
 
-**Mock LLM Responses**
+### Mock LLM Responses
 
 ``` python
 class MockLanguageModel:
@@ -55,7 +55,7 @@ class MockLanguageModel:
         return self.responses.get("feedback_suggestion", "Default mock response")
 ```
 
-**Mock Configuration Objects**
+### Mock Configuration Objects
 
 ``` python
 class MockApproachConfig:
@@ -65,7 +65,7 @@ class MockApproachConfig:
         self.type = "default"
 ```
 
-**Mock Environment Variables**
+### Mock Environment Variables
 
 ``` python
 @pytest.fixture(autouse=True)
@@ -140,7 +140,7 @@ real/
 
 ## Real Test Configuration
 
-**Azure OpenAI Configuration**
+### Azure OpenAI Configuration
 
 ``` python
 @pytest.fixture
@@ -156,7 +156,7 @@ def real_config():
     )
 ```
 
-**Environment Setup**
+### Environment Setup
 
 ``` python
 @pytest.fixture(scope="session", autouse=True)
