@@ -107,16 +107,7 @@ graph LR
 
 **Best for**: Single institution, moderate load
 
-### Option 2: Kubernetes
-
-- Multi-node deployment
-- Auto-scaling
-- High availability
-- Advanced monitoring
-
-**Best for**: Large institutions, high load
-
-### Option 3: Manual Installation
+### Option 2: Manual Installation
 
 - Direct Python installation
 - More control

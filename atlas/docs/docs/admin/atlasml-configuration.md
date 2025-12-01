@@ -17,7 +17,6 @@ AtlasML is configured primarily through **environment variables**, which can be 
 1. **`.env` file** (recommended for production)
 2. **Docker Compose** environment section
 3. **System environment variables**
-4. **Kubernetes secrets/configmaps**
 
 ---
 
@@ -443,39 +442,7 @@ secrets:
 
 ---
 
-### Option 3: Kubernetes Secrets
-
-**Create secret**:
-```bash
-kubectl create secret generic atlasml-secrets \
-  --from-literal=api-keys='["key1","key2"]' \
-  --from-literal=openai-key='your-key' \
-  -n atlasml
-```
-
-**Use in Deployment**:
-```yaml
-env:
-  - name: ATLAS_API_KEYS
-    valueFrom:
-      secretKeyRef:
-        name: atlasml-secrets
-        key: api-keys
-  - name: OPENAI_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: atlasml-secrets
-        key: openai-key
-```
-
-**Pros**:
-- Native Kubernetes integration
-- RBAC access control
-- Encrypted by default
-
----
-
-### Option 4: External Secrets Manager
+### Option 3: External Secrets Manager
 
 Use HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, etc.
 
@@ -693,5 +660,4 @@ docker network inspect shared-network
 
 - **Docker Environment Variables**: https://docs.docker.com/compose/environment-variables/
 - **Docker Secrets**: https://docs.docker.com/engine/swarm/secrets/
-- **Kubernetes Secrets**: https://kubernetes.io/docs/concepts/configuration/secret/
 - **Azure OpenAI**: https://azure.microsoft.com/en-us/products/ai-services/openai-service
