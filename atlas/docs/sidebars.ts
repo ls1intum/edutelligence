@@ -54,6 +54,17 @@ const sidebars: SidebarsConfig = {
         'dev/code-reference/ml-pipelines',
       ],
     },
+    {
+      type: 'category',
+      label: 'AtlasML Internals',
+      items: [
+        'dev/atlasml/overview',
+        'dev/atlasml/api',
+        'dev/atlasml/models',
+        'dev/atlasml/settings_auth',
+        'dev/atlasml/weaviate',
+      ],
+    },
   ],
 
   adminSidebar: [
