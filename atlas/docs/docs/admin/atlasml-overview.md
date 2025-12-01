@@ -49,49 +49,71 @@ This guide is for system administrators deploying and operating AtlasML in produ
 ## Architecture Overview
 
 ```mermaid
-graph LR
+graph TB
     A[Artemis] -->|REST API| B[AtlasML Service]
-    B -->|Vector Search| C[Weaviate DB]
+    B -->|HTTPS/gRPC| C[Centralized Weaviate]
     B -->|Generate Embeddings| D[OpenAI API]
+    E[Iris Service] -->|HTTPS/gRPC| C
+
+    C -->|Multi2vec-CLIP| F[Embedding Module]
+
+    subgraph "Shared Infrastructure"
+    C
+    F
+    end
 
     style B fill:#4ECDC4
     style C fill:#FF6B6B
+    style E fill:#95E1D3
 ```
 
 **Communication**:
 - **Unidirectional**: Artemis calls AtlasML via REST API (AtlasML never calls Artemis)
-- **Stateful**: AtlasML stores embeddings and metadata in Weaviate
+- **Shared Weaviate**: Centralized Weaviate instance with API key authentication
+- **HTTPS + gRPC**: Secure connections to Weaviate (ports 443 and 50051)
 - **Token-based Auth**: API key authentication for all requests
 
 ---
 
 ## System Requirements
 
-### Minimum Requirements
+### AtlasML Service Requirements
 
-- **CPU**: 2 cores
-- **RAM**: 2GB
-- **Disk**: 10GB (+ storage for Weaviate data)
+- **CPU**: 2 cores (minimum), 4+ cores (recommended)
+- **RAM**: 2GB (minimum), 4GB+ (recommended)
+- **Disk**: 10GB
 - **OS**: Linux (Ubuntu 20.04+ recommended)
 - **Docker**: 20.10+
 - **Docker Compose**: 2.0+
+
+### Weaviate Requirements
+
+AtlasML **requires** the centralized Weaviate setup. See the [Weaviate README](../../../weaviate/README.md) for complete requirements:
+
+- **Separate server or VM** (shared by Atlas and Iris microservices)
+- **CPU**: 4+ cores (8+ recommended for production)
+- **RAM**: 8GB+ (16GB+ recommended for production)
+- **Disk**: 50GB+ SSD (depends on data volume)
+- **Domain**: Public domain with DNS configured
+- **Ports**: 80, 443 (HTTPS), 50051 (gRPC) accessible
 
 ### Network Requirements
 
 - **Outbound**:
   - OpenAI API: `https://*.openai.azure.com` (port 443)
   - Docker registries: `ghcr.io` (port 443)
+  - Weaviate server: `https://your-weaviate-domain.com` (ports 443, 50051)
 
 - **Inbound**:
   - Artemis server (port 8000 or custom)
 
-### Recommended Production Setup
+### Architecture Note
 
-- **CPU**: 4+ cores
-- **RAM**: 4GB+
-- **Disk**: 50GB SSD
-- **Load Balancer**: For high availability
-- **Monitoring**: Sentry, Prometheus, or similar
+**Weaviate is a shared service**: The centralized Weaviate instance is shared between Atlas and Iris microservices. This provides:
+- Centralized vector database management
+- Consistent authentication and security
+- Simplified backup and monitoring
+- Reduced infrastructure complexity
 
 ---
 

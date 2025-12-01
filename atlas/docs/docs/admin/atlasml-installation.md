@@ -142,52 +142,37 @@ networks:
 EOF
 ```
 
-### Step 5: Install Weaviate
+### Step 5: Set Up Weaviate
 
-AtlasML requires Weaviate as its vector database.
+AtlasML requires Weaviate as its vector database. **Use the centralized Weaviate setup** in the `/weaviate` directory.
 
-```bash
-# Download Weaviate compose file
-curl -o compose.weaviate.yaml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/compose.weaviate.yaml
+:::warning Required
+AtlasML requires the centralized Weaviate setup with Traefik and API key authentication. Other Weaviate deployment methods are **not supported**.
+:::
 
-# Or create manually
-cat > compose.weaviate.yaml << 'EOF'
-services:
-  weaviate:
-    image: semitechnologies/weaviate:latest
-    ports:
-      - "8085:8080"
-      - "50051:50051"
-    environment:
-      QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      DEFAULT_VECTORIZER_MODULE: 'none'
-      ENABLE_MODULES: ''
-      CLUSTER_HOSTNAME: 'node1'
-    volumes:
-      - weaviate-data:/var/lib/weaviate
-    networks:
-      - shared-network
-    restart: unless-stopped
+**Follow the Weaviate setup instructions:**
 
-volumes:
-  weaviate-data:
+1. Navigate to the weaviate directory:
+   ```bash
+   cd /path/to/edutelligence/weaviate
+   ```
 
-networks:
-  shared-network:
-    name: shared-network
-    driver: bridge
-    external: true
-EOF
+2. Follow the complete setup guide in the [Weaviate README](/weaviate/README.md), which includes:
+   - Docker and Traefik configuration
+   - SSL/TLS certificates via Let's Encrypt
+   - API key authentication setup
+   - Production-ready configuration
 
-# Start Weaviate
-docker-compose -f compose.weaviate.yaml up -d
+3. After Weaviate is running, verify it's accessible:
+   ```bash
+   curl -H "Authorization: Bearer YOUR_WEAVIATE_API_KEY" https://your-weaviate-domain.com/v1/.well-known/ready
+   # Should return: {"status":"ok"}
+   ```
 
-# Verify Weaviate is running
-curl http://localhost:8085/v1/.well-known/ready
-# Should return: {"status":"ok"}
-```
+4. **Save the following for AtlasML configuration:**
+   - Weaviate domain (e.g., `weaviate.example.com`)
+   - Weaviate API key
+   - Weaviate ports: `443` (HTTPS), `50051` (gRPC)
 
 ### Step 6: Create Environment File
 
@@ -198,10 +183,11 @@ cat > /opt/atlasml/.env << 'EOF'
 # API Authentication
 ATLAS_API_KEYS='["your-secure-api-key-here"]'
 
-# Weaviate Connection
-WEAVIATE_HOST=localhost
-WEAVIATE_PORT=8085
+# Weaviate Connection (from centralized Weaviate setup)
+WEAVIATE_HOST=https://your-weaviate-domain.com
+WEAVIATE_PORT=443
 WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=your-weaviate-api-key
 
 # OpenAI Configuration (Azure)
 OPENAI_API_KEY=your-openai-api-key
@@ -223,6 +209,10 @@ EOF
 # Secure the file
 chmod 600 /opt/atlasml/.env
 ```
+
+:::tip
+Use the same `WEAVIATE_API_KEY` that you configured in the centralized Weaviate setup (`/weaviate/.env`).
+:::
 
 :::warning Security
 Never commit the `.env` file to version control. Keep your API keys secure.

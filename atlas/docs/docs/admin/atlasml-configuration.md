@@ -68,54 +68,46 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ### Weaviate Connection
 
 ```bash
-WEAVIATE_HOST=localhost
-WEAVIATE_PORT=8085
+WEAVIATE_HOST=https://your-weaviate-domain.com
+WEAVIATE_PORT=443
 WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=your-weaviate-api-key
 ```
 
+:::warning Required Setup
+AtlasML requires the **centralized Weaviate setup** located in `/weaviate` directory. See the [Weaviate README](../../../weaviate/README.md) for complete setup instructions.
+:::
+
 **WEAVIATE_HOST**:
-- **Description**: Hostname or IP of Weaviate server
-- **Default**: `localhost`
-- **Examples**:
-  - Local: `localhost`
-  - Docker network: `weaviate` (service name)
-  - Remote: `weaviate.internal.company.com`
-  - External: `https://weaviate-cluster.example.com`
+- **Description**: Full HTTPS URL of the centralized Weaviate instance
+- **Format**: `https://your-weaviate-domain.com`
+- **Required**: Must match the domain configured in `/weaviate/.env`
+- **Example**: `https://weaviate.example.com`
 
 **WEAVIATE_PORT**:
-- **Description**: HTTP port for Weaviate REST API
-- **Default**: `8085` (local), `80` (production)
-- **Examples**:
-  - Development: `8085`
-  - Production: `80` or `443`
+- **Description**: HTTPS port for Weaviate REST API
+- **Default**: `443`
+- **Required**: Must be `443` (centralized setup uses Traefik with HTTPS)
 
 **WEAVIATE_GRPC_PORT**:
 - **Description**: gRPC port for Weaviate (used for faster queries)
 - **Default**: `50051`
-- **Production**: `443` (if behind HTTPS)
+- **Required**: Must be `50051` (as configured in centralized setup)
 
-**Configuration Examples**:
+**WEAVIATE_API_KEY**:
+- **Description**: API key for authenticating with Weaviate
+- **Required**: Yes (centralized Weaviate requires authentication)
+- **Source**: Use the same API key from `/weaviate/.env`
+- **Security**: Keep this key secure and never commit to version control
+
+**Production Configuration Example**:
 
 ```bash
-# Local development
-WEAVIATE_HOST=localhost
-WEAVIATE_PORT=8085
-WEAVIATE_GRPC_PORT=50051
-
-# Docker Compose (same network)
-WEAVIATE_HOST=weaviate
-WEAVIATE_PORT=8080
-WEAVIATE_GRPC_PORT=50051
-
-# Remote production server
-WEAVIATE_HOST=https://weaviate.prod.company.com
+# Production (using centralized Weaviate)
+WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=443
-
-# Docker host from container
-WEAVIATE_HOST=host.docker.internal
-WEAVIATE_PORT=8085
 WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=your-secure-weaviate-api-key-from-weaviate-env
 ```
 
 ---
@@ -290,10 +282,11 @@ image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
 # API Keys (development)
 ATLAS_API_KEYS='["dev-test-key"]'
 
-# Weaviate (local)
-WEAVIATE_HOST=localhost
-WEAVIATE_PORT=8085
+# Weaviate (centralized setup - required)
+WEAVIATE_HOST=https://weaviate-dev.example.com
+WEAVIATE_PORT=443
 WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=dev-weaviate-api-key
 
 # OpenAI (optional for dev)
 OPENAI_API_KEY=
@@ -310,6 +303,10 @@ SENTRY_DSN=
 IMAGE_TAG=main
 ```
 
+:::note
+Even for development, use the centralized Weaviate setup. For local development without Weaviate, see the [Development Setup Guide](/dev/setup).
+:::
+
 ---
 
 ### Staging Configuration
@@ -320,10 +317,11 @@ IMAGE_TAG=main
 # API Keys (staging)
 ATLAS_API_KEYS='["staging-key-1","staging-key-2"]'
 
-# Weaviate (staging server)
-WEAVIATE_HOST=weaviate-staging.internal
-WEAVIATE_PORT=80
-WEAVIATE_GRPC_PORT=443
+# Weaviate (centralized setup)
+WEAVIATE_HOST=https://weaviate-staging.example.com
+WEAVIATE_PORT=443
+WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=staging-weaviate-api-key
 
 # OpenAI (staging)
 OPENAI_API_KEY=staging-azure-openai-key
@@ -350,10 +348,11 @@ IMAGE_TAG=develop
 # API Keys (production - KEEP SECURE!)
 ATLAS_API_KEYS='["prod-artemis-key-2025-q1","prod-artemis-key-2025-q1-backup"]'
 
-# Weaviate (production cluster)
-WEAVIATE_HOST=https://weaviate.prod.internal
+# Weaviate (centralized setup)
+WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=443
+WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=prod-weaviate-api-key-secure
 
 # OpenAI (production)
 OPENAI_API_KEY=prod-azure-openai-key-secure
@@ -635,14 +634,18 @@ curl -H "Authorization: $(echo $ATLAS_API_KEYS | jq -r '.[0]')" \
 
 **Check network**:
 ```bash
-# From host
-curl http://localhost:8085/v1/.well-known/ready
+# Check DNS resolution
+nslookup your-weaviate-domain.com
 
-# From container
-docker exec atlasml curl http://weaviate:8080/v1/.well-known/ready
+# Test connection with API key
+curl -H "Authorization: Bearer YOUR_WEAVIATE_API_KEY" https://your-weaviate-domain.com/v1/.well-known/ready
 
-# Check network
-docker network inspect shared-network
+# From AtlasML container
+docker exec atlasml curl -H "Authorization: Bearer ${WEAVIATE_API_KEY}" ${WEAVIATE_HOST}/v1/.well-known/ready
+
+# Check if Weaviate server is running (SSH to Weaviate server)
+cd /path/to/edutelligence/weaviate
+docker-compose ps weaviate
 ```
 
 ---
