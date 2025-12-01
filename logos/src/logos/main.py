@@ -351,7 +351,7 @@ async def logos_service(path: str, request: Request):
     :param request: Request
     :return: The response from Endpoints
     """
-    return await submit_job_request(path, request)
+    return await handle_direct_proxy_request(path, request)
 
 
 @app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
@@ -361,6 +361,22 @@ async def logos_service_long(path: str, request: Request):
     :param path: Path to Endpoint
     :param request: Request
     :return: The response from Endpoints
+    """
+    return await handle_direct_proxy_request(path, request)
+
+
+@app.api_route("/jobs/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def logos_service_async(path: str, request: Request):
+    """
+    Async job-based proxy for long running/low-priority requests.
+    """
+    return await submit_job_request(path, request)
+
+
+@app.api_route("/jobs/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def logos_service_long_async(path: str, request: Request):
+    """
+    Async job-based proxy for long running/low-priority requests.
     """
     return await submit_job_request(path, request)
 
@@ -385,7 +401,7 @@ async def get_job_status(job_id: int):
 
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
     """
-    Accept a proxy request, persist it as a job, and launch async processing.
+    Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
     """
     headers = dict(request.headers)
     raw_body = await request.body()
@@ -407,10 +423,35 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         client_ip=client_ip,
     )
     job_id = JobService.create_job(job_payload)
+    status_url = str(request.url_for("get_job_status", job_id=job_id))
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
     asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip))
-    status_url = str(request.url_for("get_job_status", job_id=job_id))
     return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url})
+
+
+async def handle_direct_proxy_request(path: str, request: Request) -> JSONResponse:
+    """
+    Handle a proxy request directly (client waits for the upstream response).
+    """
+    headers = dict(request.headers)
+    raw_body = await request.body()
+    try:
+        json_data = request2json(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    if json_data is None:
+        json_data = dict()
+    if not isinstance(json_data, dict):
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
+    client_ip = get_client_ip(request)
+    try:
+        result = await execute_proxy_job(path, headers, dict(json_data), client_ip)
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Failed to process request synchronously")
+        raise HTTPException(status_code=500, detail="Failed to process request")
+    return JSONResponse(status_code=result.get("status_code", 200), content=result.get("data", result))
 
 
 async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str):
@@ -424,6 +465,8 @@ async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data
     except Exception as e:
         logging.exception("Job %s failed", job_id)
         JobService.mark_failed(job_id, str(e))
+        raise
+    return result
 
 
 async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str) -> Dict[str, Any]:
