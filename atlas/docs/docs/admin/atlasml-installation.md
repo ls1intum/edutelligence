@@ -157,7 +157,7 @@ AtlasML requires the centralized Weaviate setup with Traefik and API key authent
    cd /path/to/edutelligence/weaviate
    ```
 
-2. Follow the complete setup guide in the [Weaviate README](/weaviate/README.md), which includes:
+2. Follow the complete setup guide in the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md), which includes:
    - Docker and Traefik configuration
    - SSL/TLS certificates via Let's Encrypt
    - API key authentication setup

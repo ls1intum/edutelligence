@@ -88,7 +88,7 @@ graph TB
 
 ### Weaviate Requirements
 
-AtlasML **requires** the centralized Weaviate setup. See the [Weaviate README](../../../weaviate/README.md) for complete requirements:
+AtlasML **requires** the centralized Weaviate setup. See the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md) for complete requirements:
 
 - **Separate server or VM** (shared by Atlas and Iris microservices)
 - **CPU**: 4+ cores (8+ recommended for production)

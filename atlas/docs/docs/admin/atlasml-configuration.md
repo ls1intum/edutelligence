@@ -75,7 +75,7 @@ WEAVIATE_API_KEY=your-weaviate-api-key
 ```
 
 :::warning Required Setup
-AtlasML requires the **centralized Weaviate setup** located in `/weaviate` directory. See the [Weaviate README](../../../weaviate/README.md) for complete setup instructions.
+AtlasML requires the **centralized Weaviate setup** located in `/weaviate` directory. See the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md) for complete setup instructions.
 :::
 
 **WEAVIATE_HOST**:
