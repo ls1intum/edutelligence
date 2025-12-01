@@ -70,8 +70,8 @@ You can add your own evaluation data like this:
 
 3.  Press **Import** and select the data you want to import (See 
 [Evaluation Data Format Guide](../evaluation_data_format.md))  
-   - Select one or multiple `.json` files (in case of non-programming exercises)
-   - Alternatively: Select a `.zip` that contains `.json` files and the associated code repositories. **Important:** they have to be on the top level!
+- Select one or multiple `.json` files (in case of non-programming exercises)
+- Alternatively: Select a `.zip` that contains `.json` files and the associated code repositories. **Important:** they have to be on the top level!
 
 4.  Verify that it lists `Available exercises:` as expected
 5.  Optional: Press **Export** to export the data if needed (The
