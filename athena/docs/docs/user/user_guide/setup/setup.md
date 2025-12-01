@@ -30,8 +30,7 @@ Playground:
 - In `.env.example`, you will find example environment variables that need to be set in `.env` (duplicate the file, rename it to `.env`, then edit).
 - Run the Athena Playground. (See [Run Playground](../../../dev/run/playground.md)).
 
-Connect to Athena Instance through the Playground
---------------------------
+## Connect to Athena Instance through the Playground
 
 1. Open the playground  
 - Test-server setup: [https://athena-test1.ase.cit.tum.de/playground](https://athena-test1.ase.cit.tum.de/playground)
@@ -69,7 +68,8 @@ You can add your own evaluation data like this:
 1.  Select **Evaluation Data**
 2.  Enter a directory name for the custom evaluation data, e.g. `my_awesome_evaluation_data`
 
-3.  Press **Import** and select the data you want to import (See `evaluation_data_format_guide`)  
+3.  Press **Import** and select the data you want to import (See 
+[Evaluation Data Format Guide](../evaluation_data_format.md))  
    - Select one or multiple `.json` files (in case of non-programming exercises)
    - Alternatively: Select a `.zip` that contains `.json` files and the associated code repositories. **Important:** they have to be on the top level!
 

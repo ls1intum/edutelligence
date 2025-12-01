@@ -94,7 +94,7 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 
 ## Consume Feedback
 
-Get a list of given feedback. This usually happens when someone gives
+Get a list of given feedback. This usually happens when someone provides
 feedback on the submission in the LMS. The module will receive the
 feedback at the function annotated with `@feedback_consumer`.
 
@@ -131,10 +131,10 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
 
 ## Provide Config Schema (Optional)
 
-Get a schema for config options of the module as json schema. 
+Get a schema for config options of the module as JSON schema. 
 The config complying to the schema can then be provided in the header of a request
-<span class="title-ref">X-Module-Config</span> to override the default
-values. The module can decorate one pydantic model with
+`X-Module-Config` to override the default
+values. The module can decorate one Pydantic model with
 `@config_schema_provider` to provide the schema and should have default
 values set for all fields as default configuration. The configuration
 class can be appended to the function signature of all other decorators
