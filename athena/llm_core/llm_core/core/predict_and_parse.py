@@ -49,63 +49,74 @@ async def predict_and_parse(
     elif model.supports_function_calling():
         structured_output_llm = llm_model.with_structured_output(pydantic_object)
     else:
-        # Many non-OpenAI endpoints (e.g., LM Studio) may prepend metadata tokens
-        # or wrap JSON in code fences. Clean the model text before JSON parsing.
-        def _extract_json_text(x: Union[str, BaseMessage]) -> str:
-            # Get raw text
-            if isinstance(x, (AIMessage, BaseMessage)):
-                text = getattr(x, "content", "") or ""
-            else:
-                text = str(x)
+        # For providers that don't support structured outputs or tool calling,
+        # default to plain parsing. Apply LM Studio–specific cleaning only for
+        # LM Studio to avoid impacting other providers (ollama, azure, openai, etc.).
+        provider = getattr(model, "provider", None)
 
-            # Remove common leading control tokens (LM Studio, etc.)
-            # Example: "<|channel|>final <|constrain|>JSON<|message|>{...}"
-            # Strategy: find the first '{' or '[' and return the balanced JSON substring.
-            start_candidates = []
-            lbrace = text.find("{")
-            if lbrace != -1:
-                start_candidates.append(lbrace)
-            lbrack = text.find("[")
-            if lbrack != -1:
-                start_candidates.append(lbrack)
-
-            if not start_candidates:
-                return text.strip()
-
-            start = min(start_candidates)
-            # Balanced scan for object/array
-            open_char = text[start]
-            close_char = '}' if open_char == '{' else ']'
-            depth = 0
-            in_string = False
-            escape = False
-            for i in range(start, len(text)):
-                ch = text[i]
-                if in_string:
-                    if escape:
-                        escape = False
-                    elif ch == '\\':
-                        escape = True
-                    elif ch == '"':
-                        in_string = False
+        if provider == "lmstudio":
+            # LM Studio responses may prepend control tokens or wrap JSON.
+            # Clean the model text before JSON parsing.
+            def _extract_json_text(x: Union[str, BaseMessage]) -> str:
+                # Get raw text
+                if isinstance(x, (AIMessage, BaseMessage)):
+                    text = getattr(x, "content", "") or ""
                 else:
-                    if ch == '"':
-                        in_string = True
-                    elif ch == open_char:
-                        depth += 1
-                    elif ch == close_char:
-                        depth -= 1
-                        if depth == 0:
-                            return text[start: i + 1].strip()
+                    text = str(x)
 
-            # Fallback: return from start to end if balancing failed
-            return text[start:].strip()
+                # Example: "<|channel|>final <|constrain|>JSON<|message|>{...}"
+                # Strategy: find the first '{' or '[' and return the balanced JSON substring.
+                start_candidates = []
+                lbrace = text.find("{")
+                if lbrace != -1:
+                    start_candidates.append(lbrace)
+                lbrack = text.find("[")
+                if lbrack != -1:
+                    start_candidates.append(lbrack)
 
-        structured_output_llm = RunnableSequence(
-            llm_model,
-            RunnableLambda(_extract_json_text),
-            PydanticOutputParser(pydantic_object=pydantic_object),
-        )
+                if not start_candidates:
+                    return text.strip()
+
+                start = min(start_candidates)
+                # Balanced scan for object/array
+                open_char = text[start]
+                close_char = '}' if open_char == '{' else ']'
+                depth = 0
+                in_string = False
+                escape = False
+                for i in range(start, len(text)):
+                    ch = text[i]
+                    if in_string:
+                        if escape:
+                            escape = False
+                        elif ch == '\\':
+                            escape = True
+                        elif ch == '"':
+                            in_string = False
+                    else:
+                        if ch == '"':
+                            in_string = True
+                        elif ch == open_char:
+                            depth += 1
+                        elif ch == close_char:
+                            depth -= 1
+                            if depth == 0:
+                                return text[start: i + 1].strip()
+
+                # Fallback: return from start to end if balancing failed
+                return text[start:].strip()
+
+            structured_output_llm = RunnableSequence(
+                llm_model,
+                RunnableLambda(_extract_json_text),
+                PydanticOutputParser(pydantic_object=pydantic_object),
+            )
+        else:
+            # Non-LM Studio: keep original behavior to avoid unintended changes
+            structured_output_llm = RunnableSequence(
+                llm_model,
+                PydanticOutputParser(pydantic_object=pydantic_object),
+            )
 
     chain = RunnableSequence(chat_prompt, structured_output_llm)
 
