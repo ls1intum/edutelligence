@@ -225,7 +225,6 @@ async def health():
 
 **Use Cases**:
 - Docker healthchecks
-- Kubernetes liveness probes
 - Load balancer health checks
 
 **When to Modify**:

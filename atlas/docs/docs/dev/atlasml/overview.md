@@ -21,12 +21,9 @@ AtlasML is a FastAPI-based microservice that exposes competency-centric ML featu
 - Request/response logging middleware emits concise request lines, best-effort bodies for POST, response codes, and end-to-end duration. This supports rapid debugging in dev and observability in staging.
 - The Weaviate client is checked on startup for liveness and closed gracefully on shutdown, ensuring connections are released and schemas are validated before requests hit the endpoints.
 
-```{toctree}
-:maxdepth: 2
-:caption: AtlasML Details
+## Related Documentation
 
-api
-models
-settings_auth
-weaviate
-```
+- [API Reference](./api.md) - REST API endpoints and contracts
+- [Data Models](./models.md) - Pydantic models and DTOs
+- [Settings & Authentication](./settings_auth.md) - Configuration and auth details
+- [Weaviate Integration](./weaviate.md) - Vector database client
