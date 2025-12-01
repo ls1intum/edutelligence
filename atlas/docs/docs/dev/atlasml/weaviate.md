@@ -7,7 +7,7 @@ title: 'Weaviate Integration'
 Module: `atlasml/clients/weaviate.py`. The client wraps the official SDK with a singleton accessor, schema bootstrap, and high-level helpers. This keeps API handlers simple and centralizes error handling and connection lifecycle.
 
 :::info Centralized Weaviate Setup
-AtlasML connects to the **centralized Weaviate instance** shared by Atlas and Iris microservices. This requires:
+AtlasML connects to the **centralized Weaviate instance** shared by AtlasML and Iris microservices. This requires:
 - HTTPS connection (`https://your-weaviate-domain.com`)
 - API key authentication
 - Ports 443 (HTTPS) and 50051 (gRPC)

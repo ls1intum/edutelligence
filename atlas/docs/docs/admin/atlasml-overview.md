@@ -90,7 +90,7 @@ graph TB
 
 AtlasML **requires** the centralized Weaviate setup. See the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md) for complete requirements:
 
-- **Separate server or VM** (shared by Atlas and Iris microservices)
+- **Separate server or VM** (shared by AtlasML and Iris microservices)
 - **CPU**: 4+ cores (8+ recommended for production)
 - **RAM**: 8GB+ (16GB+ recommended for production)
 - **Disk**: 50GB+ SSD (depends on data volume)
@@ -109,7 +109,7 @@ AtlasML **requires** the centralized Weaviate setup. See the [Weaviate README](h
 
 ### Architecture Note
 
-**Weaviate is a shared service**: The centralized Weaviate instance is shared between Atlas and Iris microservices. This provides:
+**Weaviate is a shared service**: The centralized Weaviate instance is shared between AtlasML and Iris microservices. This provides:
 - Centralized vector database management
 - Consistent authentication and security
 - Simplified backup and monitoring

@@ -1,6 +1,6 @@
 # Atlas: Competency Based Learning Management System
 
-Welcome to the Atlas documentation!
+Welcome to the AtlasML documentation!
 
 ## What is AtlasML?
 
