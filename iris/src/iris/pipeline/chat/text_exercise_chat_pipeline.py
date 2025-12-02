@@ -241,6 +241,11 @@ class TextExerciseChatPipeline(
         """
         dto = state.dto
 
+        # Extract user language with fallback
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         exercise_title = dto.exercise.title if dto.exercise else ""
         course_name = (
             dto.exercise.course.name if dto.exercise and dto.exercise.course else ""
@@ -265,6 +270,7 @@ class TextExerciseChatPipeline(
         # Build system prompt using Jinja2 template
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
             "exercise_id": dto.exercise.id if dto.exercise else "",
             "exercise_title": exercise_title,
             "course_name": course_name,
@@ -399,6 +405,11 @@ class TextExerciseChatPipeline(
         Returns:
             The result with citations added.
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             # Add FAQ citations
             faq_storage = getattr(state, "faq_storage", {})
@@ -412,6 +423,7 @@ class TextExerciseChatPipeline(
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 
@@ -427,6 +439,7 @@ class TextExerciseChatPipeline(
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 

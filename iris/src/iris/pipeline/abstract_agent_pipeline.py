@@ -318,9 +318,16 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             if output:
-                session_title = self.session_title_pipeline(first_user_msg, output)
+                session_title = self.session_title_pipeline(
+                    first_user_msg, output, user_language=user_language
+                )
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)
                 if session_title is None:
