@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 DTO = TypeVar("DTO")
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
+DEFAULT_SESSION_TITLE_ALIASES: set[str] = {"new chat", "neuer chat"}
 
 
 class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
@@ -292,6 +293,21 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             if step.get("output") is not None:
                 final_output = step["output"]
         return final_output
+
+    @staticmethod
+    def should_generate_session_title(
+        session_title: Optional[str],
+    ) -> bool:
+        """
+        Determine if a session title should be generated.
+
+        Args:
+            session_title: The current session title
+        Returns:
+            bool: True if a new session title should be generated
+        """
+        title = (session_title or "").strip().lower()
+        return not title or title in DEFAULT_SESSION_TITLE_ALIASES
 
     def _create_session_title(
         self,

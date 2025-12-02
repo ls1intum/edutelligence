@@ -34,6 +34,7 @@ from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
+from ..abstract_agent_pipeline import AbstractAgentPipeline
 from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
 from ..shared.utils import (
@@ -194,7 +195,13 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
             )
             # Generate a session title if this is the first student message
             session_title = None
-            if response_with_citation and len(dto.chat_history) == 1:
+            if (
+                response_with_citation
+                and AbstractAgentPipeline.should_generate_session_title(
+                    dto.session_title
+                )
+            ):
+
                 first_user_msg = dto.chat_history[0].contents[0].text_content
                 try:
                     session_title = self.session_title_pipeline(

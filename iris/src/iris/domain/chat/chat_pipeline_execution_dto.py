@@ -8,5 +8,6 @@ from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
 
 
 class ChatPipelineExecutionDTO(PipelineExecutionDTO):
+    session_title: str = Field(alias="sessionTitle", default=None)
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
     user: Optional[UserDTO]

@@ -554,7 +554,7 @@ class CourseChatPipeline(
         # Generate only the 'first time'
         # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
         # - or directly with the user's first message (len == 1)
-        if len(dto.chat_history) in (1, 2):
+        if self.should_generate_session_title(dto.session_title):
             first_user_msg = (
                 dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
             )
