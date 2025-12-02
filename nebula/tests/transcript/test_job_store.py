@@ -3,10 +3,13 @@
 import pytest
 
 from nebula.transcript.jobs import (
+    cancel_job,
     cleanup_finished_jobs,
     create_job,
     fail_job,
     get_job_status,
+    is_job_cancelled,
+    remove_from_cancelled,
     save_job_result,
 )
 
@@ -55,3 +58,44 @@ async def test_cleanup_finished_jobs_removes_old_entries(monkeypatch):
 
     assert (await get_job_status(job_id1))["status"] == "not_found"
     assert (await get_job_status(job_id2))["status"] == "not_found"
+
+
+@pytest.mark.anyio
+async def test_cancel_job_marks_as_cancelled():
+    """Test that cancel_job marks a job as cancelled."""
+    job_id = await create_job()
+    await cancel_job(job_id)
+
+    status = await get_job_status(job_id)
+    assert status["status"] == "cancelled"
+
+    # Check that it's in the cancelled set
+    assert await is_job_cancelled(job_id) is True
+
+
+@pytest.mark.anyio
+async def test_is_job_cancelled_returns_false_for_uncancelled_job():
+    """Test that is_job_cancelled returns False for jobs not cancelled."""
+    job_id = await create_job()
+    assert await is_job_cancelled(job_id) is False
+
+
+@pytest.mark.anyio
+async def test_remove_from_cancelled_removes_job():
+    """Test that remove_from_cancelled removes job from cancelled set."""
+    job_id = await create_job()
+    await cancel_job(job_id)
+
+    assert await is_job_cancelled(job_id) is True
+
+    await remove_from_cancelled(job_id)
+    assert await is_job_cancelled(job_id) is False
+
+
+@pytest.mark.anyio
+async def test_cancel_nonexistent_job_doesnt_error():
+    """Test that cancelling a non-existent job doesn't cause errors."""
+    await cancel_job("nonexistent-job-id")
+
+    # Should not raise, and the job should be in cancelled set
+    assert await is_job_cancelled("nonexistent-job-id") is True

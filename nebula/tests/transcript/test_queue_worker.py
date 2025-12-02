@@ -1,5 +1,5 @@
 # tests/transcript/test_queue_worker.py
-# pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
+# pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel,protected-access
 
 import asyncio
 
@@ -110,3 +110,216 @@ async def test_light_phase_failure_marks_job_error(monkeypatch):
     assert "boom" in status.get("error", "")
 
     await qw.stop_worker()
+
+
+@pytest.mark.anyio
+async def test_cancel_job_in_queue_removes_it(monkeypatch):
+    """Test that cancelling a job that's in the queue removes it."""
+    monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
+
+    # Don't actually start the worker, so jobs stay in queue
+    req = TranscribeRequestDTO(
+        videoUrl="https://example.com/video.m3u8", lectureUnitId=123
+    )
+
+    # Enqueue 3 jobs
+    job_ids = ["job1", "job2", "job3"]
+    for jid in job_ids:
+        await qw.enqueue_job(jid, req)
+
+    # Cancel the middle job
+    result = await qw.cancel_job_processing("job2")
+
+    # Check result
+    assert result["status"] == "cancelled"
+    assert "in queue" in result["message"]
+
+    # Verify job2 is not in the queue anymore
+    remaining_jobs = []
+    while not qw._job_queue.empty():
+        job_id, _ = await qw._job_queue.get()
+        remaining_jobs.append(job_id)
+
+    assert "job1" in remaining_jobs
+    assert "job2" not in remaining_jobs
+    assert "job3" in remaining_jobs
+
+
+@pytest.mark.anyio
+async def test_cancel_job_during_processing_stops_it(monkeypatch):
+    """Test that cancelling a job during processing marks it for cancellation."""
+    monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
+
+    processing_started = asyncio.Event()
+    cancellation_detected = asyncio.Event()
+
+    async def fake_heavy_pipeline(job_id, req):
+        # Track this job as processing
+        async with qw._processing_lock:
+            qw._processing_jobs[job_id] = {
+                "video_path": "/tmp/video.mp4",
+                "audio_path": "/tmp/audio.wav",
+                "uid": "test-uid",
+            }
+
+        try:
+            # Signal that processing has started
+            processing_started.set()
+
+            # Simulate processing with frequent cancellation checks
+            for _ in range(10):
+                await asyncio.sleep(0.05)
+
+                # Check if cancelled
+                from nebula.transcript.jobs import is_job_cancelled
+
+                if await is_job_cancelled(job_id):
+                    cancellation_detected.set()
+                    raise asyncio.CancelledError("Job was cancelled")
+
+            return {
+                "transcription": {
+                    "segments": [{"start": 0.0, "end": 0.1, "text": "hi"}]
+                },
+                "video_path": "/tmp/video.mp4",
+                "audio_path": "/tmp/audio.wav",
+                "uid": "test-uid",
+            }
+        finally:
+            # Clean up processing dict like the real _heavy_pipeline does
+            async with qw._processing_lock:
+                qw._processing_jobs.pop(job_id, None)
+
+    monkeypatch.setattr(qw, "_heavy_pipeline", fake_heavy_pipeline, raising=True)
+
+    qw.start_worker()
+
+    jid = "job-to-cancel"
+    req = TranscribeRequestDTO(
+        videoUrl="https://example.com/video.m3u8", lectureUnitId=123
+    )
+    await qw.enqueue_job(jid, req)
+
+    # Wait for processing to actually start
+    await asyncio.wait_for(processing_started.wait(), timeout=1.0)
+
+    # Cancel it while it's processing
+    result = await qw.cancel_job_processing(jid)
+
+    # Should return cancellation result for processing job
+    assert result["status"] == "cancelled"
+    assert "processing" in result["message"]
+
+    # Wait for cancellation to be detected
+    await asyncio.wait_for(cancellation_detected.wait(), timeout=1.0)
+
+    # Verify the job is no longer in the processing dict
+    async with qw._processing_lock:
+        assert jid not in qw._processing_jobs
+
+    await qw.stop_worker()
+
+
+@pytest.mark.anyio
+async def test_remove_job_from_queue_returns_true_when_found(monkeypatch):
+    """Test that remove_job_from_queue returns True when job is found."""
+    monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
+
+    req = TranscribeRequestDTO(
+        videoUrl="https://example.com/video.m3u8", lectureUnitId=123
+    )
+
+    await qw.enqueue_job("job1", req)
+    await qw.enqueue_job("job2", req)
+
+    found = await qw.remove_job_from_queue("job1")
+    assert found is True
+
+    # Verify queue only has job2
+    assert qw._job_queue.qsize() == 1
+    remaining_job, _ = await qw._job_queue.get()
+    assert remaining_job == "job2"
+
+
+@pytest.mark.anyio
+async def test_remove_job_from_queue_returns_false_when_not_found(monkeypatch):
+    """Test that remove_job_from_queue returns False when job is not found."""
+    monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
+
+    req = TranscribeRequestDTO(
+        videoUrl="https://example.com/video.m3u8", lectureUnitId=123
+    )
+
+    await qw.enqueue_job("job1", req)
+
+    found = await qw.remove_job_from_queue("job2")
+    assert found is False
+
+    # Verify queue still has job1
+    assert qw._job_queue.qsize() == 1
+
+
+@pytest.mark.anyio
+async def test_cancel_job_already_completed(monkeypatch):
+    """Test cancelling a job that has already completed."""
+    monkeypatch.setattr(qw, "_job_queue", asyncio.Queue())
+
+    from nebula.transcript.jobs import create_job
+
+    job_id = await create_job()
+    await save_job_result(job_id, {"result": "done"})
+
+    # Try to cancel the completed job
+    result = await qw.cancel_job_processing(job_id)
+
+    assert result["status"] == "cancelled"
+    assert "may have already completed" in result["message"]
+
+
+@pytest.mark.anyio
+async def test_cleanup_temp_files_removes_files(monkeypatch, tmp_path):
+    """Test that _cleanup_temp_files removes temporary files."""
+    # Create fake temp files
+    video_path = tmp_path / "video.mp4"
+    audio_path = tmp_path / "audio.wav"
+    chunk_dir = tmp_path / "chunks_test-uid"
+
+    video_path.write_text("fake video")
+    audio_path.write_text("fake audio")
+    chunk_dir.mkdir()
+    (chunk_dir / "chunk1.mp4").write_text("chunk")
+
+    # Mock VIDEO_STORAGE_PATH to our tmp_path
+    monkeypatch.setattr("nebula.transcript.queue_worker.VIDEO_STORAGE_PATH", tmp_path)
+
+    # Call cleanup
+    qw._cleanup_temp_files(str(video_path), str(audio_path), "test-uid")
+
+    # Verify files are deleted
+    assert not video_path.exists()
+    assert not audio_path.exists()
+    assert not chunk_dir.exists()
+
+
+@pytest.mark.anyio
+async def test_heavy_pipeline_checks_cancellation(monkeypatch):
+    """Test that heavy pipeline checks for cancellation at multiple points."""
+    from nebula.transcript.jobs import cancel_job
+
+    job_id = "test-cancel-during-pipeline"
+    req = TranscribeRequestDTO(
+        videoUrl="https://example.com/video.m3u8", lectureUnitId=123
+    )
+
+    # Cancel the job before it starts
+    await cancel_job(job_id)
+
+    # Mock the heavy operations to never actually run
+    async def fake_download(url, path):
+        pass
+
+    monkeypatch.setattr("nebula.transcript.queue_worker.download_video", fake_download)
+
+    # Should raise CancelledError when checking cancellation
+    with pytest.raises(asyncio.CancelledError):
+        await qw._heavy_pipeline(job_id, req)
