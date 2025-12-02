@@ -61,6 +61,14 @@ services:
       - "traefik.http.routers.logos-server-openai.service=logos-server"
       - "traefik.http.routers.logos-server-openai.priority=100"
 
+      # === Routing: /jobs ===
+      - "traefik.http.routers.logos-server-jobs.rule=PathPrefix(`/jobs`)"
+      - "traefik.http.routers.logos-server-jobs.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-jobs.tls=true"
+      - "traefik.http.routers.logos-server-jobs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-jobs.service=logos-server"
+      - "traefik.http.routers.logos-server-jobs.priority=100"
+
       # === Routing: /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
       - "traefik.http.routers.logos-server-logosdb.entrypoints=secure8080"
