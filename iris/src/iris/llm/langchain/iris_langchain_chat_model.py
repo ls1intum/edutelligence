@@ -6,14 +6,13 @@ from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import (
     BaseChatModel,
 )
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 from langchain_core.outputs.chat_generation import ChatGeneration
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.message_converters import (
@@ -26,31 +25,23 @@ from ...llm import CompletionArguments, RequestHandler
 class IrisLangchainChatModel(BaseChatModel):
     """Custom langchain chat model for our own request handler"""
 
-    request_handler: RequestHandler
-    completion_args: CompletionArguments
-    tokens: TokenUsageDTO = None
-    logger: Logger = logging.getLogger(__name__)
+    request_handler: RequestHandler = Field(...)
+    completion_args: CompletionArguments = Field(
+        default_factory=lambda: CompletionArguments(stop=None)
+    )
+    tokens: Optional[TokenUsageDTO] = Field(default=None)
+    logger: Logger = Field(default_factory=lambda: logging.getLogger(__name__))
     tools: Optional[
         Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
-    ] = Field(default_factory=list, alias="tools")
-
-    def __init__(
-        self,
-        request_handler: RequestHandler,
-        completion_args: Optional[CompletionArguments] = CompletionArguments(stop=None),
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            request_handler=request_handler,
-            completion_args=completion_args,
-            **kwargs,
-        )
+    ] = Field(default_factory=list)
 
     def bind_tools(
         self,
-        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
-        **_kwargs: Any,
-    ) -> Runnable[LanguageModelInput, BaseMessage]:
+        tools: Sequence[Union[Dict[str, Any], Type, Callable, BaseTool]],
+        *,
+        tool_choice: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, AIMessage]:
         """Bind a sequence of tools to the request handler for function calling support.
 
         Args:
@@ -93,7 +84,6 @@ class IrisLangchainChatModel(BaseChatModel):
             costPerMillionInputToken=iris_message.token_usage.cost_per_million_input_token,
             numOutputTokens=iris_message.token_usage.num_output_tokens,
             costPerMillionOutputToken=iris_message.token_usage.cost_per_million_output_token,
-            pipeline=PipelineEnum.NOT_SET,
         )
         return ChatResult(generations=[chat_generation])
 

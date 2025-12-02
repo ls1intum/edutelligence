@@ -69,7 +69,7 @@ class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     type: Literal["openai_embedding"]
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
-        self._client = OpenAIEmbeddings(api_key=self.api_key)
+        self._client = OpenAIEmbeddings(api_key=self.api_key)  # type: ignore[arg-type]
 
     def __str__(self):
         return f"OpenAIEmbedding('{self.model}')"
@@ -91,7 +91,7 @@ class AzureOpenAIEmbeddingModel(OpenAIEmbeddingModel):
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
-            api_key=self.api_key,
+            api_key=self.api_key,  # type: ignore[arg-type]
         )
 
     def __str__(self):

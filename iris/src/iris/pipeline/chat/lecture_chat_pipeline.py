@@ -22,6 +22,7 @@ from ...common.pyris_message import PyrisMessage
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
@@ -159,18 +160,23 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
 
         self._add_conversation_to_prompt(history, query)
 
+        # Get query text with type narrowing
+        query_text = ""
+        if query.contents and isinstance(query.contents[0], TextMessageContentDTO):
+            query_text = query.contents[0].text_content
+
         self.lecture_content = self.retriever(
-            query=query.contents[0].text_content,
+            query=query_text,
             course_id=dto.course_id,
             chat_history=history,
-            lecture_id=dto.lecture_id,
-            lecture_unit_id=dto.lecture_unit_id,
+            lecture_id=dto.lecture_id or 0,
+            lecture_unit_id=dto.lecture_unit_id or 0,
             base_url=dto.settings.artemis_base_url,
         )
 
         self._add_lecture_content_to_prompt(self.lecture_content)
         custom_instructions = format_custom_instructions(
-            custom_instructions=dto.custom_instructions
+            custom_instructions=dto.custom_instructions or ""
         )
         if custom_instructions:
             self.prompt += SystemMessagePromptTemplate.from_template(
@@ -180,7 +186,10 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
+            if self.llm.tokens:
+                self._append_tokens(
+                    self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE
+                )
             response_with_citation = self.citation_pipeline(
                 self.lecture_content,
                 response,
@@ -195,13 +204,17 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
             # Generate a session title if this is the first student message
             session_title = None
             if response_with_citation and len(dto.chat_history) == 1:
-                first_user_msg = dto.chat_history[0].contents[0].text_content
+                first_user_msg = ""
+                if dto.chat_history[0].contents and isinstance(
+                    dto.chat_history[0].contents[0], TextMessageContentDTO
+                ):
+                    first_user_msg = dto.chat_history[0].contents[0].text_content
                 try:
                     session_title = self.session_title_pipeline(
                         first_user_msg, response_with_citation
                     )
                     if self.session_title_pipeline.tokens is not None:
-                        self.tokens.append(self.session_title_pipeline.tokens)
+                        self.tokens.extend(self.session_title_pipeline.tokens)
                 except Exception as e:
                     logger.error(
                         "An error occurred while running the session title generation pipeline",
@@ -265,8 +278,8 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Next you will find the relevant lecture transcription content:\n"
         )
-        for _, chunk in enumerate(lecture_content.lecture_transcriptions):
-            text_content_msg = f" \n {chunk.segment_text} \n"
+        for transcription in lecture_content.lecture_transcriptions:
+            text_content_msg = f" \n {transcription.segment_text} \n"
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
 
@@ -275,8 +288,8 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
             """Next you will find the relevant lecture chunks which are summaries of one lecture slide combined with the
             corresponding lecture transcription:\n"""
         )
-        for chunk in lecture_content.lecture_unit_segments:
-            text_content_msg = f" \n {chunk.segment_summary} \n"
+        for segment in lecture_content.lecture_unit_segments:
+            text_content_msg = f" \n {segment.segment_summary} \n"
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
 

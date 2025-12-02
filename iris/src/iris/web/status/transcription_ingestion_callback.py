@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Optional
 
 from ...domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -20,8 +20,8 @@ class TranscriptionIngestionStatus(StatusCallback):
         self,
         run_id: str,
         base_url: str,
-        initial_stages: List[StageDTO] = None,
-        lecture_unit_id: int = None,
+        initial_stages: Optional[List[StageDTO]] = None,
+        lecture_unit_id: Optional[int] = None,
     ):
         url = f"{base_url}/api/iris/internal/webhooks/ingestion/transcriptions/runs/{run_id}/status"
 

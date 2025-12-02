@@ -52,7 +52,7 @@ def generate_images(
         iris_images.append(
             ImageMessageContentDTO(
                 prompt=revised_prompt,
-                base64=base64_data,
+                pdfFile=base64_data,
             )
         )
 

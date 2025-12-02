@@ -26,7 +26,9 @@ class LectureUnitPipeline(SubPipeline):
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
 
     def __call__(self, lecture_unit: LectureUnitDTO):
         lecture_unit_segment_summaries, token_unit_segment_summary = (

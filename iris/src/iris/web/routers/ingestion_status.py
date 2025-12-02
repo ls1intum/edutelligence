@@ -1,5 +1,6 @@
 import json
 from enum import Enum
+from typing import Annotated
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, Response, status
@@ -29,7 +30,7 @@ def get_lecture_unit_ingestion_state(
     course_id: int,
     lecture_id: int,
     lecture_unit_id: int,
-    base_url: str = Query(...),
+    base_url: Annotated[str, Query(...)],
 ):
     """
 

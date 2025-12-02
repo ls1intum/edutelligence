@@ -21,9 +21,10 @@ class SubPipeline(metaclass=ABCMeta):
         return f"{self.__class__.__name__}"
 
     @abstractmethod
-    def __call__(self, **kwargs):
+    def __call__(self, *args, **kwargs):
         """
-        Extracts the required parameters from the kwargs runs the pipeline.
+        Extracts the required parameters from the args/kwargs and runs the pipeline.
+        Subclasses should override with their specific signature.
         """
         raise NotImplementedError("Subclasses must implement the __call__ method.")
 

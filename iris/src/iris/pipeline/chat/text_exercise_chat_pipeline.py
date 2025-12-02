@@ -76,7 +76,7 @@ class TextExerciseChatPipeline(
         return f"{self.__class__.__name__}()"
 
     @classmethod
-    def get_variants(cls) -> List[TextExerciseChatVariant]:  # type: ignore[override]
+    def get_variants(cls) -> List[TextExerciseChatVariant]:
         """
         Get available variants for the text exercise chat pipeline.
 
@@ -140,7 +140,7 @@ class TextExerciseChatPipeline(
         last_message: Optional[PyrisMessage] = next(
             (
                 m
-                for m in reversed(dto.conversation or [])
+                for m in reversed(dto.chat_history or [])
                 if m.sender == IrisMessageRole.USER
             ),
             None,
@@ -213,7 +213,7 @@ class TextExerciseChatPipeline(
                     create_tool_faq_content_retrieval(
                         faq_retriever,
                         dto.exercise.course.id,
-                        dto.exercise.course.name,
+                        dto.exercise.course.name or "",
                         (dto.settings.artemis_base_url if dto.settings else ""),
                         callback,
                         query_text,
@@ -463,8 +463,12 @@ class TextExerciseChatPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if len(dto.chat_history) == 1:
-            first_user_msg = dto.chat_history[0].contents[0].text_content
+        if dto.chat_history and len(dto.chat_history) == 1:
+            first_user_msg = ""
+            if dto.chat_history[0].contents and isinstance(
+                dto.chat_history[0].contents[0], TextMessageContentDTO
+            ):
+                first_user_msg = dto.chat_history[0].contents[0].text_content
             return super()._create_session_title(state, output, first_user_msg)
         return None
 

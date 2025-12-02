@@ -4,9 +4,9 @@ import tempfile
 import threading
 import traceback
 from asyncio.log import logger
-from typing import List, Optional
+from typing import Any, List, Optional, Tuple
 
-import fitz
+import fitz  # type: ignore[import-untyped]
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -36,7 +36,6 @@ from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
 )
-from ..web.status import ingestion_status_callback
 from . import Pipeline
 
 batch_update_lock = threading.Lock()
@@ -103,22 +102,24 @@ class LectureUnitPageIngestionPipeline(
         self,
         client: WeaviateClient,
         dto: Optional[IngestionPipelineExecutionDto],
-        callback: ingestion_status_callback,
+        callback: Any,
     ):
         super().__init__()
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_chat = ModelVersionRequestHandler("gpt-4.1-mini")
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_chat = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gpt-4.1-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
-        self.tokens = []
-        self.course_language = None
+        self.tokens: List[Any] = []
+        self.course_language: Optional[str] = None
 
     @classmethod
     def get_variants(cls) -> List[LectureUnitPageIngestionVariant]:
@@ -146,8 +147,11 @@ class LectureUnitPageIngestionPipeline(
             ),
         ]
 
-    def __call__(self) -> (str, []):
+    def __call__(self) -> Tuple[str, List[Any]]:
         try:
+            if self.dto is None:
+                raise ValueError("DTO must be provided")
+
             if not self.check_if_attachment_needs_update():
                 pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
                 doc = fitz.open(pdf_path)
@@ -190,7 +194,7 @@ class LectureUnitPageIngestionPipeline(
                 "Lecture ingestion pipeline finished Successfully for course %s",
                 self.dto.lecture_unit.course_name,
             )
-            return self.course_language, self.tokens
+            return self.course_language if self.course_language else "", self.tokens
         except Exception as e:
             logger.error("Error updating lecture unit: %s", e)
             traceback.print_exc()
@@ -202,6 +206,9 @@ class LectureUnitPageIngestionPipeline(
             return "", []
 
     def check_if_attachment_needs_update(self) -> bool:
+        if self.dto is None:
+            return False
+
         page_chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.BASE_URL.value
         ).equal(self.dto.settings.artemis_base_url)
@@ -221,9 +228,15 @@ class LectureUnitPageIngestionPipeline(
 
         if len(page_chunk) == 0:
             return True
-        version = page_chunk[0].properties.get(
+        version_raw = page_chunk[0].properties.get(
             LectureUnitPageChunkSchema.PAGE_VERSION.value
         )
+        if isinstance(version_raw, int):
+            version = version_raw
+        elif version_raw is not None:
+            version = int(str(version_raw))
+        else:
+            version = 0
 
         return version < self.dto.lecture_unit.attachment_version
 
@@ -253,12 +266,15 @@ class LectureUnitPageIngestionPipeline(
     def chunk_data(
         self,
         lecture_pdf: str,
-        lecture_unit_slide_dto: LectureUnitPageDTO = None,
-        base_url: str = None,
+        lecture_unit_slide_dto: Optional[LectureUnitPageDTO] = None,
+        base_url: Optional[str] = None,
     ):  # pylint: disable=arguments-renamed
         """
         Chunk the data from the lecture into smaller pieces
         """
+        if lecture_unit_slide_dto is None or base_url is None:
+            raise ValueError("lecture_unit_slide_dto and base_url must be provided")
+
         doc = fitz.open(lecture_pdf)
         self.course_language = self.get_course_language(
             doc.load_page(min(5, doc.page_count - 1)).get_text()
@@ -281,7 +297,7 @@ class LectureUnitPageIngestionPipeline(
                     img_base64,
                     old_page_text,
                     lecture_unit_slide_dto.lecture_name,
-                    self.course_language,
+                    self.course_language if self.course_language else "English",
                 )
                 page_text = self.merge_page_content_and_image_interpretation(
                     page_text, image_interpretation
@@ -310,7 +326,7 @@ class LectureUnitPageIngestionPipeline(
         Interpret the image passed
         """
         image_interpretation_prompt = TextMessageContentDTO(
-            text_content=f"This page is part of the {name_of_lecture} university lecture."
+            textContent=f"This page is part of the {name_of_lecture} university lecture."
             f"I am the professor that created these slides, "
             f" please interpret this slide in an academic way. "
             f"For more context here is the content of the previous slide:\n "
@@ -318,7 +334,7 @@ class LectureUnitPageIngestionPipeline(
             f" Only repond with the slide explanation and interpretation in {course_language}, "
             f"do not add anything else to your response.Your explanation should not exceed 350 words."
         )
-        image = ImageMessageContentDTO(base64=img_base64)
+        image = ImageMessageContentDTO(pdfFile=img_base64)
         iris_message = PyrisMessage(
             sender=IrisMessageRole.USER,
             contents=[image_interpretation_prompt, image],
@@ -329,13 +345,17 @@ class LectureUnitPageIngestionPipeline(
                 CompletionArguments(temperature=0, max_tokens=512),
                 tools=[],
             )
-            self._append_tokens(
-                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
-            )
+            if response.token_usage:
+                self._append_tokens(
+                    response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
+                )
         except Exception as e:
             logger.error("Error interpreting image: %s", e)
             return None
-        return response.contents[0].text_content
+        text_content = response.contents[0]
+        if isinstance(text_content, TextMessageContentDTO):
+            return text_content.text_content
+        return None
 
     def merge_page_content_and_image_interpretation(
         self, page_content: str, image_interpretation: str
@@ -368,7 +388,8 @@ class LectureUnitPageIngestionPipeline(
             bullets=True,
             extra_whitespace=True,
         )
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
+        if self.llm.tokens:
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
         return clean_output
 
     def get_course_language(self, page_content: str) -> str:
@@ -381,15 +402,21 @@ class LectureUnitPageIngestionPipeline(
         )
         iris_message = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
-            contents=[TextMessageContentDTO(text_content=prompt)],
+            contents=[TextMessageContentDTO(textContent=prompt)],
         )
         response = self.llm_chat.chat(
             [iris_message],
             CompletionArguments(temperature=0, max_tokens=20),
             tools=[],
         )
-        self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
-        return response.contents[0].text_content
+        if response.token_usage:
+            self._append_tokens(
+                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
+            )
+        text_content = response.contents[0]
+        if isinstance(text_content, TextMessageContentDTO):
+            return text_content.text_content
+        return "English"
 
     def delete_old_lectures(
         self,

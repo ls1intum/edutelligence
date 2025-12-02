@@ -75,9 +75,9 @@ def create_tool_get_competency_list(
                     competency_metrics.confidence.get(comp, 0),
                 ),
                 "judgment_of_learning": (
-                    competency_metrics.jol_values.get(comp).json()
+                    jol.json()
                     if competency_metrics.jol_values
-                    and comp in competency_metrics.jol_values
+                    and (jol := competency_metrics.jol_values.get(comp)) is not None
                     else None
                 ),
             }

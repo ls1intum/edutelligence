@@ -2,6 +2,7 @@ import datetime
 import os
 from asyncio.log import logger
 from enum import Enum
+from typing import Any
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
@@ -100,17 +101,17 @@ class CitationPipeline(SubPipeline):
 
         formatted_string_lecture_transcriptions = ""
 
-        for paragraph in lecture_retrieval_dto.lecture_transcriptions:
-            start_time_sec = paragraph.segment_start_time
-            end_time_sec = paragraph.segment_end_time
+        for transcription in lecture_retrieval_dto.lecture_transcriptions:
+            start_time_sec = transcription.segment_start_time
+            end_time_sec = transcription.segment_end_time
             start_time_str = str(datetime.timedelta(seconds=int(start_time_sec)))
             end_time_str = str(datetime.timedelta(seconds=int(end_time_sec)))
             lct = (
-                f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}, Link: {paragraph.video_link or "No link available"}, "
+                f"Lecture Transcription: {transcription.lecture_name}, Unit: {transcription.lecture_unit_name}, "
+                f"Page: {transcription.page_number}, Link: {transcription.video_link or "No link available"}, "
                 f"Start Time: {start_time_str}, End Time: {end_time_str},\n"
                 f"Content:\n"
-                f"---{paragraph.segment_text}---\n\n"
+                f"---{transcription.segment_text}---\n\n"
             )
             formatted_string_lecture_transcriptions += lct
         return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
@@ -137,11 +138,11 @@ class CitationPipeline(SubPipeline):
 
     def __call__(
         self,
-        information,  #: #Union[List[dict], List[str]],
+        information: Any,
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
         variant: str = "default",
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
         """
         Runs the pipeline

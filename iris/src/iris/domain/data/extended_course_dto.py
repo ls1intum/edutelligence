@@ -16,7 +16,7 @@ class ExtendedCourseDTO(BaseModel):
     and competencies."""
 
     id: int = Field(alias="id")
-    name: str = Field(alias="name", default=None)
+    name: Optional[str] = Field(alias="name", default=None)
     description: Optional[str] = Field(alias="description", default=None)
     start_time: Optional[datetime] = Field(alias="startTime", default=None)
     end_time: Optional[datetime] = Field(alias="endTime", default=None)

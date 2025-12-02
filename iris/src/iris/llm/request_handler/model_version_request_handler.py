@@ -1,9 +1,10 @@
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union, cast
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from iris.common.pyris_message import PyrisMessage
+from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.external.model import (
     ChatModel,
@@ -19,23 +20,17 @@ class ModelVersionRequestHandler(RequestHandler):
     """Request handler that selects the first model with a matching version."""
 
     version: str
-    llm_manager: LlmManager | None = None
+    llm_manager: LlmManager = Field(default_factory=LlmManager)
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def __init__(
+    def complete(
         self,
-        version: str,
-    ) -> None:
-        super().__init__(
-            version=version,
-            llm_manager=None,
-        )
-        self.version = version
-        self.llm_manager = LlmManager()
-
-    def complete(self, prompt: str, arguments: CompletionArguments) -> str:
-        llm = self._select_model(CompletionModel)
-        return llm.complete(prompt, arguments)
+        prompt: str,
+        arguments: CompletionArguments,
+        image: Optional[ImageMessageContentDTO] = None,
+    ) -> str:
+        llm = cast(CompletionModel, self._select_model(CompletionModel))
+        return llm.complete(prompt, arguments, image)
 
     def chat(
         self,
@@ -45,7 +40,7 @@ class ModelVersionRequestHandler(RequestHandler):
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
-        llm = self._select_model(ChatModel)
+        llm = cast(ChatModel, self._select_model(ChatModel))
         message = llm.chat(messages, arguments, tools)
         message.token_usage.model_info = llm.model
         message.token_usage.cost_per_million_input_token = (
@@ -57,7 +52,7 @@ class ModelVersionRequestHandler(RequestHandler):
         return message
 
     def embed(self, text: str) -> list[float]:
-        llm = self._select_model(EmbeddingModel)
+        llm = cast(EmbeddingModel, self._select_model(EmbeddingModel))
         return llm.embed(text)
 
     def split_text_semantically(
@@ -69,7 +64,7 @@ class ModelVersionRequestHandler(RequestHandler):
         breakpoint_threshold_amount: float = 95.0,
         min_chunk_size: int = 512,
     ):
-        llm = self._select_model(EmbeddingModel)
+        llm = cast(EmbeddingModel, self._select_model(EmbeddingModel))
 
         return llm.split_text_semantically(
             text,
@@ -78,7 +73,7 @@ class ModelVersionRequestHandler(RequestHandler):
             min_chunk_size,
         )
 
-    def _select_model(self, type_filter: type) -> LanguageModel:
+    def _select_model(self, type_filter: Type[LanguageModel]) -> LanguageModel:
         """Select the first model that matches the requested version"""
         # Get all LLMs from the manager
         all_llms = self.llm_manager.entries
@@ -96,7 +91,7 @@ class ModelVersionRequestHandler(RequestHandler):
             )
 
         # Select the first matching LLM
-        llm = matching_llms[0]
+        llm = cast(LanguageModel, matching_llms[0])
 
         # Print the selected model for the logs
         print(f"Selected {llm.description}")

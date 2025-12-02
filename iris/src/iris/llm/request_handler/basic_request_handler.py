@@ -10,7 +10,7 @@ from typing import (
 )
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -26,13 +26,8 @@ class BasicRequestHandler(RequestHandler):
     """
 
     model_id: str
-    llm_manager: LlmManager | None = None
+    llm_manager: LlmManager = Field(default_factory=LlmManager)
     model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def __init__(self, model_id: str):
-        super().__init__(model_id=model_id, llm_manager=None)
-        self.model_id = model_id
-        self.llm_manager = LlmManager()
 
     def complete(
         self,

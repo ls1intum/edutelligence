@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Any, List, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -60,7 +60,9 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             client
         )
 
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(
+            version="text-embedding-3-small"
+        )
 
         request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
@@ -68,12 +70,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
-        self.tokens = []
+        self.tokens: List[Any] = []
 
-    def __call__(self) -> [str]:
+    def __call__(self) -> Tuple[List[str], List[Any]]:
         slide_number_start, slide_number_end = self._get_slide_range()
 
-        summaries = []
+        summaries: List[str] = []
         for slide_index in range(slide_number_start, slide_number_end + 1):
             transcriptions = self._get_transcriptions(slide_index)
             slides = self._get_slides(slide_index)
@@ -106,26 +108,34 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         ).objects
 
         if len(slides) != 0:
-            slide_numbers = [
-                int(slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value))
-                for slide in slides
-            ]
-            return min(slide_numbers), max(slide_numbers)
+            slide_numbers = []
+            for slide in slides:
+                page_num = slide.properties.get(
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value
+                )
+                if isinstance(page_num, int):
+                    slide_numbers.append(page_num)
+                elif page_num is not None:
+                    slide_numbers.append(int(str(page_num)))
+            if slide_numbers:
+                return min(slide_numbers), max(slide_numbers)
 
         transcriptions = self.lecture_transcription_collection.query.fetch_objects(
             filters=self._get_lecture_transcription_filter()
         ).objects
 
         if len(transcriptions) != 0:
-            slide_numbers = [
-                int(
-                    transcription.properties.get(
-                        LectureTranscriptionSchema.PAGE_NUMBER.value
-                    )
+            slide_numbers = []
+            for transcription in transcriptions:
+                page_num = transcription.properties.get(
+                    LectureTranscriptionSchema.PAGE_NUMBER.value
                 )
-                for transcription in transcriptions
-            ]
-            return min(slide_numbers), max(slide_numbers)
+                if isinstance(page_num, int):
+                    slide_numbers.append(page_num)
+                elif page_num is not None:
+                    slide_numbers.append(int(str(page_num)))
+            if slide_numbers:
+                return min(slide_numbers), max(slide_numbers)
 
         return 0, 0
 
@@ -186,9 +196,10 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         self.prompt = ChatPromptTemplate.from_messages(formatted_prompt)
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            self._append_tokens(
-                self.llm.tokens, PipelineEnum.IRIS_LECTURE_SUMMARY_PIPELINE
-            )
+            if self.llm.tokens:
+                self._append_tokens(
+                    self.llm.tokens, PipelineEnum.IRIS_LECTURE_SUMMARY_PIPELINE
+                )
             return response
         except Exception as e:
             raise e

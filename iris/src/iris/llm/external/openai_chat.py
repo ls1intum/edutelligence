@@ -36,7 +36,7 @@ from ...common.pyris_message import PyrisAIMessage, PyrisMessage
 from ...common.token_usage_dto import TokenUsageDTO
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...domain.data.json_message_content_dto import JsonMessageContentDTO
-from ...domain.data.tool_call_dto import ToolCallDTO
+from ...domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel
@@ -169,10 +169,10 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
         ToolCallDTO(
             id=tc.id,
             type=tc.type,
-            function={
-                "name": tc.function.name,
-                "arguments": tc.function.arguments,
-            },
+            function=FunctionDTO(
+                name=tc.function.name,
+                arguments=tc.function.arguments,
+            ),
         )
         for tc in message_tool_calls
     ]
@@ -199,16 +199,16 @@ def convert_to_iris_message(
 
     if message.tool_calls:
         return PyrisAIMessage(
-            tool_calls=create_iris_tool_calls(message.tool_calls),
+            toolCalls=create_iris_tool_calls(message.tool_calls),
             contents=[TextMessageContentDTO(textContent="")],
-            sendAt=current_time,
+            sentAt=current_time,
             token_usage=token_usage,
         )
 
     return PyrisMessage(
         sender=map_str_to_role(message.role),
-        contents=[TextMessageContentDTO(textContent=message.content)],
-        sendAt=current_time,
+        contents=[TextMessageContentDTO(textContent=message.content or "")],
+        sentAt=current_time,
         token_usage=token_usage,
     )
 
@@ -217,6 +217,10 @@ class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
 
     api_key: str
+
+    def get_client(self) -> OpenAI:
+        """Get the OpenAI client. Must be implemented by subclasses."""
+        raise NotImplementedError("Subclasses must implement get_client()")
 
     def chat(
         self,
@@ -236,14 +240,19 @@ class OpenAIChatModel(ChatModel):
 
             for message in messages:
                 if message.sender == "SYSTEM":
-                    print("SYSTEM MESSAGE: " + message.contents[0].text_content)
+                    first_content = message.contents[0]
+                    if hasattr(first_content, "text_content"):
+                        print("SYSTEM MESSAGE: " + first_content.text_content)  # type: ignore[attr-defined]
                     break
 
-            messages = convert_to_open_ai_messages(messages)
+            openai_messages = convert_to_open_ai_messages(messages)
 
             for attempt in range(retries):
                 try:
-                    params = {"model": self.model, "messages": messages}
+                    params: Dict[str, Any] = {
+                        "model": self.model,
+                        "messages": openai_messages,
+                    }
 
                     if arguments.temperature is not None:
                         params["temperature"] = arguments.temperature

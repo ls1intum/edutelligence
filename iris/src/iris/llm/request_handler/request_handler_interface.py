@@ -37,7 +37,7 @@ class RequestHandler(BaseModel, metaclass=ABCMeta):
     @abstractmethod
     def chat(
         self,
-        messages: list[any],
+        messages: list[Any],
         arguments: CompletionArguments,
         tools: Optional[
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
