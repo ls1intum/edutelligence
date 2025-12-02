@@ -17,7 +17,7 @@ jobs:
     environment: 'Atlas - Test 1'
     steps:
       - name: Write .env to remote host
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
