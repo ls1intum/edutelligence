@@ -33,7 +33,7 @@ async def lifespan(_: FastAPI):
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
     logging.info("Memory Sleep scheduler started (lifespan style)")
-
+    memory_sleep_task()
     yield
 
     scheduler.shutdown()
