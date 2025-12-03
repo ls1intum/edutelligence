@@ -10,8 +10,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+    command:
+      - "--configFile=/traefik.yml"
+      - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro

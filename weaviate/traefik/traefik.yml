@@ -51,7 +51,7 @@ tls:
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: ${LETSENCRYPT_EMAIL}
+      # Email is configured via command-line argument in docker-compose.yml
       storage: acme.json
       httpChallenge:
         entryPoint: http
