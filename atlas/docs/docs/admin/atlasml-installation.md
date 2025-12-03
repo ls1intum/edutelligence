@@ -95,51 +95,25 @@ cd /opt/atlasml
 sudo chown $USER:$USER /opt/atlasml
 ```
 
-### Step 4: Download Compose File
+### Step 4: Download Configuration Files
 
 ```bash
-# Download from GitHub
-curl -o compose.atlas.yaml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/compose.atlas.yaml
+# Download production Docker Compose file
+curl -o docker-compose.prod.yml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/docker-compose.prod.yml
 
-# Or create manually
-cat > compose.atlas.yaml << 'EOF'
-services:
-  atlasml:
-    image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
-    env_file:
-      - .env
-    environment:
-      PYTHONPATH: ${PYTHONPATH:-/atlasml}
-      WEAVIATE_HOST: ${WEAVIATE_HOST}
-      WEAVIATE_PORT: ${WEAVIATE_PORT:-80}
-      WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT:-443}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_API_URL: ${OPENAI_API_URL}
-      ATLAS_API_KEYS: ${ATLAS_API_KEYS}
-      SENTRY_DSN: ${SENTRY_DSN}
-      ENV: ${ENV:-production}
-    restart: unless-stopped
-    ports:
-      - '80:8000'
-    networks:
-      - shared-network
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1/health']
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '50m'
-        max-file: '5'
+# Download environment template
+curl -o .env.example https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/.env.example
 
-networks:
-  shared-network:
-    name: shared-network
-    driver: bridge
-EOF
+# Create Traefik configuration directory
+mkdir -p traefik
+
+# Download Traefik configuration files
+curl -o traefik/traefik.yml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/traefik/traefik.yml
+curl -o traefik/config.yml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/traefik/config.yml
+
+# Create SSL certificate file with correct permissions
+touch traefik/acme.json
+chmod 600 traefik/acme.json
 ```
 
 ### Step 5: Set Up Weaviate
@@ -224,13 +198,13 @@ Never commit the `.env` file to version control. Keep your API keys secure.
 cd /opt/atlasml
 
 # Pull the image
-docker-compose -f compose.atlas.yaml pull
+docker-compose -f docker-compose.prod.yml pull
 
 # Start the service
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Check status
-docker-compose -f compose.atlas.yaml ps
+docker-compose -f docker-compose.prod.yml ps
 ```
 
 **Expected output**:
@@ -330,10 +304,10 @@ See [Monitoring Guide](./atlasml-monitoring.md) for detailed monitoring setup.
 cd /opt/atlasml
 
 # Pull new image
-docker-compose -f compose.atlas.yaml pull
+docker-compose -f docker-compose.prod.yml pull
 
 # Restart service (zero downtime if using load balancer)
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify
 docker logs atlasml
@@ -346,8 +320,8 @@ docker logs atlasml
 echo "IMAGE_TAG=v1.2.0" >> /opt/atlasml/.env
 
 # Pull and restart
-docker-compose -f compose.atlas.yaml pull
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml pull
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
 ---
@@ -388,7 +362,7 @@ docker-compose -f compose.weaviate.yaml up -d
 
 ```bash
 # Stop and remove containers
-docker-compose -f compose.atlas.yaml down
+docker-compose -f docker-compose.prod.yml down
 
 # Remove images
 docker rmi ghcr.io/ls1intum/edutelligence/atlasml:main

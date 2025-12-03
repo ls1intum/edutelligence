@@ -1,0 +1,94 @@
+services:
+  traefik:
+    image: traefik:v3.2
+    container_name: atlasml-traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - atlasml_network
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/traefik.yml:ro
+      - ./traefik/acme.json:/acme.json:rw
+      - ./traefik/config.yml:/config.yml:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '${TRAEFIK_CPU_LIMIT:-0.5}'
+          memory: ${TRAEFIK_MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: '${TRAEFIK_CPU_RESERVATION:-0.25}'
+          memory: ${TRAEFIK_MEMORY_RESERVATION:-256M}
+
+  atlasml:
+    image: ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG:-latest}
+    container_name: atlasml
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - atlasml_network
+    environment:
+      PYTHONPATH: ${PYTHONPATH:-/atlasml}
+      WEAVIATE_HOST: ${WEAVIATE_HOST}
+      WEAVIATE_PORT: ${WEAVIATE_PORT:-443}
+      WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT:-50051}
+      WEAVIATE_API_KEY: ${WEAVIATE_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_URL: ${OPENAI_API_URL}
+      ATLAS_API_KEYS: ${ATLAS_API_KEYS}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ENV: ${ENV:-production}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:80/api/v1/health').getcode() == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.atlasml.entrypoints=http"
+      - "traefik.http.routers.atlasml.rule=Host(`${ATLASML_DOMAIN}`)"
+      - "traefik.http.middlewares.atlasml-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.atlasml.middlewares=atlasml-https-redirect"
+      - "traefik.http.routers.atlasml-secure.entrypoints=https"
+      - "traefik.http.routers.atlasml-secure.rule=Host(`${ATLASML_DOMAIN}`)"
+      - "traefik.http.routers.atlasml-secure.tls=true"
+      - "traefik.http.routers.atlasml-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.atlasml-secure.tls.options=default@file"
+      # IP Whitelist middleware (only applied if ALLOWED_IPS is set)
+      - "traefik.http.middlewares.atlasml-ipwhitelist.ipallowlist.sourcerange=${ALLOWED_IPS:-0.0.0.0/0}"
+      # Apply middlewares (IP whitelist only used if explicitly enabled)
+      - "traefik.http.routers.atlasml-secure.middlewares=default-headers,rate-limit${ALLOWED_IPS:+,atlasml-ipwhitelist}"
+      - "traefik.http.routers.atlasml-secure.service=atlasml"
+      - "traefik.http.services.atlasml.loadbalancer.server.port=80"
+    deploy:
+      resources:
+        limits:
+          cpus: '${ATLASML_CPU_LIMIT:-4}'
+          memory: ${ATLASML_MEMORY_LIMIT:-8G}
+        reservations:
+          cpus: '${ATLASML_CPU_RESERVATION:-2}'
+          memory: ${ATLASML_MEMORY_RESERVATION:-4G}
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  atlasml_network:
+    driver: bridge

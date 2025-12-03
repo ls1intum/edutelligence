@@ -147,7 +147,7 @@ Uses reusable workflow to deploy:
   uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
   with:
     environment: 'AtlasML - Test 1'
-    docker-compose-file: './atlas/compose.atlas.yaml'
+    docker-compose-file: './atlas/docker-compose.prod.yml'
     main-image-name: ls1intum/edutelligence/atlasml
     image-tag: ${{ inputs.image-tag }}
     deployment-base-path: '/opt/atlasml'
@@ -339,8 +339,8 @@ cat .env >> .env.new
 mv .env.new .env
 
 # Pull and restart
-docker-compose -f compose.atlas.yaml pull
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml pull
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify
 docker logs atlasml
@@ -380,7 +380,7 @@ graph LR
 ### Using Docker Compose
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 services:
   atlasml:
     image: ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}
@@ -394,7 +394,7 @@ services:
 
 **Deploy**:
 ```bash
-docker-compose -f compose.atlas.yaml up -d --no-deps --build atlasml
+docker-compose -f docker-compose.prod.yml up -d --no-deps --build atlasml
 ```
 
 This updates containers one at a time, ensuring at least one is always running.
@@ -572,13 +572,13 @@ docker logs atlasml
 **Solution**:
 ```bash
 # Force pull new image
-docker-compose -f compose.atlas.yaml pull
+docker-compose -f docker-compose.prod.yml pull
 
 # Remove old container
-docker-compose -f compose.atlas.yaml down
+docker-compose -f docker-compose.prod.yml down
 
 # Start with new image
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify version (check logs for startup message)
 docker logs atlasml | grep "Starting"

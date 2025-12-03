@@ -62,7 +62,7 @@ curl http://localhost/api/v1/health
 
 ### Docker Health Check
 
-Configured in `compose.atlas.yaml`:
+Configured in `docker-compose.prod.yml`:
 
 ```yaml
 healthcheck:
@@ -191,7 +191,7 @@ docker logs atlasml 2>&1 | grep -E "(WARNING|ERROR)"
 
 ### Log Rotation
 
-Configured in `compose.atlas.yaml`:
+Configured in `docker-compose.prod.yml`:
 
 ```yaml
 logging:
@@ -229,7 +229,7 @@ For production, send logs to a centralized system:
 #### Option 1: Syslog
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 logging:
   driver: syslog
   options:
@@ -299,7 +299,7 @@ docker stats atlasml --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}
 Prevent resource exhaustion:
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 services:
   atlasml:
     deploy:

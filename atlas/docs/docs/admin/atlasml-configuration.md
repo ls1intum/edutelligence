@@ -264,7 +264,7 @@ IMAGE_TAG=feature-new-embeddings
 IMAGE_TAG=pr-123
 ```
 
-**Used in**: `compose.atlas.yaml`
+**Used in**: `docker-compose.prod.yml`
 
 ```yaml
 image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
