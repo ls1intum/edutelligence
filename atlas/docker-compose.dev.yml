@@ -6,21 +6,25 @@
 #
 # Usage:
 #   1. Start infrastructure:
-#      docker-compose -f docker-compose.dev.yml up -d
+#      docker compose -f docker-compose.dev.yml up -d
 #
 #   2. Run AtlasML locally (in another terminal):
 #      cd AtlasMl
 #      poetry install
-#      poetry run uvicorn atlasml.main:app --reload --host 0.0.0.0 --port 8000
+#      cp .env.example .env  # Configure with your Azure OpenAI credentials
+#      poetry run uvicorn atlasml.app:app --reload
 #
-# Access AtlasML at: http://localhost:8000 (running locally)
+# Access AtlasML at: http://localhost:8000 (running locally via Poetry)
 # Access Weaviate at: http://localhost:8085 (running in Docker)
+# Access Multi2vec-CLIP at: http://localhost:8081 (running in Docker)
 #
 # Benefits of running AtlasML locally:
 # - Instant code changes with --reload (no Docker rebuild)
 # - Full IDE debugging support (breakpoints, step-through)
 # - Fast development iteration cycle
 # - Direct Poetry dependency management
+#
+# For detailed setup instructions, see: AtlasMl/README.md
 
 services:
   weaviate:
