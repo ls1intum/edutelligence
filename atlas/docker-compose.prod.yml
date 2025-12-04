@@ -53,7 +53,7 @@ services:
       SENTRY_DSN: ${SENTRY_DSN:-}
       ENV: ${ENV:-production}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:80/api/v1/health').getcode() == 200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health').getcode() == 200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -74,7 +74,7 @@ services:
       # Apply middlewares (IP whitelist only used if explicitly enabled)
       - "traefik.http.routers.atlasml-secure.middlewares=default-headers,rate-limit${ALLOWED_IPS:+,atlasml-ipwhitelist}"
       - "traefik.http.routers.atlasml-secure.service=atlasml"
-      - "traefik.http.services.atlasml.loadbalancer.server.port=80"
+      - "traefik.http.services.atlasml.loadbalancer.server.port=8000"
     deploy:
       resources:
         limits:

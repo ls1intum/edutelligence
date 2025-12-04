@@ -66,7 +66,7 @@ services:
     container_name: atlasml-local
     restart: unless-stopped
     ports:
-      - "8000:80"
+      - "8000:8000"
     environment:
       PYTHONPATH: /atlasml
       WEAVIATE_HOST: http://weaviate
@@ -77,7 +77,7 @@ services:
       SENTRY_DSN: ${SENTRY_DSN:-}
       ENV: development
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:80/api/v1/health').getcode() == 200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health').getcode() == 200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
