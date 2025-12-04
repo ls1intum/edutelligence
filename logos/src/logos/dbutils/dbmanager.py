@@ -741,7 +741,8 @@ class DBManager:
         """
         sql = text("""
             SELECT id, ollama_admin_url, total_vram_mb, parallel_capacity,
-                   keep_alive_seconds, max_loaded_models, updated_at
+                   keep_alive_seconds, max_loaded_models, updated_at,
+                   ssh_host, ssh_user, ssh_port, ssh_key_path, ssh_remote_ollama_port
             FROM providers
             WHERE id = :provider_id
         """)
@@ -758,7 +759,12 @@ class DBManager:
                 "parallel_capacity": result[3],
                 "keep_alive_seconds": result[4],
                 "max_loaded_models": result[5],
-                "updated_at": result[6]
+                "updated_at": result[6],
+                "ssh_host": result[7],
+                "ssh_user": result[8],
+                "ssh_port": result[9],
+                "ssh_key_path": result[10],
+                "ssh_remote_ollama_port": result[11],
             }
         return None
 
@@ -770,7 +776,12 @@ class DBManager:
         total_vram_mb: int = None,
         parallel_capacity: int = None,
         keep_alive_seconds: int = None,
-        max_loaded_models: int = None
+        max_loaded_models: int = None,
+        ssh_host: str = None,
+        ssh_user: str = None,
+        ssh_port: int = None,
+        ssh_key_path: str = None,
+        ssh_remote_ollama_port: int = None
     ) -> Tuple[dict, int]:
         """
         Update SDI configuration fields in providers table.
@@ -783,6 +794,11 @@ class DBManager:
             parallel_capacity: Max concurrent requests per model
             keep_alive_seconds: How long models stay loaded when idle
             max_loaded_models: Max models that can be loaded simultaneously
+            ssh_host: SSH host for reaching a private Ollama server
+            ssh_user: SSH user to authenticate with
+            ssh_port: SSH port (defaults to 22)
+            ssh_key_path: Local path to private key (assumed present on this host)
+            ssh_remote_ollama_port: Remote Ollama port to query (defaults to 11434)
 
         Returns:
             Tuple of (result dict, status code)
@@ -809,6 +825,21 @@ class DBManager:
         if max_loaded_models is not None:
             updates.append("max_loaded_models = :max_loaded_models")
             params["max_loaded_models"] = int(max_loaded_models)
+        if ssh_host is not None:
+            updates.append("ssh_host = :ssh_host")
+            params["ssh_host"] = ssh_host
+        if ssh_user is not None:
+            updates.append("ssh_user = :ssh_user")
+            params["ssh_user"] = ssh_user
+        if ssh_port is not None:
+            updates.append("ssh_port = :ssh_port")
+            params["ssh_port"] = int(ssh_port)
+        if ssh_key_path is not None:
+            updates.append("ssh_key_path = :ssh_key_path")
+            params["ssh_key_path"] = ssh_key_path
+        if ssh_remote_ollama_port is not None:
+            updates.append("ssh_remote_ollama_port = :ssh_remote_ollama_port")
+            params["ssh_remote_ollama_port"] = int(ssh_remote_ollama_port)
 
         if not updates:
             return {"error": "No fields to update"}, 400

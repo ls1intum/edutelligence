@@ -36,6 +36,11 @@ services:
     volumes:
       - data_volume:/src/logos
       - ./tests/performance/results:/app/tests/performance/results
+      # SSH credentials for private Ollama access (host paths must exist)
+      # Disclaimer: You might have to adjust permissions of your SSH keys or filepath to make them readable inside the container
+      # TODO: Consider switching from SSH ollama server status polling, this is workaround for now
+      - ${HOME}/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+      - ${HOME}/.ssh/known_hosts:/root/.ssh/known_hosts:ro
     environment:
       PROVIDER_NAME: azure
       BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/

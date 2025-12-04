@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system packages
 RUN apt-get update && apt-get install -y \
     gcc \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip
 

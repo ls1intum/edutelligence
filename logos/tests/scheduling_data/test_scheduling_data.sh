@@ -59,26 +59,127 @@ while [ $attempts -lt $max_attempts ]; do
     sleep 2
 done
 
+test_exit_code=0
+
+# Build pytest arguments from script parameters
+PYTEST_ARGS=()
+
+# Parse script arguments and convert to pytest options
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --ssh-host=*)
+      PYTEST_ARGS+=("--ssh-host=${1#*=}")
+      shift
+      ;;
+    --ssh-host)
+      PYTEST_ARGS+=("--ssh-host=$2")
+      shift 2
+      ;;
+    --ssh-user=*)
+      PYTEST_ARGS+=("--ssh-user=${1#*=}")
+      shift
+      ;;
+    --ssh-user)
+      PYTEST_ARGS+=("--ssh-user=$2")
+      shift 2
+      ;;
+    --ssh-key-path=*)
+      PYTEST_ARGS+=("--ssh-key-path=${1#*=}")
+      shift
+      ;;
+    --ssh-key-path)
+      PYTEST_ARGS+=("--ssh-key-path=$2")
+      shift 2
+      ;;
+    --ssh-remote-port=*)
+      PYTEST_ARGS+=("--ssh-remote-port=${1#*=}")
+      shift
+      ;;
+    --ssh-remote-port)
+      PYTEST_ARGS+=("--ssh-remote-port=$2")
+      shift 2
+      ;;
+    --ollama-live-model-id=*)
+      PYTEST_ARGS+=("--ollama-live-model-id=${1#*=}")
+      shift
+      ;;
+    --ollama-live-model-id)
+      PYTEST_ARGS+=("--ollama-live-model-id=$2")
+      shift 2
+      ;;
+    --azure-model-id=*)
+      PYTEST_ARGS+=("--azure-model-id=${1#*=}")
+      shift
+      ;;
+    --azure-model-id)
+      PYTEST_ARGS+=("--azure-model-id=$2")
+      shift 2
+      ;;
+    --azure-live-model-id=*)
+      PYTEST_ARGS+=("--azure-live-model-id=${1#*=}")
+      shift
+      ;;
+    --azure-live-model-id)
+      PYTEST_ARGS+=("--azure-live-model-id=$2")
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --ssh-host HOST               SSH hostname for live Ollama tests"
+      echo "  --ssh-user USER               SSH username"
+      echo "  --ssh-key-path PATH           Path to SSH private key"
+      echo "  --ssh-remote-port PORT        Remote Ollama port (default: 11434)"
+      echo "  --ollama-live-model-id ID     Ollama model ID for live tests"
+      echo "  --azure-model-id ID           Azure model ID (default: 12)"
+      echo "  --azure-live-model-id ID      Azure live model ID"
+      echo ""
+      echo "Examples:"
+      echo "  # Run all tests (skip live tests)"
+      echo "  $0"
+      echo ""
+      echo "  # Run with SSH live tests"
+      echo "  $0 --ssh-host=example.com --ssh-user=user --ssh-key-path=/root/.ssh/id_ed25519"
+      echo ""
+      echo "  # Run with all live tests"
+      echo "  $0 --ssh-host=example.com --ssh-user=user --ssh-key-path=/root/.ssh/id_ed25519 \\"
+      echo "     --ollama-live-model-id=18 --azure-live-model-id=12"
+      exit 0
+      ;;
+    *)
+      err "Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
 echo ""
 log "Running integration tests..."
 echo ""
 
-test_exit_code=0
-docker compose exec "$CONTAINER_NAME" poetry run pytest tests/scheduling_data/test_scheduling_data.py -v || test_exit_code=$?
+# Run pytest with collected arguments
+if [ ${#PYTEST_ARGS[@]} -eq 0 ]; then
+  log "Running tests without live test parameters (live tests will be skipped)"
+  docker compose exec "$CONTAINER_NAME" poetry run pytest tests/scheduling_data -v || test_exit_code=$?
+else
+  log "Running tests with parameters: ${PYTEST_ARGS[*]}"
+  docker compose exec "$CONTAINER_NAME" poetry run pytest tests/scheduling_data "${PYTEST_ARGS[@]}" -v || test_exit_code=$?
+fi
 
 echo ""
 echo "======================================"
 
 if [ $test_exit_code -eq 0 ]; then
-    printf "\n\033[1;32m✅ Success!\033[0m All 21 integration tests passed.\n\n"
+    printf "\n\033[1;32m✅ Success!\033[0m SDI test suite passed.\n\n"
     log "Test coverage:"
-    log "  - Mixed workload scenarios (1 test)"
-    log "  - Rate limit handling (1 test)"
-    log "  - Cold start scenarios (3 tests)"
-    log "  - High traffic burst (3 tests)"
-    log "  - SDI integration (3 tests)"
-    log "  - SDI data usage (5 tests) ← CRITICAL"
-    log "  - Request lifecycle (5 tests) ← CRITICAL"
+    log "  - Mixed workload scenarios"
+    log "  - Rate limit handling"
+    log "  - Cold start and high-traffic scenarios"
+    log "  - SDI integration and data usage"
+    log "  - Request lifecycle (sequential/parallel/multi-provider)"
+    log "  - Ollama SSH polling path"
     printf "\n"
 else
     printf "\n\033[1;31m❌ Failed!\033[0m Tests failed with exit code: %s\n\n" "$test_exit_code"

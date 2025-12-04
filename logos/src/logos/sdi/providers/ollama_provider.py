@@ -9,7 +9,9 @@ Queries Ollama /api/ps endpoint to get real-time information about:
 Provides accurate cold-start prediction and VRAM availability calculation.
 """
 
+import json
 import logging
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -57,7 +59,7 @@ class OllamaDataProvider:
     def __init__(
         self,
         name: str,
-        base_url: str,
+        base_url: Optional[str],
         total_vram_mb: int,
         queue_manager: "PriorityQueueManager",  # REQUIRED
         refresh_interval: float = 5.0,
@@ -69,7 +71,7 @@ class OllamaDataProvider:
 
         Args:
             name: Provider identifier (e.g., 'openwebui')
-            base_url: Ollama API base URL
+            base_url: Ollama API base URL (optional when using SSH config)
             total_vram_mb: Total VRAM capacity in MB (e.g., 49152 for 48GB)
             queue_manager: PriorityQueueManager instance (REQUIRED for Ollama)
             refresh_interval: Seconds between /api/ps polls (default: 5.0)
@@ -77,7 +79,7 @@ class OllamaDataProvider:
             db_manager: Database manager instance (for config lookups)
         """
         self.name = name
-        self.base_url = base_url.rstrip('/')
+        self.base_url = base_url.rstrip('/') if base_url else ""
         self.total_vram_mb = total_vram_mb
         self.queue_manager = queue_manager  # Store queue manager reference
         self.refresh_interval = refresh_interval
@@ -99,6 +101,9 @@ class OllamaDataProvider:
 
         # Load provider-level config from database
         self._provider_config = self._load_provider_config()
+        self._ssh_config = self._build_ssh_config(self._provider_config)
+        if not self.base_url and self._provider_config.get("ollama_admin_url"):
+            self.base_url = (self._provider_config.get("ollama_admin_url") or "").rstrip('/')
 
     def _load_provider_config(self) -> Dict[str, Any]:
         """
@@ -116,6 +121,25 @@ class OllamaDataProvider:
         except Exception as e:
             logger.warning(f"[{self.name}] Failed to load provider config: {e}")
             return {}
+
+    def _build_ssh_config(self, provider_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Extract SSH connection details for private Ollama servers.
+        """
+        if not provider_config:
+            return None
+
+        ssh_host = provider_config.get("ssh_host")
+        if not ssh_host:
+            return None
+
+        return {
+            "host": ssh_host,
+            "user": provider_config.get("ssh_user"),
+            "port": provider_config.get("ssh_port") or 22,
+            "key_path": provider_config.get("ssh_key_path"),
+            "remote_port": provider_config.get("ssh_remote_ollama_port") or 11434,
+        }
 
     def get_config_value(
         self,
@@ -180,7 +204,55 @@ class OllamaDataProvider:
             if now - self._last_refresh < self.refresh_interval:
                 return  # Data is fresh
 
-        # Query /api/ps (without holding lock to avoid blocking)
+        data = self._fetch_ps_data()
+        if data is None:
+            return
+
+        models = data.get("models", [])
+
+        # Update cache with lock
+        with self._lock:
+            self._loaded_models = {}
+            for model in models:
+                model_name = model.get("name") or model.get("model")
+                if model_name:
+                    self._loaded_models[model_name] = {
+                        'size_vram': model.get("size_vram", 0),
+                        'expires_at': self._parse_timestamp(model.get("expires_at"))
+                    }
+            self._last_refresh = now
+
+        logger.debug(f"[{self.name}] Refreshed /api/ps: {len(self._loaded_models)} models loaded")
+
+    def _fetch_ps_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch /api/ps either directly over HTTP or via SSH if the endpoint is private.
+        """
+        data: Optional[Dict[str, Any]] = None
+
+        # Prefer HTTP when only base_url is configured, SSH when only SSH is configured.
+        if self.base_url and not self._ssh_config:
+            data = self._fetch_ps_via_http()
+        elif self._ssh_config and not self.base_url:
+            data = self._fetch_ps_via_ssh()
+        else:
+            # Try HTTP first, then fall back to SSH when both are present.
+            if self.base_url:
+                data = self._fetch_ps_via_http()
+            if data is None and self._ssh_config:
+                data = self._fetch_ps_via_ssh()
+
+        if data is None:
+            logger.warning(f"[{self.name}] Unable to fetch /api/ps via HTTP or SSH")
+        return data
+
+    def _fetch_ps_via_http(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch /api/ps using the configured HTTP base URL.
+        """
+        if not self.base_url:
+            return None
+
         try:
             response = requests.get(
                 f"{self.base_url}/api/ps",
@@ -188,33 +260,73 @@ class OllamaDataProvider:
             )
 
             if response.status_code == 200:
-                data = response.json()
-                models = data.get("models", [])
+                return response.json()
 
-                # Update cache with lock
-                with self._lock:
-                    self._loaded_models = {}
-                    for model in models:
-                        model_name = model.get("name") or model.get("model")
-                        if model_name:
-                            self._loaded_models[model_name] = {
-                                'size_vram': model.get("size_vram", 0),
-                                'expires_at': self._parse_timestamp(model.get("expires_at"))
-                            }
-                    self._last_refresh = now
-
-                logger.debug(f"[{self.name}] Refreshed /api/ps: {len(self._loaded_models)} models loaded")
-            else:
-                logger.warning(
-                    f"[{self.name}] /api/ps returned status {response.status_code}"
-                )
-
+            logger.warning(f"[{self.name}] /api/ps returned status {response.status_code}")
         except requests.exceptions.Timeout:
             logger.warning(f"[{self.name}] /api/ps query timed out")
         except requests.exceptions.RequestException as e:
             logger.warning(f"[{self.name}] Failed to query /api/ps: {e}")
         except Exception as e:
             logger.error(f"[{self.name}] Unexpected error querying /api/ps: {e}")
+
+        return None
+
+    def _fetch_ps_via_ssh(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch /api/ps by executing curl over SSH on the remote host.
+        """
+        if not self._ssh_config:
+            return None
+
+        ssh_host = self._ssh_config.get("host")
+        ssh_user = self._ssh_config.get("user")
+        ssh_port = self._ssh_config.get("port") or 22
+        ssh_key_path = self._ssh_config.get("key_path")
+        remote_port = self._ssh_config.get("remote_port") or 11434
+
+        if not ssh_host:
+            return None
+
+        ssh_target = f"{ssh_user + '@' if ssh_user else ''}{ssh_host}"
+        remote_cmd = f"curl -s http://127.0.0.1:{remote_port}/api/ps"
+
+        ssh_cmd = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-p",
+            str(ssh_port)
+        ]
+
+        if ssh_key_path:
+            ssh_cmd.extend(["-i", ssh_key_path])
+
+        ssh_cmd.extend([ssh_target, remote_cmd])
+
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode != 0:
+                logger.warning(f"[{self.name}] SSH /api/ps failed: {result.stderr.strip()}")
+                return None
+
+            return json.loads(result.stdout or "{}")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[{self.name}] SSH /api/ps timed out")
+        except json.JSONDecodeError as e:
+            logger.warning(f"[{self.name}] Failed to parse SSH /api/ps response: {e}")
+        except Exception as e:
+            logger.error(f"[{self.name}] Unexpected SSH error: {e}")
+
+        return None
 
     def get_model_status(self, model_id: int) -> ModelStatus:
         """

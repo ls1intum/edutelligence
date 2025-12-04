@@ -66,6 +66,14 @@ CREATE TABLE providers (
     ollama_admin_url TEXT DEFAULT '',  -- TODO: For Ollama providers, add internal admin endpoint when avaliable
     total_vram_mb INTEGER DEFAULT NULL,  -- Total VRAM capacity (e.g., 49152 for 48GB)
 
+    -- SSH access (for non-public Ollama servers)
+    -- TODO: Remove those fields if we implement better way of accessing Ollama servers behind SSH tunnels
+    ssh_host TEXT DEFAULT NULL,
+    ssh_user TEXT DEFAULT NULL,
+    ssh_port INTEGER DEFAULT 22,
+    ssh_key_path TEXT DEFAULT NULL,
+    ssh_remote_ollama_port INTEGER DEFAULT 11434,
+
     -- SDI: Configuration defaults for this provider
     parallel_capacity INTEGER DEFAULT 1,
     keep_alive_seconds INTEGER DEFAULT 300,

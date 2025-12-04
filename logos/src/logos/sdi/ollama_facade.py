@@ -81,9 +81,9 @@ class OllamaSchedulingDataFacade:
         self,
         model_id: int,
         provider_name: str,
-        ollama_admin_url: str,
-        model_name: str,
-        total_vram_mb: int,
+        ollama_admin_url: Optional[str] = None,
+        model_name: Optional[str] = None,
+        total_vram_mb: Optional[int] = None,
         refresh_interval: float = 5.0,
         provider_id: Optional[int] = None
     ) -> None:
@@ -95,26 +95,36 @@ class OllamaSchedulingDataFacade:
         Args:
             model_id: Internal database ID for the model
             provider_name: Provider identifier (e.g., 'openwebui')
-            ollama_admin_url: Ollama /api/ps endpoint
+            ollama_admin_url: Ollama /api/ps endpoint (optional when provider config supplies SSH access)
             model_name: Model name as known by Ollama (e.g., 'llama3.1:8b')
             total_vram_mb: Total VRAM capacity in MB
             refresh_interval: Polling interval in seconds (default: 5.0)
             provider_id: Database provider ID (for config lookups)
         """
+
+        if model_name is None and total_vram_mb is None:
+            raise ValueError("model_name and total_vram_mb are required")
+
         with self._lock:
             # Create provider if it doesn't exist
             if provider_name not in self._providers:
                 provider = OllamaDataProvider(
                     name=provider_name,
                     base_url=ollama_admin_url,
-                    total_vram_mb=total_vram_mb,
+                    total_vram_mb=int(total_vram_mb) if total_vram_mb is not None else 0,
                     queue_manager=self.queue_manager,
                     refresh_interval=refresh_interval,
                     provider_id=provider_id,
                     db_manager=self._db
                 )
                 self._providers[provider_name] = provider
-                logger.info(f"Created Ollama provider '{provider_name}' at {ollama_admin_url}")
+                connection_hint = ollama_admin_url or (provider._provider_config.get("ollama_admin_url") if getattr(provider, "_provider_config", None) else "")
+                if getattr(provider, "_ssh_config", None) and provider._ssh_config.get("host"):
+                    connection_hint = f"ssh://{provider._ssh_config.get('host')}"
+                if connection_hint:
+                    logger.info(f"Created Ollama provider '{provider_name}' using {connection_hint}")
+                else:
+                    logger.info(f"Created Ollama provider '{provider_name}' without explicit admin URL (using provider config)")
 
             # Register model with provider
             provider = self._providers[provider_name]
@@ -161,18 +171,6 @@ class OllamaSchedulingDataFacade:
         provider = self._providers[provider_name]
         # Provider already returns OllamaCapacity dataclass
         return provider.get_capacity_info()
-
-    def get_scheduling_data(self, model_ids: List[int]) -> List[ModelStatus]:
-        """
-        Batch query for multiple models (optimized).
-
-        Args:
-            model_ids: Models to query
-
-        Returns:
-            List of ModelStatus dataclasses, one per model
-        """
-        return [self.get_model_status(mid) for mid in model_ids]
 
     def on_request_start(self, request_id: str, model_id: int, priority: str = 'normal') -> None:
         """
