@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 from athena.text import Exercise, Submission, Feedback
-from athena.schemas.learner_profile import LearnerProfile
+from athena.schemas import LearnerProfile, Competency
 import inspect
 
 from module_text_llm.registry import APPROACH_IMPLEMENTATIONS
@@ -15,6 +15,7 @@ async def generate_suggestions(
     is_graded: bool,
     learner_profile: Optional[LearnerProfile] = None,
     latest_submission: Optional[Submission] = None,
+    competencies: Optional[List[Competency]] = None,
 ) -> List[Feedback]:
     implementation_func = APPROACH_IMPLEMENTATIONS.get(config.type)
     if implementation_func is None:
@@ -35,6 +36,9 @@ async def generate_suggestions(
 
     if "latest_submission" in sig.parameters:
         kwargs["latest_submission"] = latest_submission
+
+    if "competencies" in sig.parameters:
+        kwargs["competencies"] = competencies
 
     return await implementation_func(
         exercise,
