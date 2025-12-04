@@ -70,7 +70,6 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```bash
 WEAVIATE_HOST=https://your-weaviate-domain.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=your-weaviate-api-key
 ```
 
@@ -88,11 +87,7 @@ AtlasML requires the **centralized Weaviate setup** located in `/weaviate` direc
 - **Description**: HTTPS port for Weaviate REST API
 - **Default**: `443`
 - **Required**: Must be `443` (centralized setup uses Traefik with HTTPS)
-
-**WEAVIATE_GRPC_PORT**:
-- **Description**: gRPC port for Weaviate (used for faster queries)
-- **Default**: `50051`
-- **Required**: Must be `50051` (as configured in centralized setup)
+- **Note**: AtlasML uses REST API only (no gRPC) for simplicity and better HTTPS compatibility
 
 **WEAVIATE_API_KEY**:
 - **Description**: API key for authenticating with Weaviate
@@ -103,10 +98,9 @@ AtlasML requires the **centralized Weaviate setup** located in `/weaviate` direc
 **Production Configuration Example**:
 
 ```bash
-# Production (using centralized Weaviate)
+# Production (using centralized Weaviate with REST API only)
 WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=your-secure-weaviate-api-key-from-weaviate-env
 ```
 
@@ -285,7 +279,6 @@ ATLAS_API_KEYS=dev-test-key
 # Weaviate (centralized setup - required)
 WEAVIATE_HOST=https://weaviate-dev.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=dev-weaviate-api-key
 
 # OpenAI (optional for dev)
@@ -320,7 +313,6 @@ ATLAS_API_KEYS=staging-key-1,staging-key-2
 # Weaviate (centralized setup)
 WEAVIATE_HOST=https://weaviate-staging.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=staging-weaviate-api-key
 
 # OpenAI (staging)
@@ -351,7 +343,6 @@ ATLAS_API_KEYS=prod-artemis-key-2025-q1,prod-artemis-key-2025-q1-backup
 # Weaviate (centralized setup)
 WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=prod-weaviate-api-key-secure
 
 # OpenAI (production)
@@ -487,8 +478,10 @@ docker exec atlasml env | grep -E "(WEAVIATE|OPENAI|ATLAS|ENV)" | sed 's/=.*/=**
 ### Test Configuration
 
 ```bash
-# Test Weaviate connection
-curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
+# Test Weaviate connection (HTTPS production example)
+curl ${WEAVIATE_HOST}/v1/.well-known/ready
+# For local/dev without scheme, use:
+# curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
 
 # Test AtlasML health
 curl http://localhost/api/v1/health
@@ -512,11 +505,15 @@ echo $ATLAS_API_KEYS
 
 **Error**: `Weaviate connection failed`
 ```bash
-# Check connectivity
-curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
+# Check connectivity (HTTPS production example)
+curl ${WEAVIATE_HOST}/v1/.well-known/ready
+# For local/dev without scheme, use:
+# curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
 
 # Check from container
-docker exec atlasml curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
+docker exec atlasml curl ${WEAVIATE_HOST}/v1/.well-known/ready
+# For local/dev without scheme, use:
+# docker exec atlasml curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
 ```
 
 **Error**: `OpenAI API error`

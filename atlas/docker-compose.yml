@@ -71,7 +71,6 @@ services:
       PYTHONPATH: /atlasml
       WEAVIATE_HOST: http://weaviate
       WEAVIATE_PORT: 8085
-      WEAVIATE_GRPC_PORT: 50051
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_API_URL: ${OPENAI_API_URL:-https://ase-se01.openai.azure.com}
       ATLAS_API_KEYS: ${ATLAS_API_KEYS:-dev-test-key}

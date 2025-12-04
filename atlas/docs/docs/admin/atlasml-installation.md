@@ -146,7 +146,7 @@ AtlasML requires the centralized Weaviate setup with Traefik and API key authent
 4. **Save the following for AtlasML configuration:**
    - Weaviate domain (e.g., `weaviate.example.com`)
    - Weaviate API key
-   - Weaviate ports: `443` (HTTPS), `50051` (gRPC)
+   - Weaviate port: `443` (HTTPS REST)
 
 ### Step 6: Create Environment File
 
@@ -157,10 +157,9 @@ cat > /opt/atlasml/.env << 'EOF'
 # API Authentication (comma-separated)
 ATLAS_API_KEYS=your-secure-api-key-here
 
-# Weaviate Connection (from centralized Weaviate setup)
+# Weaviate Connection (from centralized Weaviate setup - REST API only)
 WEAVIATE_HOST=https://your-weaviate-domain.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=your-weaviate-api-key
 
 # OpenAI Configuration (Azure)

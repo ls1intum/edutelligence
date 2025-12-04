@@ -7,9 +7,9 @@ convenient access within the application.
 
 Environment variables:
 - ATLAS_API_KEYS: Comma-separated list of API key tokens used for request auth
-- WEAVIATE_HOST: Weaviate host (e.g., "localhost")
-- WEAVIATE_PORT: Weaviate REST port (e.g., 8080)
-- WEAVIATE_GRPC_PORT: Weaviate gRPC port (e.g., 50051)
+- WEAVIATE_HOST: Weaviate host (may include scheme, e.g., "https://weaviate.example.com")
+- WEAVIATE_PORT: Weaviate REST port (e.g., 8080 or 443)
+- WEAVIATE_API_KEY: Optional API key for authenticated Weaviate deployments
 - SENTRY_DSN: Optional Sentry DSN used only in production
 - ENV: Environment name (e.g., "dev", "production")
 
@@ -19,6 +19,7 @@ requested via `get_settings(use_defaults=True)`.
 
 import os
 import logging
+from urllib.parse import urlparse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -30,10 +31,14 @@ class APIKeyConfig(BaseModel):
 
 
 class WeaviateSettings(BaseModel):
-    """Connection parameters for the Weaviate vector database."""
+    """Connection parameters for the Weaviate vector database.
+
+    Uses REST API only (no gRPC) for simplicity and better HTTPS compatibility.
+    """
     host: str
     port: int
-    grpc_port: int
+    api_key: str | None = None
+    scheme: str = "http"  # "http" or "https"
 
 
 class Settings(BaseModel):
@@ -63,7 +68,7 @@ class Settings(BaseModel):
 
         default_api_keys = [APIKeyConfig(token="default-test-token")]
         default_weaviate = WeaviateSettings(
-            host="localhost", port=8080, grpc_port=50051
+            host="localhost", port=8080
         )
 
         return cls(api_keys=default_api_keys, weaviate=default_weaviate, sentry_dsn=None, env="dev")
@@ -87,7 +92,6 @@ class Settings(BaseModel):
             "ATLAS_API_KEYS",
             "WEAVIATE_HOST",
             "WEAVIATE_PORT",
-            "WEAVIATE_GRPC_PORT",
         ]
         missing_vars = [var for var in required_vars if not os.environ.get(var)]
 
@@ -114,14 +118,35 @@ class Settings(BaseModel):
 
         # Get Weaviate settings from environment variables with validation
         try:
-            weaviate_host = os.environ.get("WEAVIATE_HOST")
+            weaviate_host_raw = os.environ.get("WEAVIATE_HOST")
             weaviate_port = int(os.environ.get("WEAVIATE_PORT"))
-            weaviate_grpc_port = int(os.environ.get("WEAVIATE_GRPC_PORT"))
+            weaviate_api_key = os.environ.get("WEAVIATE_API_KEY")
+
+            # Parse scheme from URL if present (e.g., "https://weaviate.example.com" -> "https", "weaviate.example.com")
+            weaviate_scheme = "http"  # default
+            weaviate_host = weaviate_host_raw
+
+            parsed_host = urlparse(weaviate_host_raw)
+            if parsed_host.scheme:
+                weaviate_scheme = parsed_host.scheme
+                # urlparse puts host in hostname; fallback to netloc for non-standard cases
+                weaviate_host = parsed_host.hostname or parsed_host.netloc
+            elif weaviate_host_raw.startswith("http://"):
+                # Fallback for cases where urlparse fails to parse (should be rare)
+                weaviate_scheme = "http"
+                weaviate_host = weaviate_host_raw.replace("http://", "")
+
         except ValueError as e:
             raise ValueError(f"Invalid port configuration: {e}") from e
 
+        if not weaviate_host:
+            raise ValueError("WEAVIATE_HOST must include a valid hostname")
+
         weaviate_settings = WeaviateSettings(
-            host=weaviate_host, port=weaviate_port, grpc_port=weaviate_grpc_port
+            host=weaviate_host,
+            port=weaviate_port,
+            api_key=weaviate_api_key,
+            scheme=weaviate_scheme
         )
 
         # Get Sentry DSN from environment (optional)
@@ -131,7 +156,7 @@ class Settings(BaseModel):
         env = os.environ.get("ENV", "dev")
 
         logger.info(
-            f"Loaded settings - ENV: {env}, API keys count: {len(api_keys)}, Weaviate: {weaviate_host}:{weaviate_port}, Sentry: {'configured' if sentry_dsn else 'not configured'}"
+            f"Loaded settings - ENV: {env}, API keys count: {len(api_keys)}, Weaviate: {weaviate_scheme}://{weaviate_host}:{weaviate_port}, Sentry: {'configured' if sentry_dsn else 'not configured'}"
         )
 
         return cls(api_keys=api_keys, weaviate=weaviate_settings, sentry_dsn=sentry_dsn, env=env)
