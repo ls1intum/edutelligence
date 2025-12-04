@@ -7,7 +7,7 @@ from langchain.prompts import ChatPromptTemplate
 from athena import emit_meta
 from athena.programming import Exercise, Submission
 
-from module_programming_llm.config import BasicApproachConfig
+from module_programming_quality_llm.config import BasicApproachConfig
 from llm_core.utils.llm_utils import (
     get_chat_prompt,
     num_tokens_from_string,
@@ -15,7 +15,7 @@ from llm_core.utils.llm_utils import (
 )
 from llm_core.core.predict_and_parse import predict_and_parse
 
-from module_programming_llm.helpers.utils import get_diff
+from module_programming_quality_llm.helpers.utils import get_diff
 
 
 class FileProblemStatement(BaseModel):

@@ -6,27 +6,27 @@ from pydantic import BaseModel, Field
 from llm_core.models import ModelConfigType
 
 from athena import config_schema_provider
-from module_programming_llm.prompts.generate_graded_suggestions_by_file import (
+from module_programming_quality_llm.prompts.generate_graded_suggestions_by_file import (
     system_message as generate_graded_suggestions_by_file_system_message,
     human_message as generate_graded_suggestions_by_file_human_message,
 )
-from module_programming_llm.prompts.generate_non_graded_suggestions_by_file import (
+from module_programming_quality_llm.prompts.generate_non_graded_suggestions_by_file import (
     system_message as generate_non_graded_suggestions_by_file_system_message,
     human_message as generate_non_graded_suggestions_by_file_human_message,
 )
-from module_programming_llm.prompts.split_grading_instructions_by_file import (
+from module_programming_quality_llm.prompts.split_grading_instructions_by_file import (
     system_message as split_grading_instructions_by_file_message,
     human_message as split_grading_instructions_by_file_human_message,
 )
-from module_programming_llm.prompts.split_problem_non_grading_statement_by_file import (
+from module_programming_quality_llm.prompts.split_problem_non_grading_statement_by_file import (
     system_message as split_problem_statements_by_file_system_message_without_solution,
     human_message as split_problem_statements_by_file_human_message_without_solution,
 )
-from module_programming_llm.prompts.split_problem_grading_statement_by_file import (
+from module_programming_quality_llm.prompts.split_problem_grading_statement_by_file import (
     system_message as split_problem_statements_by_file_system_message_with_solution,
     human_message as split_problem_statements_by_file_human_message_with_solution,
 )
-from module_programming_llm.prompts.summarize_submission_by_file import (
+from module_programming_quality_llm.prompts.summarize_submission_by_file import (
     system_message as summarize_submission_by_file_system_message,
     human_message as summarize_submission_by_file_human_message,
 )
