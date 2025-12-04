@@ -408,7 +408,7 @@ This updates containers one at a time, ensuring at least one is always running.
 ```yaml
 # .env.dev
 ENV=development
-ATLAS_API_KEYS='["dev-key"]'
+ATLAS_API_KEYS=dev-key
 WEAVIATE_HOST=localhost
 OPENAI_API_KEY=dev-key
 ```
@@ -418,7 +418,7 @@ OPENAI_API_KEY=dev-key
 ```yaml
 # .env.staging
 ENV=staging
-ATLAS_API_KEYS='["staging-key-1","staging-key-2"]'
+ATLAS_API_KEYS=staging-key-1,staging-key-2
 WEAVIATE_HOST=weaviate-staging.internal
 OPENAI_API_KEY=staging-key
 SENTRY_DSN=https://...@sentry.../staging
@@ -429,7 +429,7 @@ SENTRY_DSN=https://...@sentry.../staging
 ```yaml
 # .env.production
 ENV=production
-ATLAS_API_KEYS='["prod-key-1","prod-key-2","prod-key-3"]'
+ATLAS_API_KEYS=prod-key-1,prod-key-2,prod-key-3
 WEAVIATE_HOST=weaviate.internal
 OPENAI_API_KEY=prod-key
 SENTRY_DSN=https://...@sentry.../production

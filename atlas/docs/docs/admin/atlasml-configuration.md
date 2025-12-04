@@ -27,23 +27,23 @@ These variables **must** be set for AtlasML to function:
 ### API Authentication
 
 ```bash
-ATLAS_API_KEYS='["key1","key2","key3"]'
+ATLAS_API_KEYS=key1,key2,key3
 ```
 
-**Description**: JSON array of API keys for authenticating requests from Artemis.
+**Description**: Comma-separated list of API keys for authenticating requests from Artemis.
 
-**Format**: JSON array string
+**Format**: Comma-separated string (no spaces around commas recommended)
 
 **Example**:
 ```bash
 # Single key
-ATLAS_API_KEYS='["my-secure-api-key-2025"]'
+ATLAS_API_KEYS=my-secure-api-key-2025
 
 # Multiple keys (for key rotation)
-ATLAS_API_KEYS='["current-key","backup-key"]'
+ATLAS_API_KEYS=current-key,backup-key
 
 # Production example
-ATLAS_API_KEYS='["prod-key-artemis-1","prod-key-artemis-2"]'
+ATLAS_API_KEYS=prod-key-artemis-1,prod-key-artemis-2
 ```
 
 **Security Notes**:
@@ -280,7 +280,7 @@ image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
 # .env.development
 
 # API Keys (development)
-ATLAS_API_KEYS='["dev-test-key"]'
+ATLAS_API_KEYS=dev-test-key
 
 # Weaviate (centralized setup - required)
 WEAVIATE_HOST=https://weaviate-dev.example.com
@@ -315,7 +315,7 @@ Even for development, use the centralized Weaviate setup. For local development 
 # .env.staging
 
 # API Keys (staging)
-ATLAS_API_KEYS='["staging-key-1","staging-key-2"]'
+ATLAS_API_KEYS=staging-key-1,staging-key-2
 
 # Weaviate (centralized setup)
 WEAVIATE_HOST=https://weaviate-staging.example.com
@@ -346,7 +346,7 @@ IMAGE_TAG=develop
 # .env.production
 
 # API Keys (production - KEEP SECURE!)
-ATLAS_API_KEYS='["prod-artemis-key-2025-q1","prod-artemis-key-2025-q1-backup"]'
+ATLAS_API_KEYS=prod-artemis-key-2025-q1,prod-artemis-key-2025-q1-backup
 
 # Weaviate (centralized setup)
 WEAVIATE_HOST=https://weaviate.example.com
@@ -534,18 +534,18 @@ curl https://${OPENAI_API_URL}/openai/deployments \
 
 ```bash
 # ✅ Good - 32+ characters, random
-ATLAS_API_KEYS='["8h7f6e5d4c3b2a1z9y8x7w6v5u4t3s2r"]'
+ATLAS_API_KEYS=8h7f6e5d4c3b2a1z9y8x7w6v5u4t3s2r
 
 # ❌ Bad - Short, predictable
-ATLAS_API_KEYS='["test","password123"]'
+ATLAS_API_KEYS=test,password123
 ```
 
 ### 2. Separate Environments
 
 ```bash
 # ✅ Good - Different keys per environment
-# .env.dev:   ATLAS_API_KEYS='["dev-key"]'
-# .env.prod:  ATLAS_API_KEYS='["prod-key"]'
+# .env.dev:   ATLAS_API_KEYS=dev-key
+# .env.prod:  ATLAS_API_KEYS=prod-key
 
 # ❌ Bad - Same keys everywhere
 ```
@@ -554,7 +554,7 @@ ATLAS_API_KEYS='["test","password123"]'
 
 ```bash
 # Support multiple keys for zero-downtime rotation
-ATLAS_API_KEYS='["current-key","new-key"]'
+ATLAS_API_KEYS=current-key,new-key
 
 # Process:
 # 1. Add new key
@@ -583,7 +583,7 @@ secrets/
 
 ```bash
 # .env.example (commit this)
-ATLAS_API_KEYS='["REPLACE_WITH_YOUR_KEY"]'
+ATLAS_API_KEYS=REPLACE_WITH_YOUR_KEY
 WEAVIATE_HOST=localhost
 WEAVIATE_PORT=8085
 OPENAI_API_KEY=REPLACE_WITH_YOUR_KEY
@@ -623,10 +623,11 @@ docker exec atlasml printenv ATLAS_API_KEYS
 ```bash
 # Check format
 echo $ATLAS_API_KEYS
-# Must be valid JSON array
+# Must be comma-separated
 
-# Test with curl
-curl -H "Authorization: $(echo $ATLAS_API_KEYS | jq -r '.[0]')" \
+# Test with curl (use first key if multiple)
+KEY=$(echo $ATLAS_API_KEYS | cut -d',' -f1)
+curl -H "Authorization: $KEY" \
   http://localhost/api/v1/health
 ```
 

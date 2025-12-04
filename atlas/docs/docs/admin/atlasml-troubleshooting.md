@@ -338,13 +338,13 @@ curl -H "Authorization: your-api-key" http://localhost/api/v1/competency/suggest
 #### Wrong Key Format in .env
 
 ```bash
-# ❌ Bad - Not valid JSON
-ATLAS_API_KEYS=[key1,key2]          # Missing quotes
-ATLAS_API_KEYS=["key1", "key2"]     # Extra spaces
-ATLAS_API_KEYS="[\"key1\"]"         # Escaped quotes
+# ❌ Bad - Incorrect formats
+ATLAS_API_KEYS=["key1","key2"]      # JSON array (not supported)
+ATLAS_API_KEYS=[key1,key2]          # Brackets
+ATLAS_API_KEYS="key1, key2"         # Spaces around commas
 
-# ✅ Good - Valid JSON array
-ATLAS_API_KEYS='["key1","key2"]'
+# ✅ Good - Comma-separated
+ATLAS_API_KEYS=key1,key2
 
 # Fix and restart
 docker-compose -f docker-compose.prod.yml restart atlasml

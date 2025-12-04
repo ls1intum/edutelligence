@@ -154,8 +154,8 @@ See [Configuration Guide](./atlasml-configuration.md) for detailed explanation o
 
 ```bash
 cat > /opt/atlasml/.env << 'EOF'
-# API Authentication
-ATLAS_API_KEYS='["your-secure-api-key-here"]'
+# API Authentication (comma-separated)
+ATLAS_API_KEYS=your-secure-api-key-here
 
 # Weaviate Connection (from centralized Weaviate setup)
 WEAVIATE_HOST=https://your-weaviate-domain.com

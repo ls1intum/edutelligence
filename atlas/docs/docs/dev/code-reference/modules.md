@@ -139,7 +139,7 @@ def get_settings(use_defaults: bool = False) -> Settings:
 ```
 
 **Environment Variables**:
-- `ATLAS_API_KEYS`: JSON array of API keys
+- `ATLAS_API_KEYS`: Comma-separated list of API keys
 - `WEAVIATE_HOST`, `WEAVIATE_PORT`, `WEAVIATE_GRPC_PORT`
 - `SENTRY_DSN`, `ENV`
 
