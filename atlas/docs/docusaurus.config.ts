@@ -41,6 +41,8 @@ const config: Config = {
     locales: ['en'],
   },
 
+  themes: ['@docusaurus/theme-mermaid'], // This is correct
+
   presets: [
     [
       'classic',
@@ -61,6 +63,10 @@ const config: Config = {
     ],
   ],
 
+  markdown: {
+    mermaid: true,
+  },
+
   themeConfig: {
     // Replace with your project's social card
     image: 'img/docusaurus-social-card.jpg',
@@ -74,12 +80,6 @@ const config: Config = {
         src: 'img/logo.svg',
       },
       items: [
-        {
-          type: 'docSidebar',
-          sidebarId: 'userSidebar',
-          position: 'left',
-          label: 'User Guide',
-        },
         {
           type: 'docSidebar',
           sidebarId: 'devSidebar',
@@ -106,12 +106,8 @@ const config: Config = {
           title: 'Documentation',
           items: [
             {
-              label: 'User Guide',
-              to: '/user',
-            },
-            {
               label: 'Contributor Guide',
-              to: '/dev',
+              to: '/dev/development-process',
             },
             {
               label: 'Admin Guide',
@@ -134,6 +130,9 @@ const config: Config = {
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
+    },
+    mermaid: {
+      theme: {light: 'default', dark: 'dark'},
     },
   } satisfies Preset.ThemeConfig,
 };
