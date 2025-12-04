@@ -142,6 +142,23 @@ class Settings(BaseModel):
         if not weaviate_host:
             raise ValueError("WEAVIATE_HOST must include a valid hostname")
 
+        # Get environment early for validation
+        env = os.environ.get("ENV", "dev")
+
+        # Validate that HTTPS connections require API key authentication
+        if weaviate_scheme == "https" and not weaviate_api_key:
+            raise ValueError(
+                "WEAVIATE_API_KEY is required when using HTTPS (WEAVIATE_HOST starts with 'https://'). "
+                "The centralized Weaviate setup requires API key authentication."
+            )
+
+        # In production, always require API key for security
+        if env == "production" and not weaviate_api_key:
+            raise ValueError(
+                "WEAVIATE_API_KEY is required in production (ENV=production). "
+                "Set WEAVIATE_API_KEY or use ENV=development for local testing."
+            )
+
         weaviate_settings = WeaviateSettings(
             host=weaviate_host,
             port=weaviate_port,
@@ -151,9 +168,6 @@ class Settings(BaseModel):
 
         # Get Sentry DSN from environment (optional)
         sentry_dsn = os.environ.get("SENTRY_DSN")
-        
-        # Get environment
-        env = os.environ.get("ENV", "dev")
 
         logger.info(
             f"Loaded settings - ENV: {env}, API keys count: {len(api_keys)}, Weaviate: {weaviate_scheme}://{weaviate_host}:{weaviate_port}, Sentry: {'configured' if sentry_dsn else 'not configured'}"

@@ -202,6 +202,55 @@ class TestSettings:
             assert settings.weaviate.host == "weaviate.internal"
             assert settings.weaviate.port == 8080
 
+    def test_https_without_api_key_fails(self):
+        """Test that HTTPS connections require API key."""
+        env_vars = {
+            "ATLAS_API_KEYS": "token1",
+            "WEAVIATE_HOST": "https://weaviate.example.com",
+            "WEAVIATE_PORT": "443",
+            # No WEAVIATE_API_KEY
+        }
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            with pytest.raises(
+                ValueError,
+                match="WEAVIATE_API_KEY is required when using HTTPS",
+            ):
+                Settings.get_settings()
+
+    def test_production_without_api_key_fails(self):
+        """Test that production environment requires API key."""
+        env_vars = {
+            "ATLAS_API_KEYS": "token1",
+            "WEAVIATE_HOST": "weaviate.internal",
+            "WEAVIATE_PORT": "8080",
+            "ENV": "production",
+            # No WEAVIATE_API_KEY
+        }
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            with pytest.raises(
+                ValueError,
+                match="WEAVIATE_API_KEY is required in production",
+            ):
+                Settings.get_settings()
+
+    def test_production_with_https_and_api_key_succeeds(self):
+        """Test that production with HTTPS and API key works correctly."""
+        env_vars = {
+            "ATLAS_API_KEYS": "token1",
+            "WEAVIATE_HOST": "https://weaviate.example.com",
+            "WEAVIATE_PORT": "443",
+            "WEAVIATE_API_KEY": "prod-weaviate-key",
+            "ENV": "production",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            settings = Settings.get_settings()
+            assert settings.weaviate.scheme == "https"
+            assert settings.weaviate.api_key == "prod-weaviate-key"
+            assert settings.env == "production"
+
     def test_get_api_keys_method(self):
         """Test the get_api_keys class method."""
         env_vars = {
