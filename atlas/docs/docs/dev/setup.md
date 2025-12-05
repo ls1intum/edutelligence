@@ -19,9 +19,51 @@ git clone https://github.com/ls1intum/edutelligence.git
 cd edutelligence/atlas/AtlasMl
 ```
 
-### 2. Install Dependencies
+### 2. Start Local Infrastructure
+
+AtlasML requires Weaviate (vector database) and Multi2vec-CLIP (for embeddings). Start them using Docker Compose:
 
 ```bash
+# From the atlas directory (parent of AtlasMl)
+cd ..
+docker compose -f docker-compose.dev.yml up -d
+```
+
+**This starts:**
+- Weaviate on `http://localhost:8085` (no authentication required)
+- Multi2vec-CLIP on `http://localhost:8081` (for embeddings)
+
+**Verify services are running:**
+```bash
+# Check Weaviate
+curl http://localhost:8085/v1/.well-known/ready
+# Should return: {"status":"ok"}
+
+# Check Multi2vec-CLIP
+curl http://localhost:8081/.well-known/ready
+# Should return: status 200
+
+# Or check Docker
+docker ps | grep -E "weaviate|multi2vec"
+```
+
+**To stop infrastructure later:**
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
+**To reset Weaviate data:**
+```bash
+docker compose -f docker-compose.dev.yml down -v  # Remove volumes
+docker compose -f docker-compose.dev.yml up -d    # Start fresh
+```
+
+### 3. Install Dependencies
+
+```bash
+# Return to AtlasMl directory
+cd AtlasMl
+
 # Install with Poetry
 poetry install
 
@@ -29,7 +71,37 @@ poetry install
 poetry shell
 ```
 
-### 3. Set Up Pre-commit Hooks (Optional)
+### 4. Configure Environment Variables
+
+Create a `.env` file based on the example:
+
+```bash
+cp .env.example .env
+```
+
+**Edit `.env` with your credentials:**
+```bash
+# AtlasML Authentication (for API endpoints)
+ATLAS_API_KEYS=dev-test-key
+
+# Local Weaviate (no authentication needed for dev)
+WEAVIATE_HOST=localhost
+WEAVIATE_PORT=8085
+
+# Azure OpenAI (required for embeddings - contact your team for credentials)
+OPENAI_API_KEY=your-azure-openai-key
+OPENAI_API_URL=https://your-instance.openai.azure.com
+
+# Optional
+SENTRY_DSN=
+ENV=development
+```
+
+:::tip
+You need valid Azure OpenAI credentials for the embedding functionality to work. Contact your team lead to get access to the development Azure OpenAI instance.
+:::
+
+### 5. Set Up Pre-commit Hooks (Optional)
 
 ```bash
 # Install pre-commit
@@ -39,7 +111,7 @@ pip install pre-commit
 pre-commit install
 ```
 
-### 4. Configure IDE
+### 6. Configure IDE
 
 #### VS Code
 
