@@ -2,8 +2,6 @@ import type { Feedback } from "@/model/feedback";
 import type { FileTree } from "@/helpers/fetch_repository";
 
 import { useId, useState } from "react";
-import { FocusStyleManager } from "@blueprintjs/core";
-import { renderers as bpRenderers } from "react-complex-tree-blueprintjs-renderers";
 import {
   ControlledTreeEnvironment,
   Tree,
@@ -90,13 +88,8 @@ export default function FileTree({
   const [selectedItems, setSelectedItems] = useState<TreeItemIndex[]>([]);
 
   return (
-    <div
-      className="h-full overflow-auto"
-      onMouseDown={() => FocusStyleManager.onlyShowFocusOnTabs()}
-      onKeyDown={() => FocusStyleManager.alwaysShowFocus()}
-    >
+    <div className="h-full overflow-auto focus-visible:outline-hidden">
       <ControlledTreeEnvironment<ItemData>
-        {...bpRenderers}
         items={items}
         getItemTitle={(item) => item.data.name}
         viewState={{
@@ -119,25 +112,23 @@ export default function FileTree({
         }
         onSelectItems={(items) => setSelectedItems(items)}
         onPrimaryAction={(item) => onSelectFile(`${item.index}`)}
-        renderItemTitle={(props) => (
-          <>
-            {bpRenderers.renderItemTitle && bpRenderers.renderItemTitle(props)}
-            {props.item.data.feedbackCount && (
+        renderItemTitle={({ item, context }) => (
+          <span className="flex items-center gap-1">
+            <span>{item.data.name}</span>
+            {item.data.feedbackCount && (
               <span
                 className={twMerge(
-                  "mx-1 px-1 py-0.5 text-xs",
-                  props.item.data.isDir
-                    ? "rounded-full aspect-auto text-slate-500"
-                    : "rounded text-blue-800 bg-blue-200",
-                  props.context.isSelected && props.item.data.isDir
-                    ? "text-white"
-                    : ""
+                  "px-1 py-0.5 text-xs",
+                  item.data.isDir
+                    ? "rounded-full text-slate-500"
+                    : "rounded-sm text-blue-800 bg-blue-200",
+                  context.isSelected && item.data.isDir ? "text-white" : ""
                 )}
               >
-                {props.item.data.feedbackCount}
+                {item.data.feedbackCount}
               </span>
             )}
-          </>
+          </span>
         )}
       >
         <Tree treeId={treeId} rootItem="root" treeLabel="File Tree" />

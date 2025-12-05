@@ -148,9 +148,11 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
                   placeholder="Metric Summary"
                 />
                 <div className="border border-gray-300 rounded-md p-2 w-full">
-                  <ReactMarkdown rehypePlugins={[rehypeRaw]} className="prose-sm">
-                    {metric.description}
-                  </ReactMarkdown>
+                  <div className="prose-sm">
+                    <ReactMarkdown rehypePlugins={[rehypeRaw]}>
+                      {metric.description}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               </div>
             )}

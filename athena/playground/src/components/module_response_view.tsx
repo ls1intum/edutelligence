@@ -1,5 +1,6 @@
 import type ModuleResponse from "@/model/module_response";
 
+import {ReactNode} from "react";
 import Disclosure from "@/components/disclosure";
 
 export default function ModuleResponseView({
@@ -7,7 +8,7 @@ export default function ModuleResponseView({
   children,
 }: {
   response?: ModuleResponse;
-  children?: string | JSX.Element | JSX.Element[] | null;
+  children?: ReactNode | null;
 }) {
   if (!response) {
     return null;

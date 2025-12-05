@@ -1,5 +1,5 @@
 import type { DataMode } from "@/model/data_mode";
-import { useQueryClient } from "react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import useExercises from "@/hooks/playground/exercises";
 import useImportEvaluationData from "@/hooks/playground/evaluation_data/import";
 import useExportEvaluationData from "@/hooks/playground/evaluation_data/export";
@@ -32,7 +32,7 @@ export default function DataModeSelect({
   const { mutate, isLoading: isLoadingImport } = useImportEvaluationData({
     onSuccess: () => {
       alert("Import successful!");
-      queryClient.invalidateQueries("exercises");
+      queryClient.invalidateQueries(['exercises']);
     },
     onError: () => {
       alert("Import failed!");
@@ -52,7 +52,7 @@ export default function DataModeSelect({
   });
   
   const { mutate: deleteData, isLoading: isLoadingDelete } = useDeleteEvaluationData({
-    onSuccess: () => queryClient.invalidateQueries("exercises"),
+    onSuccess: () => queryClient.invalidateQueries(['exercises']),
   });
 
   const handleImport = (files: FileList | null) => {

@@ -77,9 +77,11 @@ export default function SingleChoiceLikertScale(singleChoiceLikertScale: SingleC
                 <InfoIconButton onClick={handleInfoClick} />
             </div>
             <Popup isOpen={isPopupOpen} onClose={closePopup} title="Information">
-                <ReactMarkdown rehypePlugins={[rehypeRaw]} className="prose prose-sm max-w-none">
-                    {description}
-                </ReactMarkdown>
+                <div className="prose prose-sm max-w-none">
+                    <ReactMarkdown rehypePlugins={[rehypeRaw]}>
+                        {description}
+                    </ReactMarkdown>
+                </div>
             </Popup>
 
             {/* Summary */}

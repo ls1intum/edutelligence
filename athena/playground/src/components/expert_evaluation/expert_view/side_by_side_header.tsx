@@ -67,9 +67,11 @@ export default function SideBySideHeader(sideBySideHeaderProps: SideBySideHeader
                                 {metrics.map((metric, index) => (
                                     <div key={index} className="border border-gray-300 rounded-md p-4">
                                         <h2 className="font-semibold mb-4">{metric.title}</h2>
-                                        <ReactMarkdown rehypePlugins={[rehypeRaw]} className="prose-sm">
-                                            {metric.description}
-                                        </ReactMarkdown>
+                                        <div className="prose-sm">
+                                            <ReactMarkdown rehypePlugins={[rehypeRaw]}>
+                                                {metric.description}
+                                            </ReactMarkdown>
+                                        </div>
                                     </div>
                                 ))}
                             </div>

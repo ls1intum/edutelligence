@@ -1,5 +1,5 @@
 import base_url from "@/helpers/base_url";
-import { useMutation, UseMutationOptions } from "react-query";
+import { useMutation, UseMutationOptions } from "@tanstack/react-query";
 
 export default function useDeleteEvaluationData(
   options: Omit<

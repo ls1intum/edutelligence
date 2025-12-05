@@ -3,7 +3,7 @@ import type { Feedback } from "@/model/feedback";
 import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
 
-import { UseMutationOptions, useMutation } from "react-query";
+import { UseMutationOptions, useMutation } from "@tanstack/react-query";
 import { AthenaError, useAthenaFetcher } from "@/hooks/athena_fetcher";
 
 /**

@@ -1,6 +1,6 @@
 import type ModuleResponse from "@/model/module_response";
 
-import { UseQueryOptions, useQuery } from "react-query";
+import { UseQueryOptions, useQuery } from "@tanstack/react-query";
 import { AthenaError, useAthenaFetcher } from "@/hooks/athena_fetcher";
 import { useModule } from "@/hooks/module_context";
 

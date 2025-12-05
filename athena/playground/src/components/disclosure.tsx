@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { ReactNode, useState } from "react";
 import * as Collapsible from '@radix-ui/react-collapsible';
 import { twMerge } from 'tailwind-merge'
 
 type DisclosureProps = {
-  title: string | JSX.Element | JSX.Element[],
-  children: string | JSX.Element | JSX.Element[],
+  title: ReactNode,
+  children: ReactNode,
   className?: {
     root?: string,
     trigger?: string,

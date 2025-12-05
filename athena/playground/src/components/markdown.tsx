@@ -54,9 +54,11 @@ export default function Markdown({
   );
 
   const markdownView = (
-    <ReactMarkdown rehypePlugins={[rehypeRaw]} className={twMerge("prose prose-sm max-w-none", className)} >
-      {content}
-    </ReactMarkdown>
+      (<div className={twMerge("prose prose-sm max-w-none", className)}>
+          <ReactMarkdown rehypePlugins={[rehypeRaw]}>
+              {content}
+          </ReactMarkdown>
+      </div>)
   );
 
   return (

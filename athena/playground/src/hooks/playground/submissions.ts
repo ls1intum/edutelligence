@@ -2,7 +2,7 @@ import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
 import type { DataMode } from "@/model/data_mode";
 
-import { UseQueryOptions, useQuery } from "react-query";
+import { UseQueryOptions, useQuery } from "@tanstack/react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 
