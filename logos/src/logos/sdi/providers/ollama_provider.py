@@ -112,12 +112,17 @@ class OllamaDataProvider:
         Returns:
             Dictionary with provider config or empty dict if not found
         """
-        if not self._db or not self.provider_id:
-            return {}
-
         try:
-            config = self._db.get_provider_config(self.provider_id)
-            return config if config else {}
+            if self._db:
+                config = self._db.get_provider_config(self.provider_id)
+                return config if config else {}
+            
+            # Fallback: Create temporary DB connection
+            from logos.dbutils.dbmanager import DBManager
+            with DBManager() as db:
+                config = db.get_provider_config(self.provider_id)
+                return config if config else {}
+                
         except Exception as e:
             logger.warning(f"[{self.name}] Failed to load provider config: {e}")
             return {}
@@ -230,13 +235,19 @@ class OllamaDataProvider:
         """
         data: Optional[Dict[str, Any]] = None
 
-        # Prefer HTTP when only base_url is configured, SSH when only SSH is configured.
-        if self.base_url and not self._ssh_config:
-            data = self._fetch_ps_via_http()
-        elif self._ssh_config and not self.base_url:
+        # Prioritize SSH if configured, especially if base_url is localhost
+        use_ssh_first = False
+        if self._ssh_config:
+            if not self.base_url:
+                use_ssh_first = True
+            elif "127.0.0.1" in self.base_url or "localhost" in self.base_url:
+                use_ssh_first = True
+
+        if use_ssh_first:
             data = self._fetch_ps_via_ssh()
+            if data is None and self.base_url:
+                data = self._fetch_ps_via_http()
         else:
-            # Try HTTP first, then fall back to SSH when both are present.
             if self.base_url:
                 data = self._fetch_ps_via_http()
             if data is None and self._ssh_config:
@@ -297,6 +308,10 @@ class OllamaDataProvider:
             "BatchMode=yes",
             "-o",
             "ConnectTimeout=5",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
             "-p",
             str(ssh_port)
         ]
@@ -307,6 +322,7 @@ class OllamaDataProvider:
         ssh_cmd.extend([ssh_target, remote_cmd])
 
         try:
+            logger.debug(f"[{self.name}] Executing SSH command: {' '.join(ssh_cmd)}")
             result = subprocess.run(
                 ssh_cmd,
                 capture_output=True,
@@ -315,14 +331,15 @@ class OllamaDataProvider:
             )
 
             if result.returncode != 0:
-                logger.warning(f"[{self.name}] SSH /api/ps failed: {result.stderr.strip()}")
+                logger.warning(f"[{self.name}] SSH /api/ps failed (code {result.returncode}): {result.stderr.strip()}")
                 return None
 
+            logger.debug(f"[{self.name}] SSH /api/ps success: {result.stdout.strip()}")
             return json.loads(result.stdout or "{}")
         except subprocess.TimeoutExpired:
             logger.warning(f"[{self.name}] SSH /api/ps timed out")
         except json.JSONDecodeError as e:
-            logger.warning(f"[{self.name}] Failed to parse SSH /api/ps response: {e}")
+            logger.warning(f"[{self.name}] Failed to parse SSH /api/ps response: {e}. Output: {result.stdout}")
         except Exception as e:
             logger.error(f"[{self.name}] Unexpected SSH error: {e}")
 

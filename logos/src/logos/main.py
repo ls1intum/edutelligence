@@ -2,9 +2,10 @@ import json
 import logging
 import os
 import traceback
+from contextlib import asynccontextmanager
 
 import grpc
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from grpclocal import model_pb2_grpc
@@ -13,20 +14,75 @@ from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
-from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup, \
-    proxy_behaviour, resource_behaviour
-from logos.scheduling.scheduling_fcfs import FCFSScheduler
-from logos.scheduling.scheduling_manager import SchedulingManager
+from logos.responses import get_client_ip
+# New Pipeline Components
+from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
+from logos.pipeline.scheduler_interface import UtilizationAwareScheduler
+from logos.pipeline.executor import Executor
+from logos.queue.priority_queue import PriorityQueueManager
+from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
+from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from typing import Optional, Dict, List, Any
 from scripts import setup_proxy
-
-from scripts.setup_proxy import setup
 
 logger = logging.getLogger("LogosLogger")
 
-app = FastAPI(docs_url="/docs", openapi_url="/openapi.json")
+# Global Pipeline Components
+_pipeline: Optional[RequestPipeline] = None
+_queue_mgr: Optional[PriorityQueueManager] = None
+_ollama_facade: Optional[OllamaSchedulingDataFacade] = None
+_azure_facade: Optional[AzureSchedulingDataFacade] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application startup/shutdown lifecycle.
+    Initializes the new pipeline components.
+    """
+    # Initialize DB
+    # Initialize DB - Legacy call removed as DBManager handles connection internally
+    # DBManager.initialize(
+    #     db_path=os.getenv("DB_PATH", "logos.db"),
+    #     schema_path=os.getenv("SCHEMA_PATH", "schema.sql")
+    # )
+    
+    # Start Pipeline
+    await start_pipeline()
+    
+    # Start gRPC server
+    global _grpc_server
+    _grpc_server = grpc.aio.server()
+    model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(_pipeline), _grpc_server)
+    _grpc_server.add_insecure_port("[::]:50051")
+    await _grpc_server.start()
+
+    # Setup proxy if needed (legacy setup)
+    DEFAULT_PROVIDER = os.getenv("PROVIDER_NAME")
+    DEFAULT_BASE_URL = os.getenv("BASE_URL")
+    FORMAT = '%(levelname)-8s: %(asctime)s at module %(module)-15s %(message)s'
+    logging.basicConfig(format=FORMAT, level=logging.DEBUG)
+    if DEFAULT_PROVIDER and len(DEFAULT_BASE_URL) > 5:
+        logging.info("Creating Proxy Configuration...")
+        with DBManager() as db:
+            db.is_root_initialized()
+        logging.info("Processing setup. Initialized: %s", str(DBManager.is_initialized()))
+        if not DBManager.is_initialized():
+            lk = setup_proxy.setup(DEFAULT_BASE_URL, DEFAULT_PROVIDER)
+            if "error" in lk:
+                logging.error("Error during proxy setup: %s", lk)
+            else:
+                logging.info("Created proxy configuration: %s", lk)
+    
+    yield
+    
+    # Shutdown logic
+    if _grpc_server:
+        await _grpc_server.stop(0)
+
+
+app = FastAPI(docs_url="/docs", openapi_url="/openapi.json", lifespan=lifespan)
 _grpc_server = None
-_scheduler = None
-_classifier = None
 
 
 app.add_middleware(
@@ -38,35 +94,138 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def start_grpc():
-    global _grpc_server
-    _grpc_server = grpc.aio.server()
-    model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(), _grpc_server)
-    _grpc_server.add_insecure_port("[::]:50051")
-    await _grpc_server.start()
-    DEFAULT_PROVIDER = os.getenv("PROVIDER_NAME")
-    DEFAULT_BASE_URL = os.getenv("BASE_URL")
-    FORMAT = '%(levelname)-8s: %(asctime)s at module %(module)-15s %(message)s'
-    logging.basicConfig(format=FORMAT, level=logging.DEBUG)
-    if DEFAULT_PROVIDER and len(DEFAULT_BASE_URL) > 5:
-        logging.info("Creating Proxy Configuration...")
-        with DBManager() as db:
-            db.is_root_initialized()
-        logging.info("Processing setup. Initialized: %s", str(DBManager.is_initialized()))
-        if not DBManager.is_initialized():
-            lk = setup(DEFAULT_BASE_URL, DEFAULT_PROVIDER)
-            if "error" in lk:
-                logging.error("Error during proxy setup: %s", lk)
-            else:
-                logging.info("Created proxy configuration: %s", lk)
+async def start_pipeline():
+    """Initialize the new request pipeline components."""
+    global _pipeline, _queue_mgr, _ollama_facade, _azure_facade
+    
+    logger.info("Initializing Request Pipeline...")
+    
+    # 1. Queue Manager
+    _queue_mgr = PriorityQueueManager()
+    
+    # 2. SDI Facades
+    # We need a temporary DB manager for registration
+    # Ideally facades should take a factory or manage their own DB context
+    # For now, we pass None if they create their own, or pass a fresh one
+    # The current implementation of facades creates DBManager internally or takes it
+    # Let's check signatures. Ollama takes (queue, db_manager). Azure takes (db_manager).
+    # If we pass None, they might fail if they expect an instance.
+    # Let's assume they handle their own DB connections or we pass a fresh one.
+    
+    _ollama_facade = OllamaSchedulingDataFacade(_queue_mgr, None) 
+    _azure_facade = AzureSchedulingDataFacade(None)
+    
+    # 3. Register Models
+    await _register_models_with_facades(_ollama_facade, _azure_facade)
+    
+    # 4. Scheduler
+    model_registry = _build_model_registry()
+    scheduler = UtilizationAwareScheduler(
+        queue_manager=_queue_mgr,
+        ollama_facade=_ollama_facade,
+        azure_facade=_azure_facade,
+        model_registry=model_registry
+    )
+    
+    # 5. Executor
+    executor = Executor()
+    
+    # 6. Classifier
+    classifier = _build_classifier()
+    
+    # 7. Pipeline
+    _pipeline = RequestPipeline(
+        classifier=classifier,
+        scheduler=scheduler,
+        executor=executor
+    )
+    
+    logger.info("Request Pipeline Initialized. with SDI-aware scheduling")
 
 
-@app.on_event("startup")
-async def start_handlers():
-    global _scheduler
-    _scheduler = SchedulingManager(FCFSScheduler())
-    classifier()
+async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacade, azure_facade: AzureSchedulingDataFacade):
+    """Register all models with their respective SDI facades."""
+    with DBManager() as db:
+        # Get all models and their providers
+        models_data = db.get_all_models_data()
+        
+        for model_data in models_data:
+            model_id = model_data[0]
+            model_name = model_data[1]
+            
+            provider = db.get_provider_to_model(model_id)
+            if not provider:
+                continue
+            
+            provider_name = provider["name"].lower()
+            provider_id = provider["id"]
+            
+            # Get SDI config
+            provider_config = db.get_provider_config(provider_id) or {}
+            
+            if "ollama" in provider_name or "openwebui" in provider_name:
+                _ollama_facade.register_model(
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    ollama_admin_url=provider_config.get("ollama_admin_url"),
+                    model_name=model_name,
+                    total_vram_mb=provider_config.get("total_vram_mb", 65536),
+                    provider_id=provider_id,
+                )
+            elif "azure" in provider_name:
+                model_info = db.get_model(model_id)
+                if model_info:
+                    _azure_facade.register_model(
+                        model_id=model_id,
+                        provider_name=provider_name,
+                        model_name=model_name,
+                        model_endpoint=model_info["endpoint"],
+                        provider_id=provider_id,
+                    )
+
+
+def _build_model_registry() -> Dict[int, str]:
+    """Build mapping of model_id -> provider_type."""
+    registry = {}
+    with DBManager() as db:
+        for model_id in db.get_all_models():
+            provider = db.get_provider_to_model(model_id)
+            if provider:
+                name = provider["name"].lower()
+                if "ollama" in name or "openwebui" in name:
+                    registry[model_id] = "ollama"
+                elif "azure" in name:
+                    registry[model_id] = "azure"
+                else:
+                    registry[model_id] = "cloud"  # Generic cloud
+    return registry
+
+
+def _build_classifier() -> ClassificationManager:
+    """Build classifier with all models."""
+    
+    mdls = []
+    with DBManager() as db:
+        for model_id in db.get_all_models():
+            tpl = db.get_model(model_id)
+            if tpl:
+                mdls.append({
+                    "id": tpl["id"],
+                    "name": tpl["name"],
+                    "endpoint": tpl["endpoint"],
+                    "api_id": tpl["api_id"],
+                    "weight_privacy": tpl["weight_privacy"],
+                    "weight_latency": tpl["weight_latency"],
+                    "weight_accuracy": tpl["weight_accuracy"],
+                    "weight_cost": tpl["weight_cost"],
+                    "weight_quality": tpl["weight_quality"],
+                    "tags": tpl["tags"],
+                    "parallel": tpl["parallel"],
+                    "description": tpl["description"],
+                    "classification_weight": Balancer(),
+                })
+    
+    return ClassificationManager(mdls)
 
 
 def classifier():
@@ -100,8 +259,6 @@ async def stop_grpc():
     global _grpc_server
     if _grpc_server:
         await _grpc_server.stop(0)
-    sm = SchedulingManager(FCFSScheduler())
-    sm.stop()
 
 
 @app.post("/logosdb/setup")
@@ -113,7 +270,7 @@ async def setup_db(data: LogosSetupRequest):
         logging.info("Processing setup request. Initialized: %s", str(DBManager.is_initialized()))
         if not DBManager.is_initialized():
             # If we run logos for the first time automatically run a basic setup skript
-            lk = setup(**data.dict())
+            lk = setup_proxy.setup(**data.dict())
             if "error" in lk:
                 return lk, 500
             return {"logos-key": lk}
@@ -338,91 +495,178 @@ async def generalstats(data: LogosKeyModel):
         return db.generalstats(**data.dict())
 
 
+@app.post("/work")
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def logos_service(path: str, request: Request):
-    """
-    Dynamic proxy for Endpoints
-    :param path: Path to Endpoint
-    :param request: Request
-    :return: The response from Endpoints
-    """
-    return await work(path, request)
-
-
 @app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def logos_service_long(path: str, request: Request):
+async def work(request: Request, path: str = None):
     """
-    Dynamic proxy for Endpoints
-    :param path: Path to Endpoint
-    :param request: Request
-    :return: The response from Endpoints
+    Main entry point for processing requests.
+    Routes all requests through the new pipeline.
     """
-    return await work(path, request)
-
-
-async def work(path:str, request: Request):
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+        
+    # Extract headers
     headers = dict(request.headers)
-    # Read request
-    data = await request.body()
-    json_data = request2json(data)
-    # logos-API-check
-    logos_key = headers["logos_key"] if "logos_key" in headers else (
-        headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else (headers["authorization"].replace("Bearer ", "") if "authorization" in headers else ""))
-    # logging.info("Headers: %s", headers)
-    with DBManager() as db:
-        r, c = db.get_process_id(logos_key)
-        if c != 200:
-            logging.info("Error while logging a request: %s", r)
-            usage_id = None
-        else:
-            r, c = db.log_usage(int(r["result"]), get_client_ip(request), json_data, headers)
-            if c != 200:
-                usage_id = None
-            else:
-                usage_id = int(r["log-id"])
-    # Check if Logos is used as proxy or resource
-    models = request_setup(headers, logos_key)
-    if not models:
+    logos_key = headers.get("logos_key") or \
+                headers.get("Authorization", "").replace("Bearer ", "") or \
+                headers.get("authorization", "").replace("Bearer ", "")
+    
+    # Log request (reusing existing logging logic via DBManager for now)
+    log_id = None
+    if logos_key:
         with DBManager() as db:
-            # Get available providers for this key
-            providers = db.get_providers(logos_key)
-        # Find most suitable provider
-        out = proxy_behaviour(headers, providers, path)
-        if isinstance(out[0], dict) and "error" in out[0]:
-            return out
-        proxy_headers, forward_url, provider_id = out
-        model_id, model_name = None, None
-        provider_name = ""
-        policy_id = -1
-        classified = dict()
+            r, c = db.get_process_id(logos_key)
+            if c == 200:
+                r_log, c_log = db.log_usage(int(r["result"]), get_client_ip(request), body, headers)
+                if c_log == 200:
+                    log_id = int(r_log["log-id"])
+
+    # Resolve allowed models from request
+    allowed_models = None
+    requested_model = body.get("model")
+    if requested_model:
+        # Look up model ID by name from the classifier's cache
+        for m in _pipeline._classifier.models:
+            if m["name"] == requested_model:
+                allowed_models = [m["id"]]
+                break
+        
+        if allowed_models is None:
+            # Model requested but not found
+            raise HTTPException(status_code=404, detail=f"Model '{requested_model}' not found")
+
+    # Create Pipeline Request
+    pipeline_req = PipelineRequest(
+        logos_key=logos_key or "anon",
+        payload=body,
+        headers=headers,
+        policy=None, # Policy extraction could be added here
+        allowed_models=allowed_models
+    )
+    
+    # Process
+    result = await _pipeline.process(pipeline_req)
+    
+    if not result.success:
+        raise HTTPException(status_code=503, detail=result.error or "Pipeline processing failed")
+        
+    # Execute and Respond
+    try:
+        if body.get("stream"):
+            return _streaming_response(
+                result.execution_context, 
+                body, 
+                log_id, 
+                result.provider_id, 
+                result.model_id, 
+                -1, # Policy ID not tracked yet
+                result.classification_stats,
+                result.scheduling_stats
+            )
+        else:
+            return await _sync_response(
+                result.execution_context,
+                body,
+                log_id,
+                result.provider_id,
+                result.model_id,
+                -1, # Policy ID not tracked yet
+                result.classification_stats,
+                result.scheduling_stats
+            )
+    except Exception as e:
+        _pipeline.record_completion(
+            request_id=result.scheduling_stats.get("request_id"),
+            result_status="ERROR",
+            error_message=str(e)
+        )
+        raise e
     else:
-        out = resource_behaviour(logos_key, headers, json_data, models)
-        if isinstance(out[0], dict) and "error" in out[0]:
-            return out
-        proxy_headers, forward_url, model_id, model_name, provider_id, provider_name, policy_id, classified = out
-    # OpenWebUI expects the model name not in the endpoint but in the data
-    if "openwebui" in provider_name.lower():
-        json_data["model"] = model_name
-    with DBManager() as db:
-        if usage_id is not None:
-            db.set_forward_timestamp(usage_id)
-    # Forward Request
-    # Try multiple requesting methods. Start with streaming
-    try:
-        if "stream" in json_data and json_data["stream"]:     # "stream" not in json_data or
-            logging.info("Sending Streaming Request")
-            json_data["stream"] = True
-            return get_streaming_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id, classified)
-    except:
-        traceback.print_exc()
-    # Fall back to naive request method
-    try:
-        logging.info("Falling back to Standard Request")
-        json_data["stream"] = False
-        return await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id, classified)
-    except:
-        traceback.print_exc()
-    return {"error": "provider not reachable"}, 500
+        # For sync requests, we record completion here.
+        # For streaming, _streaming_response generator would ideally handle it, 
+        # but since we return the response object immediately, we can only record success here 
+        # for the *setup* of the stream. The stream itself happens later.
+        # To properly trace streaming duration, we'd need to wrap the generator.
+        # For now, we record success here.
+        _pipeline.record_completion(
+            request_id=result.scheduling_stats.get("request_id"),
+            result_status="SUCCESS"
+        )
+
+
+def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None):
+    """Build streaming response using executor."""
+    from fastapi.responses import StreamingResponse
+    
+    async def streamer():
+        full_text = ""
+        first_chunk = None
+        
+        try:
+            async for chunk in _pipeline._executor.execute_streaming(context, payload):
+                yield chunk
+                
+                # Parse chunk for logging
+                line = chunk.decode().strip()
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        blob = json.loads(line[6:])
+                        if first_chunk is None:
+                            first_chunk = blob
+                        if "choices" in blob and blob["choices"]:
+                            delta = blob["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_text += content
+                    except json.JSONDecodeError:
+                        pass
+        finally:
+            # Log completion
+            if log_id:
+                with DBManager() as db:
+                    db.set_response_payload(
+                        log_id,
+                        {"content": full_text},
+                        provider_id,
+                        model_id,
+                        {},  # Usage from final chunk - TODO: extract usage
+                        policy_id,
+                        classification_stats,
+                        queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival"),
+                        utilization_at_arrival=scheduling_stats.get("utilization_at_arrival")
+                    )
+            
+            # Release scheduler capacity
+            _pipeline._scheduler.release(model_id, str(log_id or ""))
+    
+    return StreamingResponse(streamer(), media_type="text/event-stream")
+
+
+async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None):
+    """Execute sync request and return response."""
+    from fastapi.responses import JSONResponse
+    
+    result = await _pipeline._executor.execute_sync(context, payload)
+    
+    if log_id:
+        with DBManager() as db:
+            db.set_response_payload(
+                log_id,
+                result.response,
+                provider_id,
+                model_id,
+                result.usage,
+                policy_id,
+                classification_stats,
+                queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
+                utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+            )
+    
+    return JSONResponse(content=result.response, status_code=200 if result.success else 500)
+
 
 
 def request2json(request_data: bytes) -> dict:

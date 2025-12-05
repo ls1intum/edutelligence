@@ -29,7 +29,7 @@ class MonitoringRecorder:
     def record_enqueue(
         self,
         request_id: str,
-        model_id: int,
+        model_id: Optional[int],
         provider_id: Optional[int],
         initial_priority: Optional[str],
         queue_depth: Optional[int],

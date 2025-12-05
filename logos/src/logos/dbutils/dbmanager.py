@@ -1234,7 +1234,7 @@ class DBManager:
         return {"result": "timestamp_response set"}, 200
 
     def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None, policy_id=-1,
-                             classified=None):
+                             classified=None, **kwargs):
         # Hole Privacy-Level
         if classified is None:
             classified = dict()
@@ -1268,19 +1268,23 @@ class DBManager:
                    SET response_payload = :payload,
                        provider_id      = COALESCE(:provider_id, provider_id),
                        model_id         = COALESCE(:model_id, model_id),
-                       policy_id         = COALESCE(:policy_id, policy_id),
-                       timestamp_response = :timestamp_response,
-                       classification_statistics = :classification_statistics
+                       timestamp_response = :timestamp,
+                       policy_id        = COALESCE(:policy_id, policy_id),
+                       classification_statistics = :classification_statistics,
+                       queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
+                       utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
                    WHERE id = :log_id
                    """)
         self.session.execute(sql, {
-            "payload": json.dumps(payload),
+            "payload": json.dumps(payload) if payload else None,
             "provider_id": provider_id,
             "model_id": model_id,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
             "log_id": log_id,
-            "policy_id": policy_id if policy_id >= 0 else None,
-            "timestamp_response": datetime.datetime.now(datetime.timezone.utc),
-            "classification_statistics": json.dumps(classified)
+            "policy_id": policy_id if policy_id != -1 else None,
+            "classification_statistics": json.dumps(classified),
+            "queue_depth": kwargs.get("queue_depth_at_arrival"),
+            "utilization": kwargs.get("utilization_at_arrival")
         })
         self.session.commit()
         return {"result": "response_payload set"}, 200
