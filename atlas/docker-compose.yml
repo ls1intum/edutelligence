@@ -55,7 +55,7 @@ services:
     environment:
       ENABLE_CUDA: '0'
     healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:8080/.well-known/ready"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')"]
       interval: 10s
       timeout: 5s
       retries: 10
