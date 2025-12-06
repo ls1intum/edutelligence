@@ -1,0 +1,234 @@
+# src/logos/pipeline/pipeline.py
+"""
+Main request pipeline orchestrating classification → scheduling → execution.
+"""
+
+import logging
+import uuid
+from dataclasses import dataclass
+from typing import Dict, Any, Optional, List, Tuple
+
+from logos.classification.classification_manager import ClassificationManager
+from logos.classification.proxy_policy import ProxyPolicy
+from logos.dbutils.dbmanager import DBManager
+from logos.monitoring.recorder import MonitoringRecorder
+
+from .scheduler_interface import SchedulerInterface, SchedulingRequest, SchedulingResult
+from .executor import Executor, ExecutionContext, ExecutionResult
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineRequest:
+    """Input to the pipeline."""
+    logos_key: str
+    payload: Dict[str, Any]
+    headers: Dict[str, str]
+    policy: Optional[Dict[str, Any]] = None
+    allowed_models: Optional[List[int]] = None
+
+
+@dataclass
+class PipelineResult:
+    """Output from the pipeline."""
+    success: bool
+    model_id: Optional[int]
+    provider_id: Optional[int]
+    execution_context: Optional[ExecutionContext]
+    classification_stats: Dict[str, Any]
+    scheduling_stats: Dict[str, Any]
+    error: Optional[str] = None
+
+
+class RequestPipeline:
+    """
+    Orchestrates the full request flow:
+    
+    1. Classification - rank candidate models
+    2. Scheduling - select best available model
+    3. Execution - make backend call
+    
+    Decouples these concerns for testability and flexibility.
+    """
+    
+    def __init__(
+        self,
+        classifier: ClassificationManager,
+        scheduler: SchedulerInterface,
+        executor: Executor,
+        monitoring: Optional[MonitoringRecorder] = None,
+    ):
+        self._classifier = classifier
+        self._scheduler = scheduler
+        self._executor = executor
+        self._monitoring = monitoring or MonitoringRecorder()
+    
+    async def process(self, request: PipelineRequest) -> PipelineResult:
+        """
+        Process a request through the full pipeline.
+        
+        This method orchestrates the entire lifecycle:
+        1.  **Classification**: Determines which models are suitable candidates.
+        2.  **Scheduling**: Selects the best available model, potentially queuing if all are busy.
+        3.  **Execution Context**: Resolves the necessary DB information to perform the call.
+        
+        Args:
+            request: The `PipelineRequest` containing payload, headers, and policy.
+            
+        Returns:
+            `PipelineResult` containing the execution context (if successful) or error details.
+            The result also includes classification and scheduling statistics for logging.
+        """
+        request_id = str(uuid.uuid4())
+        
+        # 1. Classification
+        classification_result = self._classify(request)
+        if not classification_result.candidates:
+            return PipelineResult(
+                success=False,
+                model_id=None,
+                provider_id=None,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={},
+                error="No models passed classification",
+            )
+        
+        # 2. Scheduling
+        sched_request = SchedulingRequest(
+            request_id=request_id,
+            candidates=classification_result.candidates,
+            payload=request.payload,
+            timeout_s=request.payload.get("timeout_s"),
+        )
+        
+        # Record enqueue
+        self._monitoring.record_enqueue(
+            request_id=request_id,
+            model_id=None,
+            provider_id=None,
+            initial_priority=str(classification_result.candidates[0][2]),
+            queue_depth=None,
+            timeout_s=request.payload.get("timeout_s"),
+        )
+        
+        sched_result = await self._scheduler.schedule(sched_request)
+        if not sched_result:
+            return PipelineResult(
+                success=False,
+                model_id=None,
+                provider_id=None,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={"error": "No available model"},
+                error="All candidate models unavailable (rate-limited or no capacity)",
+            )
+        
+        # Record scheduled
+        self._monitoring.record_scheduled(
+            request_id=request_id,
+            model_id=sched_result.model_id,
+            priority_when_scheduled=None,
+            queue_depth_at_schedule=sched_result.queue_depth_at_schedule,
+        )
+        
+        # 3. Resolve execution context
+        exec_context = self._executor.resolve_context(sched_result.model_id)
+        if not exec_context:
+            return PipelineResult(
+                success=False,
+                model_id=sched_result.model_id,
+                provider_id=None,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={"model_id": sched_result.model_id},
+                error=f"Failed to resolve execution context for model {sched_result.model_id}",
+            )
+        
+        # Record monitoring - Enqueue moved to before scheduling
+        # self._monitoring.record_enqueue(...)
+        
+        return PipelineResult(
+            success=True,
+            model_id=sched_result.model_id,
+            provider_id=exec_context.provider_id,
+            execution_context=exec_context,
+            classification_stats=classification_result.stats,
+            scheduling_stats={
+                "request_id": request_id,
+                "model_id": sched_result.model_id,
+                "provider_type": sched_result.provider_type,
+                "queue_depth": sched_result.queue_depth_at_schedule,
+                "queue_depth_at_arrival": sched_result.queue_depth_at_arrival,
+                "utilization_at_arrival": sched_result.utilization_at_arrival,
+            },
+        )
+    
+    def _classify(self, request: PipelineRequest) -> "_ClassificationResult":
+        """Run classification to get candidate models."""
+        policy = request.policy or ProxyPolicy()
+        
+        # Extract prompts
+        user_prompt, system_prompt = self._extract_prompts(request.payload)
+        
+        import time
+        start = time.time()
+        
+        candidates = self._classifier.classify(
+            user_prompt,
+            policy,
+            allowed=request.allowed_models,
+            system=system_prompt,
+        )
+        
+        elapsed = time.time() - start
+        
+        # Build classification stats
+        stats = {
+            "classification_time": elapsed,
+            "candidate_count": len(candidates),
+            "candidates": [
+                {"model_id": m, "weight": w, "priority": p}
+                for m, w, p, _ in candidates[:5]  # Top 5 for logging
+            ],
+        }
+        
+        return _ClassificationResult(candidates=candidates, stats=stats)
+    
+    def _extract_prompts(self, payload: Dict[str, Any]) -> Tuple[str, str]:
+        """Extract user and system prompts from payload."""
+        messages = payload.get("messages", [])
+        user_prompt = ""
+        system_prompt = ""
+        
+        for msg in messages:
+            role = msg.get("role", "").lower()
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    p.get("text", "") for p in content 
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+            
+            if role == "user":
+                user_prompt = content
+            elif role == "system":
+                system_prompt = content
+        
+        return user_prompt, system_prompt
+
+    def record_completion(self, request_id: str, result_status: str, error_message: Optional[str] = None):
+        """Record request completion."""
+        self._monitoring.record_complete(
+            request_id=request_id,
+            result_status=result_status,
+            error_message=error_message
+        )
+
+
+@dataclass
+class _ClassificationResult:
+    candidates: List[Tuple[int, float, int, int]]
+    stats: Dict[str, Any]

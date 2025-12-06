@@ -73,6 +73,52 @@ class DBManager:
         self.session.commit()
         return result.inserted_primary_key[0]
 
+    def upsert_request_event(self, request_id: str, **fields: Any) -> None:
+        """
+        Insert or update a request_events row identified by request_id.
+
+        Only provided fields are updated; omitted fields remain unchanged.
+        """
+        allowed_fields = {
+            "model_id",
+            "provider_id",
+            "initial_priority",
+            "priority_when_scheduled",
+            "queue_depth_at_enqueue",
+            "queue_depth_at_schedule",
+            "timeout_s",
+            "enqueue_ts",
+            "scheduled_ts",
+            "request_complete_ts",
+            "available_vram_mb",
+            "azure_rate_remaining_requests",
+            "azure_rate_remaining_tokens",
+            "cold_start",
+            "result_status",
+            "error_message",
+        }
+
+        payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
+        columns = ["request_id"] + list(payload.keys())
+        params = {"request_id": request_id, **payload}
+
+        if payload:
+            assignments = ", ".join(f"{col}=EXCLUDED.{col}" for col in payload.keys())
+            placeholders = ", ".join(f":{col}" for col in columns)
+            sql = text(
+                f"INSERT INTO request_events ({', '.join(columns)}) "
+                f"VALUES ({placeholders}) "
+                f"ON CONFLICT (request_id) DO UPDATE SET {assignments}"
+            )
+        else:
+            sql = text(
+                "INSERT INTO request_events (request_id) VALUES (:request_id) "
+                "ON CONFLICT (request_id) DO NOTHING"
+            )
+
+        self.session.execute(sql, params)
+        self.session.commit()
+
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         update_stmt = table.update().where(table.c.id == record_id).values(**data)
@@ -555,6 +601,241 @@ class DBManager:
         pk = self.insert("model_provider", {"provider_id": int(provider_id), "model_id": int(model_id)})
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
 
+    def add_model_provider_config(
+        self,
+        logos_key: str,
+        model_id: int,
+        provider_name: str,
+        cold_start_threshold_ms: float = None,
+        parallel_capacity: int = None,
+        keep_alive_seconds: int = None,
+        observed_avg_cold_load_ms: float = None,
+        observed_avg_warm_load_ms: float = None
+    ) -> Tuple[dict, int]:
+        """
+        Add or update SDI configuration for a model-provider pair.
+
+        This configures the Scheduling Data Interface (SDI) parameters for how
+        a specific model behaves when served by a specific provider.
+
+        Args:
+            logos_key: Authorization key (root user only)
+            model_id: Model ID to configure
+            provider_name: Provider name (e.g., "openwebui", "azure", "openai")
+            cold_start_threshold_ms: Threshold for detecting cold starts (ms)
+            parallel_capacity: Max concurrent requests this model can handle
+            keep_alive_seconds: How long model stays loaded when idle
+            observed_avg_cold_load_ms: Observed average cold start time (ms)
+            observed_avg_warm_load_ms: Observed average warm start time (ms)
+
+        Returns:
+            Tuple of (result dict, status code)
+        """
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+
+        # Build config dict with only provided values
+        config = {
+            "model_id": int(model_id),
+            "provider_name": provider_name
+        }
+
+        if cold_start_threshold_ms is not None:
+            config["cold_start_threshold_ms"] = float(cold_start_threshold_ms)
+        if parallel_capacity is not None:
+            config["parallel_capacity"] = int(parallel_capacity)
+        if keep_alive_seconds is not None:
+            config["keep_alive_seconds"] = int(keep_alive_seconds)
+        if observed_avg_cold_load_ms is not None:
+            config["observed_avg_cold_load_ms"] = float(observed_avg_cold_load_ms)
+        if observed_avg_warm_load_ms is not None:
+            config["observed_avg_warm_load_ms"] = float(observed_avg_warm_load_ms)
+
+        # Use INSERT ... ON CONFLICT UPDATE pattern for upsert
+        from sqlalchemy import text
+
+        # Build column lists dynamically
+        columns = list(config.keys())
+        placeholders = [f":{col}" for col in columns]
+
+        # Build UPDATE clause for conflict resolution (exclude PK columns)
+        update_columns = [col for col in columns if col not in ["model_id", "provider_name"]]
+        if update_columns:
+            set_expressions = ", ".join(f"{col} = EXCLUDED.{col}" for col in update_columns)
+            set_clause = f"{set_expressions}, last_updated = CURRENT_TIMESTAMP"
+        else:
+            # Only PKs present; still advance timestamp on conflict
+            set_clause = "last_updated = CURRENT_TIMESTAMP"
+
+        sql = text(f"""
+            INSERT INTO model_provider_config ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            ON CONFLICT (model_id, provider_name)
+            DO UPDATE SET {set_clause}
+            RETURNING model_id, provider_name
+        """)
+
+        result = self.session.execute(sql, config)
+        self.session.commit()
+        row = result.fetchone()
+
+        return {
+            "result": "Created/updated SDI model-provider configuration",
+            "model_id": row[0],
+            "provider_name": row[1]
+        }, 200
+
+    def get_model_provider_config(
+        self,
+        model_id: int,
+        provider_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve SDI configuration for a model-provider pair.
+
+        Args:
+            model_id: Model ID to query
+            provider_name: Provider name (e.g., "openwebui", "azure", "openai")
+
+        Returns:
+            Dictionary with configuration fields if found, None otherwise
+        """
+        sql = text("""
+            SELECT model_id, provider_name, cold_start_threshold_ms,
+                   parallel_capacity, keep_alive_seconds,
+                   observed_avg_cold_load_ms, observed_avg_warm_load_ms, last_updated
+            FROM model_provider_config
+            WHERE model_id = :model_id AND provider_name = :provider_name
+        """)
+
+        result = self.session.execute(sql, {
+            "model_id": model_id,
+            "provider_name": provider_name
+        }).fetchone()
+
+        if result:
+            return {
+                "model_id": result[0],
+                "provider_name": result[1],
+                "cold_start_threshold_ms": result[2],
+                "parallel_capacity": result[3],
+                "keep_alive_seconds": result[4],
+                "observed_avg_cold_load_ms": result[5],
+                "observed_avg_warm_load_ms": result[6],
+                "last_updated": result[7]
+            }
+        return None
+
+    def get_provider_config(
+        self,
+        provider_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve SDI provider-level configuration from providers table.
+
+        Args:
+            provider_id: Provider ID to query
+
+        Returns:
+            Dictionary with configuration fields if found, None otherwise
+        """
+        sql = text("""
+            SELECT id, ollama_admin_url, total_vram_mb, parallel_capacity,
+                   keep_alive_seconds, max_loaded_models, updated_at
+            FROM providers
+            WHERE id = :provider_id
+        """)
+
+        result = self.session.execute(sql, {
+            "provider_id": provider_id
+        }).fetchone()
+
+        if result:
+            return {
+                "provider_id": result[0],
+                "ollama_admin_url": result[1],
+                "total_vram_mb": result[2],
+                "parallel_capacity": result[3],
+                "keep_alive_seconds": result[4],
+                "max_loaded_models": result[5],
+                "updated_at": result[6],
+            }
+        return None
+
+    def update_provider_sdi_config(
+        self,
+        logos_key: str,
+        provider_id: int,
+        ollama_admin_url: str = None,
+        total_vram_mb: int = None,
+        parallel_capacity: int = None,
+        keep_alive_seconds: int = None,
+        max_loaded_models: int = None,
+    ) -> Tuple[dict, int]:
+        """
+        Update SDI configuration fields in providers table.
+
+        Args:
+            logos_key: Authorization key (root user only)
+            provider_id: Provider ID to configure
+            ollama_admin_url: Internal admin endpoint for Ollama (e.g., http://gpu-vm-1:11434)
+            total_vram_mb: Total VRAM capacity in MB (e.g., 49152 for 48GB)
+            parallel_capacity: Max concurrent requests per model
+            keep_alive_seconds: How long models stay loaded when idle
+            max_loaded_models: Max models that can be loaded simultaneously
+
+        Returns:
+            Tuple of (result dict, status code)
+        """
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+
+        # Build UPDATE SET clauses for non-None fields
+        updates = []
+        params = {"provider_id": int(provider_id)}
+
+        if ollama_admin_url is not None:
+            updates.append("ollama_admin_url = :ollama_admin_url")
+            params["ollama_admin_url"] = ollama_admin_url
+        if total_vram_mb is not None:
+            updates.append("total_vram_mb = :total_vram_mb")
+            params["total_vram_mb"] = int(total_vram_mb)
+        if parallel_capacity is not None:
+            updates.append("parallel_capacity = :parallel_capacity")
+            params["parallel_capacity"] = int(parallel_capacity)
+        if keep_alive_seconds is not None:
+            updates.append("keep_alive_seconds = :keep_alive_seconds")
+            params["keep_alive_seconds"] = int(keep_alive_seconds)
+        if max_loaded_models is not None:
+            updates.append("max_loaded_models = :max_loaded_models")
+            params["max_loaded_models"] = int(max_loaded_models)
+
+
+        if not updates:
+            return {"error": "No fields to update"}, 400
+
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        update_clause = ", ".join(updates)
+
+        sql = text(f"""
+            UPDATE providers
+            SET {update_clause}
+            WHERE id = :provider_id
+            RETURNING id
+        """)
+
+        result = self.session.execute(sql, params)
+        self.session.commit()
+        row = result.fetchone()
+
+        if not row:
+            return {"error": "Provider not found"}, 404
+
+        return {
+            "result": "Updated provider SDI configuration",
+            "provider_id": row[0]
+        }, 200
+
     def connect_model_api(self, logos_key: str, model_id: int, api_id: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
@@ -923,7 +1204,7 @@ class DBManager:
         return {"result": "timestamp_response set"}, 200
 
     def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None, policy_id=-1,
-                             classified=None):
+                             classified=None, **kwargs):
         # Hole Privacy-Level
         if classified is None:
             classified = dict()
@@ -957,19 +1238,23 @@ class DBManager:
                    SET response_payload = :payload,
                        provider_id      = COALESCE(:provider_id, provider_id),
                        model_id         = COALESCE(:model_id, model_id),
-                       policy_id         = COALESCE(:policy_id, policy_id),
-                       timestamp_response = :timestamp_response,
-                       classification_statistics = :classification_statistics
+                       timestamp_response = :timestamp,
+                       policy_id        = COALESCE(:policy_id, policy_id),
+                       classification_statistics = :classification_statistics,
+                       queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
+                       utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
                    WHERE id = :log_id
                    """)
         self.session.execute(sql, {
-            "payload": json.dumps(payload),
+            "payload": json.dumps(payload) if payload else None,
             "provider_id": provider_id,
             "model_id": model_id,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
             "log_id": log_id,
-            "policy_id": policy_id if policy_id >= 0 else None,
-            "timestamp_response": datetime.datetime.now(datetime.timezone.utc),
-            "classification_statistics": json.dumps(classified)
+            "policy_id": policy_id if policy_id != -1 else None,
+            "classification_statistics": json.dumps(classified),
+            "queue_depth": kwargs.get("queue_depth_at_arrival"),
+            "utilization": kwargs.get("utilization_at_arrival")
         })
         self.session.commit()
         return {"result": "response_payload set"}, 200
