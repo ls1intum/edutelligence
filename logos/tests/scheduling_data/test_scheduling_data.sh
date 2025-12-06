@@ -67,38 +67,8 @@ PYTEST_ARGS=()
 # Parse script arguments and convert to pytest options
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --ssh-host=*)
-      PYTEST_ARGS+=("--ssh-host=${1#*=}")
-      shift
-      ;;
-    --ssh-host)
-      PYTEST_ARGS+=("--ssh-host=$2")
-      shift 2
-      ;;
-    --ssh-user=*)
-      PYTEST_ARGS+=("--ssh-user=${1#*=}")
-      shift
-      ;;
-    --ssh-user)
-      PYTEST_ARGS+=("--ssh-user=$2")
-      shift 2
-      ;;
-    --ssh-key-path=*)
-      PYTEST_ARGS+=("--ssh-key-path=${1#*=}")
-      shift
-      ;;
-    --ssh-key-path)
-      PYTEST_ARGS+=("--ssh-key-path=$2")
-      shift 2
-      ;;
-    --ssh-remote-port=*)
-      PYTEST_ARGS+=("--ssh-remote-port=${1#*=}")
-      shift
-      ;;
-    --ssh-remote-port)
-      PYTEST_ARGS+=("--ssh-remote-port=$2")
-      shift 2
-      ;;
+
+
     --ollama-live-model-id=*)
       PYTEST_ARGS+=("--ollama-live-model-id=${1#*=}")
       shift
@@ -127,10 +97,6 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --ssh-host HOST               SSH hostname for live Ollama tests"
-      echo "  --ssh-user USER               SSH username"
-      echo "  --ssh-key-path PATH           Path to SSH private key"
-      echo "  --ssh-remote-port PORT        Remote Ollama port (default: 11434)"
       echo "  --ollama-live-model-id ID     Ollama model ID for live tests"
       echo "  --azure-model-id ID           Azure model ID (default: 12)"
       echo "  --azure-live-model-id ID      Azure live model ID"
@@ -139,12 +105,9 @@ while [[ $# -gt 0 ]]; do
       echo "  # Run all tests (skip live tests)"
       echo "  $0"
       echo ""
-      echo "  # Run with SSH live tests"
-      echo "  $0 --ssh-host=example.com --ssh-user=user --ssh-key-path=/root/.ssh/id_ed25519"
-      echo ""
+
       echo "  # Run with all live tests"
-      echo "  $0 --ssh-host=example.com --ssh-user=user --ssh-key-path=/root/.ssh/id_ed25519 \\"
-      echo "     --ollama-live-model-id=18 --azure-live-model-id=12"
+      echo "  $0 --ollama-live-model-id=18 --azure-live-model-id=12"
       exit 0
       ;;
     *)
@@ -179,7 +142,7 @@ if [ $test_exit_code -eq 0 ]; then
     log "  - Cold start and high-traffic scenarios"
     log "  - SDI integration and data usage"
     log "  - Request lifecycle (sequential/parallel/multi-provider)"
-    log "  - Ollama SSH polling path"
+    log "  - Request lifecycle (sequential/parallel/multi-provider)"
     printf "\n"
 else
     printf "\n\033[1;31m❌ Failed!\033[0m Tests failed with exit code: %s\n\n" "$test_exit_code"

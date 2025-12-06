@@ -95,7 +95,7 @@ class OllamaSchedulingDataFacade:
         Args:
             model_id: Internal database ID for the model
             provider_name: Provider identifier (e.g., 'openwebui')
-            ollama_admin_url: Ollama /api/ps endpoint (optional when provider config supplies SSH access)
+            ollama_admin_url: Ollama /api/ps endpoint (optional)
             model_name: Model name as known by Ollama (e.g., 'llama3.1:8b')
             total_vram_mb: Total VRAM capacity in MB
             refresh_interval: Polling interval in seconds (default: 5.0)
@@ -118,13 +118,11 @@ class OllamaSchedulingDataFacade:
                     db_manager=self._db
                 )
                 self._providers[provider_name] = provider
-                connection_hint = ollama_admin_url or (provider._provider_config.get("ollama_admin_url") if getattr(provider, "_provider_config", None) else "")
-                if getattr(provider, "_ssh_config", None) and provider._ssh_config.get("host"):
-                    connection_hint = f"ssh://{provider._ssh_config.get('host')}"
-                if connection_hint:
-                    logger.info(f"Created Ollama provider '{provider_name}' using {connection_hint}")
+                
+                if ollama_admin_url:
+                    logger.info(f"Created Ollama provider '{provider_name}' using {ollama_admin_url}")
                 else:
-                    logger.info(f"Created Ollama provider '{provider_name}' without explicit admin URL (using provider config)")
+                    logger.info(f"Created Ollama provider '{provider_name}' without explicit URL (scheduling metrics limited)")
 
             # Register model with provider
             provider = self._providers[provider_name]

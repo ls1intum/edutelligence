@@ -6,8 +6,7 @@ This directory contains SQL migration scripts for upgrading the Logos database s
 
 | Script | Description | Tables/Columns Modified |
 |--------|-------------|------------------------|
-| `001_add_provider_ssh_columns.sql` | Add SSH connectivity for private Ollama servers | providers: ssh_host, ssh_user, ssh_port, ssh_key_path, ssh_remote_ollama_port |
-| `002_add_provider_sdi_columns.sql` | Add SDI monitoring and configuration columns | providers: provider_type, ollama_admin_url, total_vram_mb, parallel_capacity, keep_alive_seconds, max_loaded_models, updated_at |
+| `002_add_provider_sdi_columns.sql` | Add SDI columns to providers | providers: ollama_admin_url, total_vram_mb, parallel_capacity, keep_alive_seconds, max_loaded_models |, updated_at |
 | `003_create_model_provider_config.sql` | Create per-model per-provider config table | NEW TABLE: model_provider_config |
 | `004_add_log_entry_sdi_columns.sql` | Add SDI metrics to log entries | log_entry: priority, queue_depth_at_arrival, utilization_at_arrival, queue_wait_ms, was_cold_start, load_duration_ms |
 | `005_create_request_events_table.sql` | Create request monitoring table | NEW TABLE: request_events, NEW TYPE: result_status_enum |
@@ -23,7 +22,7 @@ Run all migrations in order:
 cd db/migrations
 
 # Run each migration in order
-docker exec -i logos-db psql -U postgres -d logosdb < 001_add_provider_ssh_columns.sql
+
 docker exec -i logos-db psql -U postgres -d logosdb < 002_add_provider_sdi_columns.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 003_create_model_provider_config.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 004_add_log_entry_sdi_columns.sql

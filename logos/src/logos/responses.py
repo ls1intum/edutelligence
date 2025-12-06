@@ -61,3 +61,15 @@ def extract_prompt(json_data: Dict[str, Any]) -> Dict[str, str]:
         user_text = _extract_text_from_content(last_by_role["user"].get("content", ""))
 
     return {"system": system_text, "user": user_text}
+
+
+def merge_url(base_url: str, endpoint: str) -> str:
+    """
+    Merge a base URL and an endpoint path.
+    Example: merge_url("http://example.com", "/api/v1") -> "http://example.com/api/v1"
+    """
+    if endpoint.startswith("http"):
+        return endpoint
+    base = base_url.rstrip("/")
+    path = endpoint.lstrip("/")
+    return f"{base}/{path}"

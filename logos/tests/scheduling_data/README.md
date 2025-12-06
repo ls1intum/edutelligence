@@ -17,20 +17,6 @@ cd tests/scheduling_data
 
 All tests will run, but live integration tests will be skipped automatically.
 
-### Running with Live SSH Tests
-
-To run live Ollama SSH polling tests, provide SSH credentials:
-
-```bash
-./test_scheduling_data.sh \
-  --ssh-host=hochbruegge.aet.cit.tum.de \
-  --ssh-user=ge84ciq \
-  --ssh-key-path=/root/.ssh/id_ed25519 \
-  --ssh-remote-port=11434
-```
-
-If parameters are not provided, live SSH tests are skipped and the rest still run.
-
 ### Running with Live Model Tests
 
 To run live inference tests from the database:
@@ -86,8 +72,7 @@ docker compose exec logos-server poetry run pytest tests/scheduling_data \
 ./test_scheduling_data.sh --help
 ```
 
-Detailed SSH setup (VPN, key mounts, provider row config) is in `tests/scheduling_data/README_ollama_ssh.md`.
-That guide also explains the real workflow: SSH-based `/api/ps` polling plus how to route live inference to a remote Ollama via tunnel or direct base_url.
+For setting up remote Ollama connections in production, see `docs/remote_ollama_setup.md`.
 
 ## What Gets Tested
 
@@ -132,10 +117,8 @@ The integration test suite (multiple files under `tests/scheduling_data/`) provi
 - ✅ Multi-provider concurrent execution
 - ✅ Complete queue drain with SDI verification at every step
 
-### 8. Ollama SSH Polling (optional live)
-- ✅ Mocked SSH path (unit)
-- ✅ Optional live SSH + `/api/ps` when SSH parameters are provided
-- ✅ Optional DB-driven live inference + SSH poll when `--ollama-live-model-id` is provided (uses DB provider/model config)
+### 8. Live Inference (Optional)
+- ✅ Optional DB-driven live inference when `--ollama-live-model-id` is provided (uses DB provider/model config)
   (test will skip if the DB-configured base_url is not reachable)
 
 ## Test Architecture

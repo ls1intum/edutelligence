@@ -31,8 +31,7 @@ echo ""
 
 # List of migrations in order
 MIGRATIONS=(
-    "001_add_provider_ssh_columns.sql"
-    "002_add_provider_sdi_columns.sql"
+    "003_drop_provider_ssh_columns.sql"
     "003_create_model_provider_config.sql"
     "004_add_log_entry_sdi_columns.sql"
     "005_create_request_events_table.sql"
@@ -99,7 +98,7 @@ else
 
     echo ""
     log "Checking providers table columns..."
-    docker exec logos-db psql -U postgres -d logosdb -c "\d providers" | grep -E "provider_type|ssh_host|total_vram_mb|parallel_capacity" || true
+    docker exec logos-db psql -U postgres -d logosdb -c "\d providers" | grep -E "provider_type|total_vram_mb|parallel_capacity" || true
 
     echo ""
     ok "Schema verification complete!"

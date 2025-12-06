@@ -651,11 +651,17 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
     
     result = await _pipeline._executor.execute_sync(context, payload)
     
+    # If execution failed and response is empty, log the error
+    response_payload = result.response
+    if not result.success and not response_payload and result.error:
+        response_payload = {"error": result.error}
+        logger.error(f"Request failed: {result.error}")
+    
     if log_id:
         with DBManager() as db:
             db.set_response_payload(
                 log_id,
-                result.response,
+                response_payload,
                 provider_id,
                 model_id,
                 result.usage,
