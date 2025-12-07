@@ -42,10 +42,17 @@ async def lifespan(app: FastAPI):
     """
     # Initialize DB
     # Initialize DB - Legacy call removed as DBManager handles connection internally
-    # DBManager.initialize(
-    #     db_path=os.getenv("DB_PATH", "logos.db"),
     #     schema_path=os.getenv("SCHEMA_PATH", "schema.sql")
     # )
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        force=True
+    )
+    # Ensure logos logger is at INFO/DEBUG
+    logging.getLogger("logos").setLevel(logging.INFO)
     
     # Start Pipeline
     await start_pipeline()
@@ -580,21 +587,11 @@ async def work(request: Request, path: str = None):
     except Exception as e:
         _pipeline.record_completion(
             request_id=result.scheduling_stats.get("request_id"),
-            result_status="ERROR",
+            result_status="error",
             error_message=str(e)
         )
         raise e
-    else:
-        # For sync requests, we record completion here.
-        # For streaming, _streaming_response generator would ideally handle it, 
-        # but since we return the response object immediately, we can only record success here 
-        # for the *setup* of the stream. The stream itself happens later.
-        # To properly trace streaming duration, we'd need to wrap the generator.
-        # For now, we record success here.
-        _pipeline.record_completion(
-            request_id=result.scheduling_stats.get("request_id"),
-            result_status="SUCCESS"
-        )
+
 
 
 def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None):
@@ -604,9 +601,17 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
     async def streamer():
         full_text = ""
         first_chunk = None
+        error_message = None
         
         try:
-            async for chunk in _pipeline._executor.execute_streaming(context, payload):
+            # Define header callback for rate limit updates
+            def process_headers(headers: dict):
+                try:
+                    _pipeline.update_provider_stats(model_id, headers)
+                except Exception:
+                    pass
+
+            async for chunk in _pipeline._executor.execute_streaming(context, payload, on_headers=process_headers):
                 yield chunk
                 
                 # Parse chunk for logging
@@ -623,6 +628,10 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                                 full_text += content
                     except json.JSONDecodeError:
                         pass
+        except Exception as e:
+            # Capture error for logging
+            error_message = str(e)
+            raise e
         finally:
             # Log completion
             if log_id:
@@ -639,8 +648,27 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         utilization_at_arrival=scheduling_stats.get("utilization_at_arrival")
                     )
             
-            # Release scheduler capacity
-            _pipeline._scheduler.release(model_id, str(log_id or ""))
+            # Record processing complete
+            # We use the captured error_message if any
+            if scheduling_stats:
+                status = "error" if error_message else "success"
+                
+                _pipeline.record_completion(
+                    request_id=scheduling_stats.get("request_id"),
+                    result_status=status,
+                    error_message=error_message,
+                    cold_start=scheduling_stats.get("is_cold_start")
+                )
+            
+            # Release scheduler resources
+            if scheduling_stats and scheduling_stats.get("request_id"):
+                 try:
+                     _pipeline._scheduler.release(
+                         model_id,
+                         scheduling_stats.get("request_id")
+                     )
+                 except Exception as e:
+                     logger.error(f"Failed to release scheduler resources: {e}")
     
     return StreamingResponse(streamer(), media_type="text/event-stream")
 
@@ -649,29 +677,58 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
     
-    result = await _pipeline._executor.execute_sync(context, payload)
+    try:
+        # Execute
+        exec_result = await _pipeline._executor.execute_sync(context, payload)
+        
+        # Update stats (e.g. rate limits) from headers
+        if exec_result.headers:
+            try:
+                _pipeline.update_provider_stats(model_id, exec_result.headers)
+            except Exception:
+                pass
     
-    # If execution failed and response is empty, log the error
-    response_payload = result.response
-    if not result.success and not response_payload and result.error:
-        response_payload = {"error": result.error}
-        logger.error(f"Request failed: {result.error}")
+        # If execution failed and response is empty, log the error
+        response_payload = exec_result.response
+        if not exec_result.success and not response_payload and exec_result.error:
+            response_payload = {"error": exec_result.error}
+            logger.error(f"Request failed: {exec_result.error}")
+        
+        if log_id:
+            with DBManager() as db:
+                db.set_response_payload(
+                    log_id,
+                    response_payload,
+                    provider_id,
+                    model_id,
+                    exec_result.usage,
+                    policy_id,
+                    classification_stats,
+                    queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
+                    utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                )
     
-    if log_id:
-        with DBManager() as db:
-            db.set_response_payload(
-                log_id,
-                response_payload,
-                provider_id,
-                model_id,
-                result.usage,
-                policy_id,
-                classification_stats,
-                queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
-                utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+        # Record completion
+        if scheduling_stats:
+            status = "success" if exec_result.success else "error"
+            _pipeline.record_completion(
+                request_id=scheduling_stats.get("request_id"),
+                result_status=status,
+                error_message=exec_result.error if not exec_result.success else None,
+                cold_start=scheduling_stats.get("is_cold_start")
             )
-    
-    return JSONResponse(content=result.response, status_code=200 if result.success else 500)
+        
+        return JSONResponse(content=exec_result.response, status_code=200 if exec_result.success else 500)
+
+    finally:
+        if scheduling_stats and scheduling_stats.get("request_id"):
+             try:
+                 _pipeline._scheduler.release(
+                     model_id,
+                     scheduling_stats.get("request_id")
+                 )
+             except Exception as e:
+                 logger.error(f"Failed to release scheduler resources: {e}")
 
 
 

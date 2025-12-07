@@ -4,7 +4,7 @@ Backend execution - resolves DB paths, makes API calls.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, AsyncIterator
+from typing import Dict, Any, Optional, AsyncIterator, Callable
 import httpx
 import json
 import logging
@@ -35,6 +35,7 @@ class ExecutionResult:
     error: Optional[str]
     usage: Dict[str, int]
     is_streaming: bool
+    headers: Optional[Dict[str, str]] = None
 
 
 class Executor:
@@ -95,9 +96,18 @@ class Executor:
         self,
         context: ExecutionContext,
         payload: Dict[str, Any],
+        on_headers: Optional[Callable[[Dict[str, str]], None]] = None,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming request and yield response chunks.
+        
+        Args:
+            context: Execution properties (URL, auth, etc.).
+            payload: Request body.
+            on_headers: Optional callback invoked with response headers (for rate limits).
+            
+        Yields:
+            Byte chunks of the response body.
         """
         headers = {
             context.auth_header: context.auth_value,
@@ -111,6 +121,8 @@ class Executor:
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
         
+        logger.info(f"Stream-Executing request to {context.forward_url} (model: {context.model_name})")
+        
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream(
                 "POST", 
@@ -118,6 +130,9 @@ class Executor:
                 headers=headers, 
                 json=payload
             ) as resp:
+                if on_headers:
+                    on_headers(dict(resp.headers))
+                
                 async for line in resp.aiter_lines():
                     if line:
                         yield (line + "\n").encode()
@@ -129,6 +144,13 @@ class Executor:
     ) -> ExecutionResult:
         """
         Execute synchronous (non-streaming) request.
+        
+        Args:
+            context: Execution properties.
+            payload: Request body.
+            
+        Returns:
+            ExecutionResult containing response body, usage stats, and headers.
         """
         headers = {
             context.auth_header: context.auth_value,
@@ -139,6 +161,8 @@ class Executor:
             payload = {**payload, "model": context.model_name}
         
         payload["stream"] = False
+        
+        logger.info(f"Sync-Executing request to {context.forward_url} (model: {context.model_name})")
         
         try:
             async with httpx.AsyncClient() as client:
@@ -158,6 +182,7 @@ class Executor:
                     error=response.text,
                     usage={},
                     is_streaming=False,
+                    headers=dict(response.headers),
                 )
             
             usage = self._extract_usage(body)
@@ -168,6 +193,7 @@ class Executor:
                 error=body.get("error") if response.status_code >= 400 else None,
                 usage=usage,
                 is_streaming=False,
+                headers=dict(response.headers),
             )
             
         except Exception as e:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any
 
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import ResultStatus
@@ -51,19 +51,30 @@ class MonitoringRecorder:
         model_id: int,
         priority_when_scheduled: Optional[str],
         queue_depth_at_schedule: Optional[int],
-        available_vram_mb: Optional[int] = None,
-        azure_rate_remaining_requests: Optional[int] = None,
-        azure_rate_remaining_tokens: Optional[int] = None,
+        provider_metrics: Dict[str, Any] = None,
     ) -> None:
+        """
+        Record when a request is scheduled.
+        
+        Args:
+            request_id: Unique request ID.
+            model_id: Selected model ID.
+            priority_when_scheduled: Priority string (low/normal/high).
+            queue_depth_at_schedule: Total system queue depth at scheduling time.
+            provider_metrics: Dictionary of provider-specific metrics (e.g. VRAM, rate limits).
+        """
         payload = {
             "model_id": model_id,
             "priority_when_scheduled": priority_when_scheduled,
             "queue_depth_at_schedule": queue_depth_at_schedule,
             "scheduled_ts": datetime.datetime.now(datetime.timezone.utc),
-            "available_vram_mb": available_vram_mb,
-            "azure_rate_remaining_requests": azure_rate_remaining_requests,
-            "azure_rate_remaining_tokens": azure_rate_remaining_tokens,
         }
+        
+        # Flatten provider metrics for DB columns
+        if provider_metrics:
+            for key, value in provider_metrics.items():
+                if key in ["available_vram_mb", "azure_rate_remaining_requests", "azure_rate_remaining_tokens"]:
+                    payload[key] = value
         self._write(request_id, **payload)
 
     def record_complete(

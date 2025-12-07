@@ -16,6 +16,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SchedulingResult:
@@ -27,6 +29,16 @@ class SchedulingResult:
     queue_depth_at_schedule: int
     queue_depth_at_arrival: Optional[int] = None
     utilization_at_arrival: Optional[float] = None
+    available_vram_mb: Optional[int] = None
+    azure_rate_remaining_requests: Optional[int] = None
+    azure_rate_remaining_tokens: Optional[int] = None
+    provider_metrics: Dict[str, Any] = None
+    priority_when_scheduled: Optional[str] = None
+    is_cold_start: Optional[bool] = None
+
+    def __post_init__(self):
+        if self.provider_metrics is None:
+            self.provider_metrics = {}
 
 
 @dataclass
@@ -54,6 +66,16 @@ class SchedulerInterface(ABC):
     @abstractmethod
     def release(self, model_id: int, request_id: str) -> None:
         """Called when a request completes to free capacity."""
+        pass
+
+    @abstractmethod
+    def get_total_queue_depth(self) -> int:
+        """Get total number of queued requests across all models."""
+        pass
+
+    @abstractmethod
+    def update_provider_stats(self, model_id: int, headers: Dict[str, str]) -> None:
+        """Update provider-specific statistics (e.g., rate limits) from response headers."""
         pass
 
 
@@ -126,11 +148,23 @@ class UtilizationAwareScheduler(SchedulerInterface):
         
         # Enqueue the Future
         entry_id = self._queue_mgr.enqueue(future, target_model_id, priority)
+        logger.info(f"Request {request.request_id} queued for model {target_model_id} (weight={sorted_candidates[0][1]:.2f}, depth={self._queue_mgr.get_total_depth(target_model_id)})")
         
         try:
             # Wait for the future to be completed by release()
             timeout = request.timeout_s if request.timeout_s else 60
-            return await asyncio.wait_for(future, timeout=timeout)
+            result = await asyncio.wait_for(future, timeout=timeout)
+            
+            # Woken up! We are now active. 
+            # The slot was transferred to us by the finishing request (reuse_slot=True).
+            # So we do NOT increment active count. We just start tracking time.
+            if provider_type == 'ollama':
+                try:
+                    self._ollama.on_request_begin_processing(request.request_id, increment_active=False)
+                except KeyError:
+                    pass
+            
+            return result
         except asyncio.TimeoutError:
             self._queue_mgr.remove(entry_id)
             return None
@@ -157,40 +191,102 @@ class UtilizationAwareScheduler(SchedulerInterface):
             return None
             
         # Select highest scoring
+        # Select highest scoring
         scored_candidates.sort(key=lambda x: x[2], reverse=True)
-        return scored_candidates[0]
+        
+        # New Logic: Try to reserve capacity atomically
+        for model_id, provider_type, score, priority_int in scored_candidates:
+            if provider_type == 'ollama':
+                if self._ollama.try_reserve_capacity(model_id):
+                    logger.info(f"Reserved capacity on Ollama model {model_id} (score={score:.2f})")
+                    return (model_id, provider_type, score, priority_int)
+                else:
+                    logger.debug(f"Failed to reserve capacity on Ollama model {model_id}, skipping")
+            elif provider_type == 'azure':
+                # Azure handled by rate limits which are checked in _get_availability_score
+                # But strict concurrency limits?
+                return (model_id, provider_type, score, priority_int)
+                
+        return None
 
     def _create_result(self, model_id: int, provider_type: str, priority_int: int, request_id: str, was_queued: bool) -> SchedulingResult:
         """Helper to create SchedulingResult and update stats."""
         queue_depth = 0
         utilization = 0.0
         
+        queue_depth = 0
+        utilization = 0.0
+        priority_str = Priority.from_int(priority_int).name.lower()
+        is_cold_start = False
+        
         if provider_type == 'ollama':
             priority = Priority.from_int(priority_int)
             queue_state = self._queue_mgr.get_state(model_id)
             queue_depth = queue_state.total
             
-            # Get utilization (active requests)
+            # Get utilization and cold start status
             try:
                 status = self._ollama.get_model_status(model_id)
                 utilization = float(status.active_requests)
+                is_cold_start = not status.is_loaded
             except ValueError:
                 utilization = 0.0
+                is_cold_start = True # Assume cold if status unknown? Or False?
             
+            # If not queued, we must increment active count IMMEDIATELY to prevent race conditions
+            # Refactored: We now use atomic reservation in _select_best_candidate.
+            # So if we are here and not queued, reservation already happened.
+            # Assume cold if status unknown? Or False?
+            
+            # Start tracking request lifecycle (metrics & cleanup)
             self._ollama.on_request_start(
                 request_id, 
                 model_id=model_id,
                 priority=priority.name.lower()
             )
+
+            # If not queued, we need to start tracking processing time.
+            # Active count was ALREADY incremented by try_reserve_capacity in _select_best_candidate.
+            if not was_queued:
+                try:
+                    self._ollama.on_request_begin_processing(request_id, increment_active=False)
+                except KeyError:
+                    pass
             
+        # Metrics collection
+        provider_metrics = {}
+        
+        if provider_type == 'ollama':
+            try:
+                cap = self._ollama.get_capacity_info(self._ollama._model_to_provider.get(model_id))
+                provider_metrics['available_vram_mb'] = cap.available_vram_mb
+            except Exception:
+                pass
+        
+        elif provider_type == 'azure':
+            try:
+                cap = self._azure.get_model_capacity(model_id)
+                if cap:
+                    provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
+                    provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
+            except Exception:
+                pass
+
         return SchedulingResult(
             model_id=model_id,
             provider_type=provider_type,
             queue_entry_id=None,
             was_queued=was_queued,
             queue_depth_at_schedule=queue_depth,
-            queue_depth_at_arrival=queue_depth,
-            utilization_at_arrival=utilization
+            queue_depth_at_arrival=queue_depth,  # Approximate if not passed
+            utilization_at_arrival=utilization,
+            provider_metrics=provider_metrics,
+            # Legacy fields for backward compatibility
+            available_vram_mb=provider_metrics.get('available_vram_mb'),
+            azure_rate_remaining_requests=provider_metrics.get('azure_rate_remaining_requests'),
+            azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
+            priority_when_scheduled=priority_str,
+            is_cold_start=is_cold_start
         )
     
     def _get_availability_score(self, model_id: int, provider_type: str) -> Optional[float]:
@@ -233,37 +329,34 @@ class UtilizationAwareScheduler(SchedulerInterface):
         """
         provider_type = self._model_registry.get(model_id)
         
-        # 1. Notify SDI
-        if provider_type == 'ollama':
-            try:
-                self._ollama.on_request_complete(
-                    request_id,
-                    was_cold_start=False,
-                    duration_ms=0
-                )
-            except KeyError:
-                pass
-
         # 2. Check starvation
         self._check_starvation(model_id)
 
         # 3. Wake up next request
         # We dequeue the next task (which is a Future) and set its result
+        # Check if we have waiters
+        has_waiters = (self._queue_mgr.get_total_depth(model_id) > 0)
+        
+        # Reuse capacity logic: 
+        # If waiters exist, we pass the "token" (capacity slot) to the woken task.
+        # So we tell Facade NOT to decrement the active count.
+        
+        # 1. Notify SDI (moved logic inside release to handle atomic reuse)
+        if provider_type == 'ollama':
+            try:
+                self._ollama.on_request_complete(
+                    request_id,
+                    was_cold_start=False,
+                    duration_ms=0,
+                    reuse_slot=has_waiters # Hand off slot if someone is waiting
+                )
+                logger.info(f"Request {request_id} released model {model_id}. Reusing slot? {has_waiters}")
+            except KeyError:
+                pass
+
         next_task = self._queue_mgr.dequeue(model_id)
         if next_task and isinstance(next_task, asyncio.Future):
             if not next_task.done():
-                # We need to construct a SchedulingResult for the woken request
-                # We don't have the original request details here easily unless we stored them in the task
-                # But we know the model_id and provider_type
-                
-                # NOTE: The Future expects a SchedulingResult.
-                # We can assume priority was handled by the queue.
-                # We'll use a default priority for the result metadata since we lost the original int.
-                # Or we could have stored (Future, priority_int) in the queue.
-                
-                # For now, let's assume NORMAL priority for the result metadata or fetch from queue entry if possible.
-                # But dequeue returns just the task.
-                
                 result = SchedulingResult(
                     model_id=model_id,
                     provider_type=provider_type,
@@ -273,6 +366,7 @@ class UtilizationAwareScheduler(SchedulerInterface):
                 )
                 
                 # Schedule the callback to run safely
+                logger.info(f"Waking up queued request for model {model_id}")
                 next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
 
     def _check_starvation(self, model_id: int):
@@ -290,7 +384,27 @@ class UtilizationAwareScheduler(SchedulerInterface):
                 self._queue_mgr.move_priority(entry.entry_id, Priority.NORMAL)
                 
         # Check NORMAL priority
-        normal_entries = self._queue_mgr.get_entries_for_priority(model_id, Priority.NORMAL)
-        for entry in normal_entries:
             if (now - entry.enqueue_time).total_seconds() > 30:
                 self._queue_mgr.move_priority(entry.entry_id, Priority.HIGH)
+
+    def get_total_queue_depth(self) -> int:
+        """Get total queued requests."""
+        # PriorityQueueManager doesn't have get_total_depth across all models directly?
+        # It has get_total_depth(model_id).
+        # We need to iterate all models? Or expose a method in QueueManager.
+        # Assuming QueueManager logic:
+        # We can iterate known models.
+        total = 0
+        for model_id in self._model_registry.keys():
+            total += self._queue_mgr.get_total_depth(model_id)
+        return total
+
+    def update_provider_stats(self, model_id: int, headers: Dict[str, str]) -> None:
+        """
+        Update provider statistics (e.g. rate limits) from response headers.
+        
+        Delegates to the appropriate scheduling data facade.
+        """
+        provider_type = self._model_registry.get(model_id)
+        if provider_type == 'azure':
+            self._azure.update_model_rate_limits(model_id, headers)

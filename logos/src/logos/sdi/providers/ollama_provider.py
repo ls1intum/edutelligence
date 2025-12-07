@@ -350,18 +350,43 @@ class OllamaDataProvider:
         with self._lock:
             self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
 
-    def decrement_active(self, model_id: int) -> None:
+    def decrement_active(self, model_id: int, reuse_slot: bool = False) -> None:
         """
         Track when a request completes processing.
-
-        Called when a request finishes execution.
-
+        
         Args:
             model_id: Model that handled the request
+            reuse_slot: If True, do NOT decrement count (hand off to queued request)
         """
+        if reuse_slot:
+            # Slot is being handed off to a queued request immediately.
+            # Do not decrement the counter.
+            logger.debug(f"Reuse slot for model {model_id}, active count remains {self._model_active.get(model_id, 0)}")
+            return
+
         with self._lock:
             current_active = self._model_active.get(model_id, 0)
             self._model_active[model_id] = max(0, current_active - 1)
+            logger.debug(f"Decremented active count for model {model_id}: {current_active} -> {self._model_active[model_id]}")
+
+    def try_reserve_capacity(self, model_id: int) -> bool:
+        """
+        Atomically check availability and reserve capacity.
+        
+        Returns:
+            True if capacity was available and reserved.
+            False if busy (should queue).
+        """
+        with self._lock:
+            current_active = self._model_active.get(model_id, 0)
+            max_capacity = self.get_config_value(model_id, "parallel_capacity", self.DEFAULT_PARALLEL_CAPACITY)
+            
+            if current_active < max_capacity:
+                self._model_active[model_id] = current_active + 1
+                logger.debug(f"Reserved capacity for model {model_id}: {current_active} -> {self._model_active[model_id]} (max={max_capacity})")
+                return True
+            logger.debug(f"Capacity full for model {model_id}: {current_active}/{max_capacity}")
+            return False
 
     def get_active_count(self, model_id: int) -> int:
         """

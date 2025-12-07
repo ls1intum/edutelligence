@@ -146,6 +146,28 @@ class AzureSchedulingDataFacade:
         provider = self._get_provider_for_model(model_id)
         return provider.get_model_status(model_id)
 
+    def get_model_capacity(self, model_id: int) -> Optional[AzureCapacity]:
+        """
+        Get capacity info for a specific model (resolving deployment automatically).
+
+        Args:
+            model_id: Model to query
+
+        Returns:
+            AzureCapacity dataclass or None if not found
+        """
+        try:
+            provider = self._get_provider_for_model(model_id)
+            # Retrieve deployment name associated with the model
+            deployment_name = provider._model_to_deployment.get(model_id)
+            if not deployment_name:
+                return None
+                
+            return provider.get_capacity_info(deployment_name)
+            
+        except (ValueError, KeyError):
+            return None
+
     def get_capacity_info(self, provider_name: str, deployment_name: str) -> AzureCapacity:
         """
         Get rate limit capacity information for a specific Azure deployment.
@@ -193,6 +215,22 @@ class AzureSchedulingDataFacade:
         provider.update_rate_limits(deployment_name, response_headers)
 
         logger.debug(f"Updated rate limits for {provider_name}/{deployment_name}")
+
+    def update_model_rate_limits(self, model_id: int, response_headers: Dict[str, str]) -> None:
+        """
+        Update rate limits for the deployment associated with a specific model ID.
+        
+        This is a convenience wrapper that looks up the deployment name for the given model
+        and then calls update_rate_limits().
+        """
+        try:
+            provider = self._get_provider_for_model(model_id)
+            # Find deployment (internal lookup)
+            deployment_name = provider._model_to_deployment.get(model_id)
+            if deployment_name:
+                provider.update_rate_limits(deployment_name, response_headers)
+        except (ValueError, KeyError, AttributeError):
+            pass
 
     def get_scheduling_data(self, model_ids: List[int]) -> List[ModelStatus]:
         """

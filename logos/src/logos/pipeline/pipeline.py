@@ -13,6 +13,8 @@ from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.dbmanager import DBManager
 from logos.monitoring.recorder import MonitoringRecorder
 
+from logos.queue.models import Priority
+
 from .scheduler_interface import SchedulerInterface, SchedulingRequest, SchedulingResult
 from .executor import Executor, ExecutionContext, ExecutionResult
 
@@ -109,13 +111,14 @@ class RequestPipeline:
             request_id=request_id,
             model_id=None,
             provider_id=None,
-            initial_priority=str(classification_result.candidates[0][2]),
-            queue_depth=None,
+            initial_priority=Priority.from_int(classification_result.candidates[0][2]).name.lower(),
+            queue_depth=self._scheduler.get_total_queue_depth(),
             timeout_s=request.payload.get("timeout_s"),
         )
         
         sched_result = await self._scheduler.schedule(sched_request)
         if not sched_result:
+            logger.warning(f"Request {request_id} failed scheduling: All models unavailable")
             return PipelineResult(
                 success=False,
                 model_id=None,
@@ -130,8 +133,9 @@ class RequestPipeline:
         self._monitoring.record_scheduled(
             request_id=request_id,
             model_id=sched_result.model_id,
-            priority_when_scheduled=None,
+            priority_when_scheduled=sched_result.priority_when_scheduled,
             queue_depth_at_schedule=sched_result.queue_depth_at_schedule,
+            provider_metrics=sched_result.provider_metrics
         )
         
         # 3. Resolve execution context
@@ -146,6 +150,9 @@ class RequestPipeline:
                 scheduling_stats={"model_id": sched_result.model_id},
                 error=f"Failed to resolve execution context for model {sched_result.model_id}",
             )
+        
+        # Record provider ID now that it's resolved
+        self._monitoring.record_provider(request_id, exec_context.provider_id)
         
         # Record monitoring - Enqueue moved to before scheduling
         # self._monitoring.record_enqueue(...)
@@ -163,6 +170,7 @@ class RequestPipeline:
                 "queue_depth": sched_result.queue_depth_at_schedule,
                 "queue_depth_at_arrival": sched_result.queue_depth_at_arrival,
                 "utilization_at_arrival": sched_result.utilization_at_arrival,
+                "is_cold_start": sched_result.is_cold_start,
             },
         )
     
@@ -219,13 +227,27 @@ class RequestPipeline:
         
         return user_prompt, system_prompt
 
-    def record_completion(self, request_id: str, result_status: str, error_message: Optional[str] = None):
+    def record_completion(self, request_id: str, result_status: str, error_message: Optional[str] = None, cold_start: Optional[bool] = None):
         """Record request completion."""
         self._monitoring.record_complete(
             request_id=request_id,
             result_status=result_status,
-            error_message=error_message
+            error_message=error_message,
+            cold_start=cold_start
         )
+
+    def update_provider_stats(self, model_id: int, headers: Dict[str, str]) -> None:
+        """
+        Update provider statistics (e.g. rate limits) from response headers.
+        
+        Args:
+            model_id: The model that generated the response.
+            headers: Response headers containing rate limit info.
+        """
+        if not headers:
+            return
+            
+        self._scheduler.update_provider_stats(model_id, headers)
 
 
 @dataclass
