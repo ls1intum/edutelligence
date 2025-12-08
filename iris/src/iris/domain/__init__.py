@@ -15,6 +15,9 @@ from .competency_extraction_pipeline_execution_dto import (
 )
 from .data import image_message_content_dto
 from .error_response_dto import IrisErrorResponseDTO
+from .inconsistency_check_pipeline_execution_dto import (
+    InconsistencyCheckPipelineExecutionDTO,
+)
 from .pipeline_execution_dto import PipelineExecutionDTO
 from .pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
 
@@ -27,6 +30,7 @@ __all__ = [
     "CompetencyExtractionPipelineExecutionDTO",
     "image_message_content_dto",
     "IrisErrorResponseDTO",
+    "InconsistencyCheckPipelineExecutionDTO",
     "PipelineExecutionDTO",
     "PipelineExecutionSettingsDTO",
 ]

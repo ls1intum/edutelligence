@@ -9,6 +9,7 @@ from iris.web.routers.pipelines import (
     CompetencyExtractionPipeline,
     CourseChatPipeline,
     ExerciseChatAgentPipeline,
+    InconsistencyCheckPipeline,
     LectureChatPipeline,
     TextExerciseChatPipeline,
     TutorSuggestionPipeline,
@@ -20,6 +21,7 @@ PipelineType = Type[
     | CourseChatPipeline
     | LectureChatPipeline
     | CompetencyExtractionPipeline
+    | InconsistencyCheckPipeline
     | TutorSuggestionPipeline
     | LectureUnitPageIngestionPipeline
     | FaqIngestionPipeline
@@ -31,6 +33,7 @@ PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
     Features.TEXT_EXERCISE_CHAT: TextExerciseChatPipeline,
     Features.LECTURE_CHAT: LectureChatPipeline,
     Features.COMPETENCY_GENERATION: CompetencyExtractionPipeline,
+    Features.INCONSISTENCY_CHECK: InconsistencyCheckPipeline,
     Features.TUTOR_SUGGESTION: TutorSuggestionPipeline,
     Features.LECTURE_INGESTION: LectureUnitPageIngestionPipeline,
     Features.FAQ_INGESTION: FaqIngestionPipeline,

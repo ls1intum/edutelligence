@@ -12,12 +12,16 @@ from iris.domain import (
     CourseChatPipelineExecutionDTO,
     ExerciseChatPipelineExecutionDTO,
     FeatureDTO,
+    InconsistencyCheckPipelineExecutionDTO,
 )
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
+)
+from iris.domain.rewriting_pipeline_execution_dto import (
+    RewritingPipelineExecutionDTO,
 )
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
@@ -35,13 +39,19 @@ from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
 from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
+from iris.pipeline.inconsistency_check_pipeline import (
+    InconsistencyCheckPipeline,
+)
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
+from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
     CompetencyExtractionCallback,
     CourseChatStatusCallback,
     ExerciseChatStatusCallback,
+    InconsistencyCheckCallback,
     LectureChatCallback,
+    RewritingCallback,
     TextExerciseChatCallback,
     TutorSuggestionCallback,
 )
@@ -261,6 +271,82 @@ def run_competency_extraction_pipeline(dto: CompetencyExtractionPipelineExecutio
     thread.start()
 
 
+def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: str):
+    try:
+        callback = RewritingCallback(
+            run_id=dto.execution.settings.authentication_token,
+            base_url=dto.execution.settings.artemis_base_url,
+            initial_stages=dto.execution.initial_stages,
+        )
+        match variant:
+            case "faq" | "problem_statement":
+                pipeline = RewritingPipeline(callback=callback, variant=variant)
+            case _:
+                raise ValueError(f"Unknown variant: {variant}")
+    except Exception as e:
+        logger.error("Error preparing rewriting pipeline: %s", e)
+        logger.error(traceback.format_exc())
+        capture_exception(e)
+        return
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error("Error running rewriting extraction pipeline: %s", e)
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/rewriting/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
+    variant = validate_pipeline_variant(
+        dto.execution.settings, RewritingPipeline
+    ).lower()
+    logger.info("Rewriting pipeline started with variant: %s and dlo: %s", variant, dto)
+
+    thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
+    thread.start()
+
+
+def run_inconsistency_check_pipeline_worker(
+    dto: InconsistencyCheckPipelineExecutionDTO, _variant: str
+):  # pylint: disable=invalid-name
+    try:
+        callback = InconsistencyCheckCallback(
+            run_id=dto.execution.settings.authentication_token,
+            base_url=dto.execution.settings.artemis_base_url,
+            initial_stages=dto.execution.initial_stages,
+        )
+        pipeline = InconsistencyCheckPipeline(callback=callback)
+    except Exception as e:
+        logger.error("Error preparing inconsistency check pipeline: %s", e)
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error("Error running inconsistency check pipeline: %s", e)
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/inconsistency-check/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO):
+    variant = validate_pipeline_variant(
+        dto.execution.settings, InconsistencyCheckPipeline
+    )
+
+    thread = Thread(target=run_inconsistency_check_pipeline_worker, args=(dto, variant))
+    thread.start()
+
+
 def run_communication_tutor_suggestions_pipeline_worker(
     dto: CommunicationTutorSuggestionPipelineExecutionDTO, variant_id
 ):  # pylint: disable=invalid-name
@@ -340,6 +426,14 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
         case "LECTURE_CHAT":
             return get_available_variants(
                 LectureChatPipeline.get_variants(), available_llms
+            )
+        case "INCONSISTENCY_CHECK":
+            return get_available_variants(
+                InconsistencyCheckPipeline.get_variants(), available_llms
+            )
+        case "REWRITING":
+            return get_available_variants(
+                RewritingPipeline.get_variants(), available_llms
             )
         case "LECTURE_INGESTION":
             return get_available_variants(
