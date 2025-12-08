@@ -435,6 +435,12 @@ class LectureChatCallback(StatusCallback):
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Extracting memories",
+                internal=True,
+            ),
         ]
         super().__init__(
             url,

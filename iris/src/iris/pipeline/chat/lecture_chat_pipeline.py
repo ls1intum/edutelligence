@@ -1,7 +1,11 @@
 import logging
+import os
 import traceback
+from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
+import pytz
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
 from iris.pipeline.session_title_generation_pipeline import (
@@ -14,45 +18,21 @@ from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
 from ...domain.variant.lecture_chat_variant import LectureChatVariant
+from ...retrieval.faq_retrieval import FaqRetrieval
+from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...tools import (
+    create_tool_faq_content_retrieval,
     create_tool_get_course_details,
     create_tool_lecture_content_retrieval,
 )
 from ...web.status.status_update import LectureChatCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.utils import format_custom_instructions
+from ..shared.utils import datetime_to_string, format_custom_instructions
 
 logger = logging.getLogger(__name__)
-
-
-def chat_history_system_prompt():
-    """
-    Returns the system prompt for the chat history
-    """
-    return """This is the chat history of your conversation with the student so far. Read it so you
-    know what already happened, but never re-use any message you already wrote. Instead, always write new and original
-    responses. The student can reference the messages you've already written."""
-
-
-def lecture_initial_prompt():
-    """
-    Returns the initial prompt for the lecture chat
-    """
-    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the
-     Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to answer the student's
-     questions about the lectures. To provide the best possible answer, the following relevant lecture content is
-     provided to you: lecture slides, lecture transcriptions, and lecture segments. Lecture segments contain a
-     combined summary of a section of lecture slides and transcription content.
-     student's question. If the context provided to you is not enough to formulate an answer to the student question
-     you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
-     you that is relevant to the student's question. If the user greets you greet him back,
-     and ask him how you can help.
-     Always respond in the same language as the user. If they use English, you use English.
-     If they use German, you use German, but then always use "du" instead of "Sie".
-     """
 
 
 class LectureChatPipeline(
@@ -62,18 +42,29 @@ class LectureChatPipeline(
     Lecture chat pipeline that answers course related questions from students.
     """
 
-    # compared with the lecture chat pipeline this does not work with Jinja
-    # no FAQs used here compared to lecture (FAQs seem to refer to lecture level?)
-    # no event used here compared to lecture (no JOL)
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
     lecture_retriever: Optional[LectureRetrieval]
+    faq_retriever: Optional[FaqRetrieval]
+    jinja_env: Environment
+    system_prompt_template: Any
 
     def __init__(self):
         super().__init__(implementation_id="lecture_chat_pipeline")
         self.session_title_pipeline = SessionTitleGenerationPipeline()
         self.citation_pipeline = CitationPipeline()
         self.lecture_retriever = None
+        self.faq_retriever = None
+        template_dir = os.path.join(
+            os.path.dirname(__file__), "..", "prompts", "templates"
+        )
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(template_dir),
+            autoescape=select_autoescape(["html", "xml", "j2"]),
+        )
+        self.system_prompt_template = self.jinja_env.get_template(
+            "lecture_chat_system_prompt.j2"
+        )
 
     # event (see course) does not exist here
     # model (see old version) is in the abstract super class now
@@ -109,12 +100,21 @@ class LectureChatPipeline(
         Returns:
             list[Callable]: A list of tools available for the agent pipeline
         """
-        # Add memiris? (see course pipeline)
-        # Add FAQ? (see course pipeline)
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
+        allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
+        allow_memiris_tool = bool(
+            state.dto.user
+            and state.dto.user.memiris_enabled
+            and state.memiris_wrapper
+            and state.memiris_wrapper.has_memories()
+        )
 
         if not hasattr(state, "lecture_content_storage"):
             setattr(state, "lecture_content_storage", {})
+        if not hasattr(state, "faq_storage"):
+            setattr(state, "faq_storage", {})
+        if not hasattr(state, "accessed_memory_storage"):
+            setattr(state, "accessed_memory_storage", [])
 
         callback = state.callback
         if not isinstance(callback, LectureChatCallback):
@@ -123,6 +123,8 @@ class LectureChatPipeline(
         tool_list: list[Callable] = [
             create_tool_get_course_details(state.dto.course, callback),
         ]
+
+        query_text = self.get_text_of_latest_user_message(state)
         if allow_lecture_tool:
             self.lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
@@ -131,11 +133,38 @@ class LectureChatPipeline(
                     state.dto.course.id,
                     state.dto.settings.artemis_base_url if state.dto.settings else "",
                     callback,
-                    self.get_text_of_latest_user_message(state),
+                    query_text,
                     state.message_history,
                     getattr(state, "lecture_content_storage", {}),
                     lecture_id=state.dto.lecture.id if state.dto.lecture else None,
                     lecture_unit_id=state.dto.lecture_unit_id,
+                )
+            )
+
+        if allow_faq_tool:
+            self.faq_retriever = FaqRetrieval(state.db.client)
+            tool_list.append(
+                create_tool_faq_content_retrieval(
+                    self.faq_retriever,
+                    state.dto.course.id,
+                    state.dto.course.name,
+                    state.dto.settings.artemis_base_url if state.dto.settings else "",
+                    callback,
+                    query_text,
+                    state.message_history,
+                    getattr(state, "faq_storage", {}),
+                )
+            )
+
+        if allow_memiris_tool and state.memiris_wrapper:
+            tool_list.append(
+                state.memiris_wrapper.create_tool_memory_search(
+                    getattr(state, "accessed_memory_storage", [])
+                )
+            )
+            tool_list.append(
+                state.memiris_wrapper.create_tool_find_similar_memories(
+                    getattr(state, "accessed_memory_storage", [])
                 )
             )
 
@@ -153,42 +182,30 @@ class LectureChatPipeline(
         Returns:
             str: The system message content
         """
-        # course pipeline somewhat more complex with Jinja but in the end returnes a string aswell
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
-
-        instructions: list[str] = [
-            lecture_initial_prompt(),
-            chat_history_system_prompt(),
-        ]
-
-        lecture_name = state.dto.lecture.title if state.dto.lecture else None
-        course_name = state.dto.course.name if state.dto.course else None
-        if lecture_name:
-            instructions.append(
-                f"You are currently helping with the lecture '{lecture_name}'."
-            )
-        if course_name:
-            instructions.append(f"The lecture belongs to the course '{course_name}'.")
-
-        if allow_lecture_tool:
-            instructions.append(
-                "You have access to the lecture_content_retrieval tool. Always call it exactly once before producing "
-                "the final answer so that you can ground your response in the latest lecture slides, transcripts, "
-                "and segment summaries."
-            )
-        else:
-            instructions.append(
-                "Lecture retrieval is currently unavailable for this course. Rely on the conversation so far and be "
-                "transparent if you are missing specific lecture details."
-            )
-
+        allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
+        allow_memiris_tool = bool(
+            state.dto.user
+            and state.dto.user.memiris_enabled
+            and state.memiris_wrapper
+            and state.memiris_wrapper.has_memories()
+        )
         custom_instructions = format_custom_instructions(
             state.dto.custom_instructions or ""
         )
-        if custom_instructions:
-            instructions.append(custom_instructions)
 
-        return "\n\n".join(instructions)
+        template_context = {
+            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "lecture_name": state.dto.lecture.title if state.dto.lecture else None,
+            "course_name": state.dto.course.name if state.dto.course else None,
+            "allow_lecture_tool": allow_lecture_tool,
+            "allow_faq_tool": allow_faq_tool,
+            "allow_memiris_tool": allow_memiris_tool,
+            "has_chat_history": bool(state.message_history),
+            "custom_instructions": custom_instructions,
+        }
+
+        return self.system_prompt_template.render(template_context)
 
     def get_memiris_tenant(self, dto: LectureChatPipelineExecutionDTO) -> str:
         """
@@ -252,24 +269,24 @@ class LectureChatPipeline(
         Returns:
             str: The final result
         """
-        # Add FAQs if FAQ tool is used
         if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
             state.result = self._process_citations(
                 state,
                 state.result,
                 state.lecture_content_storage,
+                state.faq_storage,
                 state.dto,
                 state.variant,
             )
 
         session_title = self._generate_session_title(state, state.result, state.dto)
 
-        # course: sends accessed_memories with status update
         state.callback.done(
             "Response created",
             final_result=state.result,
             tokens=state.tokens,
             session_title=session_title,
+            accessed_memories=getattr(state, "accessed_memory_storage", []),
         )
 
         return state.result
@@ -281,16 +298,18 @@ class LectureChatPipeline(
         ],
         output: str,
         lecture_content_storage: dict[str, Any],
+        faq_storage: dict[str, Any],
         dto: LectureChatPipelineExecutionDTO,
         variant: LectureChatVariant,
     ) -> str:
         """
-        Process citations for lecture content.
+        Process citations for lecture content and FAQs.
 
         Args:
             state: The current pipeline execution state
             output: The agent's output
             lecture_content_storage: Storage for lecture content
+            faq_storage: Storage for FAQ content
             dto: The pipeline execution DTO
             variant: The variant configuration
 
@@ -309,6 +328,16 @@ class LectureChatPipeline(
         if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
             for token in self.citation_pipeline.tokens:
                 self._track_tokens(state, token)
+
+        if faq_storage.get("faqs"):
+            base_url = dto.settings.artemis_base_url if dto.settings else ""
+            output = self.citation_pipeline(
+                faq_storage["faqs"],
+                output,
+                InformationType.FAQS,
+                variant=variant.id,
+                base_url=base_url,
+            )
 
         return output
 
@@ -355,8 +384,10 @@ class LectureChatPipeline(
                 exc_info=e,
             )
             traceback.print_exc()
-            # course: token=[]  argument
-            callback.error("An error occurred while running the lecture chat pipeline.")
+            callback.error(
+                "An error occurred while running the lecture chat pipeline.",
+                tokens=[],
+            )
 
     @classmethod
     def get_variants(cls) -> List[LectureChatVariant]:
