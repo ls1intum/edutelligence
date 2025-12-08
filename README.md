@@ -42,7 +42,7 @@ A sophisticated system designed to provide (semi-)automated assessments for vari
 
 **Technology Stack:** Python, Docker Compose, PostgreSQL
 
-**Documentation:** [ls1intum.github.io/Athena/](https://ls1intum.github.io/Athena)
+**Documentation:** [https://ls1intum.github.io/edutelligence/athena/](https://ls1intum.github.io/edutelligence/athena/)
 
 ### 🗺️ [Atlas](./atlas/) - Adaptive Competency-Based Learning
 
