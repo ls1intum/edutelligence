@@ -1,8 +1,7 @@
 /.github/CODEOWNERS @bassner
-* @ls1intum/iris-maintainers @ls1intum/athena-maintainers @ls1intum/atlas-maintainers @ls1intum/hyperion-maintainers @ls1intum/logos-maintainers
+* @ls1intum/iris-maintainers @ls1intum/athena-maintainers @ls1intum/atlas-maintainers @ls1intum/logos-maintainers
 /iris/ @ls1intum/iris-maintainers
 /athena/ @ls1intum/athena-maintainers
 /atlas/ @ls1intum/atlas-maintainers
-/hyperion/ @ls1intum/hyperion-maintainers
 /logos/ @ls1intum/logos-maintainers
 /memiris/ @ls1intum/iris-maintainers @Hialus
