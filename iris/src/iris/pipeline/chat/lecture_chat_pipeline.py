@@ -353,8 +353,9 @@ class LectureChatPipeline(
         Generate a session title for the first learner interaction.
         """
 
-        if len(dto.chat_history) == 1:
-            first_user_msg = dto.chat_history[0].contents[0].text_content
+        chat_history = dto.chat_history or []
+        if len(chat_history) == 1 and chat_history[0].contents:
+            first_user_msg = chat_history[0].contents[0].text_content
             return super()._create_session_title(state, output, first_user_msg)
         return None
 
