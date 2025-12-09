@@ -66,6 +66,25 @@ class RequestPipeline:
         self._scheduler = scheduler
         self._executor = executor
         self._monitoring = monitoring or MonitoringRecorder()
+
+    @property
+    def classifier(self) -> ClassificationManager:
+        """Expose classifier for read-only access."""
+        return self._classifier
+
+    def update_classifier(self, classifier: ClassificationManager) -> None:
+        """Replace classifier instance after model changes."""
+        self._classifier = classifier
+
+    @property
+    def executor(self) -> Executor:
+        """Expose executor for helper functions."""
+        return self._executor
+
+    @property
+    def scheduler(self) -> SchedulerInterface:
+        """Expose scheduler for helper functions."""
+        return self._scheduler
     
     async def process(self, request: PipelineRequest) -> PipelineResult:
         """

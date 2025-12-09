@@ -14,7 +14,15 @@ from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
-from logos.responses import get_client_ip
+from logos.responses import (
+    get_client_ip,
+    extract_model,
+    request_setup,
+    proxy_behaviour,
+    get_streaming_response,
+    get_standard_response,
+    extract_token_usage
+)
 # New Pipeline Components
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
 from logos.pipeline.scheduler_interface import UtilizationAwareScheduler
@@ -27,36 +35,30 @@ from scripts import setup_proxy
 
 logger = logging.getLogger("LogosLogger")
 
-# Global Pipeline Components
+# Global Components
 _pipeline: Optional[RequestPipeline] = None
 _queue_mgr: Optional[PriorityQueueManager] = None
 _ollama_facade: Optional[OllamaSchedulingDataFacade] = None
 _azure_facade: Optional[AzureSchedulingDataFacade] = None
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Application startup/shutdown lifecycle.
-    Initializes the new pipeline components.
+    Initializes the request pipeline components and gRPC server.
     """
-    # Initialize DB
-    # Initialize DB - Legacy call removed as DBManager handles connection internally
-    #     schema_path=os.getenv("SCHEMA_PATH", "schema.sql")
-    # )
-    
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         force=True
     )
-    # Ensure logos logger is at INFO/DEBUG
     logging.getLogger("logos").setLevel(logging.INFO)
-    
+
     # Start Pipeline
     await start_pipeline()
-    
+
     # Start gRPC server
     global _grpc_server
     _grpc_server = grpc.aio.server()
@@ -64,7 +66,7 @@ async def lifespan(app: FastAPI):
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
 
-    # Setup proxy if needed (legacy setup)
+    # Initial provider setup from environment variables
     DEFAULT_PROVIDER = os.getenv("PROVIDER_NAME")
     DEFAULT_BASE_URL = os.getenv("BASE_URL")
     FORMAT = '%(levelname)-8s: %(asctime)s at module %(module)-15s %(message)s'
@@ -80,9 +82,9 @@ async def lifespan(app: FastAPI):
                 logging.error("Error during proxy setup: %s", lk)
             else:
                 logging.info("Created proxy configuration: %s", lk)
-    
+
     yield
-    
+
     # Shutdown logic
     if _grpc_server:
         await _grpc_server.stop(0)
@@ -101,33 +103,65 @@ app.add_middleware(
 )
 
 
+def _extract_policy(headers: dict, logos_key: str, body: dict):
+    """
+    Extract policy from request headers or model string.
+
+    :param headers: Request headers dict
+    :param logos_key: User's logos_key
+    :param body: Request body (for model string parsing)
+    :return: Policy dict or None (will default to ProxyPolicy)
+    """
+    from logos.model_string_parser import parse_model_string
+
+    policy = None
+
+    if "policy" in headers:
+        try:
+            with DBManager() as db:
+                policy = db.get_policy(logos_key, int(headers["policy"]))
+                if isinstance(policy, dict) and "error" in policy:
+                    logger.warning(f"Failed to load policy {headers['policy']}: {policy['error']}")
+                    policy = None
+        except Exception as e:
+            logger.warning(f"Failed to load policy from header: {e}")
+            policy = None
+
+    if policy is None:
+        policy = {}
+
+    try:
+        mdl = extract_model(body)
+        if mdl and mdl.startswith("logos-v"):
+            model_string_dto = parse_model_string(mdl)
+            p = model_string_dto.policy
+            if not p.get("default"):
+                for key in p:
+                    if key == "default":
+                        continue
+                    if key == "privacy":
+                        policy["threshold_privacy"] = p[key]
+                    # Add other policy settings as needed
+    except Exception as e:
+        logger.debug(f"Could not parse model string for policy: {e}")
+
+    return policy if policy else None
+
 async def start_pipeline():
     """Initialize the new request pipeline components."""
     global _pipeline, _queue_mgr, _ollama_facade, _azure_facade
     
     logger.info("Initializing Request Pipeline...")
-    
-    # 1. Queue Manager
+
     _queue_mgr = PriorityQueueManager()
-    
-    # 2. SDI Facades
-    # We need a temporary DB manager for registration
-    # Ideally facades should take a factory or manage their own DB context
-    # For now, we pass None if they create their own, or pass a fresh one
-    # The current implementation of facades creates DBManager internally or takes it
-    # Let's check signatures. Ollama takes (queue, db_manager). Azure takes (db_manager).
-    # If we pass None, they might fail if they expect an instance.
-    # Let's assume they handle their own DB connections or we pass a fresh one.
-    
+
     _ollama_facade = OllamaSchedulingDataFacade(_queue_mgr, None) 
     _azure_facade = AzureSchedulingDataFacade(None)
-    
-    # 3. Register Models
+
     await _register_models_with_facades(_ollama_facade, _azure_facade)
-    
-    # 4. Scheduler
+
     model_registry = _build_model_registry()
-    scheduler = UtilizationAwareScheduler(
+    scheduler = UtilizationAwareScheduler( # Swap in other schedulers as needed
         queue_manager=_queue_mgr,
         ollama_facade=_ollama_facade,
         azure_facade=_azure_facade,
@@ -138,11 +172,11 @@ async def start_pipeline():
     executor = Executor()
     
     # 6. Classifier
-    classifier = _build_classifier()
+    clf = classifier()
     
     # 7. Pipeline
     _pipeline = RequestPipeline(
-        classifier=classifier,
+        classifier=clf,
         scheduler=scheduler,
         executor=executor
     )
@@ -208,9 +242,8 @@ def _build_model_registry() -> Dict[int, str]:
     return registry
 
 
-def _build_classifier() -> ClassificationManager:
-    """Build classifier with all models."""
-    
+def classifier() -> ClassificationManager:
+    """Build classifier with all models from database."""
     mdls = []
     with DBManager() as db:
         for model_id in db.get_all_models():
@@ -231,41 +264,21 @@ def _build_classifier() -> ClassificationManager:
                     "description": tpl["description"],
                     "classification_weight": Balancer(),
                 })
-    
+
     return ClassificationManager(mdls)
 
 
-def classifier():
-    mdls = list()
-    with DBManager() as db:
-        for model in db.get_all_models():
-            tpl = db.get_model(model)
-            model = {
-                "id": tpl["id"],
-                "name": tpl["name"],
-                "endpoint": tpl["endpoint"],
-                "api_id": tpl["api_id"],
-                "weight_privacy": tpl["weight_privacy"],
-                "weight_latency": tpl["weight_latency"],
-                "weight_accuracy": tpl["weight_accuracy"],
-                "weight_cost": tpl["weight_cost"],
-                "weight_quality": tpl["weight_quality"],
-                "tags": tpl["tags"],
-                "parallel": tpl["parallel"],
-                "description": tpl["description"],
-                "classification_weight": Balancer(),
-            }
-            mdls.append(model)
-    global _classifier
-    _classifier = ClassificationManager(mdls)
-    _classifier.update_manager(mdls)
-
-
-@app.on_event("shutdown")
-async def stop_grpc():
-    global _grpc_server
-    if _grpc_server:
-        await _grpc_server.stop(0)
+def rebuild_classifier():
+    """
+    Rebuild classifier with current models from database.
+    Updates the global pipeline's classifier instance.
+    Called when models are added, updated, or deleted.
+    """
+    global _pipeline
+    if _pipeline:
+        new_classifier = classifier()
+        _pipeline.update_classifier(new_classifier)
+        logger.info("Classifier rebuilt with updated models")
 
 
 @app.post("/logosdb/setup")
@@ -276,7 +289,7 @@ async def setup_db(data: LogosSetupRequest):
             db.is_root_initialized()
         logging.info("Processing setup request. Initialized: %s", str(DBManager.is_initialized()))
         if not DBManager.is_initialized():
-            # If we run logos for the first time automatically run a basic setup skript
+            # First-time setup: create initial provider and process
             lk = setup_proxy.setup(**data.dict())
             if "error" in lk:
                 return lk, 500
@@ -364,28 +377,32 @@ async def connect_model_api(data: ConnectModelApiRequest):
 async def add_model(data: AddModelRequest):
     with DBManager() as db:
         back = db.add_model(**data.dict())
-        classifier()
-        return back
+    rebuild_classifier()
+    return back
 
 
 @app.post("/logosdb/add_full_model")
 async def add_full_model(data: AddFullModelRequest):
     with DBManager() as db:
-        return db.add_full_model(**data.dict())
+        back = db.add_full_model(**data.dict())
+    rebuild_classifier()
+    return back
 
 
 @app.post("/logosdb/update_model")
 async def update_model(data: GiveFeedbackRequest):
     with DBManager() as db:
         back = db.update_model_weights(**data.dict())
-        classifier()
-        return back
+    rebuild_classifier()
+    return back
 
 
 @app.post("/logosdb/delete_model")
 async def delete_model(data: DeleteModelRequest):
     with DBManager() as db:
-        return db.delete_model(**data.dict())
+        back = db.delete_model(**data.dict())
+    rebuild_classifier()
+    return back
 
 
 @app.post("/logosdb/get_model")
@@ -502,26 +519,32 @@ async def generalstats(data: LogosKeyModel):
         return db.generalstats(**data.dict())
 
 
-@app.post("/work")
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 @app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def work(request: Request, path: str = None):
     """
-    Main entry point for processing requests.
-    Routes all requests through the new pipeline.
+    Dynamic proxy for LLM API endpoints.
+    Supports two modes:
+    - PROXY MODE: Direct forwarding to provider (no classification/scheduling)
+    - RESOURCE MODE: Classification + scheduling with SDI-aware pipeline
+
+    :param request: FastAPI Request object containing headers, body, and client metadata
+    :param path: API endpoint path (e.g., 'chat/completions', 'completions', 'embeddings')
+    :return: StreamingResponse for streaming requests, JSONResponse for synchronous requests
     """
+
     try:
         body = await request.json()
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
-        
+
     # Extract headers
     headers = dict(request.headers)
     logos_key = headers.get("logos_key") or \
                 headers.get("Authorization", "").replace("Bearer ", "") or \
                 headers.get("authorization", "").replace("Bearer ", "")
-    
-    # Log request (reusing existing logging logic via DBManager for now)
+
+    # Log request
     log_id = None
     if logos_key:
         with DBManager() as db:
@@ -531,66 +554,103 @@ async def work(request: Request, path: str = None):
                 if c_log == 200:
                     log_id = int(r_log["log-id"])
 
-    # Resolve allowed models from request
-    allowed_models = None
-    requested_model = body.get("model")
-    if requested_model:
-        # Look up model ID by name from the classifier's cache
-        for m in _pipeline._classifier.models:
-            if m["name"] == requested_model:
-                allowed_models = [m["id"]]
-                break
-        
-        if allowed_models is None:
-            # Model requested but not found
-            raise HTTPException(status_code=404, detail=f"Model '{requested_model}' not found")
+    # Check if we should use proxy mode or resource mode
+    models = request_setup(headers, logos_key)
 
-    # Create Pipeline Request
-    pipeline_req = PipelineRequest(
-        logos_key=logos_key or "anon",
-        payload=body,
-        headers=headers,
-        policy=None, # Policy extraction could be added here
-        allowed_models=allowed_models
-    )
-    
-    # Process
-    result = await _pipeline.process(pipeline_req)
-    
-    if not result.success:
-        raise HTTPException(status_code=503, detail=result.error or "Pipeline processing failed")
-        
-    # Execute and Respond
-    try:
-        if body.get("stream"):
-            return _streaming_response(
-                result.execution_context, 
-                body, 
-                log_id, 
-                result.provider_id, 
-                result.model_id, 
-                -1, # Policy ID not tracked yet
-                result.classification_stats,
-                result.scheduling_stats
-            )
-        else:
-            return await _sync_response(
-                result.execution_context,
-                body,
-                log_id,
-                result.provider_id,
-                result.model_id,
-                -1, # Policy ID not tracked yet
-                result.classification_stats,
-                result.scheduling_stats
-            )
-    except Exception as e:
-        _pipeline.record_completion(
-            request_id=result.scheduling_stats.get("request_id"),
-            result_status="error",
-            error_message=str(e)
+    # PROXY MODE: Direct forwarding without classification
+    if not models or "proxy" in headers:
+        with DBManager() as db:
+            providers = db.get_providers(logos_key)
+
+        out = proxy_behaviour(headers, providers, path)
+        if isinstance(out[0], dict) and "error" in out[0]:
+            raise HTTPException(status_code=out[1], detail=out[0]["error"])
+
+        proxy_headers, forward_url, provider_id = out
+        model_id = None
+        policy_id = -1
+        classified = {}
+
+        # Forward request (streaming or sync)
+        try:
+            if body.get("stream"):
+                return get_streaming_response(
+                    forward_url, proxy_headers, body,
+                    log_id, provider_id, model_id, policy_id, classified
+                )
+            else:
+                response = await get_standard_response(
+                    forward_url, proxy_headers, body,
+                    log_id, provider_id, model_id, policy_id, classified
+                )
+                return response
+        except Exception as e:
+            logger.error(f"Proxy mode request failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Provider error: {str(e)}")
+
+    # RESOURCE MODE: Pipeline with classification and scheduling
+    else:
+        # Resolve allowed models from request (None means "use all known models")
+        allowed_models = None
+        requested_model = body.get("model")
+        if requested_model:
+            for m in _pipeline.classifier.models:
+                if m["name"] == requested_model:
+                    allowed_models = [m["id"]]
+                    break
+
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail=f"Model '{requested_model}' not found")
+
+        # Extract policy from headers and model string
+        policy = _extract_policy(headers, logos_key, body)
+
+        # Create Pipeline Request
+        pipeline_req = PipelineRequest(
+            logos_key=logos_key or "anon",
+            payload=body,
+            headers=headers,
+            policy=policy,
+            allowed_models=allowed_models
         )
-        raise e
+
+        # Process
+        result = await _pipeline.process(pipeline_req)
+
+        if not result.success:
+            raise HTTPException(status_code=503, detail=result.error or "Pipeline processing failed")
+
+        # Execute and Respond
+        try:
+            if body.get("stream"):
+                return _streaming_response(
+                    result.execution_context,
+                    body,
+                    log_id,
+                    result.provider_id,
+                    result.model_id,
+                    -1,  # Policy ID not implemented
+                    result.classification_stats,
+                    result.scheduling_stats
+                )
+            else:
+                return await _sync_response(
+                    result.execution_context,
+                    body,
+                    log_id,
+                    result.provider_id,
+                    result.model_id,
+                    -1,  # Policy ID not implemented
+                    result.classification_stats,
+                    result.scheduling_stats
+                )
+        except Exception as e:
+            _pipeline.record_completion(
+                request_id=result.scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=str(e)
+            )
+            raise e
 
 
 
@@ -601,24 +661,25 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
     async def streamer():
         full_text = ""
         first_chunk = None
+        last_chunk = None
         error_message = None
-        
+
         try:
-            # Define header callback for rate limit updates
             def process_headers(headers: dict):
                 try:
                     _pipeline.update_provider_stats(model_id, headers)
                 except Exception:
                     pass
 
-            async for chunk in _pipeline._executor.execute_streaming(context, payload, on_headers=process_headers):
+            async for chunk in _pipeline.executor.execute_streaming(context, payload, on_headers=process_headers):
                 yield chunk
-                
+
                 # Parse chunk for logging
                 line = chunk.decode().strip()
                 if line.startswith("data: ") and line != "data: [DONE]":
                     try:
                         blob = json.loads(line[6:])
+                        last_chunk = blob  # Keep track of last chunk (may have usage)
                         if first_chunk is None:
                             first_chunk = blob
                         if "choices" in blob and blob["choices"]:
@@ -629,27 +690,37 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                     except json.JSONDecodeError:
                         pass
         except Exception as e:
-            # Capture error for logging
             error_message = str(e)
             raise e
         finally:
-            # Log completion
+            # Log completion with detailed token usage
             if log_id:
+                # Extract usage from last chunk (OpenAI includes it with stream_options)
+                usage = last_chunk.get("usage", {}) if last_chunk else {}
+                usage_tokens = extract_token_usage(usage) if usage else {}
+
+                # Build response payload
+                response_payload = {"content": full_text}
+                if first_chunk:
+                    response_payload = first_chunk.copy()
+                    if "choices" in response_payload and response_payload["choices"]:
+                        response_payload["choices"][0]["delta"] = {"content": full_text}
+                    if usage:
+                        response_payload["usage"] = usage
+
                 with DBManager() as db:
                     db.set_response_payload(
                         log_id,
-                        {"content": full_text},
+                        response_payload,
                         provider_id,
                         model_id,
-                        {},  # Usage from final chunk - TODO: extract usage
+                        usage_tokens,
                         policy_id,
                         classification_stats,
-                        queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival"),
-                        utilization_at_arrival=scheduling_stats.get("utilization_at_arrival")
+                        queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
+                        utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     )
-            
-            # Record processing complete
-            # We use the captured error_message if any
+
             if scheduling_stats:
                 status = "error" if error_message else "success"
                 
@@ -662,13 +733,13 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
             
             # Release scheduler resources
             if scheduling_stats and scheduling_stats.get("request_id"):
-                 try:
-                     _pipeline._scheduler.release(
-                         model_id,
-                         scheduling_stats.get("request_id")
-                     )
-                 except Exception as e:
-                     logger.error(f"Failed to release scheduler resources: {e}")
+                try:
+                    _pipeline.scheduler.release(
+                        model_id,
+                        scheduling_stats.get("request_id")
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to release scheduler resources: {e}")
     
     return StreamingResponse(streamer(), media_type="text/event-stream")
 
@@ -678,37 +749,38 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
     from fastapi.responses import JSONResponse
     
     try:
-        # Execute
-        exec_result = await _pipeline._executor.execute_sync(context, payload)
-        
-        # Update stats (e.g. rate limits) from headers
+        exec_result = await _pipeline.executor.execute_sync(context, payload)
+
+        # Update rate limits from response headers
         if exec_result.headers:
             try:
                 _pipeline.update_provider_stats(model_id, exec_result.headers)
             except Exception:
                 pass
-    
-        # If execution failed and response is empty, log the error
+
         response_payload = exec_result.response
         if not exec_result.success and not response_payload and exec_result.error:
             response_payload = {"error": exec_result.error}
             logger.error(f"Request failed: {exec_result.error}")
-        
+
         if log_id:
+            # Extract detailed token usage
+            usage = response_payload.get("usage", {}) if response_payload else {}
+            usage_tokens = extract_token_usage(usage) if usage else {}
+
             with DBManager() as db:
                 db.set_response_payload(
                     log_id,
                     response_payload,
                     provider_id,
                     model_id,
-                    exec_result.usage,
+                    usage_tokens,
                     policy_id,
                     classification_stats,
                     queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
                     utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                 )
-    
-        # Record completion
+
         if scheduling_stats:
             status = "success" if exec_result.success else "error"
             _pipeline.record_completion(
@@ -722,13 +794,13 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
-             try:
-                 _pipeline._scheduler.release(
-                     model_id,
-                     scheduling_stats.get("request_id")
-                 )
-             except Exception as e:
-                 logger.error(f"Failed to release scheduler resources: {e}")
+            try:
+                _pipeline.scheduler.release(
+                    model_id,
+                    scheduling_stats.get("request_id")
+                )
+            except Exception as e:
+                logger.error(f"Failed to release scheduler resources: {e}")
 
 
 
