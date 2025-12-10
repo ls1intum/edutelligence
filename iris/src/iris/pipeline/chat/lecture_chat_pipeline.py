@@ -88,7 +88,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         self,
         callback: LectureChatCallback,
         dto: LectureChatPipelineExecutionDTO,
-        variant: str = "default_local",
+        variant: str = "default",
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
 

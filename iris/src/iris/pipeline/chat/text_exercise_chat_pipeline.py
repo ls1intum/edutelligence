@@ -491,7 +491,7 @@ class TextExerciseChatPipeline(
             logger.info("Running text exercise chat pipeline...")
 
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback, local=dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+            super().__call__(dto, variant, callback, local=self.local == "LOCAL_AI")
 
         except Exception as e:
             logger.error("Error in text exercise chat pipeline", exc_info=e)

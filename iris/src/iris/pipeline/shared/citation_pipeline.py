@@ -32,7 +32,7 @@ class CitationPipeline(SubPipeline):
     prompt_str: str
     prompt: ChatPromptTemplate
 
-    def __init__(self, local=True):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="citation_pipeline")
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
@@ -140,7 +140,7 @@ class CitationPipeline(SubPipeline):
         information,  #: #Union[List[dict], List[str]],
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
-        variant: str = "default_local",
+        variant: str = "default",
         **kwargs,
     ) -> str:
         """
@@ -156,7 +156,7 @@ class CitationPipeline(SubPipeline):
         paragraphs_transcriptions = ""
 
         if variant not in self.llms:
-            variant = "default_local"   # Choose local to be safe
+            variant = "default"
 
         llm = self.llms[variant]
         pipeline = self.pipelines[variant]

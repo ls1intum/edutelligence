@@ -368,10 +368,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # 1. Prepare message history, user query, LLM, prompt and tools
         state.message_history = self.get_recent_history_from_dto(state)
 
-        import json
-        for i, msg in enumerate(state.message_history):
-            logger.info(f"Message {i}: sender={msg.sender}")
-            logger.info(f"  Contents: {json.dumps([vars(c) for c in msg.contents], indent=2)}")
         user_query = self.get_text_of_latest_user_message(state)
 
         # Create LLM from variant's agent_model
