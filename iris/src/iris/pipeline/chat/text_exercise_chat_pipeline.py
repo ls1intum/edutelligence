@@ -172,6 +172,12 @@ class TextExerciseChatPipeline(
         dto = state.dto
         callback = state.callback
 
+        local = (
+                dto.execution is not None
+                and dto.execution.settings is not None
+                and dto.execution.settings.artemis_llm_selection == "LOCAL_AI"
+        )
+
         # Initialize storage for shared data between tools
         if not hasattr(state, "lecture_content_storage"):
             setattr(state, "lecture_content_storage", {})
@@ -193,7 +199,7 @@ class TextExerciseChatPipeline(
         # Add lecture content retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_lecture_tool(state.db, dto.exercise.course.id):
-                lecture_retriever = LectureRetrieval(state.db.client, local=self.local)
+                lecture_retriever = LectureRetrieval(state.db.client, local=local)
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_lecture_content_retrieval(
@@ -210,7 +216,7 @@ class TextExerciseChatPipeline(
         # Add FAQ retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_faq_tool(state.db, dto.exercise.course.id):
-                faq_retriever = FaqRetrieval(state.db.client, local=self.local)
+                faq_retriever = FaqRetrieval(state.db.client, local=local)
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_faq_content_retrieval(
@@ -490,8 +496,14 @@ class TextExerciseChatPipeline(
         try:
             logger.info("Running text exercise chat pipeline...")
 
+            local = (
+                    dto.execution is not None
+                    and dto.execution.settings is not None
+                    and dto.execution.settings.artemis_llm_selection == "LOCAL_AI"
+            )
+
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback, local=self.local == "LOCAL_AI")
+            super().__call__(dto, variant, callback, local=local)
 
         except Exception as e:
             logger.error("Error in text exercise chat pipeline", exc_info=e)

@@ -55,7 +55,7 @@ class InteractionSuggestionPipeline(SubPipeline):
     pipeline: Runnable
     prompt: ChatPromptTemplate
     variant: str
-    tokens: TokenUsageDTO
+    tokens: TokenUsageDTO | None
     local: bool
 
     def __init__(self, variant: str = "default", local: bool = False):

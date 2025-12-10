@@ -97,7 +97,10 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         self.variant = variant
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        local = dto.settings.artemis_llm_selection == "LOCAL_AI"
+        local = (
+                dto.settings is not None
+            and dto.settings.artemis_llm_selection == "LOCAL_AI"
+        )
         if local:
             if variant == "advanced":
                 model = "gpt-oss:120b"
