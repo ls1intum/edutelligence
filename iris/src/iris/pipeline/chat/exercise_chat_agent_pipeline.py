@@ -113,8 +113,8 @@ class ExerciseChatAgentPipeline(
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 cloud_agent_model="gpt-4.1-mini",
                 cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="gemma3:27b",
-                local_citation_model="gemma3:27b",
+                local_agent_model="llama3.3:latest",
+                local_citation_model="llama3.3:latest",
             ),
             ExerciseChatVariant(
                 variant_id="advanced",
@@ -123,7 +123,7 @@ class ExerciseChatAgentPipeline(
                 cloud_agent_model="gpt-4.1",
                 cloud_citation_model="gpt-4.1-mini",
                 local_agent_model="gpt-oss:120b",
-                local_citation_model="gemma3:27b",
+                local_citation_model="llama3.3:latest",
             ),
         ]
 
@@ -389,7 +389,7 @@ class ExerciseChatAgentPipeline(
             # Create small LLM for refinement
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version="gemma3:27b" if state.dto.settings.artemis_llm_selection == "LOCAL_AI" else "gpt-4.1-mini"),
+                request_handler=ModelVersionRequestHandler(version="llama3.3:latest" if state.dto.settings.artemis_llm_selection == "LOCAL_AI" else "gpt-4.1-mini"),
                 completion_args=completion_args,
             )
 

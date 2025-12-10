@@ -102,7 +102,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
             if variant == "advanced":
                 model = "gpt-oss:120b"
             else:
-                model = "gemma3:27b"
+                model = "llama3.3:latest"
         else:
             if variant == "advanced":
                 model = "gpt-4.1"
@@ -131,8 +131,8 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 cloud_agent_model="gpt-4.1-mini",
                 cloud_citation_model="gpt-4.1-nano",
-                local_agent_model="gemma3:27b",
-                local_citation_model="gemma3:4b",
+                local_agent_model="llama3.3:latest",
+                local_citation_model="llama3.3:latest",
             ),
             LectureChatVariant(
                 variant_id="advanced",
@@ -141,7 +141,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                 cloud_agent_model="gpt-4.1",
                 cloud_citation_model="gpt-4.1-mini",
                 local_agent_model="gpt-oss:120b",
-                local_citation_model="gemma3:27b",
+                local_citation_model="llama3.3:latest",
             ),
         ]
 

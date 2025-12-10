@@ -46,6 +46,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     llm: Any | None
     prompt: ChatPromptTemplate | None
     tokens: List[TokenUsageDTO]
+    local: bool
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -178,17 +179,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 return message
         return None
 
-    def execute_agent(self, state: AgentPipelineExecutionState[DTO, VARIANT], local: bool = False) -> str:
+    def execute_agent(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> str:
         """
         Default agent execution: uses the LLM from state, prompt, tools and runs the agent loop.
 
         Subclasses customize behavior by implementing get_tools, build_system_message,
         get_agent_params, and using on_agent_step/post_agent_hook hooks.
         """
-        # Local models: simple execution without tools
-        if local:
-            return self._execute_simple_llm(state)
-        # Cloud models: full agent execution with tools
 
         params = self.get_agent_params(state)
 
@@ -204,7 +201,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         return output or ""
 
     def assemble_prompt_with_history(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str, local: bool = False
+            self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
     ) -> ChatPromptTemplate:
         """
         Combine the prefix prompt with converted chat history and add the agent scratchpad.
@@ -218,15 +215,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             convert_iris_message_to_langchain_message(message)
             for message in state.message_history
         ]
-        # For local models, don't add agent_scratchpad placeholder
-        if local:
-            combined = prefix_messages + history_lc_messages
-        else:
-            combined = (
-                    prefix_messages
-                    + history_lc_messages
-                    + [("placeholder", "{agent_scratchpad}")]
-            )
+        combined = (
+                prefix_messages
+                + history_lc_messages
+                + [("placeholder", "{agent_scratchpad}")]
+        )
         return ChatPromptTemplate.from_messages(combined)
 
     def pre_agent_hook(
@@ -258,34 +251,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # ================================================
     # === MUST NOT override (private/final methods) ===
     # ================================================
-    def _execute_simple_llm(
-            self, state: AgentPipelineExecutionState[DTO, VARIANT]
-    ) -> str:
-        """
-        Execute LLM without tools for local models.
-
-        This is used when state.local=True, bypassing the agent executor
-        and using a simple LLM chain instead.
-        """
-        try:
-            # Format the prompt with the message history
-            formatted_messages = state.prompt.format_messages()
-
-            # Invoke the LLM directly
-            response = state.llm.invoke(formatted_messages)
-
-            # Track tokens if available
-            if hasattr(state.llm, "tokens") and state.llm.tokens:
-                state.tokens.append(state.llm.tokens)
-
-            # Extract content from response
-            if hasattr(response, "content"):
-                return response.content
-            return str(response)
-
-        except Exception as e:
-            logger.error("Error in simple LLM execution for local model", exc_info=e)
-            raise
 
     def _create_agent_executor(
         self,
@@ -374,6 +339,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback, local: bool = False):
         """
         Call the agent pipeline with the provided arguments.
+
+        Args:
+            dto: Data transfer object containing the request
+            variant: The variant configuration to use
+            callback: Status callback for updates
+            local: If True, use local models; if False, use cloud models
         """
         # 0. Initialize the execution state
         state = AgentPipelineExecutionState[DTO, VARIANT]()
@@ -389,13 +360,18 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.llm = None
         state.prompt = None
         state.tokens = []
+        state.local = local  # Store local flag in state
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
         )
 
-
         # 1. Prepare message history, user query, LLM, prompt and tools
         state.message_history = self.get_recent_history_from_dto(state)
+
+        import json
+        for i, msg in enumerate(state.message_history):
+            logger.info(f"Message {i}: sender={msg.sender}")
+            logger.info(f"  Contents: {json.dumps([vars(c) for c in msg.contents], indent=2)}")
         user_query = self.get_text_of_latest_user_message(state)
 
         # Create LLM from variant's agent_model
@@ -409,9 +385,16 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         system_message = self.build_system_message(state)
         state.prompt = self.assemble_prompt_with_history(
-            state=state, system_prompt=system_message, local=local
+            state=state, system_prompt=system_message
         )
-        state.tools = self.get_tools(state) if not local else []        # Don't add tools when using small local LLMs
+
+        # Load tools for both local and cloud models
+        state.tools = self.get_tools(state)
+
+        if local:
+            logger.info("Using local model with tool calling support")
+        else:
+            logger.info("Using cloud model with tool calling support")
 
         # 4. Start memory creation if enabled
         if self.is_memiris_memory_creation_enabled(state):
@@ -426,7 +409,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         self.pre_agent_hook(state)
 
         # 7.2. Run the agent with the provided DTO
-        state.result = self.execute_agent(state, local)
+        state.result = self.execute_agent(state)
 
         # 7.3. Run post agent hook
         self.post_agent_hook(state)

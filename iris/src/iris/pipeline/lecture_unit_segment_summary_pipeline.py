@@ -63,7 +63,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
-        request_handler = ModelVersionRequestHandler(version="gemma3:27b" if local else "gpt-4.1-mini")
+        request_handler = ModelVersionRequestHandler(version="llama3.3:latest" if local else "gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

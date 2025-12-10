@@ -50,7 +50,7 @@ class CitationPipeline(SubPipeline):
         self.pipelines = {}
 
         # Default variant
-        default_request_handler = ModelVersionRequestHandler(version="gemma3:4b" if local else "gpt-4.1-nano")
+        default_request_handler = ModelVersionRequestHandler(version="llama3.3:latest" if local else "gpt-4.1-nano")
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),
@@ -59,7 +59,7 @@ class CitationPipeline(SubPipeline):
         self.pipelines["default"] = default_llm | StrOutputParser()
 
         # Advanced variant
-        advanced_request_handler = ModelVersionRequestHandler(version="gemma3:27b" if local else "gpt-4.1-mini")
+        advanced_request_handler = ModelVersionRequestHandler(version="llama3.3:latest" if local else "gpt-4.1-mini")
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),

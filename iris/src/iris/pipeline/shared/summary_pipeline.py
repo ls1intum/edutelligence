@@ -26,7 +26,7 @@ class SummaryPipeline(SubPipeline):
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="summary_pipeline")
         # Set the langchain chat model
-        request_handler = ModelVersionRequestHandler(version="gemma3:4b" if local else "gpt-3.5-turbo")
+        request_handler = ModelVersionRequestHandler(version="llama3.3:latest" if local else "gpt-3.5-turbo")
         self.llm = IrisLangchainCompletionModel(
             request_handler=request_handler, max_tokens=1000
         )

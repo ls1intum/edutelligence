@@ -43,7 +43,7 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="gemma3:4b" if local else "gpt-o3-mini"),
+            request_handler=ModelVersionRequestHandler(version="llama3.3:latest" if local else "gpt-o3-mini"),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)
@@ -138,6 +138,6 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
                 name="Default",
                 description="Standard inconsistency check implementation with efficient model usage",
                 cloud_solver_model="gpt-o3-mini",
-                local_solver_model="gemma3:4b",
+                local_solver_model="llama3.3:latest",
             ),
         ]
