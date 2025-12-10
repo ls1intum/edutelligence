@@ -4,9 +4,6 @@ athena:
 atlas:
   - atlas
 
-hyperion:
-  - hyperion
-
 iris:
   - iris
 
