@@ -1,11 +1,47 @@
 import unittest
+import re
+from collections import Counter
 
-from iris.tests.test_data import CODE_SORTING, TASK_SORTING
+from iris.tests.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 
 
-# Helper function to extract keywords from code input, every word with minimum length 3 is kept
-def extract_keywords_from_code(code: str):
-    return [w.lower() for w in code.replace("(", " ").replace(")", " ").split() if len(w) > 2]
+# Helper function to extract keywords from code input, that are less often used in exercise template
+def extract_keywords(task_template: str, code: str, top_n: int = 10):
+    """
+    Extract keywords that represent the conceptual difference between task and code.
+    This focuses on tokens that appear significantly more often in the code than in the task text.
+    """
+    # Normalize text
+    task_text = task_template.lower()
+    code_text = code.lower()
+
+
+    # Tokenization (simple words and identifiers)
+    token_pattern = r"[a-zA-Z_][a-zA-Z0-9_]*"
+
+
+    task_tokens = re.findall(token_pattern, task_text)
+    code_tokens = re.findall(token_pattern, code_text)
+
+
+    task_counts = Counter(task_tokens)
+    code_counts = Counter(code_tokens)
+
+
+    # Compute difference: code tokens that are more characteristic in code
+    diff_scores = {}
+    for token, count in code_counts.items():
+        task_count = task_counts.get(token, 0)
+        # Only consider tokens that appear more often in code
+        if count > task_count:
+            diff_scores[token] = count - task_count
+
+
+    # Select most relevant tokens
+    keywords = [token for token, _ in Counter(diff_scores).most_common(top_n)]
+
+
+    return keywords
 
 
 class AskUserTest(unittest.TestCase):
@@ -13,8 +49,9 @@ class AskUserTest(unittest.TestCase):
     def setUp(self):
         self.task = TASK_SORTING
         self.code = CODE_SORTING
-        self.question = "" # generate_verification_question(self.code, self.task)
-        self.keywords = extract_keywords_from_code(self.code)
+        self.template = TEMPLATE_SORTING
+        self.question = "" # generate_verification_question(self.code, self.task, self.template)
+        self.keywords = extract_keywords(self.template, self.code)
 
 
 

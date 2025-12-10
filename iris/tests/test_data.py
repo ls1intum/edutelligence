@@ -566,10 +566,4 @@ public class MergeSort {
     }
 
 }
-
-TODO:
-- extend test cases and test data so that given template of the task is also considered as input in ask_user_test
-    > questions have to be about difference between template and submission
-    > this difference is what the keywords must be extracted from in ask_user_test, NOT the whole code submission
-    > also test if generated questions do not ask about code of optional challenges
 """
