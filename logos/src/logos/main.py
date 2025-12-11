@@ -2,13 +2,14 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import grpc
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from logos.auth import authenticate_logos_key
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
@@ -17,8 +18,7 @@ from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.jobs.job_service import JobService, JobSubmission
-from logos.responses import get_standard_response, get_client_ip, request_setup, \
-    proxy_behaviour, resource_behaviour
+from logos.responses import get_standard_response, get_client_ip, request_setup, proxy_behaviour, resource_behaviour
 from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 from scripts import setup_proxy
@@ -346,10 +346,14 @@ async def generalstats(data: LogosKeyModel):
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service(path: str, request: Request):
     """
-    Dynamic proxy for Endpoints
-    :param path: Path to Endpoint
-    :param request: Request
-    :return: The response from Endpoints
+    Dynamic proxy for AI endpoints.
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming request.
+
+    Returns:
+        Upstream response payload and status.
     """
     return await handle_direct_proxy_request(path, request)
 
@@ -357,10 +361,14 @@ async def logos_service(path: str, request: Request):
 @app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service_long(path: str, request: Request):
     """
-    Dynamic proxy for Endpoints
-    :param path: Path to Endpoint
-    :param request: Request
-    :return: The response from Endpoints
+    Dynamic proxy for OpenAI-compatible endpoints.
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming request.
+
+    Returns:
+        Upstream response payload and status.
     """
     return await handle_direct_proxy_request(path, request)
 
@@ -369,6 +377,13 @@ async def logos_service_long(path: str, request: Request):
 async def logos_service_async(path: str, request: Request):
     """
     Async job-based proxy for long running/low-priority requests.
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming request.
+
+    Returns:
+        202 with job metadata; poll /jobs/{id} for result.
     """
     return await submit_job_request(path, request)
 
@@ -376,19 +391,40 @@ async def logos_service_async(path: str, request: Request):
 @app.api_route("/jobs/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service_long_async(path: str, request: Request):
     """
-    Async job-based proxy for long running/low-priority requests.
+    Async job-based proxy for OpenAI-compatible, long running/low-priority requests.
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming request.
+
+    Returns:
+        202 with job metadata; poll /jobs/{id} for result.
     """
     return await submit_job_request(path, request)
 
 
 @app.get("/jobs/{job_id}")
-async def get_job_status(job_id: int):
+async def get_job_status(job_id: int, request: Request):
     """
     Return current state of a submitted job, including result or error when finished.
+
+    Params:
+        job_id: Identifier of the async job.
+        request: Incoming request
+
+    Returns:
+        Job status, result/error, and timestamps.
+
+    Raises:
+        HTTPException(401/403/404) on auth or missing job.
     """
+    _, process_id = authenticate_logos_key(dict(request.headers))
     job = JobService.fetch(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    job_process_id = job.get("process_id")
+    if job_process_id != process_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this job")
     return {
         "job_id": job_id,
         "status": job["status"],
@@ -399,21 +435,49 @@ async def get_job_status(job_id: int):
     }
 
 
-async def submit_job_request(path: str, request: Request) -> JSONResponse:
+async def authenticate_and_parse_request(request: Request) -> Tuple[Dict[str, str], str, int, Dict[str, Any], str]:
     """
-    Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
+    Authenticate the request and parse headers/body/client IP.
+
+    Params:
+        request: Incoming request.
+
+    Returns:
+        headers dict, logos key, process_id, JSON payload as dict, client IP.
+
+    Raises:
+        HTTPException(400/401): On auth failure or invalid JSON payload.
     """
     headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
     raw_body = await request.body()
     try:
-        json_data = request2json(raw_body)
+        json_data = json.loads(raw_body) if raw_body else {}
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
     if json_data is None:
-        json_data = dict()
+        json_data = {}
     if not isinstance(json_data, dict):
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
     client_ip = get_client_ip(request)
+    return headers, logos_key, process_id, json_data, client_ip
+
+
+async def submit_job_request(path: str, request: Request) -> JSONResponse:
+    """
+    Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming FastAPI request containing headers/body.
+
+    Returns:
+        202 Accepted with job id and status URL.
+
+    Raises:
+        HTTPException(400/401) on invalid payload or auth.
+    """
+    headers, logos_key, process_id, json_data, client_ip = await authenticate_and_parse_request(request)
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
         path=path,
@@ -421,11 +485,12 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         headers=headers,
         body=json_data,
         client_ip=client_ip,
+        process_id=process_id,
     )
     job_id = JobService.create_job(job_payload)
     status_url = str(request.url_for("get_job_status", job_id=job_id))
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip))
+    asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, logos_key, process_id))
     return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url})
 
 
@@ -433,19 +498,10 @@ async def handle_direct_proxy_request(path: str, request: Request) -> JSONRespon
     """
     Handle a proxy request directly (client waits for the upstream response).
     """
-    headers = dict(request.headers)
-    raw_body = await request.body()
+    headers, logos_key, process_id, json_data, client_ip = await authenticate_and_parse_request(request)
     try:
-        json_data = request2json(raw_body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
-    if json_data is None:
-        json_data = dict()
-    if not isinstance(json_data, dict):
-        raise HTTPException(status_code=400, detail="JSON payload must be an object")
-    client_ip = get_client_ip(request)
-    try:
-        result = await execute_proxy_job(path, headers, dict(json_data), client_ip)
+        result = await execute_proxy_job(path, headers, dict(json_data), client_ip, logos_key=logos_key,
+                                         process_id=process_id)
     except HTTPException:
         raise
     except Exception:
@@ -454,13 +510,15 @@ async def handle_direct_proxy_request(path: str, request: Request) -> JSONRespon
     return JSONResponse(status_code=result.get("status_code", 200), content=result.get("data", result))
 
 
-async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str):
+async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
+                      logos_key: str, process_id: int):
     """
     Execute a job and persist success or failure.
     """
     try:
         JobService.mark_running(job_id)
-        result = await execute_proxy_job(path, headers, json_data, client_ip)
+        result = await execute_proxy_job(path, headers, json_data, client_ip, logos_key=logos_key,
+                                         process_id=process_id)
         JobService.mark_success(job_id, result)
     except Exception as e:
         logging.exception("Job %s failed", job_id)
@@ -469,27 +527,20 @@ async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data
     return result
 
 
-async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str) -> Dict[str, Any]:
+async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
+                            logos_key: str, process_id: int) -> Dict[str, Any]:
     """
     Execute the long-running proxy workflow and return serialized result.
     """
     headers = headers or dict()
     json_data = json_data or dict()
-    # logos-API-check
-    logos_key = headers["logos_key"] if "logos_key" in headers else (
-        headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else (
-            headers["authorization"].replace("Bearer ", "") if "authorization" in headers else ""))
+    usage_id = None
     with DBManager() as db:
-        r, c = db.get_process_id(logos_key)
+        r, c = db.log_usage(process_id, client_ip, json_data, headers)
         if c != 200:
             logging.info("Error while logging a request: %s", r)
-            usage_id = None
         else:
-            r, c = db.log_usage(int(r["result"]), client_ip, json_data, headers)
-            if c != 200:
-                usage_id = None
-            else:
-                usage_id = int(r["log-id"])
+            usage_id = int(r["log-id"])
     models = request_setup(headers, logos_key)
     if isinstance(models, tuple) and len(models) == 2 and isinstance(models[0], dict) and "error" in models[0]:
         status_code = models[1] if isinstance(models[1], int) else 500
@@ -522,12 +573,3 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     response = await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id,
                                            policy_id, classified)
     return {"status_code": 200, "data": response}
-
-
-def request2json(request_data: bytes) -> Dict[str, Any]:
-    """
-    Decode request payload bytes into a JSON object.
-    """
-    if not request_data:
-        return {}
-    return json.loads(request_data)

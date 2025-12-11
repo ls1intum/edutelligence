@@ -101,7 +101,12 @@ class DBManager:
         result = self.session.execute(table.select()).mappings().all()
         return [dict(row) for row in result]
 
-    def create_job_record(self, request_payload: Dict[str, Any], status: str = JobStatus.PENDING.value) -> int:
+    def create_job_record(
+        self,
+        request_payload: Dict[str, Any],
+        process_id: int,
+        status: str = JobStatus.PENDING.value,
+    ) -> int:
         """
         Persist a new async job.
         """
@@ -110,6 +115,7 @@ class DBManager:
             "jobs",
             {
                 "status": status,
+                "process_id": process_id,
                 "request_payload": request_payload,
                 "created_at": now,
                 "updated_at": now,

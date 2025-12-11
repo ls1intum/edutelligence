@@ -198,6 +198,7 @@ class Job(Base):
 
     id = Column(Integer, primary_key=True)
     status = Column(Enum(JobStatus), nullable=False, default=JobStatus.PENDING)
+    process_id = Column(Integer, ForeignKey("process.id", ondelete="CASCADE"), nullable=False)
     request_payload = Column(JSON, nullable=False)
     result_payload = Column(JSON)
     error_message = Column(Text)

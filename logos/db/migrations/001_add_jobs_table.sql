@@ -4,6 +4,7 @@ CREATE TYPE IF NOT EXISTS job_status_enum AS ENUM ('pending', 'running', 'succes
 CREATE TABLE IF NOT EXISTS jobs (
     id SERIAL PRIMARY KEY,
     status job_status_enum NOT NULL DEFAULT 'pending',
+    process_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
     request_payload JSONB NOT NULL,
     result_payload JSONB,
     error_message TEXT,

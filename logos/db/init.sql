@@ -156,6 +156,7 @@ CREATE TYPE job_status_enum as ENUM ('pending', 'running', 'success', 'failed');
 CREATE TABLE jobs (
     id SERIAL PRIMARY KEY,
     status job_status_enum NOT NULL DEFAULT 'pending',
+    process_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
     request_payload JSONB NOT NULL,
     result_payload JSONB,
     error_message TEXT,

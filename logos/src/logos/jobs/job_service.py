@@ -19,6 +19,7 @@ class JobSubmission:
     headers: Dict[str, str]
     body: Dict[str, Any]
     client_ip: str
+    process_id: int
 
 
 class JobService:
@@ -32,7 +33,7 @@ class JobService:
         """
         payload: Dict[str, Any] = asdict(submission)
         with DBManager() as db:
-            return db.create_job_record(payload, JobStatus.PENDING.value)
+            return db.create_job_record(payload, submission.process_id, JobStatus.PENDING.value)
 
     @staticmethod
     def mark_running(job_id: int) -> None:
