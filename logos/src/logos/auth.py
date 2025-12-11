@@ -33,7 +33,10 @@ def _resolve_logos_key(headers: Optional[Dict[str, str]], required: bool = True)
         return logos_header
     auth_header = _get_header_value(headers, "authorization")
     if auth_header:
-        return auth_header.replace("Bearer ", "")
+        auth_header = auth_header.strip()
+        if auth_header.lower().startswith("bearer "):
+            return auth_header[7:].strip()
+        return auth_header
     if required:
         raise HTTPException(status_code=401, detail="Missing logos key")
     return None

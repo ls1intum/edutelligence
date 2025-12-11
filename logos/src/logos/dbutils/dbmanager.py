@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
+from logos.dbutils.dbmodules import JobStatus
 
 
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):

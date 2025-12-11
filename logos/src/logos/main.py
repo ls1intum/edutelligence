@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Set, Tuple
 
 import grpc
 from fastapi import FastAPI, Request, HTTPException
@@ -31,6 +31,7 @@ app = FastAPI(docs_url="/docs", openapi_url="/openapi.json")
 _grpc_server = None
 _scheduler = None
 _classifier = None
+_background_tasks: Set[asyncio.Task] = set()
 
 
 app.add_middleware(
@@ -453,8 +454,8 @@ async def authenticate_and_parse_request(request: Request) -> Tuple[Dict[str, st
     raw_body = await request.body()
     try:
         json_data = json.loads(raw_body) if raw_body else {}
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    except json.JSONDecodeError as err:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from err
     if json_data is None:
         json_data = {}
     if not isinstance(json_data, dict):
@@ -490,7 +491,9 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     job_id = JobService.create_job(job_payload)
     status_url = str(request.url_for("get_job_status", job_id=job_id))
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, logos_key, process_id))
+    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, logos_key, process_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url})
 
 
@@ -504,9 +507,9 @@ async def handle_direct_proxy_request(path: str, request: Request) -> JSONRespon
                                          process_id=process_id)
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
         logging.exception("Failed to process request synchronously")
-        raise HTTPException(status_code=500, detail="Failed to process request")
+        raise HTTPException(status_code=500, detail="Failed to process request") from e
     return JSONResponse(status_code=result.get("status_code", 200), content=result.get("data", result))
 
 
@@ -524,7 +527,7 @@ async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data
     except Exception as e:
         logging.exception("Job %s failed", job_id)
         JobService.mark_failed(job_id, str(e))
-        raise
+        return {"status_code": 500, "data": {"error": "Job failed"}}
     return result
 
 
