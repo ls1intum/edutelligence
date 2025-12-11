@@ -520,6 +520,7 @@ async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data
         result = await execute_proxy_job(path, headers, json_data, client_ip, logos_key=logos_key,
                                          process_id=process_id)
         JobService.mark_success(job_id, result)
+    # Exception while processing the job is caught and persisted in the database
     except Exception as e:
         logging.exception("Job %s failed", job_id)
         JobService.mark_failed(job_id, str(e))
