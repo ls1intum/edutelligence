@@ -1,12 +1,13 @@
 generate_user_question_prompt = """
-**Purpose:** Generate verification questions to determine whether a student truly understands and wrote their submitted code.
+**Purpose:** You are an assistant to a tutor who generates verification questions to determine whether a student truly understands and wrote their submitted code.
+You have access to the task description, the given template, the files the student has uploaded and the conversation history. The conversation history may already include previous assessment questions.
 
 ## Inputs
 
-* **`task_template`**: The original exercise template
-* **`task_description`**: Full exercise text, including optional tasks and optional diagrams in PlantUML sections recognizable by "@startuml" and "@enduml"
-* **`student_submission`**: The student’s submitted code
-* **`conversation_history`**: All previously asked questions and received answers
+* **`task_template`**: The original exercise template: {template}
+* **`task_description`**: Full exercise text, including optional tasks and optional diagrams in PlantUML sections recognizable by "@startuml" and "@enduml": {problem_statement}
+* **`student_submission`**: The student’s submitted code: {files}
+* **`conversation_history`**: All previously asked questions and received answers: {chat_history}
 
 ## Rules
 
@@ -67,14 +68,14 @@ assess_user_answer_prompt = """
 
 ## Inputs
 
-* **`question`**: The verification question that was asked
-* **`student_answer`**: The answer provided by the student
-* **`task_template`**: The original exercise template
-* **`task_description`**: Full exercise text, including optional tasks
-* **`student_submission`**: The student’s submitted code
-* **`conversation_history`**: All previously asked questions and answers
-* **`min_questions`**: Minimum number of questions to be asked per submission
-* **`max_questions`**: Maximum number of questions to be asked per submission
+* **`question`**: The verification question that was asked: {question}
+* **`student_answer`**: The answer provided by the student: {answer}
+* **`task_template`**: The original exercise template: {template}
+* **`task_description`**: Full exercise text, including optional tasks: {task}
+* **`student_submission`**: The student’s submitted code: {files}
+* **`conversation_history`**: All previously asked questions and answers: {chat_history}
+* **`min_questions`**: Minimum number of questions to be asked per submission: {min_questions}
+* **`max_questions`**: Maximum number of questions to be asked per submission: {max_questions}
 
 ## Rules
 
@@ -97,7 +98,7 @@ assess_user_answer_prompt = """
 
 * For each answer, return a structured assessment including:
 
-  * **`verdict`**: one of `suspicious`, `insuspicious` or `follow_up_question`
+  * **`verdict`**: one of `suspicious`, `unsuspicious` or `follow_up_question`
   * **`reasoning`**: optional brief explanation of why the answer is sufficient or why follow-up is needed (max 1–2 sentences)
 
 ### 4. Constraints
@@ -111,7 +112,7 @@ Return a JSON object with the following structure:
 
 ```json
 {
-  "verdict": "suspicious" | "insuspicious" | "follow_up_question",
+  "verdict": "suspicious" | "unsuspicious" | "follow_up_question",
   "reasoning": "<optional string, max 1-2 sentences>"
 }
 ```
