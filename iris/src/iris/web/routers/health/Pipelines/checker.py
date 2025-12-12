@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable, Set
 
 from iris.domain.variant.abstract_variant import AbstractVariant
+from iris.llm.llm_configuration import LlmConfigurationError
 from iris.web.routers.health.Pipelines.features import Features
 from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
 
@@ -34,6 +35,17 @@ class FeatureResult:
         return self.wired and self.has_default and not self.missing_models
 
 
+def _missing_from_llm_configuration_error(
+    error: LlmConfigurationError,
+) -> frozenset[str]:
+    message = str(error)
+    if message.startswith("Missing llm configuration entries:"):
+        lines = [line.strip() for line in message.splitlines()[1:] if line.strip()]
+        if lines:
+            return frozenset(lines)
+    return frozenset({message})
+
+
 def evaluate_feature(feature: Features, available: Set[str]) -> FeatureResult:
     pipeline_cls = PIPELINE_BY_FEATURE.get(feature)
     if pipeline_cls is None:
@@ -42,6 +54,13 @@ def evaluate_feature(feature: Features, available: Set[str]) -> FeatureResult:
         )
     try:
         variants: list[AbstractVariant] = pipeline_cls.get_variants()
+    except LlmConfigurationError as e:
+        return FeatureResult(
+            feature,
+            wired=True,
+            has_default=False,
+            missing_models=_missing_from_llm_configuration_error(e),
+        )
     except (TypeError, ValueError):
         return FeatureResult(
             feature, wired=True, has_default=False, missing_models=frozenset()

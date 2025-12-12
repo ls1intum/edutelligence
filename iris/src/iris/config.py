@@ -31,7 +31,7 @@ class Settings(BaseModel):
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
     memiris: MemirisSettings
-    llm_configuration: dict[str, LlmVariantConfiguration]
+    llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
 
     @classmethod
     def get_settings(cls):
