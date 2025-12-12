@@ -20,6 +20,10 @@ class MemirisSettings(BaseModel):
     sleep_enabled: bool = Field(default=True)
 
 
+LlmRoleConfiguration = dict[str, dict[str, str]]  # role -> {local/cloud -> model_id}
+LlmVariantConfiguration = dict[str, LlmRoleConfiguration]  # variant_id -> role config
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -27,6 +31,7 @@ class Settings(BaseModel):
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
     memiris: MemirisSettings
+    llm_configuration: dict[str, LlmVariantConfiguration]
 
     @classmethod
     def get_settings(cls):
