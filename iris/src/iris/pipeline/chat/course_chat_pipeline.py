@@ -198,10 +198,8 @@ class CourseChatPipeline(
                 )
             )
 
-        is_local = bool(state.dto.settings and state.dto.settings.artemis_llm_selection == "LOCAL_AI")
-
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=state.dto.is_local())
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -215,7 +213,7 @@ class CourseChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
+            self.faq_retriever = FaqRetrieval(state.db.client, local=state.dto.is_local())
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -583,9 +581,7 @@ class CourseChatPipeline(
             logger.info("Running course chat pipeline...")
 
             # Call the parent __call__ method which handles the complete execution
-
-            is_local = bool(dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI")
-            super().__call__(dto, variant, callback, local=is_local)
+            super().__call__(dto, variant, callback, local=dto.is_local())
 
         except Exception as e:
             logger.error(

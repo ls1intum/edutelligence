@@ -126,7 +126,7 @@ class InteractionSuggestionPipeline(SubPipeline):
             chat_begin_prompt = exercise_chat_begin_prompt
 
         try:
-            logger.info(f"Running interaction suggestion pipeline (local={self.local})...")
+            logger.info(f"Running interaction suggestion pipeline...")
 
             # Skip suggestions for local models for this PR
             if self.local:
@@ -177,7 +177,7 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         except Exception as e:
             logger.error(
-                f"An error occurred while running the interaction suggestion pipeline (local={self.local})",
+                f"An error occurred while running the interaction suggestion pipeline",
                 exc_info=e,
             )
             traceback.print_exc()

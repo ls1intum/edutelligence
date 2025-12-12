@@ -135,7 +135,7 @@ class TutorSuggestionPipeline(
                 create_tool_get_last_artifact(state.dto.chat_history, callback)
             )
         if allow_lecture_tools:
-            self.lecture_retriever = LectureRetrieval(state.db.client, local=state.dto.settings.artemis_llm_selection == "LOCAL_AI")
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=state.dto.is_local())
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -149,7 +149,7 @@ class TutorSuggestionPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client, local=state.dto.settings.artemis_llm_selection == "LOCAL_AI")
+            self.faq_retriever = FaqRetrieval(state.db.client, local=state.dto.is_local())
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -364,7 +364,7 @@ class TutorSuggestionPipeline(
         try:
             logger.info("Running tutor suggestion pipeline...")
 
-            super().__call__(dto, variant, callback, local=dto.settings.artemis_llm_selection == "LOCAL_AI")
+            super().__call__(dto, variant, callback, local=dto.is_local())
         except Exception as e:
             logger.error(
                 "An error occurred while running the tutor suggestion pipeline",

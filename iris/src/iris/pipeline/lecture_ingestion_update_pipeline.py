@@ -87,7 +87,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 base_url=self.dto.settings.artemis_base_url,
             )
 
-            tokens += LectureUnitPipeline(local=self.dto.settings.artemis_llm_selection == "LOCAL_AI")(lecture_unit=lecture_unit_dto)
+            tokens += LectureUnitPipeline(local=self.dto.is_local())(lecture_unit=lecture_unit_dto)
             callback.done(
                 "Ingested lecture unit summary into vector database",
                 tokens=tokens,

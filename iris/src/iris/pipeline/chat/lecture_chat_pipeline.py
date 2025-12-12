@@ -98,8 +98,8 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         local = (
-                dto.settings is not None
-            and dto.settings.artemis_llm_selection == "LOCAL_AI"
+                dto is not None
+                and dto.is_local()
         )
         if local:
             if variant == "advanced":

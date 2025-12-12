@@ -497,9 +497,8 @@ class TextExerciseChatPipeline(
             logger.info("Running text exercise chat pipeline...")
 
             local = (
-                    dto.execution is not None
-                    and dto.execution.settings is not None
-                    and dto.execution.settings.artemis_llm_selection == "LOCAL_AI"
+                    dto is not None
+                    and dto.is_local()
             )
 
             # Delegate to parent class for standardized execution
