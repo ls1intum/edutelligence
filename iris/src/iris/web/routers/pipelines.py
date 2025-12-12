@@ -239,7 +239,7 @@ def run_competency_extraction_pipeline_worker(
             initial_stages=dto.execution.initial_stages,
         )
         pipeline = CompetencyExtractionPipeline(
-            callback=callback, local=dto.settings.is_local()
+            callback=callback, local=dto.execution.settings.is_local()
         )
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline: %s", e)
@@ -280,7 +280,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
         )
         match variant:
             case "faq" | "problem_statement":
-                is_local = bool(dto.execution.settings and dto.settings.is_local())
+                is_local = bool(dto.execution.settings and dto.execution.settings.is_local())
                 pipeline = RewritingPipeline(
                     callback=callback, variant=variant, local=is_local
                 )
@@ -325,7 +325,7 @@ def run_inconsistency_check_pipeline_worker(
             initial_stages=dto.execution.initial_stages,
         )
         pipeline = InconsistencyCheckPipeline(
-            callback=callback, local=dto.settings.is_local()
+            callback=callback, local=dto.execution.settings.is_local()
         )
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline: %s", e)
