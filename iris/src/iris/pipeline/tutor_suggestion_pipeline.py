@@ -13,7 +13,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 )
 from iris.domain.data.post_dto import PostDTO
 from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
-from iris.llm.llm_configuration import resolve_role_models
+from iris.llm.llm_configuration import resolve_role_models, role_requirements
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -390,6 +390,12 @@ class TutorSuggestionPipeline(
             List of TutorSuggestionVariant objects representing available variants
         """
         pipeline_id = "tutor_suggestion_pipeline"
+        lecture_retrieval_pipeline_ids = [
+            "lecture_retrieval_pipeline",
+            "lecture_unit_segment_retrieval_pipeline",
+            "lecture_transcriptions_retrieval_pipeline",
+        ]
+        faq_retrieval_pipeline_id = "faq_retrieval_pipeline"
 
         variants: list[TutorSuggestionVariant] = []
         for variant_id, name, description in [
@@ -405,6 +411,23 @@ class TutorSuggestionPipeline(
             ),
         ]:
             chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
+            additional_required_models: set[str] = set()
+            for retrieval_pipeline_id in lecture_retrieval_pipeline_ids:
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "chat"
+                )
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "embedding"
+                )
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "reranker"
+                )
+            additional_required_models |= role_requirements(
+                faq_retrieval_pipeline_id, "default", "chat"
+            )
+            additional_required_models |= role_requirements(
+                faq_retrieval_pipeline_id, "default", "embedding"
+            )
             variants.append(
                 TutorSuggestionVariant(
                     variant_id=variant_id,
@@ -412,6 +435,7 @@ class TutorSuggestionPipeline(
                     description=description,
                     cloud_agent_model=chat_models["cloud"],
                     local_agent_model=chat_models["local"],
+                    additional_required_models=additional_required_models,
                 )
             )
 

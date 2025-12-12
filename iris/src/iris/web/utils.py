@@ -3,7 +3,9 @@ from typing import Type
 from fastapi import HTTPException, status
 
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
+from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
+from iris.llm.llm_requirements import format_llm_requirement, missing_llm_requirements
 from iris.pipeline.pipeline import Pipeline
 
 
@@ -26,7 +28,16 @@ def validate_pipeline_variant(
     variant = settings.variant
 
     # Get all variants for the pipeline
-    all_variants = pipeline_class.get_variants()
+    try:
+        all_variants = pipeline_class.get_variants()
+    except LlmConfigurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "type": "llm_configuration_invalid",
+                "errorMessage": str(e),
+            },
+        ) from e
     # Find the requested variant
     requested_variant = None
     for v in all_variants:
@@ -49,16 +60,27 @@ def validate_pipeline_variant(
     if hasattr(requested_variant, "required_models"):
         llm_manager = LlmManager()
         available_models = {llm.model for llm in llm_manager.entries}
+        available_ids = {llm.id for llm in llm_manager.entries}
         required_models = requested_variant.required_models()
-        missing_models = required_models - available_models
+        missing_models = missing_llm_requirements(
+            required_models,
+            available_models=available_models,
+            available_ids=available_ids,
+        )
         if missing_models:
+            missing_display = ", ".join(
+                sorted(format_llm_requirement(m) for m in missing_models)
+            )
+            required_display = ", ".join(
+                sorted(format_llm_requirement(m) for m in required_models)
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "type": "models_not_available",
                     "errorMessage": f'Variant "{variant}" requires models that are not available: '
-                    f'{", ".join(missing_models)}. '
-                    f'Required models: {", ".join(required_models)}',
+                    f"{missing_display}. "
+                    f"Required models: {required_display}",
                 },
             )
 

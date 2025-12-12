@@ -27,7 +27,9 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 )
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm.external.model import LanguageModel
+from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
+from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from iris.pipeline.chat.exercise_chat_agent_pipeline import (
     ExerciseChatAgentPipeline,
@@ -41,7 +43,9 @@ from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.pipeline.inconsistency_check_pipeline import (
     InconsistencyCheckPipeline,
 )
-from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
+from iris.pipeline.lecture_ingestion_update_pipeline import (
+    LectureIngestionUpdatePipeline,
+)
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
@@ -455,50 +459,62 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
     llm_manager = LlmManager()
     available_llms = llm_manager.entries
 
+    def safe_get_variants(get_variants_fn):
+        try:
+            return get_variants_fn()
+        except LlmConfigurationError as e:
+            logger.warning("LLM configuration incomplete for %s: %s", feature, e)
+            return []
+
     match feature:
         case "CHAT":
             return get_available_variants(
-                ExerciseChatAgentPipeline.get_variants(), available_llms
+                safe_get_variants(ExerciseChatAgentPipeline.get_variants),
+                available_llms,
             )
         case "PROGRAMMING_EXERCISE_CHAT":
             return get_available_variants(
-                ExerciseChatAgentPipeline.get_variants(), available_llms
+                safe_get_variants(ExerciseChatAgentPipeline.get_variants),
+                available_llms,
             )
         case "TEXT_EXERCISE_CHAT":
             return get_available_variants(
-                TextExerciseChatPipeline.get_variants(), available_llms
+                safe_get_variants(TextExerciseChatPipeline.get_variants), available_llms
             )
         case "COURSE_CHAT":
             return get_available_variants(
-                CourseChatPipeline.get_variants(), available_llms
+                safe_get_variants(CourseChatPipeline.get_variants), available_llms
             )
         case "COMPETENCY_GENERATION":
             return get_available_variants(
-                CompetencyExtractionPipeline.get_variants(), available_llms
+                safe_get_variants(CompetencyExtractionPipeline.get_variants),
+                available_llms,
             )
         case "LECTURE_CHAT":
             return get_available_variants(
-                LectureChatPipeline.get_variants(), available_llms
+                safe_get_variants(LectureChatPipeline.get_variants), available_llms
             )
         case "INCONSISTENCY_CHECK":
             return get_available_variants(
-                InconsistencyCheckPipeline.get_variants(), available_llms
+                safe_get_variants(InconsistencyCheckPipeline.get_variants),
+                available_llms,
             )
         case "REWRITING":
             return get_available_variants(
-                RewritingPipeline.get_variants(), available_llms
+                safe_get_variants(RewritingPipeline.get_variants), available_llms
             )
         case "LECTURE_INGESTION":
             return get_available_variants(
-                LectureUnitPageIngestionPipeline.get_variants(), available_llms
+                safe_get_variants(LectureIngestionUpdatePipeline.get_variants),
+                available_llms,
             )
         case "FAQ_INGESTION":
             return get_available_variants(
-                FaqIngestionPipeline.get_variants(), available_llms
+                safe_get_variants(FaqIngestionPipeline.get_variants), available_llms
             )
         case "TUTOR_SUGGESTION":
             return get_available_variants(
-                TutorSuggestionPipeline.get_variants(), available_llms
+                safe_get_variants(TutorSuggestionPipeline.get_variants), available_llms
             )
         case _:
             raise HTTPException(
@@ -518,10 +534,14 @@ def get_available_variants(
 
     :return: List of FeatureDTO objects for supported variants
     """
+    available_models = {llm.model for llm in available_llms}
+    available_ids = {llm.id for llm in available_llms}
     return [
         variant.feature_dto()
         for variant in all_variants
-        if set(variant.required_models()).issubset(
-            {llm.model for llm in available_llms}
+        if not missing_llm_requirements(
+            variant.required_models(),
+            available_models=available_models,
+            available_ids=available_ids,
         )
     ]

@@ -17,7 +17,7 @@ from iris.tracing import observe
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.text_exercise_chat_variant import TextExerciseChatVariant
-from ...llm.llm_configuration import resolve_role_models
+from ...llm.llm_configuration import resolve_role_models, role_requirements
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -86,6 +86,14 @@ class TextExerciseChatPipeline(
             List of TextExerciseChatVariant instances.
         """
         pipeline_id = "text_exercise_chat_pipeline"
+        citation_pipeline_id = "citation_pipeline"
+        session_title_pipeline_id = "session_title_generation_pipeline"
+        lecture_retrieval_pipeline_ids = [
+            "lecture_retrieval_pipeline",
+            "lecture_unit_segment_retrieval_pipeline",
+            "lecture_transcriptions_retrieval_pipeline",
+        ]
+        faq_retrieval_pipeline_id = "faq_retrieval_pipeline"
 
         variants: list[TextExerciseChatVariant] = []
         for variant_id, name, description in [
@@ -101,13 +109,39 @@ class TextExerciseChatPipeline(
             ),
         ]:
             chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
+            citation_models = resolve_role_models(
+                citation_pipeline_id, variant_id, "chat"
+            )
+            additional_required_models: set[str] = set()
+            additional_required_models |= role_requirements(
+                session_title_pipeline_id, "default", "chat"
+            )
+            for retrieval_pipeline_id in lecture_retrieval_pipeline_ids:
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "chat"
+                )
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "embedding"
+                )
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "reranker"
+                )
+            additional_required_models |= role_requirements(
+                faq_retrieval_pipeline_id, "default", "chat"
+            )
+            additional_required_models |= role_requirements(
+                faq_retrieval_pipeline_id, "default", "embedding"
+            )
             variants.append(
                 TextExerciseChatVariant(
                     variant_id=variant_id,
                     name=name,
                     description=description,
                     cloud_agent_model=chat_models["cloud"],
+                    cloud_citation_model=citation_models["cloud"],
                     local_agent_model=chat_models["local"],
+                    local_citation_model=citation_models["local"],
+                    additional_required_models=additional_required_models,
                 )
             )
 

@@ -26,7 +26,7 @@ from ...llm import (
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
-from ...llm.llm_configuration import resolve_role_models
+from ...llm.llm_configuration import resolve_role_models, role_requirements
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -110,6 +110,15 @@ class ExerciseChatAgentPipeline(
         """
         pipeline_id = "exercise_chat_pipeline"
         citation_pipeline_id = "citation_pipeline"
+        session_title_pipeline_id = "session_title_generation_pipeline"
+        suggestion_pipeline_id = "interaction_suggestion_pipeline"
+        code_feedback_pipeline_id = "code_feedback_pipeline"
+        lecture_retrieval_pipeline_ids = [
+            "lecture_retrieval_pipeline",
+            "lecture_unit_segment_retrieval_pipeline",
+            "lecture_transcriptions_retrieval_pipeline",
+        ]
+        faq_retrieval_pipeline_id = "faq_retrieval_pipeline"
 
         variants: list[ExerciseChatVariant] = []
         for variant_id, name, description in [
@@ -128,6 +137,32 @@ class ExerciseChatAgentPipeline(
             citation_models = resolve_role_models(
                 citation_pipeline_id, variant_id, "chat"
             )
+            additional_required_models: set[str] = set()
+            additional_required_models |= role_requirements(
+                session_title_pipeline_id, "default", "chat"
+            )
+            additional_required_models |= role_requirements(
+                suggestion_pipeline_id, "exercise", "chat"
+            )
+            additional_required_models |= role_requirements(
+                code_feedback_pipeline_id, "default", "chat"
+            )
+            for retrieval_pipeline_id in lecture_retrieval_pipeline_ids:
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "chat"
+                )
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "embedding"
+                )
+                additional_required_models |= role_requirements(
+                    retrieval_pipeline_id, "default", "reranker"
+                )
+            additional_required_models |= role_requirements(
+                faq_retrieval_pipeline_id, "default", "chat"
+            )
+            additional_required_models |= role_requirements(
+                faq_retrieval_pipeline_id, "default", "embedding"
+            )
             variants.append(
                 ExerciseChatVariant(
                     variant_id=variant_id,
@@ -137,6 +172,7 @@ class ExerciseChatAgentPipeline(
                     local_agent_model=chat_models["local"],
                     cloud_citation_model=citation_models["cloud"],
                     local_citation_model=citation_models["local"],
+                    additional_required_models=additional_required_models,
                 )
             )
 
