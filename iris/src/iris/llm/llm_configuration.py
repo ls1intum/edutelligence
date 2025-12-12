@@ -3,12 +3,16 @@ from __future__ import annotations
 from typing import Literal, Mapping, Sequence
 
 from iris.config import settings
+from iris.llm.llm_requirements import llm_id_requirement
 
 Environment = Literal["local", "cloud"]
 
 
 class LlmConfigurationError(ValueError):
     """Raised when llm_configuration is missing or invalid."""
+
+
+ID_BASED_ROLES: set[str] = {"reranker"}
 
 
 # pipeline_id -> variant_id -> required roles
@@ -163,3 +167,19 @@ def resolve_role_models(
         "local": resolve_model(pipeline_id, variant_id, role, local=True),
         "cloud": resolve_model(pipeline_id, variant_id, role, local=False),
     }
+
+
+def role_requirements(pipeline_id: str, variant_id: str, role: str) -> set[str]:
+    """
+    Return the model requirements for a given pipeline/variant/role.
+
+    Most roles resolve to model names (matched against `LanguageModel.model`).
+    Some roles (e.g. `reranker`) resolve to LLM IDs (matched against `LanguageModel.id`) and are prefixed with `id:`.
+    """
+    models = resolve_role_models(pipeline_id, variant_id, role)
+    if role in ID_BASED_ROLES:
+        return {
+            llm_id_requirement(models["local"]),
+            llm_id_requirement(models["cloud"]),
+        }
+    return {models["local"], models["cloud"]}

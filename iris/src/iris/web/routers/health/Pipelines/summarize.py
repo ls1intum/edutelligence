@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from iris.llm.llm_requirements import format_llm_requirement
 from iris.web.routers.health.health_model import ServiceStatus
 from iris.web.routers.health.Pipelines.checker import FeatureResult
 from iris.web.routers.health.Pipelines.features import CRITICAL_PIPELINES
@@ -33,7 +34,7 @@ def format_summary(results: list[FeatureResult]) -> str:
     missing_by_model: dict[str, list[str]] = defaultdict(list)
     for r in results:
         for m in r.missing_models:
-            missing_by_model[m].append(r.feature.value.lower())
+            missing_by_model[format_llm_requirement(m)].append(r.feature.value.lower())
 
     if missing_by_model:
         lines.append("Missing models/configuration:")
