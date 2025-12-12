@@ -3,7 +3,7 @@ from typing import Dict, Set
 from pydantic import BaseModel, Field
 
 from iris.domain.data.metrics.competency_information_dto import (
-    CompetencyInformationDTO
+    CompetencyInformationDTO,
 )
 from iris.domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 
