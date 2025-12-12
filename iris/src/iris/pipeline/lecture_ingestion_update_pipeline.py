@@ -56,7 +56,10 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 callback.done()
                 callback.in_progress("skipping slide ingestion")
                 callback.done()
-            if self.dto.lecture_unit.transcription is not None:
+            if (
+                self.dto.lecture_unit.transcription is not None
+                and self.dto.lecture_unit.transcription.segments is not None
+            ):
                 transcription_pipeline = TranscriptionIngestionPipeline(
                     client=client, dto=self.dto, callback=callback
                 )
