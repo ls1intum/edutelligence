@@ -241,9 +241,11 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = CompetencyExtractionPipeline(
-            callback=callback, local=dto.execution.settings.is_local()
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
         )
+        pipeline = CompetencyExtractionPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline: %s", e)
         logger.error(traceback.format_exc())
