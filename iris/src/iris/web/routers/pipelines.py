@@ -280,11 +280,10 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
         )
         match variant:
             case "faq" | "problem_statement":
-                is_local = bool(
-                    dto.execution.settings and dto.execution.settings.is_local()
-                )
                 pipeline = RewritingPipeline(
-                    callback=callback, variant=variant, local=is_local
+                    callback=callback,
+                    variant=variant,
+                    local=dto.execution.settings.is_local(),
                 )
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
