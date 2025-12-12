@@ -25,6 +25,7 @@ from ...llm import (
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.llm_configuration import resolve_model
 from ..prompts.iris_interaction_suggestion_prompts import (
     course_chat_begin_prompt,
     course_chat_history_exists_prompt,
@@ -64,9 +65,8 @@ class InteractionSuggestionPipeline(SubPipeline):
         self.local = local
         self.tokens = None
 
-        # Set the langchain chat model
-        # Use larger model for better quality suggestions
-        model = "gpt-oss:120b" if local else "gpt-5-nano"
+        pipeline_id = "interaction_suggestion_pipeline"
+        model = resolve_model(pipeline_id, variant, "chat", local=local)
 
         request_handler = ModelVersionRequestHandler(version=model)
 
@@ -132,7 +132,10 @@ class InteractionSuggestionPipeline(SubPipeline):
             language_instruction = "\nGenerate questions in English."
 
         try:
-            logger.info("Running interaction suggestion pipeline...")
+            logger.info(
+                "Running interaction suggestion pipeline (local=%s)...",
+                self.local,
+            )
 
             history: List[PyrisMessage] = dto.chat_history or []
 
@@ -178,7 +181,8 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         except Exception as e:
             logger.error(
-                "An error occurred while running the interaction suggestion pipeline",
+                "An error occurred while running the interaction suggestion pipeline (local=%s)",
+                self.local,
                 exc_info=e,
             )
             return []

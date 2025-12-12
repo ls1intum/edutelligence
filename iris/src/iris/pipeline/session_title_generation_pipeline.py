@@ -11,6 +11,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 
@@ -31,8 +32,8 @@ class SessionTitleGenerationPipeline(SubPipeline):
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="session_title_generation_pipeline")
 
-        # Set the langchain chat model
-        model = "gpt-oss:120b" if local else "gpt-5-nano"
+        pipeline_id = "session_title_generation_pipeline"
+        model = resolve_model(pipeline_id, "default", "chat", local=local)
         request_handler = ModelVersionRequestHandler(version=model)
         completion_args = CompletionArguments(temperature=0.0)
         self.llm = IrisLangchainChatModel(

@@ -69,7 +69,9 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         logger.error("Error while deleting lectures", exc_info=e)
 
 
-def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
+def run_faq_update_pipeline_worker(
+    dto: FaqIngestionPipelineExecutionDto, variant_id: str
+):
     """
     Run the exercise chat pipeline in a separate thread
     """
@@ -83,7 +85,21 @@ def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            pipeline = FaqIngestionPipeline(client=client, dto=dto, callback=callback)
+            for variant in FaqIngestionPipeline.get_variants():
+                if variant.id == variant_id:
+                    break
+            else:
+                raise ValueError(f"Unknown variant: {variant_id}")
+            is_local = bool(
+                dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+            )
+            pipeline = FaqIngestionPipeline(
+                client=client,
+                dto=dto,
+                callback=callback,
+                variant=variant,
+                local=is_local,
+            )
             pipeline()
 
         except Exception as e:
@@ -93,7 +109,7 @@ def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
             semaphore.release()
 
 
-def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
+def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str):
     """
     Run the faq deletion in a separate thread
     """
@@ -107,7 +123,21 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            pipeline = FaqIngestionPipeline(client=client, dto=None, callback=callback)
+            for variant in FaqIngestionPipeline.get_variants():
+                if variant.id == variant_id:
+                    break
+            else:
+                raise ValueError(f"Unknown variant: {variant_id}")
+            is_local = bool(
+                dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+            )
+            pipeline = FaqIngestionPipeline(
+                client=client,
+                dto=None,
+                callback=callback,
+                variant=variant,
+                local=is_local,
+            )
             pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
 
         except Exception as e:
@@ -164,9 +194,9 @@ def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
     """
     Webhook endpoint to trigger the faq ingestion pipeline
     """
-    validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
+    variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
-    thread = Thread(target=run_faq_update_pipeline_worker, args=(dto,))
+    thread = Thread(target=run_faq_update_pipeline_worker, args=(dto, variant))
     thread.start()
     return
 
@@ -181,8 +211,8 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     """
     Webhook endpoint to trigger the faq deletion pipeline
     """
-    validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
+    variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
-    thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
+    thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto, variant))
     thread.start()
     return

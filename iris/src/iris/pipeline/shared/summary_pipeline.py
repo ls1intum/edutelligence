@@ -11,6 +11,7 @@ from iris.common.logging_config import get_logger
 
 from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
+from ...llm.llm_configuration import resolve_model
 from ...tracing import observe
 from ..sub_pipeline import SubPipeline
 
@@ -27,11 +28,12 @@ class SummaryPipeline(SubPipeline):
 
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="summary_pipeline")
-        # Set the langchain chat model
-        request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-5-nano"
+        pipeline_id = "summary_pipeline"
+        model = resolve_model(pipeline_id, "default", "chat", local=local)
+        request_handler = ModelVersionRequestHandler(version=model)
+        self.llm = IrisLangchainCompletionModel(
+            request_handler=request_handler, max_tokens=1000
         )
-        self.llm = IrisLangchainCompletionModel(request_handler=request_handler)
         # Load the prompt from a file
         dirname = os.path.dirname(__file__)
         with open(
