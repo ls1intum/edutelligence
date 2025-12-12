@@ -8,7 +8,7 @@ def align_slides_with_segments(
     result = []
 
     for segment in segments:
-        slide_number = 1  # Default if no matching timestamp
+        slide_number = -1  # Default if no matching timestamp
         for ts, num in reversed(slide_timestamps):
             if ts <= segment["start"]:
                 slide_number = num

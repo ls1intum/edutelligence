@@ -1,3 +1,4 @@
+import datetime
 from sqlalchemy import Column, Integer, String, Enum, Text, ForeignKey, JSON, TIMESTAMP, \
     Numeric, CheckConstraint, Boolean
 from sqlalchemy.orm import relationship
@@ -223,3 +224,26 @@ class TokenPrice(Base):
     price_per_k_token = Column(Numeric(10, 6), nullable=False)
 
     token_type = relationship("TokenTypes")
+
+
+class JobStatus(enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+class Job(Base):
+    __tablename__ = 'jobs'
+
+    id = Column(Integer, primary_key=True)
+    status = Column(Enum(JobStatus), nullable=False, default=JobStatus.PENDING)
+    process_id = Column(Integer, ForeignKey("process.id", ondelete="CASCADE"), nullable=False)
+    request_payload = Column(JSON, nullable=False)
+    result_payload = Column(JSON)
+    error_message = Column(Text)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False,
+                        default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False,
+                        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))

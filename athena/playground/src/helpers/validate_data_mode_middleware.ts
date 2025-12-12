@@ -14,5 +14,5 @@ export const validateDataModeMiddleware = (
   if (!allowedModesRegex.test(dataMode)) {
     return res.status(404).end();
   }  
-  next();
+  return next();
 };

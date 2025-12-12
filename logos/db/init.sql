@@ -6,6 +6,7 @@ ALTER DATABASE logosdb OWNER TO postgres;
 DROP TYPE IF EXISTS threshold_enum CASCADE;
 DROP TYPE IF EXISTS logging_enum CASCADE;
 DROP TYPE IF EXISTS result_status_enum CASCADE;
+DROP TYPE IF EXISTS job_status_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
 DROP TABLE IF EXISTS policies CASCADE;
 DROP TABLE IF EXISTS model_api_keys CASCADE;
@@ -22,6 +23,8 @@ DROP TABLE IF EXISTS log_entry CASCADE;
 DROP TABLE IF EXISTS token_types CASCADE;
 DROP TABLE IF EXISTS usage_tokens CASCADE;
 DROP TABLE IF EXISTS token_prices CASCADE;
+DROP TABLE IF EXISTS jobs CASCADE;
+DROP TABLE IF EXISTS request_events CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -201,6 +204,19 @@ CREATE TABLE token_prices (
     valid_from TIMESTAMPTZ NOT NULL,
     price_per_k_token NUMERIC(10, 6) NOT NULL
 );
+
+CREATE TYPE job_status_enum as ENUM ('pending', 'running', 'success', 'failed');
+
+-- Job status table (made for polling the status for long-running tasks)
+CREATE TABLE jobs (
+    id SERIAL PRIMARY KEY,
+    status job_status_enum NOT NULL DEFAULT 'pending',
+    process_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
+    request_payload JSONB NOT NULL,
+    result_payload JSONB,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
 -- Request-level monitoring (one row per request)
 CREATE TABLE request_events (

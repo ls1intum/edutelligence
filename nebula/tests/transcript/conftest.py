@@ -4,13 +4,15 @@ import tempfile
 
 import pytest
 
-from nebula.transcript.config import Config
+from nebula.transcript import transcriber_config
 
 
 @pytest.fixture(autouse=True)
 def temp_video_storage(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
-        monkeypatch.setattr(Config, "VIDEO_STORAGE_PATH", tmp, raising=False)
+        monkeypatch.setattr(
+            transcriber_config, "VIDEO_STORAGE_PATH", tmp, raising=False
+        )
         yield
 
 

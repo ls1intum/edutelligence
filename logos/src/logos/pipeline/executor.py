@@ -205,13 +205,118 @@ class Executor:
                 is_streaming=False,
             )
     
+    async def execute_direct_streaming(
+        self,
+        forward_url: str,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+        on_headers: Optional[Callable[[Dict[str, str]], None]] = None,
+    ) -> AsyncIterator[bytes]:
+        """
+        Execute streaming request directly (PROXY MODE - no ExecutionContext needed).
+
+        This is used for PROXY mode where we bypass classification/scheduling
+        and forward directly to a provider.
+
+        Args:
+            forward_url: Full URL to forward the request to.
+            headers: HTTP headers (including auth).
+            payload: Request body.
+            on_headers: Optional callback invoked with response headers.
+
+        Yields:
+            Byte chunks of the response body.
+        """
+        payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+
+        logger.info(f"Direct-Stream-Executing request to {forward_url}")
+
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                "POST",
+                forward_url,
+                headers=headers,
+                json=payload
+            ) as resp:
+                if on_headers:
+                    on_headers(dict(resp.headers))
+
+                async for line in resp.aiter_lines():
+                    if line:
+                        yield (line + "\n").encode()
+
+    async def execute_direct_sync(
+        self,
+        forward_url: str,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+    ) -> ExecutionResult:
+        """
+        Execute synchronous request directly (PROXY MODE - no ExecutionContext needed).
+
+        This is used for PROXY mode where we bypass classification/scheduling
+        and forward directly to a provider.
+
+        Args:
+            forward_url: Full URL to forward the request to.
+            headers: HTTP headers (including auth).
+            payload: Request body.
+
+        Returns:
+            ExecutionResult containing response body, usage stats, and headers.
+        """
+        payload = {**payload, "stream": False}
+
+        logger.info(f"Direct-Sync-Executing request to {forward_url}")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    forward_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
+
+            try:
+                body = response.json()
+            except json.JSONDecodeError:
+                return ExecutionResult(
+                    success=False,
+                    response=None,
+                    error=response.text,
+                    usage={},
+                    is_streaming=False,
+                    headers=dict(response.headers),
+                )
+
+            usage = self._extract_usage(body)
+
+            return ExecutionResult(
+                success=response.status_code < 400,
+                response=body,
+                error=body.get("error") if response.status_code >= 400 else None,
+                usage=usage,
+                is_streaming=False,
+                headers=dict(response.headers),
+            )
+
+        except Exception as e:
+            return ExecutionResult(
+                success=False,
+                response=None,
+                error=str(e),
+                usage={},
+                is_streaming=False,
+            )
+
     def _merge_url(self, base_url: str, endpoint: str) -> str:
         if endpoint.startswith("http"):
             return endpoint
         base = base_url.rstrip("/")
         path = endpoint.lstrip("/")
         return f"{base}/{path}"
-    
+
     def _extract_usage(self, response: Dict[str, Any]) -> Dict[str, int]:
         usage = response.get("usage", {})
         result = {}

@@ -11,11 +11,11 @@ python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena"}
 nltk = "3.9.1"
-antlr4-python3-runtime = "^4.13.1"
+antlr4-python3-runtime = "4.13.1"
 
 [tool.poetry.group.dev.dependencies]
-pydantic = "^2.11.7"
-prospector = "^1.10.2"
+pydantic = "2.11.7"
+prospector = "1.17.3"
 
 [tool.poetry.scripts]
 module = "athena:run_module"

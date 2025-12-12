@@ -1,26 +1,30 @@
+import asyncio
 import json
 import logging
 import os
 import traceback
 from contextlib import asynccontextmanager
+from typing import Any, Dict, Set, Tuple, Optional, List
 
 import grpc
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from logos.auth import authenticate_logos_key, _resolve_logos_key
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
+from logos.jobs.job_service import JobService, JobSubmission
 from logos.responses import (
     get_client_ip,
     extract_model,
     request_setup,
     proxy_behaviour,
-    get_streaming_response,
-    get_standard_response,
     extract_token_usage
 )
 # New Pipeline Components
@@ -30,7 +34,6 @@ from logos.pipeline.executor import Executor
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
-from typing import Optional, Dict, List, Any
 from scripts import setup_proxy
 
 logger = logging.getLogger("LogosLogger")
@@ -40,6 +43,8 @@ _pipeline: Optional[RequestPipeline] = None
 _queue_mgr: Optional[PriorityQueueManager] = None
 _ollama_facade: Optional[OllamaSchedulingDataFacade] = None
 _azure_facade: Optional[AzureSchedulingDataFacade] = None
+_grpc_server = None
+_background_tasks: Set[asyncio.Task] = set()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -91,8 +96,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(docs_url="/docs", openapi_url="/openapi.json", lifespan=lifespan)
-_grpc_server = None
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -279,6 +282,7 @@ def rebuild_classifier():
         new_classifier = classifier()
         _pipeline.update_classifier(new_classifier)
         logger.info("Classifier rebuilt with updated models")
+
 
 
 @app.post("/logosdb/setup")
@@ -519,7 +523,6 @@ async def generalstats(data: LogosKeyModel):
         return db.generalstats(**data.dict())
 
 
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 @app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def work(request: Request, path: str = None):
     """
@@ -538,11 +541,9 @@ async def work(request: Request, path: str = None):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    # Extract headers
+    # Extract headers and auth (using auth.py helper)
     headers = dict(request.headers)
-    logos_key = headers.get("logos_key") or \
-                headers.get("Authorization", "").replace("Bearer ", "") or \
-                headers.get("authorization", "").replace("Bearer ", "")
+    logos_key = _resolve_logos_key(headers, required=False)
 
     # Log request
     log_id = None
@@ -565,21 +566,20 @@ async def work(request: Request, path: str = None):
         out = proxy_behaviour(headers, providers, path)
         if isinstance(out[0], dict) and "error" in out[0]:
             raise HTTPException(status_code=out[1], detail=out[0]["error"])
-
         proxy_headers, forward_url, provider_id = out
         model_id = None
         policy_id = -1
         classified = {}
 
-        # Forward request (streaming or sync)
+        # Forward request (streaming or sync) using executor
         try:
             if body.get("stream"):
-                return get_streaming_response(
+                return _proxy_streaming_response(
                     forward_url, proxy_headers, body,
                     log_id, provider_id, model_id, policy_id, classified
                 )
             else:
-                response = await get_standard_response(
+                response = await _proxy_sync_response(
                     forward_url, proxy_headers, body,
                     log_id, provider_id, model_id, policy_id, classified
                 )
@@ -803,13 +803,539 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 logger.error(f"Failed to release scheduler resources: {e}")
 
 
+def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: dict,
+                               log_id: Optional[int], provider_id: int, model_id: Optional[int],
+                               policy_id: int, classified: dict):
+    """
+    Build streaming response for PROXY MODE using executor.
+    """
+    from fastapi.responses import StreamingResponse
+    import datetime
 
-def request2json(request_data: bytes) -> dict:
+    async def streamer():
+        full_text = ""
+        first_chunk = None
+        last_chunk = None
+        ttft = None
+
+        try:
+            async for chunk in _pipeline.executor.execute_direct_streaming(
+                forward_url, proxy_headers, payload
+            ):
+                # Track time to first token
+                if ttft is None:
+                    ttft = datetime.datetime.now(datetime.timezone.utc)
+                    if log_id:
+                        with DBManager() as db:
+                            db.set_time_at_first_token(log_id)
+
+                yield chunk
+
+                # Parse chunk for logging
+                line = chunk.decode().strip()
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        blob = json.loads(line[6:])
+                        last_chunk = blob
+                        if first_chunk is None:
+                            first_chunk = blob
+                        if "choices" in blob and blob["choices"]:
+                            delta = blob["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_text += content
+                    except json.JSONDecodeError:
+                        pass
+        finally:
+            # Log completion
+            if log_id:
+                usage = last_chunk.get("usage", {}) if last_chunk else {}
+                usage_tokens = extract_token_usage(usage) if usage else {}
+
+                response_payload = {"content": full_text}
+                if first_chunk:
+                    response_payload = first_chunk.copy()
+                    if "choices" in response_payload and response_payload["choices"]:
+                        response_payload["choices"][0]["delta"] = {"content": full_text}
+                    if usage:
+                        response_payload["usage"] = usage
+
+                with DBManager() as db:
+                    if ttft is None:
+                        db.set_time_at_first_token(log_id)
+                    db.set_response_payload(
+                        log_id, response_payload, provider_id, model_id,
+                        usage_tokens, policy_id, classified
+                    )
+
+    return StreamingResponse(streamer(), media_type="text/event-stream")
+
+
+async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: dict,
+                                log_id: Optional[int], provider_id: int, model_id: Optional[int],
+                                policy_id: int, classified: dict):
     """
-    Decode request payload into json
-    :param request_data: Request payload as bytes
-    :return: Json String of the given bytes
+    Build synchronous response for PROXY MODE using executor.
     """
-    if not request_data:
-        return {}
-    return json.loads(request_data)
+    from fastapi.responses import JSONResponse
+
+    exec_result = await _pipeline.executor.execute_direct_sync(
+        forward_url, proxy_headers, payload
+    )
+
+    response_payload = exec_result.response
+    if not exec_result.success and not response_payload and exec_result.error:
+        response_payload = {"error": exec_result.error}
+
+    if log_id:
+        usage_tokens = extract_token_usage(exec_result.usage) if exec_result.usage else {}
+
+        with DBManager() as db:
+            db.set_time_at_first_token(log_id)
+            db.set_response_timestamp(log_id)
+            db.set_response_payload(
+                log_id, response_payload, provider_id, model_id,
+                usage_tokens, policy_id, classified
+            )
+
+    return JSONResponse(content=response_payload, status_code=200 if exec_result.success else 500)
+
+
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def logos_service(path: str, request: Request):
+    """
+    Dynamic proxy for AI endpoints.
+    Supports both PROXY and RESOURCE modes with streaming.
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming request.
+
+    Returns:
+        Upstream response (streaming or sync) based on request.
+    """
+    # Auth is REQUIRED for /v1 endpoint
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    # Parse body
+    raw_body = await request.body()
+    try:
+        body = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError as err:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from err
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
+
+    client_ip = get_client_ip(request)
+
+    # Log request
+    log_id = None
+    with DBManager() as db:
+        r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
+        if c_log == 200:
+            log_id = int(r_log["log-id"])
+
+    # Determine mode: PROXY or RESOURCE
+    models = request_setup(headers, logos_key)
+    if isinstance(models, tuple) and len(models) == 2 and isinstance(models[0], dict) and "error" in models[0]:
+        raise HTTPException(status_code=models[1], detail=models[0]["error"])
+
+    # PROXY MODE: Direct forwarding
+    if not models:
+        with DBManager() as db:
+            providers = db.get_providers(logos_key)
+
+        out = proxy_behaviour(headers, providers, path)
+        if isinstance(out[0], dict) and "error" in out[0]:
+            raise HTTPException(status_code=out[1], detail=out[0]["error"])
+
+        proxy_headers, forward_url, provider_id = out
+        model_id = None
+        policy_id = -1
+        classified = {}
+
+        # Forward request (streaming or sync) using executor
+        try:
+            if body.get("stream"):
+                return _proxy_streaming_response(
+                    forward_url, proxy_headers, body,
+                    log_id, provider_id, model_id, policy_id, classified
+                )
+            else:
+                response = await _proxy_sync_response(
+                    forward_url, proxy_headers, body,
+                    log_id, provider_id, model_id, policy_id, classified
+                )
+                return response
+        except Exception as e:
+            logger.error(f"Proxy mode request failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Provider error: {str(e)}")
+
+    # RESOURCE MODE: Pipeline with classification and scheduling
+    else:
+        # Resolve allowed models from request
+        allowed_models = None
+        requested_model = body.get("model")
+        if requested_model:
+            for m in _pipeline.classifier.models:
+                if m["name"] == requested_model:
+                    allowed_models = [m["id"]]
+                    break
+
+            if allowed_models is None:
+                raise HTTPException(status_code=404, detail=f"Model '{requested_model}' not found")
+
+        # Extract policy
+        policy = _extract_policy(headers, logos_key, body)
+
+        # Create Pipeline Request
+        pipeline_req = PipelineRequest(
+            logos_key=logos_key or "anon",
+            payload=body,
+            headers=headers,
+            policy=policy,
+            allowed_models=allowed_models
+        )
+
+        # Process
+        result = await _pipeline.process(pipeline_req)
+
+        if not result.success:
+            raise HTTPException(status_code=503, detail=result.error or "Pipeline processing failed")
+
+        # Execute and Respond
+        try:
+            if body.get("stream"):
+                return _streaming_response(
+                    result.execution_context,
+                    body,
+                    log_id,
+                    result.provider_id,
+                    result.model_id,
+                    -1,  # Policy ID not implemented
+                    result.classification_stats,
+                    result.scheduling_stats
+                )
+            else:
+                return await _sync_response(
+                    result.execution_context,
+                    body,
+                    log_id,
+                    result.provider_id,
+                    result.model_id,
+                    -1,  # Policy ID not implemented
+                    result.classification_stats,
+                    result.scheduling_stats
+                )
+        except Exception as e:
+            _pipeline.record_completion(
+                request_id=result.scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=str(e)
+            )
+            raise e
+
+
+@app.api_route("/jobs/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def logos_service_async(path: str, request: Request):
+    """
+    Async job-based proxy for long running/low-priority requests.
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming request.
+
+    Returns:
+        202 with job metadata; poll /jobs/{id} for result.
+    """
+    return await submit_job_request(path, request)
+
+
+@app.api_route("/jobs/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def logos_service_long_async(path: str, request: Request):
+    """
+    Async job-based proxy for OpenAI-compatible, long running/low-priority requests.
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming request.
+
+    Returns:
+        202 with job metadata; poll /jobs/{id} for result.
+    """
+    return await submit_job_request(path, request)
+
+
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: int, request: Request):
+    """
+    Return current state of a submitted job, including result or error when finished.
+
+    Params:
+        job_id: Identifier of the async job.
+        request: Incoming request
+
+    Returns:
+        Job status, result/error, and timestamps.
+
+    Raises:
+        HTTPException(401/403/404) on auth or missing job.
+    """
+    _, process_id = authenticate_logos_key(dict(request.headers))
+    job = JobService.fetch(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job_process_id = job.get("process_id")
+    if job_process_id != process_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this job")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "result": job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None,
+        "error": job["error_message"] if job["status"] == JobStatus.FAILED.value else None,
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+
+async def authenticate_and_parse_request(request: Request) -> Tuple[Dict[str, str], str, int, Dict[str, Any], str]:
+    """
+    Authenticate the request and parse headers/body/client IP.
+
+    Params:
+        request: Incoming request.
+
+    Returns:
+        headers dict, logos key, process_id, JSON payload as dict, client IP.
+
+    Raises:
+        HTTPException(400/401): On auth failure or invalid JSON payload.
+    """
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+    raw_body = await request.body()
+    try:
+        json_data = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError as err:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from err
+    if json_data is None:
+        json_data = {}
+    if not isinstance(json_data, dict):
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
+    client_ip = get_client_ip(request)
+    return headers, logos_key, process_id, json_data, client_ip
+
+
+async def submit_job_request(path: str, request: Request) -> JSONResponse:
+    """
+    Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
+
+    Params:
+        path: Upstream path to forward.
+        request: Incoming FastAPI request containing headers/body.
+
+    Returns:
+        202 Accepted with job id and status URL.
+
+    Raises:
+        HTTPException(400/401) on invalid payload or auth.
+    """
+    headers, logos_key, process_id, json_data, client_ip = await authenticate_and_parse_request(request)
+    # Persist job and run it asynchronously
+    job_payload = JobSubmission(
+        path=path,
+        method=request.method,
+        headers=headers,
+        body=json_data,
+        client_ip=client_ip,
+        process_id=process_id,
+    )
+    job_id = JobService.create_job(job_payload)
+    status_url = str(request.url_for("get_job_status", job_id=job_id))
+    # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
+    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, logos_key, process_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url})
+
+
+async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
+                      logos_key: str, process_id: int):
+    """
+    Execute a job and persist success or failure.
+    """
+    try:
+        JobService.mark_running(job_id)
+        result = await execute_proxy_job(path, headers, json_data, client_ip, logos_key=logos_key,
+                                         process_id=process_id)
+        JobService.mark_success(job_id, result)
+    # Exception while processing the job is caught and persisted in the database
+    except Exception as e:
+        logging.exception("Job %s failed", job_id)
+        JobService.mark_failed(job_id, str(e))
+        return {"status_code": 500, "data": {"error": "Job failed"}}
+    return result
+
+
+async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
+                            logos_key: str, process_id: int) -> Dict[str, Any]:
+    """
+    Execute the proxy workflow using either PROXY MODE or RESOURCE MODE pipeline.
+    Force non-streaming for async job execution.
+
+    Returns:
+        Serializable dict result with status_code and data.
+    """
+    headers = headers or dict()
+    json_data = json_data or dict()
+
+    # Log usage
+    usage_id = None
+    with DBManager() as db:
+        r, c = db.log_usage(process_id, client_ip, json_data, headers)
+        if c != 200:
+            logging.info("Error while logging a request: %s", r)
+        else:
+            usage_id = int(r["log-id"])
+
+    # Determine mode
+    models = request_setup(headers, logos_key)
+    if isinstance(models, tuple) and len(models) == 2 and isinstance(models[0], dict) and "error" in models[0]:
+        status_code = models[1] if isinstance(models[1], int) else 500
+        return {"status_code": status_code, "data": models[0]}
+
+    # Force non-streaming for jobs
+    json_data["stream"] = False
+
+    # PROXY MODE
+    if not models:
+        with DBManager() as db:
+            providers = db.get_providers(logos_key)
+        out = proxy_behaviour(headers, providers, path)
+        if isinstance(out[0], dict) and "error" in out[0]:
+            status_code = out[1] if len(out) > 1 else 500
+            return {"status_code": status_code, "data": out[0]}
+
+        proxy_headers, forward_url, provider_id = out
+        model_id = None
+        policy_id = -1
+        classified = {}
+
+        # Execute via executor (non-streaming for jobs)
+        exec_result = await _pipeline.executor.execute_direct_sync(
+            forward_url, proxy_headers, json_data
+        )
+
+        # Log completion
+        if usage_id and exec_result.response:
+            usage = exec_result.response.get("usage", {})
+            usage_tokens = extract_token_usage(usage) if usage else {}
+
+            with DBManager() as db:
+                db.set_time_at_first_token(usage_id)
+                db.set_response_timestamp(usage_id)
+                db.set_response_payload(
+                    usage_id,
+                    exec_result.response,
+                    provider_id,
+                    model_id,
+                    usage_tokens,
+                    policy_id,
+                    classified
+                )
+
+        response_payload = exec_result.response
+        if not exec_result.success and not response_payload and exec_result.error:
+            response_payload = {"error": exec_result.error}
+
+        return {"status_code": 200 if exec_result.success else 500, "data": response_payload}
+
+    # RESOURCE MODE - use pipeline
+    else:
+        # Resolve allowed models from request
+        allowed_models = None
+        requested_model = json_data.get("model")
+        if requested_model:
+            for m in _pipeline.classifier.models:
+                if m["name"] == requested_model:
+                    allowed_models = [m["id"]]
+                    break
+            if allowed_models is None:
+                return {"status_code": 404, "data": {"error": f"Model '{requested_model}' not found"}}
+
+        # Extract policy
+        policy = _extract_policy(headers, logos_key, json_data)
+
+        # Create Pipeline Request
+        pipeline_req = PipelineRequest(
+            logos_key=logos_key or "anon",
+            payload=json_data,
+            headers=headers,
+            policy=policy,
+            allowed_models=allowed_models
+        )
+
+        # Process through pipeline
+        result = await _pipeline.process(pipeline_req)
+
+        if not result.success:
+            return {"status_code": 503, "data": {"error": result.error or "Pipeline processing failed"}}
+
+        # Execute (non-streaming)
+        try:
+            exec_result = await _pipeline.executor.execute_sync(result.execution_context, json_data)
+
+            # Update provider stats from response headers
+            if exec_result.headers:
+                try:
+                    _pipeline.update_provider_stats(result.model_id, exec_result.headers)
+                except Exception:
+                    pass
+
+            response_payload = exec_result.response
+            if not exec_result.success and not response_payload and exec_result.error:
+                response_payload = {"error": exec_result.error}
+
+            # Log completion
+            if usage_id:
+                usage = response_payload.get("usage", {}) if response_payload else {}
+                usage_tokens = extract_token_usage(usage) if usage else {}
+
+                with DBManager() as db:
+                    db.set_response_payload(
+                        usage_id,
+                        response_payload,
+                        result.provider_id,
+                        result.model_id,
+                        usage_tokens,
+                        -1,  # policy_id
+                        result.classification_stats,
+                        queue_depth_at_arrival=result.scheduling_stats.get("queue_depth_at_arrival"),
+                        utilization_at_arrival=result.scheduling_stats.get("utilization_at_arrival")
+                    )
+
+            # Record completion
+            status = "success" if exec_result.success else "error"
+            _pipeline.record_completion(
+                request_id=result.scheduling_stats.get("request_id"),
+                result_status=status,
+                error_message=exec_result.error if not exec_result.success else None,
+                cold_start=result.scheduling_stats.get("is_cold_start")
+            )
+
+            return {"status_code": 200 if exec_result.success else 500, "data": response_payload}
+
+        finally:
+            # Release scheduler resources
+            if result.scheduling_stats and result.scheduling_stats.get("request_id"):
+                try:
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.scheduling_stats.get("request_id")
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to release scheduler resources: {e}")
+
