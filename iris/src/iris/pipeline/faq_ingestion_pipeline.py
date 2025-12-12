@@ -17,6 +17,7 @@ from ..llm import (
     ModelVersionRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
+from ..llm.llm_configuration import resolve_role_models
 from ..tracing import observe
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
@@ -38,14 +39,20 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
         client: WeaviateClient,
         dto: Optional[FaqIngestionPipelineExecutionDto],
         callback: FaqIngestionStatus,
+        variant: FaqIngestionVariant,
+        local: bool = False,
     ):
-        super().__init__()
+        super().__init__(implementation_id="faq_ingestion_pipeline")
         self.client = client
         self.collection = init_faq_schema(client)
         self.dto = dto
         self.callback = callback
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        embedding_model = (
+            variant.local_embedding_model if local else variant.cloud_embedding_model
+        )
+        chat_model = variant.local_chat_model if local else variant.cloud_chat_model
+        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
+        request_handler = ModelVersionRequestHandler(version=chat_model)
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -61,14 +68,19 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
         Returns:
             List of FaqIngestionVariant objects representing available variants
         """
+        pipeline_id = "faq_ingestion_pipeline"
+        chat_models = resolve_role_models(pipeline_id, "default", "chat")
+        embedding_models = resolve_role_models(pipeline_id, "default", "embedding")
         return [
             FaqIngestionVariant(
                 variant_id="default",
                 name="Default",
                 description="Default FAQ ingestion variant using efficient models.",
-                chat_model="gpt-4.1-mini",
-                embedding_model="text-embedding-3-small",
-            ),
+                cloud_chat_model=chat_models["cloud"],
+                local_chat_model=chat_models["local"],
+                cloud_embedding_model=embedding_models["cloud"],
+                local_embedding_model=embedding_models["local"],
+            )
         ]
 
     @observe(name="FAQ Ingestion Pipeline")

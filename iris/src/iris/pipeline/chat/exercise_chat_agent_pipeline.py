@@ -26,6 +26,7 @@ from ...llm import (
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.llm_configuration import resolve_role_models
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -107,26 +108,39 @@ class ExerciseChatAgentPipeline(
         Returns:
             List of ExerciseChatVariant instances.
         """
-        return [
-            ExerciseChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="llama3.3:latest",
-                local_citation_model="llama3.3:latest",
+        pipeline_id = "exercise_chat_pipeline"
+        citation_pipeline_id = "citation_pipeline"
+
+        variants: list[ExerciseChatVariant] = []
+        for variant_id, name, description in [
+            (
+                "default",
+                "Default",
+                "Uses a smaller model for faster and cost-efficient responses.",
             ),
-            ExerciseChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="llama3.3:latest",
+            (
+                "advanced",
+                "Advanced",
+                "Uses a larger chat model, balancing speed and quality.",
             ),
-        ]
+        ]:
+            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
+            citation_models = resolve_role_models(
+                citation_pipeline_id, variant_id, "chat"
+            )
+            variants.append(
+                ExerciseChatVariant(
+                    variant_id=variant_id,
+                    name=name,
+                    description=description,
+                    cloud_agent_model=chat_models["cloud"],
+                    local_agent_model=chat_models["local"],
+                    cloud_citation_model=citation_models["cloud"],
+                    local_citation_model=citation_models["local"],
+                )
+            )
+
+        return variants
 
     def is_memiris_memory_creation_enabled(
         self,
@@ -394,13 +408,14 @@ class ExerciseChatAgentPipeline(
                 {"problem_statement": problem_statement}
             )
 
-            # Create small LLM for refinement
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            refinement_model = (
+                state.variant.local_agent_model
+                if state.local
+                else state.variant.cloud_agent_model
+            )
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(
-                    version=("llama3.3:latest" if is_local else "gpt-4.1-mini")
-                ),
+                request_handler=ModelVersionRequestHandler(version=refinement_model),
                 completion_args=completion_args,
             )
 

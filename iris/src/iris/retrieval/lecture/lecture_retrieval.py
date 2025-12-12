@@ -27,6 +27,7 @@ from iris.llm import (
     CompletionArguments,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.llm.request_handler.model_version_request_handler import (
     ModelVersionRequestHandler,
 )
@@ -84,14 +85,17 @@ class LectureRetrieval(SubPipeline):
 
     def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(
-            version="llama3.3:latest" if local else "gpt-4o-mini"
+        pipeline_id = "lecture_retrieval_pipeline"
+        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
+        embedding_model = resolve_model(
+            pipeline_id, "default", "embedding", local=local
         )
+        request_handler = ModelVersionRequestHandler(version=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
         self.pipeline = self.llm | StrOutputParser()
 
         self.lecture_unit_collection = init_lecture_unit_schema(client)
@@ -114,7 +118,8 @@ class LectureRetrieval(SubPipeline):
             client, local=local
         )
 
-        self.cohere_client = RerankRequestHandler("cohere")
+        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
+        self.cohere_client = RerankRequestHandler(reranker_id)
 
     @observe(name="Lecture Retrieval")
     def __call__(

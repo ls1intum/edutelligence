@@ -18,6 +18,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
 from iris.tracing import observe
@@ -40,15 +41,15 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
     def __init__(
         self,
         callback: Optional[CompetencyExtractionCallback] = None,
+        variant: CompetencyExtractionVariant | None = None,
         local: bool = False,
     ):
-        super().__init__(
-            implementation_id="competency_extraction_pipeline_reference_impl"
-        )
+        super().__init__(implementation_id="competency_extraction_pipeline")
+        if variant is None:
+            raise ValueError("Variant is required for CompetencyExtractionPipeline")
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1"
-        )
+        model = variant.local_agent_model if local else variant.cloud_agent_model
+        self.request_handler = ModelVersionRequestHandler(version=model)
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 
@@ -125,12 +126,14 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
         Returns:
             List of CompetencyExtractionVariant objects representing available variants
         """
+        pipeline_id = "competency_extraction_pipeline"
+        chat_models = resolve_role_models(pipeline_id, "default", "chat")
         return [
             CompetencyExtractionVariant(
                 variant_id="default",
                 name="Default",
                 description="Default competency extraction variant",
-                cloud_agent_model="gpt-4.1",
-                local_agent_model="gpt-oss:120b",
-            ),
+                cloud_agent_model=chat_models["cloud"],
+                local_agent_model=chat_models["local"],
+            )
         ]

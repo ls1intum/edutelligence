@@ -21,6 +21,7 @@ from ...domain.chat.interaction_suggestion_dto import (
 )
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.variant.course_chat_variant import CourseChatVariant
+from ...llm.llm_configuration import resolve_role_models
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -615,23 +616,36 @@ class CourseChatPipeline(
         Returns:
             List[CourseChatVariant]: List of available variants
         """
-        return [
-            CourseChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="llama3.3:latest",
-                local_citation_model="llama3.3:latest",
+        pipeline_id = "course_chat_pipeline"
+        citation_pipeline_id = "citation_pipeline"
+
+        variants: list[CourseChatVariant] = []
+        for variant_id, name, description in [
+            (
+                "default",
+                "Default",
+                "Uses a smaller model for faster and cost-efficient responses.",
             ),
-            CourseChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="llama3.3:latest",
+            (
+                "advanced",
+                "Advanced",
+                "Uses a larger chat model, balancing speed and quality.",
             ),
-        ]
+        ]:
+            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
+            citation_models = resolve_role_models(
+                citation_pipeline_id, variant_id, "chat"
+            )
+            variants.append(
+                CourseChatVariant(
+                    variant_id=variant_id,
+                    name=name,
+                    description=description,
+                    cloud_agent_model=chat_models["cloud"],
+                    local_agent_model=chat_models["local"],
+                    cloud_citation_model=citation_models["cloud"],
+                    local_citation_model=citation_models["local"],
+                )
+            )
+
+        return variants

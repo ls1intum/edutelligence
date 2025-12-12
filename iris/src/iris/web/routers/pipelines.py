@@ -254,11 +254,18 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+        for variant in CompetencyExtractionPipeline.get_variants():
+            if variant.id == _variant:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {_variant}")
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
         )
-        pipeline = CompetencyExtractionPipeline(callback=callback, local=is_local)
+        pipeline = CompetencyExtractionPipeline(
+            callback=callback, variant=variant, local=is_local
+        )
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline", exc_info=e)
         capture_exception(e)
@@ -298,19 +305,16 @@ def run_rewriting_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+        for v in RewritingPipeline.get_variants():
+            if v.id == variant:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {variant}")
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
         )
-        match variant:
-            case "faq" | "problem_statement":
-                pipeline = RewritingPipeline(
-                    callback=callback,
-                    variant=variant,
-                    local=is_local,
-                )
-            case _:
-                raise ValueError(f"Unknown variant: {variant}")
+        pipeline = RewritingPipeline(callback=callback, variant=v, local=is_local)
     except Exception as e:
         logger.error("Error preparing rewriting pipeline", exc_info=e)
         capture_exception(e)
@@ -351,11 +355,18 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+        for variant in InconsistencyCheckPipeline.get_variants():
+            if variant.id == _variant:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {_variant}")
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
         )
-        pipeline = InconsistencyCheckPipeline(callback=callback, local=is_local)
+        pipeline = InconsistencyCheckPipeline(
+            callback=callback, variant=variant, local=is_local
+        )
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline", exc_info=e)
         capture_exception(e)

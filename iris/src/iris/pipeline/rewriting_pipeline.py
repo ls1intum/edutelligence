@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, cast
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -18,6 +18,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
@@ -42,24 +43,32 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
     """
 
     callback: RewritingCallback
-    request_handler: ModelVersionRequestHandler
+    rewriting_handler: ModelVersionRequestHandler
+    consistency_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
-    variant: Literal["faq", "problem_statement"]
+    variant_id: Literal["faq", "problem_statement"]
 
     def __init__(
         self,
         callback: RewritingCallback,
-        variant: Literal["faq", "problem_statement"],
+        variant: RewritingVariant,
         local: bool = False,
     ):
-        super().__init__(implementation_id="rewriting_pipeline_reference_impl")
+        super().__init__(implementation_id="rewriting_pipeline")
         self.callback = callback
         self.db = VectorDatabase()
-        self.request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1"
+        self.variant_id = cast(Literal["faq", "problem_statement"], variant.variant_id)
+        rewriting_model = (
+            variant.local_rewriting_model if local else variant.cloud_rewriting_model
         )
+        consistency_model = (
+            variant.local_consistency_model
+            if local
+            else variant.cloud_consistency_model
+        )
+        self.rewriting_handler = ModelVersionRequestHandler(version=rewriting_model)
+        self.consistency_handler = ModelVersionRequestHandler(version=consistency_model)
         self.tokens = []
-        self.variant = variant
         self.faq_retriever = FaqRetrieval(self.db.client, local=local)
 
     @observe(name="Rewriting Pipeline")
@@ -76,7 +85,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             "faq": system_prompt_faq,
             "problem_statement": system_prompt_problem_statement,
         }
-        prompt = variant_prompts[self.variant].format(
+        prompt = variant_prompts[self.variant_id].format(
             rewritten_text=dto.to_be_rewritten,
         )
         prompt = PyrisMessage(
@@ -84,7 +93,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
 
-        response = self.request_handler.chat(
+        response = self.rewriting_handler.chat(
             [prompt], CompletionArguments(temperature=0.4), tools=None
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
@@ -102,7 +111,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         improvement = ""
         suggestions = []
 
-        if self.variant == "faq":
+        if self.variant_id == "faq":
             faqs = self.faq_retriever.get_faqs_from_db(
                 course_id=dto.course_id, search_text=response, result_limit=10
             )
@@ -151,7 +160,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             contents=[TextMessageContentDTO(text_content=consistency_prompt)],
         )
 
-        response = self.request_handler.chat(
+        response = self.consistency_handler.chat(
             [prompt], CompletionArguments(temperature=0.0), tools=None
         )
 
@@ -180,24 +189,34 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         Returns:
             List of RewritingVariant objects representing available variants
         """
-        return [
-            RewritingVariant(
-                variant_id="faq",
-                name="Default FAQ Variant",
-                description="Default FAQ rewriting variant.",
-                cloud_rewriting_model="gpt-4.1",
-                cloud_consistency_model="gpt-4.1",
-                local_rewriting_model="gpt-oss:120b",
-                local_consistency_model="gpt-oss:120b",
+        pipeline_id = "rewriting_pipeline"
+
+        variants: list[RewritingVariant] = []
+        for variant_id, name, description in [
+            ("faq", "Default FAQ Variant", "Default FAQ rewriting variant."),
+            (
+                "problem_statement",
+                "Default Variant",
+                "Default Problem statement rewriting variant.",
             ),
-            RewritingVariant(
-                variant_id="problem_statement",
-                name="Default Variant",
-                description="Default Problem statement rewriting variant.",
-                cloud_rewriting_model="gpt-4.1",
-                local_rewriting_model="gpt-oss:120b",
-            ),
-        ]
+        ]:
+            rewriting_models = resolve_role_models(pipeline_id, variant_id, "rewriting")
+            consistency_models = resolve_role_models(
+                pipeline_id, variant_id, "consistency"
+            )
+            variants.append(
+                RewritingVariant(
+                    variant_id=variant_id,
+                    name=name,
+                    description=description,
+                    cloud_rewriting_model=rewriting_models["cloud"],
+                    local_rewriting_model=rewriting_models["local"],
+                    cloud_consistency_model=consistency_models["cloud"],
+                    local_consistency_model=consistency_models["local"],
+                )
+            )
+
+        return variants
 
 
 def parse_faq_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:

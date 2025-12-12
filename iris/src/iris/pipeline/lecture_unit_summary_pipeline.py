@@ -12,6 +12,7 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.lecture_unit_summary_prompt import (
     lecture_unit_summary_prompt,
 )
@@ -35,14 +36,14 @@ class LectureUnitSummaryPipeline(SubPipeline):
         lecture_unit_segment_summaries: List[str],
         local: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(implementation_id="lecture_unit_summary_pipeline")
         self.client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.lecture_unit_segment_summaries = lecture_unit_segment_summaries
 
-        request_handler = ModelVersionRequestHandler(
-            version="llama3.3:latest" if local else "gpt-4.1-mini"
-        )
+        pipeline_id = "lecture_unit_summary_pipeline"
+        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
+        request_handler = ModelVersionRequestHandler(version=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         self.llm = IrisLangchainChatModel(

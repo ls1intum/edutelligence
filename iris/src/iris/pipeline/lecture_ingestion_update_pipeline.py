@@ -27,7 +27,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
     """Lecture Ingestion Update Pipeline to update or ingest lecture page chunks and lecture transcriptions at once"""
 
     def __init__(self, dto: IngestionPipelineExecutionDto):
-        super().__init__()
+        super().__init__(implementation_id="lecture_ingestion_update_pipeline")
         self.dto = dto
 
     @observe(name="Lecture Ingestion Update Pipeline")
@@ -43,12 +43,26 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             client = db.get_client()
             language = ""
             tokens = []
+            variant_id = self.dto.settings.variant if self.dto.settings else "default"
+            is_local = bool(
+                self.dto.settings
+                and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
+            )
             if (
                 self.dto.lecture_unit.pdf_file_base64 is not None
                 and self.dto.lecture_unit.pdf_file_base64 != ""
             ):
+                for variant in LectureUnitPageIngestionPipeline.get_variants():
+                    if variant.id == variant_id:
+                        break
+                else:
+                    raise ValueError(f"Unknown variant: {variant_id}")
                 page_content_pipeline = LectureUnitPageIngestionPipeline(
-                    client=client, dto=self.dto, callback=callback
+                    client=client,
+                    dto=self.dto,
+                    callback=callback,
+                    variant=variant,
+                    local=is_local,
                 )
                 language, tokens_page_content_pipeline = page_content_pipeline()
                 tokens += tokens_page_content_pipeline
@@ -64,7 +78,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 and self.dto.lecture_unit.transcription.segments is not None
             ):
                 transcription_pipeline = TranscriptionIngestionPipeline(
-                    client=client, dto=self.dto, callback=callback
+                    client=client, dto=self.dto, callback=callback, local=is_local
                 )
                 language, tokens_transcription_pipeline = transcription_pipeline()
                 tokens += tokens_transcription_pipeline
@@ -116,19 +130,11 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             LectureIngestionUpdateVariant(
                 variant_id="default",
                 name="Default",
-                description="Default lecture ingestion update variant using efficient models "
-                "for processing and embeddings.",
-                cloud_chat_model="gpt-4.1-mini",
-                local_chat_model="llama3.3:latest",
-                embedding_model="text-embedding-3-small",
+                description="Default lecture ingestion update variant.",
             ),
             LectureIngestionUpdateVariant(
                 variant_id="advanced",
                 name="Advanced",
-                description="Advanced lecture ingestion update variant using higher-quality models "
-                "for improved accuracy.",
-                cloud_chat_model="gpt-4.1",
-                local_chat_model="gpt-oss:120b",
-                embedding_model="text-embedding-3-large",
+                description="Advanced lecture ingestion update variant.",
             ),
         ]

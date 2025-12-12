@@ -18,3 +18,223 @@ langfuse:
 
 env_vars:
   SOME: "value"
+
+llm_configuration:
+  exercise_chat_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+    advanced:
+      chat:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+
+  course_chat_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+    advanced:
+      chat:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+
+  lecture_chat_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+    advanced:
+      chat:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+
+  text_exercise_chat_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+    advanced:
+      chat:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+
+  tutor_suggestion_pipeline:
+    default:
+      chat:
+        local: gpt-oss:20b
+        cloud: gpt-oss:20b
+    advanced:
+      chat:
+        local: gpt-oss:120b
+        cloud: gpt-oss:120b
+
+  competency_extraction_pipeline:
+    default:
+      chat:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+
+  inconsistency_check_pipeline:
+    default:
+      solver:
+        local: llama3.3:latest
+        cloud: gpt-o3-mini
+      prettify:
+        local: llama3.3:latest
+        cloud: gpt-o3-mini
+
+  rewriting_pipeline:
+    faq:
+      rewriting:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+      consistency:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+    problem_statement:
+      rewriting:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+      consistency:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+
+  lecture_unit_page_ingestion_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+    advanced:
+      chat:
+        local: gpt-oss:120b
+        cloud: gpt-4.1
+      embedding:
+        local: text-embedding-3-large
+        cloud: text-embedding-3-large
+
+  faq_ingestion_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+
+  transcription_ingestion_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+
+  lecture_unit_segment_summary_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+
+  lecture_unit_summary_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+
+  lecture_unit_pipeline:
+    default:
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+
+  lecture_retrieval_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4o-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+      reranker:
+        local: cohere
+        cloud: cohere
+
+  lecture_unit_segment_retrieval_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+      reranker:
+        local: cohere
+        cloud: cohere
+
+  lecture_transcriptions_retrieval_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+      reranker:
+        local: cohere
+        cloud: cohere
+
+  faq_retrieval_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+      embedding:
+        local: text-embedding-3-small
+        cloud: text-embedding-3-small
+
+  citation_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-nano
+    advanced:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+
+  interaction_suggestion_pipeline:
+    course:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-nano
+    exercise:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-nano
+
+  session_title_generation_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-nano
+
+  code_feedback_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-4.1-mini
+
+  summary_pipeline:
+    default:
+      chat:
+        local: llama3.3:latest
+        cloud: gpt-3.5-turbo

@@ -17,6 +17,7 @@ from iris.tracing import observe
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.text_exercise_chat_variant import TextExerciseChatVariant
+from ...llm.llm_configuration import resolve_role_models
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -84,22 +85,33 @@ class TextExerciseChatPipeline(
         Returns:
             List of TextExerciseChatVariant instances.
         """
-        return [
-            TextExerciseChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
-                local_agent_model="llama3.3:latest",
+        pipeline_id = "text_exercise_chat_pipeline"
+
+        variants: list[TextExerciseChatVariant] = []
+        for variant_id, name, description in [
+            (
+                "default",
+                "Default",
+                "Uses a smaller model for faster and cost-efficient responses.",
             ),
-            TextExerciseChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
-                local_agent_model="gpt-oss:120b",
+            (
+                "advanced",
+                "Advanced",
+                "Uses a larger chat model, balancing speed and quality.",
             ),
-        ]
+        ]:
+            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
+            variants.append(
+                TextExerciseChatVariant(
+                    variant_id=variant_id,
+                    name=name,
+                    description=description,
+                    cloud_agent_model=chat_models["cloud"],
+                    local_agent_model=chat_models["local"],
+                )
+            )
+
+        return variants
 
     def is_memiris_memory_creation_enabled(
         self,

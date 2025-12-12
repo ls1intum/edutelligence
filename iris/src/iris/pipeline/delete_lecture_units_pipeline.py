@@ -42,7 +42,7 @@ class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
         artemis_base_url: str,
         callback: LecturesDeletionStatusCallback,
     ):
-        super().__init__()
+        super().__init__(implementation_id="lecture_unit_deletion_pipeline")
         self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
         self.lecture_unit_segment_summary_collection = init_lecture_unit_segment_schema(

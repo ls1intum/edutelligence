@@ -13,6 +13,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 )
 from iris.domain.data.post_dto import PostDTO
 from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
+from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -134,8 +135,10 @@ class TutorSuggestionPipeline(
                 create_tool_get_last_artifact(state.dto.chat_history, callback)
             )
         if allow_lecture_tools:
-            is_local = state.dto.settings is not None and state.dto.settings.is_local()
-            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
+            self.lecture_retriever = LectureRetrieval(
+                state.db.client,
+                local=state.dto.settings.is_local(),
+            )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -149,8 +152,10 @@ class TutorSuggestionPipeline(
             )
 
         if allow_faq_tool:
-            is_local = state.dto.settings is not None and state.dto.settings.is_local()
-            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
+            self.faq_retriever = FaqRetrieval(
+                state.db.client,
+                local=state.dto.settings.is_local(),
+            )
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -384,19 +389,30 @@ class TutorSuggestionPipeline(
         Returns:
             List of TutorSuggestionVariant objects representing available variants
         """
-        return [
-            TutorSuggestionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
-                cloud_agent_model="gpt-oss:20b",
-                local_agent_model="gpt-oss:20b",
+        pipeline_id = "tutor_suggestion_pipeline"
+
+        variants: list[TutorSuggestionVariant] = []
+        for variant_id, name, description in [
+            (
+                "default",
+                "Default",
+                "Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
             ),
-            TutorSuggestionVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
-                cloud_agent_model="gpt-oss:120b",
-                local_agent_model="gpt-oss:120b",
+            (
+                "advanced",
+                "Advanced",
+                "Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
             ),
-        ]
+        ]:
+            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
+            variants.append(
+                TutorSuggestionVariant(
+                    variant_id=variant_id,
+                    name=name,
+                    description=description,
+                    cloud_agent_model=chat_models["cloud"],
+                    local_agent_model=chat_models["local"],
+                )
+            )
+
+        return variants

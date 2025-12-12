@@ -13,6 +13,7 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
@@ -39,22 +40,37 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
     prettify: Runnable
 
     def __init__(
-        self, callback: Optional[InconsistencyCheckCallback] = None, local: bool = False
+        self,
+        callback: Optional[InconsistencyCheckCallback] = None,
+        variant: InconsistencyCheckVariant | None = None,
+        local: bool = False,
     ):
         super().__init__(implementation_id="inconsistency_check_pipeline")
+        if variant is None:
+            raise ValueError("Variant is required for InconsistencyCheckPipeline")
+
         completion_args = CompletionArguments()
 
-        self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(
-                version="llama3.3:latest" if local else "gpt-o3-mini"
-            ),
+        solver_model = (
+            variant.local_solver_model if local else variant.cloud_solver_model
+        )
+        prettify_model = (
+            variant.local_prettify_model if local else variant.cloud_prettify_model
+        )
+
+        self.solver_llm = IrisLangchainChatModel(
+            request_handler=ModelVersionRequestHandler(version=solver_model),
+            completion_args=completion_args,
+        )
+        self.prettify_llm = IrisLangchainChatModel(
+            request_handler=ModelVersionRequestHandler(version=prettify_model),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)
-        self.solver = self.solver_prompt | self.llm
+        self.solver = self.solver_prompt | self.solver_llm
 
         self.prettify_prompt = PromptTemplate.from_template(prettify_prompt)
-        self.prettify = self.prettify_prompt | self.llm
+        self.prettify = self.prettify_prompt | self.prettify_llm
 
         self.callback = callback
         self.tokens = []
@@ -125,7 +141,14 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         result = re.sub(r"^#\s.*?\n", "", result)
         result = re.sub(r"^#+.*?Summary of Consistency Issues\s*\n", "", result)
 
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
+        if self.solver_llm.tokens:
+            self._append_tokens(
+                self.solver_llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK
+            )
+        if self.prettify_llm.tokens:
+            self._append_tokens(
+                self.prettify_llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK
+            )
         self.callback.done(final_result=result, tokens=self.tokens)
 
     @classmethod
@@ -136,12 +159,17 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         Returns:
             List of InconsistencyCheckVariant objects representing available variants
         """
+        pipeline_id = "inconsistency_check_pipeline"
+        solver_models = resolve_role_models(pipeline_id, "default", "solver")
+        prettify_models = resolve_role_models(pipeline_id, "default", "prettify")
         return [
             InconsistencyCheckVariant(
                 variant_id="default",
                 name="Default",
                 description="Standard inconsistency check implementation with efficient model usage",
-                cloud_solver_model="gpt-o3-mini",
-                local_solver_model="llama3.3:latest",
-            ),
+                cloud_solver_model=solver_models["cloud"],
+                local_solver_model=solver_models["local"],
+                cloud_prettify_model=prettify_models["cloud"],
+                local_prettify_model=prettify_models["local"],
+            )
         ]

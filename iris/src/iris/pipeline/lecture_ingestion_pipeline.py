@@ -20,6 +20,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 from iris.domain.variant.lecture_unit_page_ingestion_variant import (
     LectureUnitPageIngestionVariant,
 )
+from iris.llm.llm_configuration import resolve_role_models
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -106,14 +107,20 @@ class LectureUnitPageIngestionPipeline(
         client: WeaviateClient,
         dto: Optional[IngestionPipelineExecutionDto],
         callback: ingestion_status_callback,
+        variant: LectureUnitPageIngestionVariant,
+        local: bool = False,
     ):
-        super().__init__()
+        super().__init__(implementation_id="lecture_unit_page_ingestion_pipeline")
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_chat = ModelVersionRequestHandler("gpt-4.1-mini")
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gpt-4.1-mini")
+        chat_model = variant.local_chat_model if local else variant.cloud_chat_model
+        embedding_model = (
+            variant.local_embedding_model if local else variant.cloud_embedding_model
+        )
+        self.llm_chat = ModelVersionRequestHandler(chat_model)
+        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
+        request_handler = ModelVersionRequestHandler(chat_model)
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -130,23 +137,37 @@ class LectureUnitPageIngestionPipeline(
         Returns:
             List of LectureUnitPageIngestionVariant objects representing available variants
         """
-        return [
-            LectureUnitPageIngestionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default lecture ingestion variant using efficient models "
+        pipeline_id = "lecture_unit_page_ingestion_pipeline"
+
+        variants: list[LectureUnitPageIngestionVariant] = []
+        for variant_id, name, description in [
+            (
+                "default",
+                "Default",
+                "Default lecture ingestion variant using efficient models "
                 "for text processing and embeddings.",
-                chat_model="gpt-4.1-mini",
-                embedding_model="text-embedding-3-small",
             ),
-            LectureUnitPageIngestionVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
-                chat_model="gpt-4.1",
-                embedding_model="text-embedding-3-large",
+            (
+                "advanced",
+                "Advanced",
+                "Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
             ),
-        ]
+        ]:
+            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
+            embedding_models = resolve_role_models(pipeline_id, variant_id, "embedding")
+            variants.append(
+                LectureUnitPageIngestionVariant(
+                    variant_id=variant_id,
+                    name=name,
+                    description=description,
+                    cloud_chat_model=chat_models["cloud"],
+                    local_chat_model=chat_models["local"],
+                    cloud_embedding_model=embedding_models["cloud"],
+                    local_embedding_model=embedding_models["local"],
+                )
+            )
+
+        return variants
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
