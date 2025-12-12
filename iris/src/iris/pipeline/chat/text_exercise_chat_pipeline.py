@@ -172,12 +172,6 @@ class TextExerciseChatPipeline(
         dto = state.dto
         callback = state.callback
 
-        local = (
-                dto.execution is not None
-                and dto.execution.settings is not None
-                and dto.execution.settings.artemis_llm_selection == "LOCAL_AI"
-        )
-
         # Initialize storage for shared data between tools
         if not hasattr(state, "lecture_content_storage"):
             setattr(state, "lecture_content_storage", {})
@@ -199,7 +193,7 @@ class TextExerciseChatPipeline(
         # Add lecture content retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_lecture_tool(state.db, dto.exercise.course.id):
-                lecture_retriever = LectureRetrieval(state.db.client, local=local)
+                lecture_retriever = LectureRetrieval(state.db.client, local=state.dto.settings.is_local())
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_lecture_content_retrieval(
@@ -216,7 +210,7 @@ class TextExerciseChatPipeline(
         # Add FAQ retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_faq_tool(state.db, dto.exercise.course.id):
-                faq_retriever = FaqRetrieval(state.db.client, local=local)
+                faq_retriever = FaqRetrieval(state.db.client, local=state.dto.settings.is_local())
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_faq_content_retrieval(

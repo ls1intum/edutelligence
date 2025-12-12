@@ -238,8 +238,7 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        is_local = bool(dto.execution.settings and dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
-        pipeline = CompetencyExtractionPipeline(callback=callback, local=is_local)
+        pipeline = CompetencyExtractionPipeline(callback=callback, local=dto.settings.is_local())
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -279,7 +278,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
         )
         match variant:
             case "faq" | "problem_statement":
-                is_local = bool(dto.execution.settings and dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
+                is_local = bool(dto.execution.settings and dto.settings.is_local())
                 pipeline = RewritingPipeline(callback=callback, variant=variant, local=is_local)
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
