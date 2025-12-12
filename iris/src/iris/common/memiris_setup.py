@@ -141,6 +141,8 @@ def memiris_create_user_memory_creation_pipeline_openai(
     Returns:
         MemoryCreationPipeline: The fully constructed memory creation pipeline.
     """
+    # TODO: Make Memiris model selection configurable via llm_configuration/application.yml
+    # instead of relying on hardcoded OpenAI model names and fallback logic here.
     llm_manager = LlmManager()
     model_to_use: OpenAIChatModel | None = None
     for model in llm_manager.entries:
