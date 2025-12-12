@@ -49,7 +49,10 @@ class CodeFeedbackPipeline(SubPipeline):
     variant: str
 
     def __init__(
-        self, callback: Optional[StatusCallback] = None, variant: str = "default", local: bool = False
+        self,
+        callback: Optional[StatusCallback] = None,
+        variant: str = "default",
+        local: bool = False,
     ):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
         self.callback = callback

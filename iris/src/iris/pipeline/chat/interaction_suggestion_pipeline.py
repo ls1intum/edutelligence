@@ -72,15 +72,11 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         if local:
             completion_args = CompletionArguments(
-                temperature=0.3,
-                max_tokens=500,
-                response_format="JSON"
+                temperature=0.3, max_tokens=500, response_format="JSON"
             )
         else:
             completion_args = CompletionArguments(
-                temperature=0.6,
-                max_tokens=2000,
-                response_format="JSON"
+                temperature=0.6, max_tokens=2000, response_format="JSON"
             )
 
         self.llm = IrisLangchainChatModel(
@@ -167,7 +163,7 @@ class InteractionSuggestionPipeline(SubPipeline):
                 response: dict = (self.prompt | self.pipeline).invoke({})
 
                 # Track tokens if available
-                if hasattr(self.llm, 'tokens') and self.llm.tokens:
+                if hasattr(self.llm, "tokens") and self.llm.tokens:
                     self.tokens = self.llm.tokens
                     self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
 

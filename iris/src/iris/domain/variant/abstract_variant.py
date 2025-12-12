@@ -40,7 +40,14 @@ class AbstractAgentVariant(AbstractVariant):
     cloud_agent_model: str
     local_agent_model: str
 
-    def __init__(self, variant_id: str, name: str, description: str, cloud_agent_model: str, local_agent_model: str):
+    def __init__(
+        self,
+        variant_id: str,
+        name: str,
+        description: str,
+        cloud_agent_model: str,
+        local_agent_model: str,
+    ):
         super().__init__(variant_id=variant_id, name=name, description=description)
         self.cloud_agent_model = cloud_agent_model
         self.local_agent_model = local_agent_model

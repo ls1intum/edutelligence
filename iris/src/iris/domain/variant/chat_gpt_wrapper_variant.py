@@ -17,7 +17,7 @@ class ChatGPTWrapperVariant(AbstractAgentVariant):
             name=name,
             description=description,
             cloud_agent_model=cloud_agent_model,
-            local_agent_model=local_agent_model
+            local_agent_model=local_agent_model,
         )
 
     def required_models(self) -> set[str]:

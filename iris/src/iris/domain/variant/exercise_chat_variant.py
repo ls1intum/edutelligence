@@ -25,4 +25,9 @@ class ExerciseChatVariant(AbstractAgentVariant):
         self.local_citation_model = local_citation_model
 
     def required_models(self) -> set[str]:
-        return {self.cloud_agent_model, self.local_agent_model, self.cloud_citation_model, self.local_citation_model}
+        return {
+            self.cloud_agent_model,
+            self.local_agent_model,
+            self.cloud_citation_model,
+            self.local_citation_model,
+        }

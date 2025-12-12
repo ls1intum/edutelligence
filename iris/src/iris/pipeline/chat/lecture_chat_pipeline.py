@@ -97,10 +97,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         self.variant = variant
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        local = (
-                dto is not None
-                and dto.settings.is_local()
-        )
+        local = dto is not None and dto.settings.is_local()
         if local:
             if variant == "advanced":
                 model = "gpt-oss:120b"

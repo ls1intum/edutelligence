@@ -38,12 +38,16 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
     solver: Runnable
     prettify: Runnable
 
-    def __init__(self, callback: Optional[InconsistencyCheckCallback] = None, local: bool = False):
+    def __init__(
+        self, callback: Optional[InconsistencyCheckCallback] = None, local: bool = False
+    ):
         super().__init__(implementation_id="inconsistency_check_pipeline")
         completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="llama3.3:latest" if local else "gpt-o3-mini"),
+            request_handler=ModelVersionRequestHandler(
+                version="llama3.3:latest" if local else "gpt-o3-mini"
+            ),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)

@@ -70,11 +70,7 @@ class CourseChatPipeline(
     system_prompt_template: Any
     event: Optional[str]
 
-    def __init__(
-        self,
-        event: Optional[str] = None,
-            local: bool = False
-    ):
+    def __init__(self, event: Optional[str] = None, local: bool = False):
         """
         Initialize the course chat pipeline.
 
@@ -89,7 +85,9 @@ class CourseChatPipeline(
         self.lecture_retriever = None
         self.faq_retriever = None
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course", local=local)
+        self.suggestion_pipeline = InteractionSuggestionPipeline(
+            variant="course", local=local
+        )
         self.citation_pipeline = CitationPipeline(local=local)
 
         # Setup Jinja2 template environment
@@ -199,7 +197,9 @@ class CourseChatPipeline(
             )
 
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client, local=state.dto.settings.is_local())
+            self.lecture_retriever = LectureRetrieval(
+                state.db.client, local=state.dto.settings.is_local()
+            )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -213,7 +213,9 @@ class CourseChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client, local=state.dto.settings.is_local())
+            self.faq_retriever = FaqRetrieval(
+                state.db.client, local=state.dto.settings.is_local()
+            )
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,

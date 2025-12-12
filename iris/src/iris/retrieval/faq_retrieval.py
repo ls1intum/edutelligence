@@ -29,7 +29,10 @@ class FaqRetrieval(BaseRetrieval):
 
     def __init__(self, client: WeaviateClient, local: bool = False, **kwargs):
         super().__init__(
-            client, init_faq_schema, local=local, implementation_id="faq_retrieval_pipeline"
+            client,
+            init_faq_schema,
+            local=local,
+            implementation_id="faq_retrieval_pipeline",
         )
 
     def get_schema_properties(self) -> List[str]:

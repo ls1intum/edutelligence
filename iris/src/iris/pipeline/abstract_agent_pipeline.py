@@ -201,7 +201,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         return output or ""
 
     def assemble_prompt_with_history(
-            self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
     ) -> ChatPromptTemplate:
         """
         Combine the prefix prompt with converted chat history and add the agent scratchpad.
@@ -216,9 +216,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             for message in state.message_history
         ]
         combined = (
-                prefix_messages
-                + history_lc_messages
-                + [("placeholder", "{agent_scratchpad}")]
+            prefix_messages
+            + history_lc_messages
+            + [("placeholder", "{agent_scratchpad}")]
         )
         return ChatPromptTemplate.from_messages(combined)
 
@@ -336,7 +336,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             traceback.print_exc()
             return None
 
-    def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback, local: bool = False):
+    def __call__(
+        self, dto: DTO, variant: VARIANT, callback: StatusCallback, local: bool = False
+    ):
         """
         Call the agent pipeline with the provided arguments.
 
@@ -374,7 +376,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
         state.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(
-                version=state.variant.local_agent_model if local else state.variant.cloud_agent_model
+                version=(
+                    state.variant.local_agent_model
+                    if local
+                    else state.variant.cloud_agent_model
+                )
             ),
             completion_args=completion_args,
         )

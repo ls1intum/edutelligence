@@ -36,12 +36,18 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
     request_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
 
-    def __init__(self, callback: Optional[CompetencyExtractionCallback] = None, local: bool = False):
+    def __init__(
+        self,
+        callback: Optional[CompetencyExtractionCallback] = None,
+        local: bool = False,
+    ):
         super().__init__(
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(version="gpt-oss:120b" if local else "gpt-4.1")
+        self.request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-4.1"
+        )
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 

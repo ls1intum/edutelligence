@@ -79,11 +79,15 @@ class BaseRetrieval(SubPipeline, ABC):
     def __call__(self, *args, **kwargs):
         """Muss in der konkreten Implementierung überschrieben werden"""
 
-    def __init__(self, client: WeaviateClient, schema_init_func, local: bool = False, **kwargs):
+    def __init__(
+        self, client: WeaviateClient, schema_init_func, local: bool = False, **kwargs
+    ):
         super().__init__(
             implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
         )
-        request_handler = ModelVersionRequestHandler(version="llama3.3:latest" if local else "gpt-4.1-mini")
+        request_handler = ModelVersionRequestHandler(
+            version="llama3.3:latest" if local else "gpt-4.1-mini"
+        )
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
