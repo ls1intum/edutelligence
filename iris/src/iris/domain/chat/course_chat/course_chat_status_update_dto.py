@@ -1,9 +1,9 @@
 from typing import List, Optional
 
+from memiris import MemoryDTO
 from pydantic import Field
 
 from iris.domain.status.status_update_dto import StatusUpdateDTO
-from memiris import MemoryDTO
 
 
 class CourseChatStatusUpdateDTO(StatusUpdateDTO):
