@@ -126,7 +126,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
         is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = CourseChatPipeline(local=is_local)
+        pipeline = CourseChatPipeline(event=event, local=is_local)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
