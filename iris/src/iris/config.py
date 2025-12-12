@@ -39,6 +39,10 @@ class LangfuseSettings(BaseModel):
         return self
 
 
+LlmRoleConfiguration = dict[str, dict[str, str]]  # role -> {local/cloud -> model_id}
+LlmVariantConfiguration = dict[str, LlmRoleConfiguration]  # variant_id -> role config
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -47,6 +51,7 @@ class Settings(BaseModel):
     weaviate: WeaviateSettings
     memiris: MemirisSettings
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
+    llm_configuration: dict[str, LlmVariantConfiguration]
 
     @classmethod
     def get_settings(cls):

@@ -14,6 +14,7 @@ from iris.common.logging_config import (
     setup_logging,
 )
 from iris.config import settings
+from iris.llm.llm_configuration import validate_llm_configuration
 from iris.tracing import init_langfuse, shutdown_langfuse
 from iris.web.routers.health.health_endpoint import router as health_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
@@ -27,6 +28,7 @@ setup_logging()
 logger = get_logger(__name__)
 
 settings.set_env_vars()
+validate_llm_configuration()
 
 sentry.init()
 init_langfuse()
