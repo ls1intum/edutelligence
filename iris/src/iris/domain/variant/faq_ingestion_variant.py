@@ -9,16 +9,25 @@ class FaqIngestionVariant(AbstractVariant):
         variant_id: str,
         name: str,
         description: str,
-        chat_model: str,
-        embedding_model: str,
+        cloud_chat_model: str,
+        local_chat_model: str,
+        cloud_embedding_model: str,
+        local_embedding_model: str,
     ):
         super().__init__(
             variant_id=variant_id,
             name=name,
             description=description,
         )
-        self.chat_model = chat_model
-        self.embedding_model = embedding_model
+        self.cloud_chat_model = cloud_chat_model
+        self.local_chat_model = local_chat_model
+        self.cloud_embedding_model = cloud_embedding_model
+        self.local_embedding_model = local_embedding_model
 
     def required_models(self) -> set[str]:
-        return {self.chat_model, self.embedding_model}
+        return {
+            self.cloud_chat_model,
+            self.local_chat_model,
+            self.cloud_embedding_model,
+            self.local_embedding_model,
+        }

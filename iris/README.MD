@@ -381,6 +381,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
   Modify configuration files as needed:
   - **Pyris Configuration**: Update `application.yml` and `llm_config.yml`.
+    - `application.yml` must include an `llm_configuration` section that maps pipeline `implementation_id`s to variant IDs and roles with `local`/`cloud` model names. Use `application.example.yml` as a template.
   - **Weaviate Configuration**: Adjust settings in `weaviate.yml`.
   - **Nginx Configuration**: Modify Nginx settings in `nginx.yml` and related config files.
 

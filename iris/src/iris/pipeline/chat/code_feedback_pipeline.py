@@ -19,6 +19,7 @@ from ...llm import (
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.llm_configuration import resolve_model
 from ...web.status.status_update import StatusCallback
 from ..sub_pipeline import SubPipeline
 
@@ -54,7 +55,7 @@ class CodeFeedbackPipeline(SubPipeline):
         variant: str = "default",
         local: bool = False,
     ):
-        super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
+        super().__init__(implementation_id="code_feedback_pipeline")
         self.callback = callback
         self.variant = variant
 
@@ -63,16 +64,8 @@ class CodeFeedbackPipeline(SubPipeline):
             temperature=0, max_tokens=1024, response_format="text"
         )
 
-        if local:
-            if variant == "advanced":
-                model = "gpt-oss:120b"
-            else:
-                model = "llama3.3:latest"
-        else:
-            if variant == "advanced":
-                model = "gpt-4.1"
-            else:
-                model = "gpt-4.1-mini"
+        pipeline_id = "code_feedback_pipeline"
+        model = resolve_model(pipeline_id, variant, "chat", local=local)
 
         request_handler = ModelVersionRequestHandler(version=model)
         self.llm = IrisLangchainChatModel(
