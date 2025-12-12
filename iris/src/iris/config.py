@@ -51,7 +51,7 @@ class Settings(BaseModel):
     weaviate: WeaviateSettings
     memiris: MemirisSettings
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
-    llm_configuration: dict[str, LlmVariantConfiguration]
+    llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
 
     @classmethod
     def get_settings(cls):
