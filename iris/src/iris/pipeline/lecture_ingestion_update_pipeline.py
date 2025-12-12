@@ -10,6 +10,7 @@ from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.lecture_ingestion_update_variant import (
     LectureIngestionUpdateVariant,
 )
+from iris.llm.llm_configuration import role_requirements
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -126,15 +127,43 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         Returns:
             List of LectureIngestionUpdateVariant objects representing available variants
         """
-        return [
-            LectureIngestionUpdateVariant(
-                variant_id="default",
-                name="Default",
-                description="Default lecture ingestion update variant.",
-            ),
-            LectureIngestionUpdateVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced lecture ingestion update variant.",
-            ),
-        ]
+        variants: list[LectureIngestionUpdateVariant] = []
+        for variant_id, name, description in [
+            ("default", "Default", "Default lecture ingestion update variant."),
+            ("advanced", "Advanced", "Advanced lecture ingestion update variant."),
+        ]:
+            additional_required_models: set[str] = set()
+            additional_required_models |= role_requirements(
+                "lecture_unit_page_ingestion_pipeline", variant_id, "chat"
+            )
+            additional_required_models |= role_requirements(
+                "lecture_unit_page_ingestion_pipeline", variant_id, "embedding"
+            )
+            additional_required_models |= role_requirements(
+                "transcription_ingestion_pipeline", "default", "chat"
+            )
+            additional_required_models |= role_requirements(
+                "transcription_ingestion_pipeline", "default", "embedding"
+            )
+            additional_required_models |= role_requirements(
+                "lecture_unit_pipeline", "default", "embedding"
+            )
+            additional_required_models |= role_requirements(
+                "lecture_unit_segment_summary_pipeline", "default", "chat"
+            )
+            additional_required_models |= role_requirements(
+                "lecture_unit_segment_summary_pipeline", "default", "embedding"
+            )
+            additional_required_models |= role_requirements(
+                "lecture_unit_summary_pipeline", "default", "chat"
+            )
+            variants.append(
+                LectureIngestionUpdateVariant(
+                    variant_id=variant_id,
+                    name=name,
+                    description=description,
+                    additional_required_models=additional_required_models,
+                )
+            )
+
+        return variants
