@@ -99,7 +99,7 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         local = (
                 dto is not None
-                and dto.is_local()
+                and dto.settings.is_local()
         )
         if local:
             if variant == "advanced":

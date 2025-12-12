@@ -498,7 +498,7 @@ class TextExerciseChatPipeline(
 
             local = (
                     dto is not None
-                    and dto.is_local()
+                    and dto.settings.is_local()
             )
 
             # Delegate to parent class for standardized execution

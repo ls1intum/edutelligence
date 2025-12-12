@@ -16,6 +16,3 @@ class PipelineExecutionDTO(BaseModel):
 
     class Config:
         populate_by_name = True
-
-    def is_local(self):
-        return self.settings is not None and self.settings.artemis_llm_selection == "LOCAL_AI"

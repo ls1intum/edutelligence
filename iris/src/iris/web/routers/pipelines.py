@@ -72,7 +72,7 @@ def run_exercise_chat_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = ExerciseChatAgentPipeline(local=dto.is_local())
+        pipeline = ExerciseChatAgentPipeline(local=dto.settings.is_local())
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -124,7 +124,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(event=event, local=dto.is_local())
+        pipeline = CourseChatPipeline(event=event, local=dto.settings.is_local())
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -168,7 +168,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TextExerciseChatPipeline(local=dto.is_local())
+        pipeline = TextExerciseChatPipeline(local=dto.settings.is_local())
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -321,8 +321,7 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        is_local = bool(dto.execution.settings and dto.execution.settings.artemis_llm_selection == "LOCAL_AI")
-        pipeline = InconsistencyCheckPipeline(callback=callback, local=is_local)
+        pipeline = InconsistencyCheckPipeline(callback=callback, local=dto.settings.is_local())
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline: %s", e)
 
