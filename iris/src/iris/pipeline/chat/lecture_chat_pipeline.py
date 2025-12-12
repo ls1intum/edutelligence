@@ -98,16 +98,16 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         local = dto.settings is not None and dto.settings.is_local()
-        if local:
-            if variant == "advanced":
-                model = "gpt-oss:120b"
-            else:
-                model = "llama3.3:latest"
-        else:
-            if variant == "advanced":
-                model = "gpt-4.1"
-            else:
-                model = "gpt-4.1-mini"
+        variant_cfg = next(
+            (v for v in self.get_variants() if v.variant_id == variant),
+            None,
+        )
+
+        if variant_cfg is None:
+            raise ValueError(f"Unknown variant: {variant}")
+        model = (
+            variant_cfg.local_agent_model if local else variant_cfg.cloud_agent_model
+        )
 
         request_handler = ModelVersionRequestHandler(version=model)
 
