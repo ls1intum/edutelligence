@@ -6,8 +6,9 @@ from iris.domain import ChatPipelineExecutionDTO
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.post_dto import PostDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
-from iris.domain.data.programming_submission_dto import \
+from iris.domain.data.programming_submission_dto import (
     ProgrammingSubmissionDTO
+)
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 
 

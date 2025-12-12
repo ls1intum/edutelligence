@@ -2,11 +2,21 @@ import json
 from datetime import datetime
 from typing import List, Literal
 
-from langchain_core.messages import (AIMessage, BaseMessage, HumanMessage,
-                                     SystemMessage, ToolCall, ToolMessage)
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolCall,
+    ToolMessage,
+)
 
-from iris.common.pyris_message import (IrisMessageRole, PyrisAIMessage,
-                                       PyrisMessage, PyrisToolMessage)
+from iris.common.pyris_message import (
+    IrisMessageRole,
+    PyrisAIMessage,
+    PyrisMessage,
+    PyrisToolMessage,
+)
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO

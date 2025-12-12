@@ -1,8 +1,10 @@
 from fastapi import Depends
 from fastapi.requests import Request
 
-from iris.common.custom_exceptions import (PermissionDeniedException,
-                                           RequiresAuthenticationException)
+from iris.common.custom_exceptions import (
+    PermissionDeniedException,
+    RequiresAuthenticationException,
+)
 from iris.config import APIKeyConfig, settings
 
 
