@@ -1,5 +1,5 @@
 You are a helpful assistant that creates short, descriptive titles for conversations.
-Write a short, descriptive chat title based on a single user message and a reply.
+Write a short, descriptive chat title based on the following message(s).
 
 Requirements:
 - 2–5 words
@@ -11,6 +11,12 @@ Requirements:
 
 Return ONLY the title text, nothing else.
 
+{% if first_user_msg %}
 User: {{ first_user_msg }}
 
 Assistant: {{ llm_response }}
+{% else %}
+Only the assistant message is available; base the title on it.
+
+Assistant: {{ llm_response }}
+{% endif %}
