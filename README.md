@@ -30,18 +30,6 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 
 **Technology Stack:** Python 3.12, Poetry, FastAPI, Weaviate (Vector DB)
 
-### ⚡ [Hyperion](./hyperion/) - AI Exercise Creation Assistant
-
-AI-driven programming exercise creation assistance that illuminates the process of creating engaging, effective programming exercises. Designed to support instructors in refining and perfecting their educational content through intelligent analysis and enhancement.
-
-**Key Features:**
-
-- **Consistency Checking**: Analyzes programming exercises for conflicts between problem statements, solution code, and template code to ensure instructional coherence
-- **Problem Statement Rewriting**: AI-powered improvement and refinement of exercise descriptions for enhanced clarity and pedagogical value
-- **8-Step Workflow Support**: Designed to assist with the complete exercise creation process (Steps 1-7 in development)
-
-**Technology Stack:** Python 3.13, Poetry, FastAPI, Docker
-
 ### 🏛️ [Athena](./athena/) - Automated Assessment System
 
 A sophisticated system designed to provide (semi-)automated assessments for various types of academic exercises.
@@ -54,7 +42,7 @@ A sophisticated system designed to provide (semi-)automated assessments for vari
 
 **Technology Stack:** Python, Docker Compose, PostgreSQL
 
-**Documentation:** [ls1intum.github.io/Athena/](https://ls1intum.github.io/Athena)
+**Documentation:** [https://ls1intum.github.io/edutelligence/athena/](https://ls1intum.github.io/edutelligence/athena/)
 
 ### 🗺️ [Atlas](./atlas/) - Adaptive Competency-Based Learning
 
