@@ -1,0 +1,18 @@
+You decide whether a chat session title should be updated. Output ONLY one word: KEEP or UPDATE.
+
+A title should remain unchanged unless one of the following is true:
+- Significant topic change: the main subject/goal of the conversation has clearly shifted to a new task, domain, or user intent.
+- Language change: recent messages are predominantly in a different language than the current title.
+
+Guidelines:
+- If neither of these applies, or if you are uncertain, respond with KEEP.
+- Ignore minor follow-ups, elaborations, or deeper discussion of the same topic.
+- Consider the conversation as a whole, not just the last line.
+- Detect the main language of the recent messages and compare it to the title’s language.
+- Be conservative to avoid unnecessary changes.
+- Return ONLY 'KEEP' or 'UPDATE' with no extra characters, punctuation, or whitespace.
+
+Current title: {{ current_title }}
+
+
+Recent messages (oldest first; alternating between user and assistant): {{ recent_messages }}
