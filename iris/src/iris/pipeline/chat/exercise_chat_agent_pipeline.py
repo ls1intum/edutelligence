@@ -42,6 +42,7 @@ from ...tools import (
 )
 from ...web.status.status_update import ExerciseChatStatusCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
+from ..session_title_relevance_pipeline import SessionTitleRelevancePipeline
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
@@ -59,6 +60,7 @@ class ExerciseChatAgentPipeline(
     """
 
     session_title_pipeline: SessionTitleGenerationPipeline
+    session_title_relevance_pipeline: SessionTitleRelevancePipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     code_feedback_pipeline: CodeFeedbackPipeline
     citation_pipeline: CitationPipeline
@@ -74,6 +76,7 @@ class ExerciseChatAgentPipeline(
 
         # Create the pipelines
         self.session_title_pipeline = SessionTitleGenerationPipeline()
+        self.session_title_relevance_pipeline = SessionTitleRelevancePipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.code_feedback_pipeline = CodeFeedbackPipeline()
         self.citation_pipeline = CitationPipeline()
@@ -517,7 +520,7 @@ class ExerciseChatAgentPipeline(
         dto: ExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the latest user prompt and the model output.
 
         Args:
             state: The current pipeline execution state
@@ -527,9 +530,11 @@ class ExerciseChatAgentPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if self.should_generate_session_title(dto.session_title):
-            first_user_msg = dto.chat_history[0].contents[0].text_content
-            return super()._create_session_title(state, output, first_user_msg)
+        if self.should_generate_session_title(state, dto.session_title):
+            latest_user_msg = (
+                dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
+            )
+            return super()._create_session_title(state, output, latest_user_msg)
         return None
 
     @traceable(name="Exercise Chat Agent Pipeline")

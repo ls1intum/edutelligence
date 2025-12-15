@@ -42,6 +42,7 @@ from ..abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
+from ..session_title_relevance_pipeline import SessionTitleRelevancePipeline
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     datetime_to_string,
@@ -62,6 +63,7 @@ class CourseChatPipeline(
     """
 
     session_title_pipeline: SessionTitleGenerationPipeline
+    session_title_relevance_pipeline: SessionTitleRelevancePipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     citation_pipeline: CitationPipeline
     lecture_retriever: Optional[LectureRetrieval]
@@ -88,6 +90,7 @@ class CourseChatPipeline(
         self.lecture_retriever = None
         self.faq_retriever = None
         self.session_title_pipeline = SessionTitleGenerationPipeline()
+        self.session_title_relevance_pipeline = SessionTitleRelevancePipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
 
@@ -541,7 +544,7 @@ class CourseChatPipeline(
         dto: CourseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate a session title.
+        Generate a session title from the latest user prompt and the model output.
 
         Args:
             state: The current pipeline execution state
@@ -554,14 +557,14 @@ class CourseChatPipeline(
         # Course chat may start with:
         # - an Iris greeting (dto.chat_history == 0)
         # - the user's first message (dto.chat_history == 1)
-        if self.should_generate_session_title(dto.session_title):
-            first_user_msg = ""
+        if self.should_generate_session_title(state, dto.session_title):
+            latest_user_msg = ""
             # Iris greeting message: dto.chat_history == 0
             if len(dto.chat_history) != 0:
-                first_user_msg = (
+                latest_user_msg = (
                     dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
                 )
-            return super()._create_session_title(state, output, first_user_msg)
+            return super()._create_session_title(state, output, latest_user_msg)
         return None
 
     @traceable(name="Course Chat Pipeline")

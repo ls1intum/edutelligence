@@ -294,20 +294,37 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 final_output = step["output"]
         return final_output
 
-    @staticmethod
     def should_generate_session_title(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
         session_title: Optional[str],
     ) -> bool:
         """
         Determine if a session title should be generated.
 
         Args:
+            state: The current pipeline execution state
             session_title: The current session title
         Returns:
             bool: True if a new session title should be generated
         """
         title = (session_title or "").strip().lower()
-        return not title or title in DEFAULT_SESSION_TITLE_ALIASES
+        # Create a first title
+        if not title or title in DEFAULT_SESSION_TITLE_ALIASES:
+            return True
+        # Check for title relevance
+        recent_messages: list[str] = []
+        for msg in state.message_history[
+            -self.get_history_limit(state) :  # noqa: E203
+        ]:
+            if msg.contents and isinstance(msg.contents[0], TextMessageContentDTO):
+                prefix = "User" if msg.sender == IrisMessageRole.USER else "Assistant"
+                recent_messages.append(f"{prefix}: {msg.contents[0].text_content}")
+        should_update = self.session_title_relevance_pipeline(title, recent_messages)
+        self._track_tokens(
+            state, getattr(self.session_title_relevance_pipeline, "tokens", None)
+        )
+        return str(should_update).strip().upper() == "UPDATE"
 
     def _create_session_title(
         self,
