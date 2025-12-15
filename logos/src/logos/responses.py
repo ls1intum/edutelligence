@@ -107,26 +107,28 @@ def parse_provider_config(name: str) -> dict:
 
 def request_setup(headers: dict, logos_key: str):
     """
-    Determine if Logos should run in proxy mode or resource mode.
-    Returns empty list for proxy mode, or list of model IDs for resource mode.
+    Get available models for the user.
+
+    Returns:
+        List of model IDs (may be empty if no models available)
+
+    Raises:
+        PermissionError: If user lacks permission to access models
+        ValueError: If profile ID is invalid
     """
-    try:
-        with DBManager() as db:
-            # Get available models for this key
-            if "use_profile" in headers:
-                models = db.get_models_by_profile(logos_key, int(headers["use_profile"]))
-            else:
-                models = db.get_models_with_key(logos_key)
-        if not models or "proxy" in headers:
-            return list()
+    with DBManager() as db:
+        # Get available models for this key
+        if "use_profile" in headers:
+            models = db.get_models_by_profile(logos_key, int(headers["use_profile"]))
         else:
-            # Return ids of all available models
-            logging.info(f"Found models {models} for classification")
-            return models
-    except PermissionError as e:
-        return {"error": str(e)}, 401
-    except ValueError as e:
-        return {"error": str(e)}, 401
+            models = db.get_models_with_key(logos_key)
+
+    if not models:
+        return list()
+    else:
+        # Return ids of all available models
+        logging.info(f"Found models {models} for classification")
+        return models
 
 
 def proxy_behaviour(headers: dict, providers: list, path: str):

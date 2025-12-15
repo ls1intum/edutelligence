@@ -54,10 +54,10 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
             
             # Execute
             if is_streaming:
-                async for chunk in self.pipeline._executor.execute_streaming(result.execution_context, data):
+                async for chunk in self.pipeline._executor.execute_ressource_streaming(result.execution_context, data):
                     yield model_pb2.GenerationResponse(text=chunk.decode())
             else:
-                exec_result = await self.pipeline._executor.execute_sync(result.execution_context, data)
+                exec_result = await self.pipeline._executor.execute_ressource_sync(result.execution_context, data)
                 if not exec_result.success:
                     await context.abort(grpc.StatusCode.INTERNAL, exec_result.error or "Execution failed")
                 yield model_pb2.GenerationResponse(text=json.dumps(exec_result.response))

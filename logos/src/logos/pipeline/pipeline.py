@@ -16,7 +16,8 @@ from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
 
 from .scheduler_interface import SchedulerInterface, SchedulingRequest, SchedulingResult
-from .executor import Executor, ExecutionContext, ExecutionResult
+from .executor import Executor, ExecutionResult
+from .context_resolver import ContextResolver, ExecutionContext
 
 
 logger = logging.getLogger(__name__)
@@ -60,11 +61,13 @@ class RequestPipeline:
         classifier: ClassificationManager,
         scheduler: SchedulerInterface,
         executor: Executor,
+        context_resolver: Optional[ContextResolver] = None,
         monitoring: Optional[MonitoringRecorder] = None,
     ):
         self._classifier = classifier
         self._scheduler = scheduler
         self._executor = executor
+        self._context_resolver = context_resolver or ContextResolver()
         self._monitoring = monitoring or MonitoringRecorder()
 
     @property
@@ -158,7 +161,7 @@ class RequestPipeline:
         )
         
         # 3. Resolve execution context
-        exec_context = self._executor.resolve_context(sched_result.model_id)
+        exec_context = self._context_resolver.resolve_context(sched_result.model_id)
         if not exec_context:
             return PipelineResult(
                 success=False,
@@ -172,9 +175,7 @@ class RequestPipeline:
         
         # Record provider ID now that it's resolved
         self._monitoring.record_provider(request_id, exec_context.provider_id)
-        
-        # Record monitoring - Enqueue moved to before scheduling
-        # self._monitoring.record_enqueue(...)
+
         
         return PipelineResult(
             success=True,
