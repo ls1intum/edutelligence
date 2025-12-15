@@ -56,7 +56,7 @@ class SessionTitleRelevancePipeline(SubPipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Session Title Relevance Pipeline")
-    def __call__(self, current_title: str, recent_messages: [str], **kwargs) -> str:
+    def __call__(self, current_title: str, recent_messages: list[str], **kwargs) -> str:
         prompt_text = self.prompt_template.render(
             current_title=current_title,
             recent_messages=recent_messages,

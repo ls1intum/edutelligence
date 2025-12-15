@@ -312,6 +312,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # Create a first title
         if not title or title in DEFAULT_SESSION_TITLE_ALIASES:
             return True
+        # Check if the relevance pipeline is available
+        if not hasattr(self, "session_title_relevance_pipeline"):
+            logger.warning(
+                "session_title_relevance_pipeline not available, skipping relevance check"
+            )
+            return False
         # Check for title relevance
         recent_messages: list[str] = []
         for msg in state.message_history[
