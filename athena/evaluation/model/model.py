@@ -59,11 +59,12 @@ class Submission:
         text: str,
         language: str,
         feedbacks: Optional[Union[List[Feedback], Dict[str, List[Feedback]]]],
+        meta: dict = {},
     ) -> None:
         self.id = int(id)
         self.text = text
         self.language = language
-        self.meta = {}
+        self.meta = meta
         self.feedbacks = feedbacks
 
 

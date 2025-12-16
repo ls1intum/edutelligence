@@ -1,7 +1,11 @@
 import json
+import zipfile
 import os
 import re
 from typing import Dict, List, Optional, Union
+import os.path
+import uuid
+import datetime
 
 import numpy as np
 import pandas as pd
@@ -601,3 +605,204 @@ def read_expert_evaluation(expert_evaluation_dir: str) -> pd.DataFrame:
     merged_data = pd.merge(merged_data, mappings, on="feedback_type_pseudo", how="left")
 
     return merged_data
+
+
+def get_evaluation_files(data_dir: str) -> tuple[list[str], list[str]]:
+    """
+    Retrieves evaluation configuration and progress files from the specified directory.
+    Args:
+        data_dir (str): The directory containing evaluation files.
+    """
+    # unzip the data if needed
+    files = os.listdir(data_dir)
+    for file in files:
+        if file.endswith(".zip"):
+            with zipfile.ZipFile(f"{data_dir}/{file}", 'r') as zip_ref:
+                zip_ref.extractall(data_dir)
+
+    evaluation_config_files = []
+    evaluation_progress_files = []
+
+    files = os.listdir(data_dir)
+    for file in files:
+        if file.startswith("evaluation_config_"):
+            evaluation_config_files.append(f"{data_dir}/{file}")
+        elif file.startswith("evaluation_progress_"):
+            evaluation_progress_files.append(f"{data_dir}/{file}")
+
+    return evaluation_config_files, evaluation_progress_files
+
+
+def create_common_config(evaluation_config_files: list[str]) -> dict:
+    """
+    Creates a common evaluation configuration by merging multiple evaluation config files.
+    Args:
+        evaluation_config_files (list[str]): List of paths to evaluation configuration files.
+    """
+    metrics = []
+    exercises = []
+    expert_ids = set()
+    mappings = dict()
+
+    for config_file in evaluation_config_files:
+        with open(config_file, "r") as file:
+            config_data = json.load(file)
+            # Collect metrics
+            for metric in config_data.get("metrics", []):
+                metric["title"] = ''.join(c for c in metric.get("title", "") if c.isalnum() or c.isspace()).strip()
+                if metric not in metrics:
+                    metrics.append(metric)
+            # Collect expert ids
+            expert_ids.update(config_data.get("expertIds", []))
+            # Collect mappings
+            mappings.update(config_data.get("mappings", {}))
+
+    # Resolve transitive mappings
+    pseudonyms = set(mappings.keys())
+    feedback_types = set(mappings.values())
+    intersection = pseudonyms.intersection(feedback_types)
+    while len(intersection) > 0:
+        for key,value in mappings.items():
+            if value in intersection:
+                mappings[key] = mappings[value]
+        pseudonyms = set(mappings.keys())
+        feedback_types = set(mappings.values())
+        intersection = pseudonyms.intersection(feedback_types)
+
+    for config_file in evaluation_config_files:
+        with open(config_file, "r") as file:
+            config_data = json.load(file)
+            # Collect exercises
+            for exercise in config_data.get("exercises", []):
+                for submission in exercise.get("submissions", []):
+                    feedbacks = {}
+                    # De-pseudonymize feedbacks
+                    for pseudonym, feedback in submission.get("feedbacks", {}).items():
+                        if pseudonym not in mappings:
+                            raise ValueError(f"Pseudonym {pseudonym} not found in mappings.")
+                        feedbacks[mappings[pseudonym]] = feedback
+                    submission["feedbacks"] = feedbacks
+                exercise["submissions"].sort(key=lambda x: x["id"])
+                if exercise not in exercises:
+                    exercises.append(exercise)
+
+    common_evaluation_config = {
+        "type": "evaluation_config",
+        "id": str(uuid.uuid4()),
+        "name": "Common Config",
+        "started": True,
+        "creationDate": datetime.datetime.now().isoformat(),
+        "metrics": metrics,
+        "exercises": exercises,
+        "expertIds": list(expert_ids),
+        "mappings": mappings,
+    }
+
+    return common_evaluation_config
+
+
+def resolve_feedback_types_and_metric_titles(evaluation_progress_files: list[str], metric_ids_to_titles: dict[str, str], pseudonym_to_feedback_type: dict[str, str]) -> dict[str, dict]:
+    """
+    Resolves feedback types and metric titles in evaluation progress files.
+    Args:
+        evaluation_progress_files (list[str]): List of paths to evaluation progress files.
+        metric_ids_to_titles (dict[str, str]): Mapping from metric IDs to their titles.
+        pseudonym_to_feedback_type (dict[str, str]): Mapping from pseudonyms to feedback types.
+    """
+    progress = {}
+    for progress_file in evaluation_progress_files:
+        with open(progress_file, "r") as file:
+            progress_data = json.load(file)
+            # De-pseudonymize feedbacks in progress file
+            for _, submission in progress_data.get("selected_values", {}).items():
+                for submission_id, feedback in submission.items():
+                    resolved_feedback = {}
+                    for feedback_id, ratings in feedback.items():
+                        if feedback_id not in pseudonym_to_feedback_type:
+                            raise ValueError(f"Pseudonym {feedback_id} not found in mappings.")
+                        resolved_ratings = {}
+                        for metric_id, score in ratings.items():
+                            if metric_id not in metric_ids_to_titles:
+                                raise ValueError(f"Metric ID {metric_id} not found in metrics.")
+                            title = metric_ids_to_titles[metric_id]
+                            resolved_ratings[title] = score
+                        resolved_feedback[pseudonym_to_feedback_type[feedback_id]] = resolved_ratings
+                    submission[submission_id] = resolved_feedback
+        progress[progress_file] = progress_data
+    return progress
+
+
+def load_evaluation_progress(evaluation_progress_path: str, llm_evaluation_progress_path: str | None = None) -> pd.DataFrame:
+    """
+    Loads evaluation progress from expert and optional LLM evaluation progress files into a DataFrame.
+    Args:
+        evaluation_progress_path (str): The directory containing expert evaluation progress files.
+        llm_evaluation_progress_path (str | None): The path to the LLM evaluation progress file, if available.
+    """
+    # Load expert evaluation progress files
+    evaluations = {}
+    files = os.listdir(evaluation_progress_path)
+    for file in files:
+        if file.startswith("evaluation_progress_"):
+            with open(os.path.join(evaluation_progress_path, file), "r") as progress_file:
+                evaluation_progress = json.load(progress_file)
+                expert_id = file.replace("evaluation_progress_", "").replace(".json", "")
+                evaluations[expert_id] = evaluation_progress
+
+    # Load optional LLM evaluation progress file
+    if llm_evaluation_progress_path and os.path.exists(llm_evaluation_progress_path):
+        with open(llm_evaluation_progress_path, "r") as llm_progress_file:
+            llm_evaluation_progress = json.load(llm_progress_file)
+            evaluations["llm"] = llm_evaluation_progress
+
+    # Dataframe from progress data
+    records = []
+    for expert_id, evaluation_progress in evaluations.items():
+        for exercise_id, exercise_data in evaluation_progress.get("selected_values", {}).items():
+            for submission_id, submission_data in exercise_data.items():
+                for feedback_type, feedback_data in submission_data.items():
+                    for metric, score in feedback_data.items():
+                        if metric == "meta":
+                            continue
+                        record = {
+                            "expert_id": expert_id,
+                            "exercise_id": exercise_id,
+                            "submission_id": submission_id,
+                            "feedback_type": feedback_type,
+                            "metric": metric,
+                            "score": score,
+                        }
+                        records.append(record)
+
+    return pd.DataFrame.from_records(records).astype({
+            'exercise_id': 'int64',
+            'submission_id': 'int64',
+        })
+
+
+def load_common_evaluation_config(evaluation_config_path: str) -> pd.DataFrame:
+    """
+    Loads the common evaluation configuration from a JSON file.
+    Args:
+        evaluation_config_path (str): The path to the common evaluation configuration file.
+    """
+    with open(evaluation_config_path, "r") as config_file:
+        common_evaluation_config = json.load(config_file)
+        
+        records = []
+        for raw_exercise in common_evaluation_config.get("exercises", []):
+            exercise = {k: v for k, v in raw_exercise.items() if k != "submissions"}
+            for raw_submission in raw_exercise.get("submissions", []):
+                submission = {k: v for k, v in raw_submission.items() if k != "feedbacks"}
+                for feedback_type, raw_feedback in raw_submission.get("feedbacks", {}).items():
+                    record = {
+                        'exercise_id': exercise['id'],
+                        'submission_id': submission['id'],
+                        'feedback_type': feedback_type,
+                        'exercise': exercise,
+                        'submission': submission,
+                        'feedback': raw_feedback,
+                    }
+                    records.append(record)
+
+        return pd.DataFrame.from_records(records)
