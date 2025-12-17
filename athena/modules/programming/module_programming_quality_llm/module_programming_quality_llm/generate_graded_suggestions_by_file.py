@@ -78,11 +78,20 @@ async def generate_suggestions_by_file(
 
     for file_path, file_content in project_files.items():
         file_content_numbered = add_line_numbers(file_content)
+        # Simple heuristics to prioritize likely important files
+        size_weight = len(file_content_numbered)
+        path_weight = 0
+        lower_path = file_path.lower()
+        if "/src/" in lower_path or "/main/" in lower_path:
+            path_weight += 1000
+        if "/test/" in lower_path or "/tests/" in lower_path or lower_path.endswith("test.java"):
+            path_weight -= 1000
+
         prompt_inputs.append(
             {
                 "file_path": file_path,
                 "submission_file": file_content_numbered,
-                "priority": len(file_content_numbered),
+                "priority": size_weight + path_weight,
             }
         )
 
