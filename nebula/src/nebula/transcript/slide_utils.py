@@ -1,7 +1,7 @@
 import logging
 import re
 
-from nebula.common.llm_config import get_openai_client
+from nebula.common.config import get_openai_client
 
 
 def ask_gpt_for_slide_number(image_b64: str, job_id: str | None = None) -> int | None:

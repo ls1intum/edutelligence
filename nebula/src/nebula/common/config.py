@@ -1,46 +1,66 @@
-import logging
+"""Central configuration for Nebula services."""
+
 import os
 from pathlib import Path
 
 import yaml
+from openai import AzureOpenAI, OpenAI
 
-logger = logging.getLogger(__name__)
+
+def get_required_env(name: str) -> str:
+    """Get a required environment variable or raise with a clear error."""
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Environment variable {name} is required but not set.")
+    return value
 
 
 class Config:
     """Central configuration loader for Nebula."""
 
-    _loaded = False
-    _log_level: str = "INFO"
+    # Required: path to LLM config file
+    LLM_CONFIG_PATH = Path(get_required_env("LLM_CONFIG_PATH"))
 
-    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+    # Optional: log level (default: INFO)
+    LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
-    APPLICATION_YML_PATH = Path(
-        os.getenv(
-            "APPLICATION_YML_PATH", BASE_DIR.parent / "application_local.nebula.yml"
+
+def load_llm_config(model: str):
+    """Load LLM configuration from a YAML file."""
+    config_path = Path(get_required_env("LLM_CONFIG_PATH"))
+
+    if not config_path.is_file():
+        raise FileNotFoundError(f"LLM config file not found at: {config_path}")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    for entry in config:
+        if entry.get("model") == model:
+            return entry
+
+    raise ValueError(f"LLM config with model '{model}' not found.")
+
+
+def get_openai_client(model: str = "gpt-4.1"):
+    """
+    Create and return an OpenAI or AzureOpenAI client, plus the model/deployment name.
+    """
+    config = load_llm_config(model=model)
+    llm_type = config.get("type")
+
+    if llm_type == "azure_chat":
+        return (
+            AzureOpenAI(
+                azure_endpoint=config["endpoint"],
+                azure_deployment=config["azure_deployment"],
+                api_key=config["api_key"],
+                api_version=config["api_version"],
+            ),
+            config["azure_deployment"],
         )
-    )
 
-    LLM_CONFIG_PATH = Path(
-        os.getenv("LLM_CONFIG_PATH", BASE_DIR.parent / "llm_config.nebula.yml")
-    )
+    if llm_type == "openai_chat":
+        return OpenAI(api_key=config["api_key"]), config["model"]
 
-    @classmethod
-    def load(cls) -> None:
-        if cls._loaded:
-            return
-
-        logger.info("Loading config from: %s", cls.APPLICATION_YML_PATH)
-        if cls.APPLICATION_YML_PATH.exists():
-            with open(cls.APPLICATION_YML_PATH, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-                cls._log_level = data.get("log_level", "INFO")
-        else:
-            logger.info("No application config file found, skipping")
-
-        cls._loaded = True
-
-    @classmethod
-    def get_log_level(cls) -> str:
-        cls.load()
-        return cls._log_level
+    raise ValueError(f"Unsupported OpenAI LLM config type: {llm_type}")

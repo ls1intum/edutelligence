@@ -50,9 +50,30 @@ poetry install
 # Copy example configurations
 cp llm_config.example.yml llm_config.local.yml
 cp nginx.local_example.conf nginx.local.conf
+cp .env.local-example .env.local
 ```
 
-### Step 2: Configure LLM Settings
+### Step 2: Configure Environment Variables
+
+Edit `.env.local` and set the required paths for your machine:
+
+```bash
+# Required: Path to LLM config file (contains API keys, endpoints)
+LLM_CONFIG_PATH=/Users/YOURNAME/projects/edutelligence/nebula/llm_config.local.yml
+
+# Required for transcriber: Absolute path for temporary video/audio storage
+NEBULA_TEMP_DIR=/Users/YOURNAME/projects/edutelligence/nebula/temp
+```
+
+Before running any service, export the environment variables:
+
+```bash
+export $(cat .env.local | xargs)
+```
+
+Alternatively, set these variables directly in your shell or IDE run configuration.
+
+### Step 3: Configure LLM Settings
 
 Edit `llm_config.local.yml` with your API keys and endpoints:
 
@@ -65,7 +86,7 @@ llms:
     # ... other settings
 ```
 
-### Step 3: Start Services Locally
+### Step 4: Start Services Locally
 
 Open **three separate terminals** for the services:
 
@@ -95,7 +116,7 @@ docker rm -f nebula-nginx-gateway 2>/dev/null || true
 docker compose -f docker/nginx-only.yml up
 ```
 
-### Step 4: Verify Everything is Running
+### Step 5: Verify Everything is Running
 
 ```bash
 # Check health status (should return JSON with service statuses)
@@ -108,7 +129,7 @@ curl -H "Authorization: nebula-secret" http://localhost:3007/transcribe/health
 curl -H "Authorization: nebula-secret" http://localhost:3007/faq/health
 ```
 
-### Step 5: Submit a Transcription Job
+### Step 6: Submit a Transcription Job
 
 ```bash
 # Submit a video for transcription
@@ -139,6 +160,12 @@ curl -H "Authorization: nebula-secret" \
 
 #### General Issues
 
+- **"Environment variable X is required but not set"**: Export the required environment variables before starting services:
+  ```bash
+  export LLM_CONFIG_PATH=/path/to/llm_config.local.yml
+  export NEBULA_TEMP_DIR=/path/to/nebula/temp
+  ```
+  Or source your `.env.local` file: `export $(cat .env.local | xargs)`
 - **Port already in use**: Make sure ports 3870, 3871, and 3007 are free
 - **Connection refused**: Ensure all services are running in their respective terminals
 - **Unauthorized errors**: Check the API key in `nginx.local.conf` matches what you're sending (default: `nebula-secret`)
@@ -225,14 +252,17 @@ Job Submission → FIFO Queue → Background Worker → Heavy Pipeline → Light
 Processes one job at a time to avoid resource contention:
 
 1. **Video Download** (2-5 min)
+
    - Downloads `.m3u8` stream using FFmpeg
    - Stores as MP4 in temporary storage
 
 2. **Audio Extraction** (20-30 sec)
+
    - Extracts audio track from video
    - Converts to WAV format for Whisper
 
 3. **Audio Chunking** (instant)
+
    - Splits audio into 180-second segments
    - Optimizes for Whisper API rate limits
 
@@ -246,15 +276,18 @@ Processes one job at a time to avoid resource contention:
 Runs concurrently for each job after heavy pipeline completes:
 
 1. **Frame Extraction** (30-60 sec)
+
    - Extracts frames at transcript segment timestamps
    - Crops bottom 5% of each frame (slide number region)
 
 2. **GPT Vision Analysis** (2-3 min)
+
    - Sends cropped frames to GPT-4o Vision
    - Detects slide numbers with AI
    - Throttles requests (2-second delay)
 
 3. **Alignment** (instant)
+
    - Aligns detected slide numbers with transcript segments
    - Uses timestamp-based matching algorithm
 
