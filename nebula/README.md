@@ -252,17 +252,14 @@ Job Submission → FIFO Queue → Background Worker → Heavy Pipeline → Light
 Processes one job at a time to avoid resource contention:
 
 1. **Video Download** (2-5 min)
-
    - Downloads `.m3u8` stream using FFmpeg
    - Stores as MP4 in temporary storage
 
 2. **Audio Extraction** (20-30 sec)
-
    - Extracts audio track from video
    - Converts to WAV format for Whisper
 
 3. **Audio Chunking** (instant)
-
    - Splits audio into 180-second segments
    - Optimizes for Whisper API rate limits
 
@@ -276,18 +273,15 @@ Processes one job at a time to avoid resource contention:
 Runs concurrently for each job after heavy pipeline completes:
 
 1. **Frame Extraction** (30-60 sec)
-
    - Extracts frames at transcript segment timestamps
    - Crops bottom 5% of each frame (slide number region)
 
 2. **GPT Vision Analysis** (2-3 min)
-
    - Sends cropped frames to GPT-4o Vision
    - Detects slide numbers with AI
    - Throttles requests (2-second delay)
 
 3. **Alignment** (instant)
-
    - Aligns detected slide numbers with transcript segments
    - Uses timestamp-based matching algorithm
 
