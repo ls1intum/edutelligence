@@ -70,10 +70,7 @@ class CourseChatPipeline(
     system_prompt_template: Any
     event: Optional[str]
 
-    def __init__(
-        self,
-        event: Optional[str] = None,
-    ):
+    def __init__(self, event: Optional[str] = None, local: bool = False):
         """
         Initialize the course chat pipeline.
 
@@ -87,9 +84,11 @@ class CourseChatPipeline(
         # Initialize retrievers and pipelines (db will be created in abstract pipeline)
         self.lecture_retriever = None
         self.faq_retriever = None
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
-        self.citation_pipeline = CitationPipeline()
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
+        self.suggestion_pipeline = InteractionSuggestionPipeline(
+            variant="course", local=local
+        )
+        self.citation_pipeline = CitationPipeline(local=local)
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -198,7 +197,9 @@ class CourseChatPipeline(
             )
 
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            self.lecture_retriever = LectureRetrieval(
+                state.db.client, local=state.dto.settings.is_local()
+            )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -212,7 +213,9 @@ class CourseChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            self.faq_retriever = FaqRetrieval(
+                state.db.client, local=state.dto.settings.is_local()
+            )
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -580,7 +583,7 @@ class CourseChatPipeline(
             logger.info("Running course chat pipeline...")
 
             # Call the parent __call__ method which handles the complete execution
-            super().__call__(dto, variant, callback)
+            super().__call__(dto, variant, callback, local=dto.settings.is_local())
 
         except Exception as e:
             logger.error(
@@ -606,14 +609,18 @@ class CourseChatPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1-mini",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="llama3.3:latest",
+                local_citation_model="llama3.3:latest",
             ),
             CourseChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="llama3.3:latest",
             ),
         ]

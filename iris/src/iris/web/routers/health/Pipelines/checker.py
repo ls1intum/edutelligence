@@ -17,7 +17,7 @@ def _get_advanced_required_models(variants: Iterable[AbstractVariant]) -> set[st
     return {
         m
         for v in variants
-        if getattr(v, "id", None) != "default"
+        if "default" not in getattr(v, "id", "")
         for m in v.required_models()
     }
 

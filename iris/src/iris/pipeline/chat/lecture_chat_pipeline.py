@@ -97,11 +97,17 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         self.variant = variant
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        local = dto.settings is not None and dto.settings.is_local()
+        variant_cfg = next(
+            (v for v in self.get_variants() if v.variant_id == variant),
+            None,
+        )
 
-        if variant == "advanced":
-            model = "gpt-4.1"
-        else:
-            model = "gpt-4.1-mini"
+        if variant_cfg is None:
+            raise ValueError(f"Unknown variant: {variant}")
+        model = (
+            variant_cfg.local_agent_model if local else variant_cfg.cloud_agent_model
+        )
 
         request_handler = ModelVersionRequestHandler(version=model)
 
@@ -110,10 +116,10 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
         )
         # Create the pipelines
         self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
+        self.retriever = LectureRetrieval(self.db.client, local=local)
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
         self.pipeline = self.llm | StrOutputParser()
-        self.citation_pipeline = CitationPipeline()
+        self.citation_pipeline = CitationPipeline(local=local)
         self.tokens = []
 
     @classmethod
@@ -123,15 +129,19 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
-                citation_model="gpt-4.1-nano",
+                cloud_agent_model="gpt-4.1-mini",
+                cloud_citation_model="gpt-4.1-nano",
+                local_agent_model="llama3.3:latest",
+                local_citation_model="llama3.3:latest",
             ),
             LectureChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="llama3.3:latest",
             ),
         ]
 

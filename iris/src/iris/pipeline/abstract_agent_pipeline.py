@@ -46,6 +46,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     llm: Any | None
     prompt: ChatPromptTemplate | None
     tokens: List[TokenUsageDTO]
+    local: bool
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -335,9 +336,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             traceback.print_exc()
             return None
 
-    def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback):
+    def __call__(
+        self, dto: DTO, variant: VARIANT, callback: StatusCallback, local: bool = False
+    ):
         """
         Call the agent pipeline with the provided arguments.
+
+        Args:
+            dto: Data transfer object containing the request
+            variant: The variant configuration to use
+            callback: Status callback for updates
+            local: If True, use local models; if False, use cloud models
         """
         # 0. Initialize the execution state
         state = AgentPipelineExecutionState[DTO, VARIANT]()
@@ -353,19 +362,25 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.llm = None
         state.prompt = None
         state.tokens = []
+        state.local = local  # Store local flag in state
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
         )
 
         # 1. Prepare message history, user query, LLM, prompt and tools
         state.message_history = self.get_recent_history_from_dto(state)
+
         user_query = self.get_text_of_latest_user_message(state)
 
         # Create LLM from variant's agent_model
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
         state.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(
-                version=state.variant.agent_model
+                version=(
+                    state.variant.local_agent_model
+                    if local
+                    else state.variant.cloud_agent_model
+                )
             ),
             completion_args=completion_args,
         )
@@ -374,7 +389,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.prompt = self.assemble_prompt_with_history(
             state=state, system_prompt=system_message
         )
+
+        # Load tools for both local and cloud models
         state.tools = self.get_tools(state)
+
+        if local:
+            logger.info("Using local model with tool calling support")
+        else:
+            logger.info("Using cloud model with tool calling support")
 
         # 4. Start memory creation if enabled
         if self.is_memiris_memory_creation_enabled(state):
