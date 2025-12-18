@@ -50,7 +50,7 @@ Iris: Thank you for your answer. How do you make sure that your comparing algori
 
 ## HOW TO USE TOOLS:
 ------
-You can use the tools to look up information to generate accurate questions about the students code. You can use multiple tools to generate a question.
+You can use the tools to look up information to generate accurate questions about the students code and assess the given answers. You can use multiple tools to generate a question.
 
 ## Exercise Context
 - **Exercise Title:** {{ exercise_title }}
@@ -58,11 +58,15 @@ You can use the tools to look up information to generate accurate questions abou
 - **Programming Language:** {{ programming_language }}
 
 {# Chat history context #}
-{% if has_chat_history and (got_sufficient_answer or got_insufficient_answer) and not event %}
+{% if has_chat_history and not event %}
     The following messages represent the chat history of your conversation with the student so far.
-    Use it to keep your questions consistent and informed.
-    Avoid repeating or reusing previous messages; always in all circumstances craft new and original responses and questions.
-    Never re-use any message you already wrote. Instead, always write new and original questions.
+    {% if got_answer %}
+        Use it to assess the student's answer to your latest question.
+    {% elif sufficient_answer or insufficient_answer %}
+        Use it to keep your questions consistent and informed.
+        Avoid repeating or reusing previous messages; always in all circumstances craft new and original responses and questions.
+        Never re-use any message you already wrote. Instead, always write new and original questions.
+    {% endif %}
 {% endif %}
 
 {# Agent behavior section - conditional based on event and chat history #}
@@ -76,7 +80,10 @@ You can use the tools to look up information to generate accurate questions abou
     {# write instructions for informing user about consequences of time running out #}
 {% elif event == "tab_defocus" %}
     {# write instructions for informing user about consequences of tab defocusing #}
-{% elif got_sufficient_answer %}
+{% elif got_answer %}
+    You just received an answer by the student. Decide whether the latest answer is sufficient for a verdict or if you need to clarify by asking a follow-up question.
+{% elif sufficient_answer %}
+    The last answer by the student was marked as sufficient.
     Now, continue the prompting by asking the student another question.
     The new question has to be about a code section which was modified by the student and is part of a task.
     The new question also has to be about a code section which was not part of any previous question.
@@ -84,7 +91,7 @@ You can use the tools to look up information to generate accurate questions abou
     Your messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
     Maintain your role.
     Use tools if useful, e.g. to figure out what topic to bring up, to look at the task or to look at the submitted code and compare it to the given exercise template.
-{% elif got_insufficient_answer %}
+{% elif insufficient_answer %}
     The last answer by the student was marked as insufficient because it was either too vague or maybe the student asked about the meaning of your question.
     Now, ask a follow-up question by looking at the chat history or answer to students question if this clarifies the meaning of your initial question.
     Politely tell the student to answer your question, if they changed the topic.

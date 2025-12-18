@@ -94,10 +94,8 @@ hide empty methods
 3. Think about a useful decision in `Policy` when to use the new `QuickSort` algorithm.
 """
 
-CODE_SORTING = """
-BubbleSort.java:
-
-package net.java;
+CODE_SORTING: dict[str, str] = {
+    "BubbleSort.java": """package net.java;
 
 import java.util.*;
 
@@ -122,12 +120,9 @@ public class BubbleSort implements SortStrategy {
 
     }
 }
+""",
 
-#####
-
-Client.java:
-
-package net.java;
+    "Client.java": """package net.java;
 
 import java.text.*;
 import java.util.*;
@@ -196,55 +191,26 @@ public final class Client {
         return list;
     }
 
-    /**
-     * Creates a random Date within the given range.
-     *
-     * @param low the lower bound
-     * @param high the upper bound
-     * @return random Date within the given range
-     */
     private static Date randomDateWithin(Date low, Date high) {
         long randomLong = randomLongWithin(low.getTime(), high.getTime());
         return new Date(randomLong);
     }
 
-    /**
-     * Creates a random long within the given range.
-     *
-     * @param low the lower bound
-     * @param high the upper bound
-     * @return random long within the given range
-     */
     private static long randomLongWithin(long low, long high) {
         return ThreadLocalRandom.current().nextLong(low, high + 1);
     }
 
-    /**
-     * Creates a random int within the given range.
-     *
-     * @param low the lower bound
-     * @param high the upper bound
-     * @return random int within the given range
-     */
     private static int randomIntegerWithin(int low, int high) {
         return ThreadLocalRandom.current().nextInt(low, high + 1);
     }
 
-    /**
-     * Prints out the given Array of Date objects.
-     *
-     * @param list of the dates to print
-     */
     private static void printDateList(List<Date> list) {
         System.out.println(list.toString());
     }
 }
+""",
 
-#####
-
-Context.java:
-
-package net.java;
+    "Context.java": """package net.java;
 
 import java.util.*;
 
@@ -269,39 +235,24 @@ public class Context {
         return sortAlgorithm;
     }
 
-    /**
-     * Runs the configured sort algorithm.
-     */
     public void sort() {
         if (sortAlgorithm != null) {
             sortAlgorithm.performSort(this.dates);
         }
     }
 }
+""",
 
-#####
-
-MergeSort.java:
-
-package net.java;
+    "MergeSort.java": """package net.java;
 
 import java.util.*;
 
 public class MergeSort implements SortStrategy {
 
-    /**
-     * Wrapper method for the real MergeSort algorithm.
-     *
-     * @param input the List of Dates to be sorted
-     */
     public void performSort(List<Date> input) {
         mergesort(input, 0, input.size() - 1);
     }
 
-    /**
-     * Recursive merge sort method
-     * @oracleIgnore
-     */
     private void mergesort(List<Date> input, int low, int high) {
         if (high - low < 1) {
             return;
@@ -312,10 +263,6 @@ public class MergeSort implements SortStrategy {
         merge(input, low, mid, high);
     }
 
-    /**
-     * Merge method
-     * @oracleIgnore
-     */
     private void merge(List<Date> input, int low, int middle, int high) {
 
         Date[] temp = new Date[high - low + 1];
@@ -346,18 +293,12 @@ public class MergeSort implements SortStrategy {
         }
     }
 }
+""",
 
-#####
-
-Policy.java:
-
-package net.java;
+    "Policy.java": """package net.java;
 
 public class Policy {
 
-    /**
-     * @oracleIgnore
-     */
     private static final int DATES_SIZE_THRESHOLD = 10;
 
     private Context context;
@@ -366,9 +307,6 @@ public class Policy {
         this.context = context;
     }
 
-    /**
-     * Chooses a strategy depending on the number of date objects.
-     */
     public void configure() {
         if (this.context.getDates().size() > DATES_SIZE_THRESHOLD) {
             System.out.println("More than " + DATES_SIZE_THRESHOLD
@@ -381,32 +319,23 @@ public class Policy {
         }
     }
 }
+""",
 
-#####
-
-SortStrategy.java:
-
-package net.java;
+    "SortStrategy.java": """package net.java;
 
 import java.util.Date;
 import java.util.List;
 
 public interface SortStrategy {
 
-    /**
-     * Sorts a list of Dates.
-     *
-     * @param input list of Dates
-     */
     void performSort(List<Date> input);
 }
 """
+}
 
 
-TEMPLATE_SORTING = """
-BubbleSort.java:
-
-package net.java;
+TEMPLATE_SORTING : dict[str, str] = {
+    "BubbleSort.java": """package net.java;
 
 import java.util.*;
 
@@ -422,12 +351,9 @@ public class BubbleSort {
         //TODO: implement
     }
 }
+""",
 
-#####
-
-Client.java:
-
-package net.java;
+    "Client.java": """package net.java;
 
 import java.text.*;
 import java.util.*;
@@ -479,13 +405,6 @@ public final class Client {
         }
     }
 
-    /**
-     * Generates a List of random Date objects with random List size between
-     * {@link #RANDOM_FLOOR} and {@link #RANDOM_CEILING}.
-     *
-     * @return a List of random Date objects
-     * @throws ParserException if date string cannot be parsed
-     */
     private static List<Date> createRandomDatesList() throws ParseException {
         int listLength = randomIntegerWithin(RANDOM_FLOOR, RANDOM_CEILING);
         List<Date> list = new ArrayList<>();
@@ -501,55 +420,26 @@ public final class Client {
         return list;
     }
 
-    /**
-     * Creates a random Date within the given range.
-     *
-     * @param low the lower bound
-     * @param high the upper bound
-     * @return random Date within the given range
-     */
     private static Date randomDateWithin(Date low, Date high) {
         long randomLong = randomLongWithin(low.getTime(), high.getTime());
         return new Date(randomLong);
     }
 
-    /**
-     * Creates a random long within the given range.
-     *
-     * @param low the lower bound
-     * @param high the upper bound
-     * @return random long within the given range
-     */
     private static long randomLongWithin(long low, long high) {
         return ThreadLocalRandom.current().nextLong(low, high + 1);
     }
 
-    /**
-     * Creates a random int within the given range.
-     *
-     * @param low the lower bound
-     * @param high the upper bound
-     * @return random int within the given range
-     */
     private static int randomIntegerWithin(int low, int high) {
         return ThreadLocalRandom.current().nextInt(low, high + 1);
     }
 
-    /**
-     * Prints out the given Array of Date objects.
-     *
-     * @param list of the dates to print
-     */
     private static void printDateList(List<Date> list) {
         System.out.println(list.toString());
     }
 }
+""",
 
-#####
-
-MergeSort.java:
-
-package net.java;
+    "MergeSort.java": """package net.java;
 
 import java.util.*;
 
@@ -567,3 +457,4 @@ public class MergeSort {
 
 }
 """
+}

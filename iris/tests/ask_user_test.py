@@ -3,6 +3,16 @@ import re
 from collections import Counter
 
 from iris.tests.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
+from mypy.state import state
+
+from iris.domain import ExerciseChatPipelineExecutionDTO
+from iris.domain.data.course_dto import CourseDTO
+from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
+from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
+from iris.domain.event.pyris_event_dto import PyrisEventDTO
+from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
+from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
+from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
 
 
 # Helper function to extract keywords from code input, that are less often used in exercise template
@@ -47,13 +57,25 @@ def extract_keywords(task_template: str, code: str, top_n: int = 10):
 class AskUserTest(unittest.TestCase):
 
     def setUp(self):
-        self.task = TASK_SORTING
-        self.code = CODE_SORTING
-        self.template = TEMPLATE_SORTING
-        self.question = "" # generate_verification_question(self.code, self.task, self.template)
-        self.keywords = extract_keywords(self.template, self.code)
+        self.keywords = extract_keywords(TEMPLATE_SORTING, CODE_SORTING)
 
 
+
+        self.dto = ExerciseChatPipelineExecutionDTO(
+            submission=ProgrammingSubmissionDTO(id=1, repository=CODE_SORTING, isPractice=False, buildFailed=False),
+            exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=TEMPLATE_SORTING, problemStatement=TASK_SORTING),
+            course=CourseDTO(id=1,name="Intro to Programming", description=None),
+            eventPayload=PyrisEventDTO(eventType="", event=""),
+            customInstructions=None, settings=None, user=None)
+
+        self.variant = ExerciseChatVariant(
+            variant_id="exercise_chat_v1", name="Exercise Chat",
+            description="Variant for exercise explanations",
+            agent_model="gpt-4o-mini",citation_model="gpt-4o")
+
+        # todo: how to extract pipeline result for tests?
+        self.state = AgentPipelineExecutionState()
+        self.question = ExerciseChatAgentPipeline.execute_agent(self.state)
 
     def test_question_is_thematically_relevant(self):
         assert (any(k in self.question.lower() for k in self.keywords) or any(k in self.question.lower() for k in self.task))
