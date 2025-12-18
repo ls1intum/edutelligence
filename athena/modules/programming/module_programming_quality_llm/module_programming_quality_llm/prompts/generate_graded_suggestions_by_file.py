@@ -32,7 +32,7 @@ human_message = """\
 File: {file_path}
 
 Code (with line numbers <number>: <line>):
-"""
+\"\"\"
 {submission_file}
-"""
+\"\"\"
 """
