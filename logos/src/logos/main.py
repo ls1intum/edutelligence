@@ -36,16 +36,7 @@ from scripts import setup_proxy
 
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
-
-app = FastAPI(docs_url="/docs", openapi_url="/openapi.json", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In Produktion ggf. einschränken
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],  # logos_key etc.
-)
+_background_tasks: Set[asyncio.Task] = set()
 
 
 @asynccontextmanager
@@ -96,6 +87,17 @@ async def lifespan(app: FastAPI):
     if _grpc_server:
         await _grpc_server.stop(0)
 
+
+# Initialize FastAPI app with lifespan
+app = FastAPI(docs_url="/docs", openapi_url="/openapi.json", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In Produktion ggf. einschränken
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],  # logos_key etc.
+)
 
 
 # ============================================================================
@@ -744,25 +746,34 @@ async def _execute_resource_mode(
                     result.scheduling_stats
                 )
     except Exception as e:
-        _pipeline.record_completion(
-            request_id=result.scheduling_stats.get("request_id"),
-            result_status="error",
-            error_message=str(e)
-        )
+        logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)
+        try:
+            _pipeline.record_completion(
+                request_id=result.scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=str(e)
+            )
+        except Exception as record_err:
+            logger.error(f"Failed to record completion: {record_err}")
+
         if is_async_job:
             return {"status_code": 500, "data": {"error": str(e)}}
         else:
             raise e
     finally:
         # Release scheduler resources
-        if result.scheduling_stats and result.scheduling_stats.get("request_id"):
-            try:
-                _pipeline.scheduler.release(
-                    result.model_id,
-                    result.scheduling_stats.get("request_id")
-                )
-            except Exception as e:
-                logger.error(f"Failed to release scheduler resources: {e}")
+        try:
+            if result.scheduling_stats and result.scheduling_stats.get("request_id"):
+                try:
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.scheduling_stats.get("request_id")
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to release scheduler resources: {e}")
+        except NameError:
+            # result not defined, nothing to release
+            pass
 
 
 async def route_and_execute(

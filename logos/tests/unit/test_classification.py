@@ -86,7 +86,7 @@ def testing():
     # print("Classification finished in: {:.2f}ms".format(time.time() - s) * 1000)
 
     for result in results:
-        print(f"Model {models[result[0]]["name"]} got weight {result[1]}")
+        print(f"Model {models[result[0]]['name']} got weight {result[1]}")
 
 
 if __name__ == "__main__":

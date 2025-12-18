@@ -4,6 +4,7 @@ Registers custom CLI options for test parameters and provides fixtures.
 """
 
 import pytest
+import requests
 
 
 def pytest_addoption(parser):
@@ -113,3 +114,44 @@ def azure_live_model_id(request):
         pytest.skip(f"Invalid --azure-live-model-id: {model_id}")
         return None
     return int(model_id)
+
+
+@pytest.fixture(autouse=True, scope="function")
+def enable_ollama_http(monkeypatch):
+    """
+    Re-enable Ollama /api/ps polling so tests can supply mocked responses.
+
+    Production code disables HTTP polling; this forces the provider to call
+    requests.get (which tests patch) and use the returned JSON payload.
+    """
+
+    def _fetch_ps_via_http(self):
+        if not self.base_url:
+            return None
+        try:
+            resp = requests.get(f"{self.base_url}/api/ps", timeout=5.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            return None
+        return None
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.ollama_provider.OllamaDataProvider._fetch_ps_via_http",
+        _fetch_ps_via_http,
+    )
+
+
+@pytest.fixture(autouse=True, scope="function")
+def disable_ollama_db(monkeypatch):
+    """
+    Disable provider DB lookups to keep tests fully offline.
+    """
+
+    def _no_config(self):
+        return {}
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.ollama_provider.OllamaDataProvider._load_provider_config",
+        _no_config,
+    )

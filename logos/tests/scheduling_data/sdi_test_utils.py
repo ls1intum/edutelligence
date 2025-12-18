@@ -9,7 +9,7 @@ from unittest.mock import Mock
 from logos.scheduling.scheduler import Task
 
 
-# Realistic model metadata used across SDI tests
+# Realistic model metadata used across SDI tests (inputs to facades)
 AZURE_MODELS = {
     10: {
         "name": "azure-gpt-4-omni",
@@ -68,9 +68,10 @@ def create_task(task_id: int, model_id: int, priority: int, data: Optional[Dict]
     return Task(data=task_data, models=models, task_id=task_id)
 
 
-def create_ollama_api_response(loaded_models: Dict[int, bool]) -> Mock:
+# Ollama /api/ps payload + optional Mock wrapper
+def build_ollama_ps_payload(loaded_models: Dict[int, bool]) -> Dict:
     """
-    Create a mock response for Ollama /api/ps endpoint.
+    Build JSON payload for /api/ps showing which models are loaded.
 
     Args:
         loaded_models: Mapping of model_id -> bool indicating if loaded.
@@ -86,10 +87,14 @@ def create_ollama_api_response(loaded_models: Dict[int, bool]) -> Mock:
                     "expires_at": (now + datetime.timedelta(minutes=30)).isoformat() + "Z",
                 }
             )
+    return {"models": models_list}
 
+
+def create_ollama_api_ps_response(loaded_models: Dict[int, bool]) -> Mock:
+    """Return a Mock requests.get response for /api/ps using build_ollama_ps_payload()."""
     mock_response = Mock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {"models": models_list}
+    mock_response.json.return_value = build_ollama_ps_payload(loaded_models)
     return mock_response
 
 

@@ -7,6 +7,7 @@ from typing import Union, List, Dict, Any, Optional
 from fastapi.responses import StreamingResponse
 import httpx
 import yaml
+from pathlib import Path
 from starlette.requests import Request
 
 from logos.dbutils.dbmanager import DBManager
@@ -93,16 +94,27 @@ def extract_model(json_data: dict) -> str:
 def parse_provider_config(name: str) -> dict:
     """Load provider configuration from YAML file."""
     try:
-        with open(f"./config/config-{name}.yaml") as stream:
-            return yaml.safe_load(stream)
+        cwd_path = Path.cwd() / "config" / f"config-{name}.yaml"
+        repo_path = Path(__file__).resolve().parents[3] / "config" / f"config-{name}.yaml"
+        for candidate in (cwd_path, repo_path):
+            if candidate.exists():
+                with candidate.open() as stream:
+                    return yaml.safe_load(stream)
     except (FileNotFoundError, yaml.YAMLError):
-        # Fallback to default openwebui config
-        return {
-            'provider': 'openwebui',
-            'forward_url': '{base_url}/{path}',
-            'required_headers': ['Authorization'],
-            'auth': {'header': 'Authorization', 'format': '{Authorization}'}
-        }
+        pass
+
+    logging.warning(
+        "parse_provider_config: missing config for %s (cwd=%s); using default openwebui config",
+        name,
+        Path.cwd(),
+    )
+    # Fallback to default openwebui config
+    return {
+        'provider': 'openwebui',
+        'forward_url': '{base_url}/{path}',
+        'required_headers': ['Authorization'],
+        'auth': {'header': 'Authorization', 'format': '{Authorization}'}
+    }
 
 
 def request_setup(headers: dict, logos_key: str):
@@ -140,6 +152,11 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
     forward_url = None
     provider_info = None
 
+    def _provider_label(item: object) -> str:
+        if isinstance(item, dict):
+            return item.get("name", str(item))
+        return str(item)
+
     for provider in providers:
         with DBManager() as db:
             provider_info = db.get_provider(provider)
@@ -151,12 +168,29 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
         elif "openai" in provider_info["name"].lower() and "Authorization" in headers and "sk-" in headers["Authorization"]:
             config = parse_provider_config("openai")
         else:
+            logging.debug(
+                "proxy_behaviour: skipping provider %s (name=%s) no matching handler",
+                provider_info.get("id"),
+                provider_info.get("name"),
+            )
             continue
 
         req_headers = config["required_headers"]
+        logging.debug(
+            "proxy_behaviour: required headers for %s (%s) -> %s",
+            provider_info.get("id"),
+            provider_info.get("name"),
+            req_headers,
+        )
         check = True
         for req_header in req_headers:
             if req_header not in headers:
+                logging.warning(
+                    "proxy_behaviour: missing required header '%s' for provider %s (%s)",
+                    req_header,
+                    provider_info.get("id"),
+                    provider_info.get("name"),
+                )
                 check = False
                 break
         if not check:
@@ -176,6 +210,12 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
         break  # Found a suitable provider
 
     if proxy_headers is None:
+        logging.error(
+            "proxy_behaviour: no suitable provider found for path=%s headers=%s providers=%s",
+            path,
+            list(headers.keys()),
+            [_provider_label(p) for p in providers] if isinstance(providers, list) else _provider_label(providers),
+        )
         return {"error": "Could not identify suitable provider. Please check your headers and registered provider names"}, 500
     return proxy_headers, forward_url, int(provider_info["id"])
 
@@ -206,5 +246,3 @@ def extract_token_usage(usage: dict) -> dict:
             usage_tokens["completion_" + name] = usage["completion_tokens_details"][name]
 
     return usage_tokens
-
-
