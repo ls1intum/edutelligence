@@ -1,7 +1,7 @@
 import logging
 import re
 
-from nebula.common.llm_config import get_openai_client
+from nebula.common.config import get_openai_client
 
 
 def ask_gpt_for_slide_number(image_b64: str, job_id: str | None = None) -> int | None:
@@ -47,7 +47,7 @@ def ask_gpt_for_slide_number(image_b64: str, job_id: str | None = None) -> int |
         message_content = response.choices[0].message.content or ""
         content = message_content.strip().lower()
         if "null" in content or "unknown" in content:
-            return None
+            return -1  # No slide visible
 
         m = re.search(r"\d+", content)
         return int(m.group(0)) if m else None
