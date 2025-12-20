@@ -1,0 +1,21 @@
+{
+  "id": "chatcmpl-ow123",
+  "object": "chat.completion",
+  "created": 1734268190,
+  "model": "{{MODEL}}",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hi! I'm here to assist you with anything you need."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 12,
+    "completion_tokens": 10,
+    "total_tokens": 22
+  }
+}

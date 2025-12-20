@@ -1,0 +1,1407 @@
+log_id,request_id,mode,priority,http_status,client_duration_ms,provider_name,model_name,ttft_ms,tpot_ms,tokens,total_latency_ms,response_text,error
+528,req-1,batch,low,200,14465.52,openwebui,qwen3:30b-a3b,5854.90,8.75,963,14270.57,"Certainly! Let's explore the difference between **O(n log n)** and **O(n²)** time complexity using a **practical sorting example**.
+
+---
+
+### 🔢 **Time Complexity Overview**
+
+- **O(n²)**: Quadratic time — the time grows proportionally to the square of the input size.
+- **O(n log n)**: Linearithmic time — grows faster than linear (O(n)) but much slower than quadratic.
+
+As **n** (number of elements) increases, **O(n log n)** becomes significantly more efficient than **O(n²)**.
+
+---
+
+### 📌 **Practical Example: Sorting Algorithms**
+
+Let’s compare two common sorting algorithms:
+
+1. **Bubble Sort** → **O(n²)**
+2. **Merge Sort** → **O(n log n)**
+
+---
+
+### 🔄 **Bubble Sort (O(n²)) – The Slower Approach**
+
+**How it works:**
+- Repeatedly steps through the list, compares adjacent elements, and swaps them if they’re in the wrong order.
+- After each pass, the largest unsorted element ""bubbles up"" to its correct position.
+
+**Example with 100 elements:**
+- Worst-case comparisons: ~100² = **10,000** operations.
+- For 1,000 elements: ~1,000,000 operations.
+
+**Performance:**
+- If sorting 1,000 items takes 1 second, sorting 10,000 items would take **~100 seconds** (since (10,000² / 1,000²) = 100).
+
+> ❌ **Not suitable** for large datasets.
+
+---
+
+### 🔄 **Merge Sort (O(n log n)) – The Efficient Approach**
+
+**How it works:**
+- Divides the array into two halves, recursively sorts each half, then merges them back together.
+
+**Example with 100 elements:**
+- Number of levels in recursion: log₂(100) ≈ 7
+- At each level, we do ~100 comparisons
+- Total: ~100 × 7 = **700 operations**
+
+**Performance:**
+- For 1,000 elements: ~1,000 × log₂(1,000) ≈ 1,000 × 10 = **10,000 operations**
+- For 10,000 elements: ~10,000 × 13 ≈ **130,000 operations**
+
+> ✅ **Scales much better** — even for large datasets.
+
+---
+
+### 📊 **Comparison Table (n = number of elements)**
+
+| n       | O(n²) Operations (e.g., Bubble Sort) | O(n log n) Operations (e.g., Merge Sort) |
+|---------|---------------------------------------|------------------------------------------|
+| 100     | 10,000                                | ~700                                     |
+| 1,000   | 1,000,000                             | ~10,000                                  |
+| 10,000  | 100,000,000                           | ~130,000                                 |
+| 100,000 | 10,000,000,000                        | ~1,700,000                               |
+
+> 💡 **O(n log n) is dramatically faster** as n grows.
+
+---
+
+### ✅ **When to Use Which?**
+
+- Use **O(n log n)** algorithms (like Merge Sort, Quick Sort, Heap Sort) for:
+  - Large datasets (e.g., sorting millions of records).
+  - Real-world applications (e.g., databases, search engines).
+
+- Use **O(n²)** algorithms (like Bubble Sort, Insertion Sort) only for:
+  - Small datasets (n < 50).
+  - Educational purposes or when simplicity is more important than speed.
+
+---
+
+### 🎯 **Key Takeaway**
+
+> **O(n log n) is far more efficient than O(n²) for large inputs.**  
+> In sorting, this means algorithms like Merge Sort or Quick Sort are preferred over Bubble Sort when dealing with real-world data.
+
+💡 **Bottom line:**  
+For sorting 1 million items, **O(n²)** might take hours, while **O(n log n)** takes seconds — a crucial difference in performance!",
+529,req-2,batch,low,0,61030.44,openwebui,qwen3:30b-a3b,61025.01,,,61026.76,,
+530,req-3,batch,mid,200,41999.40,openwebui,gemma3:27b,4222.40,27.36,1372,41730.89,"Okay, here are 20 quiz questions covering computer networking fundamentals, with answers provided at the very end.  I've included a mix of difficulty levels (easy, medium, hard) and different question formats (multiple choice, true/false, fill-in-the-blank).
+
+**Instructions:** Try to answer them yourself *before* looking at the answers!
+
+---
+
+**Computer Networking Fundamentals Quiz**
+
+**1. (Easy - Multiple Choice)** What does TCP/IP stand for?
+   a) Total Communication Protocol / Internet Protocol
+   b) Transmission Control Protocol / Internet Protocol
+   c) Transfer Control Program / Internal Protocol
+   d) Total Control Program / Internet Protocol
+
+**2. (Easy - True/False)** A MAC address is a physical address assigned to a network interface card (NIC).
+
+**3. (Easy - Fill-in-the-Blank)**  A ______ is a device that forwards data packets between networks.
+
+**4. (Medium - Multiple Choice)** Which layer of the OSI model is responsible for providing reliable, ordered delivery of data?
+   a) Physical Layer
+   b) Data Link Layer
+   c) Transport Layer
+   d) Network Layer
+
+**5. (Medium - Multiple Choice)** What is the purpose of a subnet mask?
+   a) To encrypt network traffic.
+   b) To identify the network portion and host portion of an IP address.
+   c) To block specific websites.
+   d) To translate domain names to IP addresses.
+
+**6. (Easy - Multiple Choice)** What is the primary function of a router?
+   a) Connect devices within a local network
+   b) Connect different networks together
+   c) Amplify network signals
+   d) Filter out malicious software
+
+**7. (Medium - True/False)**  A hub broadcasts data to all connected devices, while a switch sends data only to the intended recipient.
+
+**8. (Medium - Fill-in-the-Blank)**  _____ is a protocol used to convert domain names (like google.com) into IP addresses.
+
+**9. (Easy - Multiple Choice)** What is the range of valid private IP addresses for Class A networks?
+   a) 10.0.0.0 – 10.255.255.255
+   b) 172.16.0.0 – 172.31.255.255
+   c) 192.168.0.0 – 192.168.255.255
+   d) 169.254.0.0 – 169.254.255.255
+
+**10. (Medium - Multiple Choice)** Which of the following is a connectionless protocol?
+   a) TCP
+   b) HTTP
+   c) UDP
+   d) FTP
+
+**11. (Hard - Multiple Choice)** What is the purpose of Network Address Translation (NAT)?
+    a) To encrypt network traffic.
+    b) To allow multiple devices on a private network to share a single public IP address.
+    c) To speed up network connections.
+    d) To filter out spam emails.
+
+**12. (Hard - True/False)**  OSPF is a routing protocol that uses distance-vector algorithms.
+
+**13. (Medium - Fill-in-the-Blank)**  The protocol used for secure email communication is _____.
+
+**14. (Easy - Multiple Choice)** What does VPN stand for?
+   a) Virtual Private Network
+   b) Very Powerful Network
+   c) Virtual Public Network
+   d) Very Private Network
+
+**15. (Medium - Multiple Choice)** Which layer of the OSI model handles physical cabling and signal transmission?
+   a) Application Layer
+   b) Transport Layer
+   c) Physical Layer
+   d) Data Link Layer
+
+**16. (Hard - Multiple Choice)**  What is the primary function of a DHCP server?
+    a) To provide security for network devices.
+    b) To automatically assign IP addresses to devices on a network.
+    c) To translate domain names to IP addresses.
+    d) To monitor network traffic.
+
+**17. (Medium - True/False)**  A collision domain is a network segment where multiple devices can transmit simultaneously without causing interference.
+
+**18. (Hard - Fill-in-the-Blank)**  The term _______ refers to the delay between the transmission of a packet and its reception.
+
+**19. (Medium - Multiple Choice)** What is the purpose of a firewall?
+   a) To speed up internet connections
+   b) To prevent unauthorized access to a network
+   c) To monitor network traffic
+   d) To translate domain names to IP addresses
+
+**20. (Hard - Multiple Choice)**  Which of the following is *not* a common wireless security protocol?
+   a) WEP
+   b) WPA
+   c) WPA2
+   d) FTP
+
+---
+
+**Answer Key**
+
+1.  b) Transmission Control Protocol / Internet Protocol
+2.  True
+3.  Router
+4.  c) Transport Layer
+5.  b) To identify the network portion and host portion of an IP address.
+6.  b) Connect different networks together
+7.  True
+8.  DNS (Domain Name System)
+9.  a) 10.0.0.0 – 10.255.255.255
+10. c) UDP
+11. b) To allow multiple devices on a private network to share a single public IP address.
+12. False (OSPF uses link-state algorithms)
+13. SMTP (Simple Mail Transfer Protocol) or TLS/SSL (for secure SMTP)
+14. a) Virtual Private Network
+15. c) Physical Layer
+16. b) To automatically assign IP addresses to devices on a network.
+17. False (A collision domain is where collisions *can* occur)
+18. Latency
+19. b) To prevent unauthorized access to a network
+20. d) FTP
+
+---
+
+I hope this quiz is helpful!  Let me know if you'd like any further clarification on any of the questions or concepts.  Good luck!",
+531,req-4,batch,mid,200,23611.29,openwebui,qwen3:30b-a3b,4624.12,6.45,2938,23555.41,"## Lecture: Compiler Design - The Core Phases (Lexical Analysis, Parsing, Code Generation)
+
+**Target Audience:** Undergraduate Computer Science Students (Introductory Compiler Course)  
+**Duration:** 50 Minutes  
+**Prerequisites:** Basic understanding of programming languages, finite automata (optional but helpful)  
+
+---
+
+### **I. Introduction: Why Compilers Matter (5 min)**
+*(Slide: ""From Source Code to Machine Execution"")*  
+> **""Imagine writing a program in Python, C++, or Java, but instead of running it, you had to manually convert every line into binary machine code. Impossible! Compilers are the *magic translators* that automate this process. Today, we’ll explore the *core phases* that turn human-readable code into executable programs.""**
+
+**Key Insight:**  
+> *""Compilers are not just tools—they’re the bridge between human creativity (writing code) and machine execution (running code). Without them, modern software development wouldn’t exist.""*
+
+---
+
+### **II. Phase 1: Lexical Analysis (Scanning) (15 min)**  
+*(Slide: ""Breaking Code into Tokens"")*  
+
+**Goal:** *Convert raw characters into meaningful units (tokens) while ignoring irrelevant details (whitespace, comments).*  
+
+**Why it’s Needed:**  
+> *""The parser can’t understand `int x = 5;` as a whole—it needs to see `int`, `x`, `=`, `5`, `;` as separate pieces.""*  
+
+**How It Works:**  
+1. **Input:** Source code (e.g., `if (x > 5) { y = x + 1; }`).  
+2. **Process:**  
+   - *Scanner* (Lexer) reads characters sequentially.  
+   - *Tokenizes*: Groups characters into tokens (e.g., `if` → `KEYWORD`, `(` → `PAREN_OPEN`, `x` → `IDENTIFIER`).  
+   - *Ignores*: Whitespace, comments (`// comment`).  
+3. **Output:** Sequence of **tokens** (e.g., `[IF, PAREN_OPEN, IDENTIFIER(x), GREATER, INTEGER(5), PAREN_CLOSE, LBRACE, ...]`).  
+
+**Key Concepts:**  
+- **Lexeme:** The actual character sequence (e.g., `x` is the lexeme for the identifier token).  
+- **Token:** The *type* of lexeme (e.g., `IDENTIFIER`).  
+- **Regular Expressions:** Used to define token patterns (e.g., `identifier = [a-zA-Z_][a-zA-Z0-9_]*`).  
+
+**Example:**  
+```c
+int main() { return 0; }
+```
+→ **Tokens:** `KEYWORD(int)`, `IDENTIFIER(main)`, `PAREN_OPEN`, `PAREN_CLOSE`, `LBRACE`, `KEYWORD(return)`, `INTEGER(0)`, `SEMICOLON`, `RBRACE`.  
+
+**Common Pitfall:**  
+> *""Lexical errors are easy (e.g., `unterminated string`), but *parsing* errors (e.g., `if (x > 5) { y = x +` missing `;`) happen later.""*  
+
+---
+
+### **III. Phase 2: Parsing (Syntax Analysis) (15 min)**  
+*(Slide: ""Building the Structure of the Program"")*  
+
+**Goal:** *Verify the token sequence follows the language’s grammar and build a structural representation (Abstract Syntax Tree - AST).*  
+
+**Why it’s Needed:**  
+> *""Tokens alone don’t tell us *how* the code is structured. Is `x + y * z` `(x + y) * z` or `x + (y * z)`? Parsing resolves ambiguity!""*  
+
+**How It Works:**  
+1. **Input:** Token stream from the lexer.  
+2. **Process:**  
+   - *Parser* uses a **grammar** (e.g., BNF) to check syntax.  
+   - *Builds an AST*: A tree representing the program’s hierarchical structure.  
+3. **Output:** **Abstract Syntax Tree (AST)**.  
+
+**Grammar Example (Simplified):**  
+```
+Statement → IfStatement | Assignment
+IfStatement → 'if' '(' Expr ')' Statement
+Expr → Expr '+' Expr | Identifier
+```
+
+**Example:**  
+*Token Stream:* `[IF, PAREN_OPEN, IDENTIFIER(x), GREATER, INTEGER(5), PAREN_CLOSE, LBRACE, ...]`  
+*AST:*  
+```
+IfStatement
+├── Condition: (x > 5)
+└── Body: { ... }
+```
+
+**Key Concepts:**  
+- **Context-Free Grammar (CFG):** Defines valid structures (e.g., `if` must have parentheses).  
+- **Parsing Techniques:**  
+  - *Top-down* (LL parsers): Start from the main goal (e.g., `if` statement).  
+  - *Bottom-up* (LR parsers): Start from tokens and build up (e.g., `y = x + 1` → `assignment`).  
+- **Syntax Errors:** *Missing `}`*, *unmatched parentheses* → **parsed but invalid**.  
+
+**Why Parse?**  
+> *""Without parsing, the compiler wouldn’t know if `x = 5 + 3 * 2` means `x = 5 + (3 * 2)` (correct) or `x = (5 + 3) * 2` (incorrect). The AST resolves this!""*  
+
+---
+
+### **IV. Phase 3: Code Generation (10 min)**  
+*(Slide: ""From Abstract Tree to Machine Code"")*  
+
+**Goal:** *Translate the AST into target machine code (e.g., assembly, bytecode).*  
+
+**Why it’s Needed:**  
+> *""The AST is a *conceptual* structure. Code generation turns it into *executable instructions* for a specific CPU.""*  
+
+**How It Works:**  
+1. **Input:** AST from the parser.  
+2. **Process:**  
+   - *Traverse the AST* (e.g., depth-first).  
+   - *Map constructs to target instructions*:  
+     - `x = y + z` → `ADD y, z, x` (in assembly).  
+     - `if (x > 5) ...` → `CMP x, 5; JG label` (jump if greater).  
+   - *Allocate registers* (e.g., store `x` in `R1`).  
+3. **Output:** **Target code** (e.g., x86 assembly, JVM bytecode).  
+
+**Example:**  
+*AST for `y = x + 1`*  
+→ **Assembly Code:**  
+```asm
+MOV R1, [x]    ; Load x into register R1
+ADD R1, #1     ; Add 1
+MOV [y], R1    ; Store result in y
+```
+
+**Key Concepts:**  
+- **Intermediate Representation (IR):** Often used *between* parsing and code gen (e.g., three-address code: `t1 = x + 1; y = t1`).  
+- **Target Architecture:** Code generation *depends* on the CPU (e.g., ARM vs. x86).  
+- **Optimization:** *Not in this phase* (covered later!), but code gen *can* include basic optimizations (e.g., constant folding).  
+
+**Why It’s the ""Final"" Phase:**  
+> *""Once code is generated, the compiler’s job is done! The OS loads the executable into memory and runs it.""*  
+
+---
+
+### **V. The Big Picture & Why Phases Matter (5 min)**  
+*(Slide: ""The Compiler Pipeline"")*  
+
+**Visual:**  
+`Source Code` → **Lexical Analysis** → `Tokens` → **Parsing** → `AST` → **Code Generation** → `Machine Code`  
+
+**Why Separate Phases?**  
+1. **Modularity:** Fix a bug in the lexer *without* touching the parser.  
+2. **Error Handling:** Lexer catches *token* errors (e.g., `@invalid`), parser catches *structure* errors (e.g., `if (x > 5` missing `)`).  
+3. **Reusability:** The lexer can be reused for *any* language (with a new grammar).  
+
+**Real-World Impact:**  
+> *""When you compile `hello.c`, the lexer finds `#include <stdio.h>`, the parser builds the structure of `main()`, and code gen turns it into `0x48 0x89 0x45...` (x86 instructions)!""*  
+
+---
+
+### **VI. Summary & Next Steps (5 min)**  
+*(Slide: ""Key Takeaways"")*  
+
+| **Phase**          | **Input**       | **Output**      | **Key Task**                     |
+|---------------------|-----------------|-----------------|----------------------------------|
+| **Lexical Analysis** | Source code     | Tokens          | Break into meaningful units      |
+| **Parsing**         | Tokens          | AST             | Check grammar, build structure   |
+| **Code Generation** | AST             | Machine code    | Map to target instructions       |
+
+**Final Thought:**  
+> *""Compilers are the unsung heroes of software. Every time you run a program, a compiler *decades* old has done its job perfectly. Understanding these phases is the first step to building *your own* compiler!""*  
+
+**Next Lecture Teaser:**  
+> *""Next, we’ll dive into *semantic analysis* (checking meaning, e.g., `x = 5;` before `x` is declared) and *optimization* (making code faster!).""*  
+
+---
+
+**Instructor Notes:**  
+- **Demo Suggestion:** Show a simple lexer/parser (e.g., using `flex`/`bison` or a Python tokenizer) for `x = 5 + 3`.  
+- **Common Student Confusion:** Clarify that *tokens* ≠ *syntax* (lexer = ""what words,"" parser = ""how they’re ordered"").  
+- **Mnemonic:** ""**L**exical **P**arser **C**ode"" (LPC) → **L**exical → **P**arsing → **C**ode.  
+
+> *""The compiler doesn’t ‘understand’ your code—it follows rules. Your job as a programmer is to speak *its* language. The compiler just translates.""*  
+
+---  
+**End of Lecture**  
+*Total Slides: 12 | Time: 50 min*",
+532,req-5,batch,low,200,566.26,openwebui,deepseek-r1:70b,494.66,,,495.90,,
+533,req-6,batch,mid,0,60253.57,openwebui,qwen3:30b-a3b,60254.18,,,60255.64,,
+534,req-7,batch,low,200,102914.29,openwebui,gemma3:27b,7455.38,48.86,1954,102869.37,"## Software Testing Methodologies: Unit, Integration, and System Testing - Lecture Notes
+
+These notes cover three fundamental levels of software testing: Unit, Integration, and System.  They aim to provide a comprehensive overview, including definitions, objectives, techniques, advantages, disadvantages, and when to apply each.
+
+**I. Introduction to Software Testing**
+
+* **Definition:** Software Testing is a process of evaluating a system or its component(s) with the intent of finding whether it satisfies the specified requirements or not. It's about *detecting defects*, not proving correctness.
+* **Purpose:**
+    * **Improve Quality:** Identifying and fixing defects leads to higher quality software.
+    * **Reduce Costs:** Fixing defects early in the development lifecycle is significantly cheaper than fixing them in production.
+    * **Increase Reliability:** Testing ensures the software performs as expected under various conditions.
+    * **Customer Satisfaction:**  Higher quality software leads to more satisfied users.
+* **Testing Principles:**
+    * **Testing shows presence of defects, not absence.**
+    * **Exhaustive testing is impossible.** (Focus on risk-based testing)
+    * **Early testing saves time and money.** (Shift Left)
+    * **Defects cluster together.** (Pareto Principle – 80/20 rule)
+    * **Pesticide Paradox:** Repeated tests will eventually stop finding new bugs.  Tests need to be reviewed and revised.
+    * **Testing is context dependent.** (Different software requires different testing approaches)
+    * **Absence-of-errors fallacy:** Finding no bugs doesn't mean the software is usable or meets user needs.
+
+
+
+**II. Unit Testing**
+
+* **Definition:** Unit Testing involves testing individual components or units of code in isolation.  A ""unit"" is the smallest testable part of an application, typically a function, method, procedure, module, or object.
+* **Objectives:**
+    * **Verify Functionality:** Ensure each unit performs its intended function correctly.
+    * **Identify Bugs Early:** Catch errors at the code level before they propagate to other parts of the system.
+    * **Facilitate Refactoring:**  Well-written unit tests provide a safety net for making code changes.
+    * **Improve Code Design:**  Forces developers to write modular, testable code.
+* **Techniques:**
+    * **White-box Testing:** Based on the internal structure of the code.  Focuses on covering statements, branches, and paths.
+    * **Black-box Testing:** Tests the unit based on its specification, without knowing its internal implementation.
+    * **Test-Driven Development (TDD):** A development process where tests are written *before* the code.  (Red-Green-Refactor cycle)
+    * **Mocking:** Replacing dependencies with controlled substitutes to isolate the unit under test. (Crucial for testing units that rely on databases, APIs, or other external services.)
+* **Tools:** JUnit (Java), NUnit (.NET), pytest (Python), Jest (JavaScript), Mockito (Java), etc.
+* **Advantages:**
+    * **Early Bug Detection:** Reduces debugging costs.
+    * **Improved Code Quality:** Leads to more modular and maintainable code.
+    * **Faster Feedback:** Quick results allow developers to address issues promptly.
+    * **Simplified Debugging:** Easier to pinpoint the source of errors.
+* **Disadvantages:**
+    * **Can be Time-Consuming:** Writing comprehensive unit tests takes effort.
+    * **Requires Code Modification:**  May need to refactor code to make it testable.
+    * **Doesn't Catch Integration Issues:**  Only tests individual units, not how they interact.
+* **When to Apply:**  Always! Unit testing should be an integral part of the development process.  Critical for complex logic and algorithms.
+
+
+
+**III. Integration Testing**
+
+* **Definition:** Integration Testing focuses on testing the interaction between different units or modules of a software system. It verifies that the integrated modules work together as expected.
+* **Objectives:**
+    * **Verify Data Flow:** Ensure data is passed correctly between modules.
+    * **Identify Interface Defects:** Detect errors in the communication between modules.
+    * **Validate Module Interactions:** Confirm that modules work together to achieve a specific function.
+* **Approaches:**
+    * **Top-Down Integration:**  Starts with the high-level modules and integrates lower-level modules gradually. (Requires stubs to simulate missing modules.)
+    * **Bottom-Up Integration:**  Starts with the low-level modules and integrates higher-level modules gradually. (Requires drivers to simulate calling modules.)
+    * **Big Bang Integration:**  Integrates all modules at once.  (Difficult to debug and isolate errors.) - Generally discouraged.
+    * **Sandwich Integration:**  A combination of top-down and bottom-up approaches.
+* **Techniques:**
+    * **Functional Testing:** Verifying the functionality of integrated modules based on requirements.
+    * **Interface Testing:** Testing the interfaces between modules to ensure proper data exchange.
+    * **API Testing:** Testing the application programming interfaces (APIs) that connect different modules.
+* **Tools:**  Many of the same tools used for unit testing can be used for integration testing, alongside API testing tools like Postman, REST-assured, and SoapUI.
+* **Advantages:**
+    * **Detects Interface Errors:** Catches problems that unit testing misses.
+    * **Verifies System Functionality:** Confirms that modules work together correctly.
+    * **Reduces Risk:**  Addresses issues before system testing.
+* **Disadvantages:**
+    * **Can be Complex:** Requires careful planning and execution.
+    * **Debugging Can Be Difficult:**  Errors may be caused by interactions between multiple modules.
+    * **Requires Integrated Environment:** Need a working environment to test the integration.
+* **When to Apply:** After successful unit testing.  Especially important for systems with complex interactions between modules.
+
+
+
+**IV. System Testing**
+
+* **Definition:** System Testing is the evaluation of a fully integrated software system against its specified requirements. It validates that the system meets all functional and non-functional requirements.
+* **Objectives:**
+    * **Verify System Functionality:** Ensure all features work as expected.
+    * **Validate System Performance:** Assess the system’s speed, stability, and scalability.
+    * **Evaluate Usability:**  Determine how easy the system is to use.
+    * **Confirm Security:**  Identify vulnerabilities and ensure the system is protected.
+* **Types of System Testing:**
+    * **Functional Testing:** Validates that the system’s functions operate correctly.
+    * **Performance Testing:** Measures the system’s responsiveness, stability, and scalability. (Load, Stress, Endurance)
+    * **Usability Testing:**  Evaluates the system’s ease of use and user experience.
+    * **Security Testing:**  Identifies vulnerabilities and ensures the system is protected against attacks. (Penetration Testing, Vulnerability Scanning)
+    * **Regression Testing:**  Confirms that new changes haven't introduced new bugs or broken existing functionality. (Automated regression tests are crucial)
+    * **Acceptance Testing:**  Performed by end-users to determine if the system meets their needs. (User Acceptance Testing - UAT)
+* **Techniques:**
+    * **Black-box Testing:** Primarily used, focusing on inputs and outputs without knowledge of the internal implementation.
+    * **Grey-box Testing:**  Combines black-box and white-box techniques.
+* **Tools:**  Selenium, JMeter, LoadRunner, Burp Suite, various automated test frameworks.
+* **Advantages:**
+    * **Comprehensive Evaluation:**  Tests the entire system from end to end.
+    * **Identifies System-Level Bugs:**  Catches issues that other testing levels miss.
+    * **Validates Requirements:**  Confirms that the system meets the specified requirements.
+* **Disadvantages:**
+    * **Can Be Time-Consuming and Expensive:** Requires a fully integrated system and significant testing effort.
+    * **Difficult to Isolate Errors:** Identifying the root cause of errors can be challenging.
+    * **Late in the Development Lifecycle:** Fixing issues at this stage can be costly.
+* **When to Apply:** After successful integration testing.  Prior to releasing the software to production.
+
+
+
+**V. Relationship Between Testing Levels & The Testing Pyramid**
+
+The Testing Pyramid is a metaphor that advocates for a hierarchical approach to testing:
+
+* **Base (Wide):** Many Unit Tests - fast, cheap, and focused.
+* **Middle (Medium):** Fewer Integration Tests - slower and more complex.
+* **Top (Narrow):** Fewest System/End-to-End Tests - slowest, most complex, and expensive.
+
+This emphasizes the importance of having a strong foundation of unit tests and gradually reducing the number of more complex tests.
+
+
+
+**Conclusion:**
+
+Understanding these three levels of software testing is crucial for delivering high-quality software. Each level plays a vital role in identifying and preventing defects, ultimately leading to more reliable, usable, and secure applications.  Applying the right testing methodology at each stage of the development lifecycle is essential for success.",
+535,req-8,batch,mid,200,709.32,openwebui,deepseek-r1:70b,627.81,,,629.52,,
+536,req-9,batch,low,200,42150.20,openwebui,qwen3:30b-a3b,19815.25,6.60,3307,41638.91,"## REST API Design Principles: A Practical Tutorial with Real-World Examples
+
+REST (Representational State Transfer) isn't just ""using HTTP"" – it's an **architectural style** that leverages HTTP’s inherent capabilities to build scalable, maintainable APIs. Below, I break down core principles with *detailed, flawed vs. correct examples* you can use tomorrow.
+
+---
+
+### 🔑 **Core Principle 1: Resources, Not Actions**
+**Why?** REST is resource-oriented. Your API should model *things* (resources), not *actions* (verbs).  
+**Flawed (RPC-Style):**  
+`GET /getUsers`  
+`POST /createUser`  
+`DELETE /deleteUser/123`  
+
+**Correct (RESTful):**  
+`GET /users` → *List all users*  
+`POST /users` → *Create a new user*  
+`DELETE /users/123` → *Delete user ID 123*  
+
+**Why it matters:**  
+- Consistent with HTTP verbs (GET, POST, PUT, DELETE).  
+- Enables caching, bookmarks, and predictable behavior.  
+- *Example:*  
+  ```bash
+  # BAD: Verb-based
+  curl -X GET http://api.example.com/getUser/123
+
+  # GOOD: Resource-based
+  curl -X GET http://api.example.com/users/123
+  ```
+
+---
+
+### 🔑 **Core Principle 2: Use HTTP Methods Correctly**
+| HTTP Method | Purpose                  | Safe | Idempotent | Example                     |
+|-------------|--------------------------|------|------------|-----------------------------|
+| `GET`       | Retrieve resource        | ✅   | ✅         | `GET /users/123`            |
+| `POST`      | Create new resource      | ❌   | ❌         | `POST /users` (with body)   |
+| `PUT`       | Replace entire resource  | ❌   | ✅         | `PUT /users/123` (full update) |
+| `PATCH`     | Partially update resource| ❌   | ❌         | `PATCH /users/123` (partial) |
+| `DELETE`    | Delete resource          | ❌   | ✅         | `DELETE /users/123`         |
+
+**Critical Mistake to Avoid:**  
+- **Using `POST` for updates** → `POST /users/123` (should be `PUT` or `PATCH`).  
+- **Using `GET` for deletions** → `GET /deleteUser/123` (should be `DELETE`).
+
+**Example: Updating a User**  
+```bash
+# BAD: Using POST for update
+curl -X POST -d '{""name"": ""Alice""}' http://api.example.com/users/123
+
+# GOOD: Using PUT (replace entire resource)
+curl -X PUT -d '{""id"":123, ""name"":""Alice"", ""email"":""alice@example.com""}' http://api.example.com/users/123
+
+# GOOD: Using PATCH (partial update)
+curl -X PATCH -d '{""name"": ""Alice""}' http://api.example.com/users/123
+```
+
+---
+
+### 🔑 **Core Principle 3: Statelessness**
+**Why?** Each request must contain all info needed to process it. *No session state on the server.*  
+**Flawed:**  
+`GET /user/profile?session_id=abc123` → Server stores session state.  
+
+**Correct:**  
+`GET /users/123/profile` → *Include authentication in headers* (e.g., `Authorization: Bearer <token>`).  
+
+**Why it matters:**  
+- Enables load balancing, caching, and scalability.  
+- *Example:*  
+  ```bash
+  # BAD: Session-dependent
+  curl ""http://api.example.com/profile?session_id=abc123""
+
+  # GOOD: Stateless (token in header)
+  curl -H ""Authorization: Bearer <token>"" http://api.example.com/users/123/profile
+  ```
+
+---
+
+### 🔑 **Core Principle 4: Uniform Interface & Standard Status Codes**
+**Always use standard HTTP status codes:**  
+- `200 OK` → Success (GET, PUT, PATCH)  
+- `201 Created` → Resource created (POST)  
+- `204 No Content` → Success (DELETE)  
+- `400 Bad Request` → Client error (invalid data)  
+- `401 Unauthorized` → Missing/invalid auth  
+- `403 Forbidden` → Authed but no permission  
+- `404 Not Found` → Resource doesn’t exist  
+- `429 Too Many Requests` → Rate limiting  
+
+**Flawed:**  
+```json
+{
+  ""status"": ""error"",
+  ""code"": 404,
+  ""message"": ""User not found""
+}
+```
+
+**Correct:**  
+```http
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+
+{
+  ""error"": ""not_found"",
+  ""message"": ""User with ID 123 not found""
+}
+```
+
+**Why it matters:**  
+- Clients can handle errors predictably (e.g., retry on 429).  
+- Tools like Postman auto-detect status codes.
+
+---
+
+### 🔑 **Core Principle 5: Resource Hierarchy & Relationships**
+**Model relationships as nested resources.**  
+**Flawed:**  
+`GET /addresses?user_id=123` → Query parameters for relationships.  
+
+**Correct:**  
+`GET /users/123/addresses` → Clear hierarchy.  
+
+**Example: Get a user’s orders**  
+```bash
+# BAD: Query parameter
+curl ""http://api.example.com/orders?user_id=123""
+
+# GOOD: Resource hierarchy
+curl ""http://api.example.com/users/123/orders""
+```
+
+**Nested example (user → orders → line items):**  
+`GET /users/123/orders/456/items`
+
+---
+
+### 🔑 **Core Principle 6: Versioning**
+**Always version your API!**  
+**Flawed:**  
+`GET /users` (v1 and v2 share the same endpoint) → Breaks clients on updates.  
+
+**Correct:**  
+- **URL Versioning (Recommended):**  
+  `GET /v1/users`  
+  `GET /v2/users`  
+- **Header Versioning (Less common):**  
+  `GET /users`  
+  `Accept: application/vnd.example.v2+json`
+
+**Why it matters:**  
+- Allows backward compatibility.  
+- *Example:*  
+  ```bash
+  # v1 (legacy)
+  curl http://api.example.com/v1/users
+
+  # v2 (new features)
+  curl http://api.example.com/v2/users
+  ```
+
+---
+
+### 🔑 **Core Principle 7: Pagination & Filtering**
+**Never return 10,000 records in one call!**  
+**Flawed:**  
+`GET /users` → Returns all users (slow, unscalable).  
+
+**Correct:**  
+`GET /users?page=2&size=20&sort=name,asc`  
+
+**Response structure:**  
+```json
+{
+  ""data"": [
+    { ""id"": 123, ""name"": ""Alice"" },
+    { ""id"": 456, ""name"": ""Bob"" }
+  ],
+  ""pagination"": {
+    ""total"": 150,
+    ""page"": 2,
+    ""size"": 20,
+    ""total_pages"": 8
+  }
+}
+```
+
+**Why it matters:**  
+- Prevents server overload.  
+- Allows clients to control data size.  
+- *Tip:* Use `Link` headers for HATEOAS (Hypermedia as the Engine of Application State):  
+  ```http
+  Link: <http://api.example.com/users?page=3&size=20>; rel=""next""
+  ```
+
+---
+
+### 🚀 **Putting It All Together: Bookstore API Example**
+
+#### **Bad API (Common Mistakes)**
+```http
+GET /getBooks?author=J.K.Rowling
+POST /createBook
+PUT /updateBook/123
+DELETE /deleteBook/123
+```
+
+#### **Good API (RESTful Design)**
+```http
+# List books (with filtering/pagination)
+GET /v1/books?author=J.K.Rowling&page=1&size=10
+
+# Create a new book
+POST /v1/books
+{
+  ""title"": ""Harry Potter"",
+  ""author"": ""J.K. Rowling"",
+  ""price"": 19.99
+}
+
+# Get a specific book
+GET /v1/books/123
+
+# Update title (partial)
+PATCH /v1/books/123
+{
+  ""title"": ""Harry Potter and the Philosopher's Stone""
+}
+
+# Delete a book
+DELETE /v1/books/123
+```
+
+**Response for `GET /v1/books?author=J.K.Rowling`:**
+```json
+{
+  ""data"": [
+    {
+      ""id"": 123,
+      ""title"": ""Harry Potter"",
+      ""author"": ""J.K. Rowling"",
+      ""price"": 19.99
+    }
+  ],
+  ""pagination"": {
+    ""total"": 5,
+    ""page"": 1,
+    ""size"": 10,
+    ""total_pages"": 1
+  }
+}
+```
+
+---
+
+### 🛠️ **Key Takeaways Checklist**
+| Principle               | Do This                                      | Avoid This                          |
+|-------------------------|----------------------------------------------|-------------------------------------|
+| **Resource Naming**     | `GET /users`                                 | `GET /getUsers`                     |
+| **HTTP Methods**        | `DELETE /users/123`                          | `GET /deleteUser/123`               |
+| **Status Codes**        | `201 Created` on POST                        | `200 OK` with `{""status"":""success""}` |
+| **Relationships**       | `GET /users/123/orders`                      | `GET /orders?user_id=123`           |
+| **Versioning**          | `GET /v2/users`                              | No versioning                       |
+| **Pagination**          | `GET /books?page=2&size=20`                  | `GET /books` (all results)          |
+| **Error Format**        | `404 Not Found` + JSON error object          | `200 OK` with `{""error"":""not_found""}` |
+
+---
+
+### 💡 **Why This Matters in Real Life**
+- **Netflix** uses REST for its API, enabling 100+ million users to stream content without breaking on updates.  
+- **GitHub API** follows these principles (e.g., `GET /users/{username}/repos`).  
+- **Avoiding ""REST"" Misuse:** If your API uses `GET /login`, it’s *not REST* (use `POST /login` with auth tokens).
+
+> 💬 **Final Wisdom:** REST isn’t a protocol—it’s a *way of thinking*. If your API feels like a remote procedure call (RPC), you’re not using REST. **Use HTTP’s capabilities, not just its syntax.**
+
+---
+
+**Next Step:** Build your first endpoint using these principles. Start small (e.g., a `/users` resource), then expand. Tools like [Swagger](https://swagger.io/) help document your API *while* you design it. 🚀",
+537,req-10,batch,mid,200,75049.37,openwebui,gemma3:27b,39973.83,21.69,1616,75007.38,"## Cryptography Basics: Symmetric & Asymmetric Encryption - Study Materials
+
+This document provides a foundational understanding of cryptography, focusing on symmetric and asymmetric encryption.  It's designed for beginners and aims to cover key concepts, algorithms, strengths, and weaknesses.
+
+**I. Introduction to Cryptography**
+
+* **Definition:** Cryptography is the art and science of concealing messages to ensure confidentiality, integrity, and authenticity.
+* **Key Goals:**
+    * **Confidentiality:**  Preventing unauthorized access to information (encryption).
+    * **Integrity:** Ensuring data hasn't been altered during transmission or storage (hashing, MACs).
+    * **Authenticity:**  Verifying the source of a message (digital signatures).
+    * **Non-Repudiation:**  Preventing a sender from denying they sent a message (digital signatures).
+* **Core Concepts:**
+    * **Plaintext:** The original, readable message.
+    * **Ciphertext:** The scrambled, unreadable message.
+    * **Key:** A secret value used to encrypt and/or decrypt data.
+    * **Algorithm:** The mathematical process used for encryption and decryption.
+    * **Encryption:** The process of transforming plaintext into ciphertext.
+    * **Decryption:** The process of transforming ciphertext back into plaintext.
+
+
+
+**II. Symmetric Encryption**
+
+* **How it Works:** Symmetric encryption uses the *same key* for both encryption and decryption. Think of it like a lock and key - the same key unlocks what it locks.
+* **Characteristics:**
+    * **Speed:** Generally much faster than asymmetric encryption.
+    * **Key Management:** The biggest challenge – securely sharing the key between parties.
+    * **Scalability:** Difficult to scale for a large number of communicating parties.
+* **Common Algorithms:**
+    * **AES (Advanced Encryption Standard):** The current standard, highly secure, supports key sizes of 128, 192, and 256 bits.  Dominantly used today.
+    * **DES (Data Encryption Standard):**  An older algorithm, now considered insecure due to its short 56-bit key.
+    * **3DES (Triple DES):**  An attempt to strengthen DES by applying it three times, but slower and less secure than AES.
+    * **Blowfish & Twofish:**  Alternative algorithms, offering good performance and security.
+* **Modes of Operation:** (Important for practical use. Briefly explain)
+    * **ECB (Electronic Codebook):**  Simple, but insecure – identical plaintext blocks produce identical ciphertext blocks.
+    * **CBC (Cipher Block Chaining):**  More secure, each block is XORed with the previous ciphertext block. Requires an Initialization Vector (IV).
+    * **CTR (Counter):**  Encrypts a counter with the key and XORs it with the plaintext.  Parallelizable and efficient.
+* **Strengths:**  Fast, efficient, suitable for encrypting large amounts of data.
+* **Weaknesses:** Key distribution problem.  Scalability issues.
+
+**III. Asymmetric Encryption (Public-Key Encryption)**
+
+* **How it Works:** Asymmetric encryption uses *two* keys: a public key and a private key.
+    * **Public Key:**  Freely distributed and used for encryption.  Anyone can encrypt a message using the recipient's public key.
+    * **Private Key:**  Kept secret by the owner and used for decryption. Only the owner can decrypt messages encrypted with their public key.
+* **Characteristics:**
+    * **Speed:**  Much slower than symmetric encryption.
+    * **Key Management:**  Solves the key distribution problem of symmetric encryption.
+    * **Scalability:**  Easily scalable, as only the public key needs to be distributed.
+* **Common Algorithms:**
+    * **RSA (Rivest–Shamir–Adleman):** The most widely used asymmetric algorithm. Based on the mathematical difficulty of factoring large numbers.
+    * **ECC (Elliptic Curve Cryptography):**  Provides the same level of security as RSA with shorter key lengths, making it more efficient for certain applications (e.g., mobile devices).
+    * **Diffie-Hellman:**  Used for key exchange, not encryption directly.  Allows two parties to establish a shared secret key over an insecure channel.
+* **Digital Signatures:** Asymmetric encryption can also be used to create digital signatures. The sender encrypts a hash of the message with their *private* key.  The receiver decrypts the signature with the sender’s *public* key and compares the resulting hash to a hash of the received message.  This verifies authenticity and integrity.
+* **Strengths:**  Solves the key distribution problem, enables digital signatures.
+* **Weaknesses:**  Slow, computationally expensive, vulnerable to certain attacks (e.g., man-in-the-middle if public key isn't verified).
+
+**IV.  Symmetric vs. Asymmetric: A Comparison Table**
+
+| Feature         | Symmetric Encryption | Asymmetric Encryption |
+|-----------------|----------------------|-----------------------|
+| **Key(s)**      | One (Secret Key)     | Two (Public & Private)|
+| **Speed**       | Fast                 | Slow                  |
+| **Key Exchange**| Difficult            | Easy                  |
+| **Security**    | Relies on key secrecy| Relies on mathematical difficulty|
+| **Scalability** | Low                  | High                  |
+| **Typical Use**| Bulk Data Encryption | Key Exchange, Digital Signatures|
+
+
+
+**V.  Practical Applications & Hybrid Approaches**
+
+* **SSL/TLS (HTTPS):** Uses a hybrid approach. Asymmetric encryption (RSA or ECC) is used to securely exchange a symmetric key (AES). Then, symmetric encryption is used to encrypt the bulk of the data.  This combines the benefits of both approaches.
+* **PGP/GPG:** Used for email encryption and digital signatures. Similar hybrid approach to SSL/TLS.
+* **VPNs:**  Use symmetric encryption to encrypt the data tunnel, with key exchange often handled using asymmetric encryption.
+
+
+
+
+**VI.  Study Questions & Exercises**
+
+1. Explain the difference between confidentiality, integrity, and authenticity.
+2.  Describe how symmetric encryption works, and give an example of a common algorithm.
+3.  Explain the concept of a digital signature and how asymmetric encryption is used to create one.
+4.  What are the advantages and disadvantages of symmetric encryption compared to asymmetric encryption?
+5.  Why is a hybrid approach often used in practical cryptography applications like SSL/TLS?
+6.  Research and explain the concept of ""hashing"" and how it relates to cryptography.
+7.  Explain the importance of key management in both symmetric and asymmetric encryption.
+
+
+
+
+**Resources for Further Learning:**
+
+* **Khan Academy - Cryptography:** [https://www.khanacademy.org/computing/computer-science/information-security/cryptography](https://www.khanacademy.org/computing/computer-science/information-security/cryptography)
+* **CryptoPals Challenges:** [https://cryptopals.com/](https://cryptopals.com/) (Practical exercises to learn cryptography)
+* **Bruce Schneier's website:** [https://www.schneier.com/](https://www.schneier.com/) (Expert insights on cryptography and security)
+
+
+
+This study material provides a starting point for understanding the basics of cryptography.  It's important to continue learning and exploring the field to stay up-to-date with the latest advancements and challenges. Good luck!",
+538,req-11,batch,low,200,65156.59,openwebui,qwen3:30b-a3b,41285.68,6.70,3558,65108.56,"## The Ultimate Guide to SQL Joins: Inner, Left, Right & Full Outer (With Practical Examples)
+
+Relational databases organize data into tables. **Joins** combine rows from two or more tables based on related columns (usually a primary key in one table matching a foreign key in another). Understanding joins is **critical** for querying relational data effectively.
+
+---
+
+### **Core Concept: The Join Condition**
+All joins require a **matching condition** (typically using `ON`), specifying how tables relate.  
+**Common Mistake:** Forgetting `ON` and using `WHERE` instead (causes Cartesian products).
+
+```sql
+-- CORRECT (Explicit JOIN condition)
+SELECT * FROM customers
+INNER JOIN orders ON customers.id = orders.customer_id;
+
+-- INCORRECT (Uses WHERE, not ON - leads to wrong results)
+SELECT * FROM customers, orders WHERE customers.id = orders.customer_id; -- Avoid!
+```
+
+---
+
+### **1. INNER JOIN: Matching Rows Only**
+*Returns **only rows where matches exist in BOTH tables**.*
+- **Key Point:** Excludes rows with no match in either table.
+- **Use Case:** When you need data that exists in both tables (e.g., ""Show customers who placed orders"").
+
+#### **Example: Customers with Orders**
+| customers (left table) | orders (right table) |
+|------------------------|----------------------|
+| id | name   | city     | id | customer_id | amount |
+| 1  | Alice  | London   | 101| 1           | 100    |
+| 2  | Bob    | Paris    | 102| 2           | 50     |
+| 3  | Charlie| Berlin   | 103| 4           | 75     |
+
+```sql
+SELECT customers.name, orders.amount
+FROM customers
+INNER JOIN orders ON customers.id = orders.customer_id;
+```
+
+**Result:**
+| name  | amount |
+|-------|--------|
+| Alice | 100    |
+| Bob   | 50     |
+
+> **Why?**  
+> - Charlie (id=3) has no orders → **excluded**.  
+> - Order 103 (customer_id=4) has no matching customer → **excluded**.
+
+---
+
+### **2. LEFT JOIN (or LEFT OUTER JOIN): All Left Rows**
+*Returns **ALL rows from the left table**, and matched rows from the right table (or `NULL` if no match).*
+- **Key Point:** Preserves all data from the **left table**.
+- **Use Case:** ""Show all customers, including those who haven’t placed orders.""
+
+#### **Example: All Customers + Their Orders**
+```sql
+SELECT customers.name, orders.amount
+FROM customers
+LEFT JOIN orders ON customers.id = orders.customer_id;
+```
+
+**Result:**
+| name    | amount |
+|---------|--------|
+| Alice   | 100    |
+| Bob     | 50     |
+| Charlie | NULL   |
+
+> **Why?**  
+> - Charlie (id=3) has no orders → `amount` = `NULL`.  
+> - All customers are included.
+
+---
+
+### **3. RIGHT JOIN (or RIGHT OUTER JOIN): All Right Rows**
+*Returns **ALL rows from the right table**, and matched rows from the left table (or `NULL` if no match).*
+- **Key Point:** Preserves all data from the **right table**.
+- **Use Case:** Rarely used (better to swap tables and use `LEFT JOIN`).
+- **Database Note:** Some databases (like MySQL) **don’t support `RIGHT JOIN`**.
+
+#### **Example: All Orders + Matching Customers**
+```sql
+SELECT orders.id, customers.name
+FROM customers
+RIGHT JOIN orders ON customers.id = orders.customer_id;
+```
+
+**Result:**
+| id  | name   |
+|-----|--------|
+| 101 | Alice  |
+| 102 | Bob    |
+| 103 | NULL   |
+
+> **Why?**  
+> - Order 103 (customer_id=4) has no matching customer → `name` = `NULL`.  
+> - All orders are included.
+
+> **Pro Tip:**  
+> `RIGHT JOIN` is **redundant**. To get the same result as above, simply swap tables and use `LEFT JOIN`:
+> ```sql
+> SELECT orders.id, customers.name
+> FROM orders
+> LEFT JOIN customers ON customers.id = orders.customer_id;
+> ```
+
+---
+
+### **4. FULL OUTER JOIN: All Rows from Both Tables**
+*Returns **ALL rows from both tables**, with `NULL` for missing matches in either table.*
+- **Key Point:** Combines `LEFT JOIN` + `RIGHT JOIN`.
+- **Use Case:** ""Show all customers and all orders, even if unmatched.""
+- **Database Note:** **Not supported in MySQL** (use `UNION` of `LEFT JOIN` + `RIGHT JOIN` instead).
+
+#### **Example: All Customers + All Orders**
+```sql
+SELECT customers.name, orders.id
+FROM customers
+FULL OUTER JOIN orders ON customers.id = orders.customer_id;
+```
+
+**Result (in PostgreSQL/SQL Server):**
+| name    | id  |
+|---------|-----|
+| Alice   | 101 |
+| Bob     | 102 |
+| Charlie | NULL|
+| NULL    | 103 |
+
+> **Why?**  
+> - Charlie (no orders) → `id` = `NULL`.  
+> - Order 103 (no customer) → `name` = `NULL`.
+
+> **MySQL Workaround:**
+> ```sql
+> -- LEFT JOIN (all customers + matched orders)
+> SELECT customers.name, orders.id
+> FROM customers
+> LEFT JOIN orders ON customers.id = orders.customer_id
+> 
+> UNION
+> 
+> -- RIGHT JOIN (all orders + unmatched customers)
+> SELECT customers.name, orders.id
+> FROM customers
+> RIGHT JOIN orders ON customers.id = orders.customer_id
+> WHERE customers.id IS NULL;
+> ```
+
+---
+
+### **Summary: Which Join to Use?**
+| Join Type          | Rows Returned                                  | When to Use                                      |
+|--------------------|-----------------------------------------------|--------------------------------------------------|
+| **INNER JOIN**     | Only rows with matches in **BOTH** tables.     | ""Get data that exists in both tables."" (Most common) |
+| **LEFT JOIN**      | All rows from **left table**, plus matches.   | ""Show all `left` items, even if no match.""       |
+| **RIGHT JOIN**     | All rows from **right table**, plus matches.  | **Avoid** – swap tables and use `LEFT JOIN`.     |
+| **FULL OUTER JOIN**| All rows from **BOTH** tables (with `NULL`s). | ""Show all data from both tables."" (Rare, DB-dependent) |
+
+---
+
+### **Critical Best Practices & Pitfalls**
+1. **Always Use `ON` (not `WHERE`)** for join conditions:
+   ```sql
+   -- WRONG: Converts LEFT JOIN to INNER JOIN
+   SELECT * FROM customers
+   LEFT JOIN orders ON customers.id = orders.customer_id
+   WHERE orders.amount > 50; -- Filters out NULLs!
+
+   -- CORRECT
+   SELECT * FROM customers
+   LEFT JOIN orders ON customers.id = orders.customer_id
+   WHERE orders.amount > 50 OR orders.amount IS NULL; -- Handles NULLs
+   ```
+
+2. **Use Aliases** for readability:
+   ```sql
+   SELECT c.name, o.amount
+   FROM customers c
+   LEFT JOIN orders o ON c.id = o.customer_id;
+   ```
+
+3. **Avoid `SELECT *`** – specify columns to prevent surprises (e.g., duplicate columns).
+
+4. **Test with Small Datasets** – joins can return massive results unexpectedly.
+
+---
+
+### **Real-World Analogy**
+- **INNER JOIN** = ""Show only people who have both a passport *and* a driver's license.""
+- **LEFT JOIN** = ""Show all people, plus their driver's license if they have one.""
+- **RIGHT JOIN** = ""Show all driver's licenses, plus the person who holds them (if any).""
+- **FULL OUTER JOIN** = ""Show all people *and* all driver's licenses, even if unmatched.""
+
+---
+
+### **Final Thoughts**
+- **Master `INNER JOIN` and `LEFT JOIN`** – they cover 95% of use cases.
+- **Avoid `RIGHT JOIN`** – it’s confusing and unnecessary.
+- **Check DB Support** for `FULL OUTER JOIN` (use `UNION` in MySQL).
+- **Always write explicit `JOIN` syntax** – it’s clearer and less error-prone than comma-separated tables.
+
+> 💡 **Remember:** A join is a **filter** that combines tables based on a relationship. The ""left"" or ""right"" refers to which table’s data you want to **preserve unconditionally**.
+
+With this guide, you’ll confidently write efficient, correct joins for any relational database! 🚀",
+539,req-12,batch,mid,200,440.45,openwebui,deepseek-r1:70b,372.79,,,373.96,,
+540,req-13,batch,low,0,60297.51,openwebui,gemma3:27b,60328.67,,,60330.91,,
+541,req-14,batch,mid,200,29182.84,openwebui,qwen3:30b-a3b,5185.85,9.80,2443,29108.34,"# **Graph Algorithms Tutorial: Shortest Path (Dijkstra & Bellman-Ford)**  
+*With Complexity Analysis and Practical Insights*
+
+---
+
+## **Introduction**
+
+In graph theory, finding the **shortest path** between two nodes is one of the most fundamental and widely used problems. Whether it's GPS navigation, network routing, or recommendation systems, efficient shortest path algorithms are essential.
+
+We’ll explore two of the most important algorithms for computing shortest paths:
+1. **Dijkstra’s Algorithm** – for graphs with non-negative edge weights.
+2. **Bellman-Ford Algorithm** – for graphs that may have negative edge weights (but no negative cycles).
+
+We’ll cover:
+- How each algorithm works
+- Step-by-step examples
+- Implementation (Python)
+- Time and space complexity analysis
+- When to use which algorithm
+
+---
+
+## **1. Problem Definition**
+
+Given a **weighted directed or undirected graph** \( G = (V, E) \), where:
+- \( V \): set of vertices (nodes)
+- \( E \): set of edges with weights \( w(u, v) \in \mathbb{R} \)
+
+We want to find the **shortest path** from a **source node \( s \)** to all other nodes (Single-Source Shortest Path).
+
+---
+
+## **2. Dijkstra’s Algorithm**
+
+### **When to Use**
+- All edge weights are **non-negative** (\( w(u, v) \geq 0 \))
+- You need efficient performance for large graphs
+
+### **Intuition**
+Dijkstra uses a **greedy approach**: always pick the unvisited node with the smallest known distance from the source, and relax its neighbors.
+
+### **Algorithm Steps**
+
+1. Initialize:
+   - Distance to source \( d[s] = 0 \)
+   - Distance to all other nodes \( d[v] = \infty \)
+   - Create a priority queue (min-heap) of all nodes, ordered by distance
+
+2. While the queue is not empty:
+   - Extract the node \( u \) with minimum distance
+   - For each neighbor \( v \) of \( u \):
+     - If \( d[u] + w(u, v) < d[v] \), update \( d[v] = d[u] + w(u, v) \)
+     - Update the priority queue (decrease-key operation)
+
+3. Return the shortest distances to all nodes.
+
+> **Note**: Once a node is processed (extracted), its shortest distance is final (no need to revisit).
+
+### **Example**
+
+Consider this graph:
+```
+    A --2-- B --1-- C
+    |       |       |
+    4       3       1
+    |       |       |
+    D --5-- E --2-- F
+```
+
+Source: A
+
+**Step-by-step**:
+- Start: \( d[A] = 0 \), others \( \infty \)
+- Process A → update B (2), D (4)
+- Process B → update C (3), E (5)
+- Process C → update F (4)
+- Process E → update F (6 → no change)
+- Process D → no updates
+- Process F → done
+
+Final distances:
+- A: 0
+- B: 2
+- C: 3
+- D: 4
+- E: 5
+- F: 4
+
+---
+
+### **Implementation (Python)**
+
+```python
+import heapq
+from collections import defaultdict
+
+def dijkstra(graph, start):
+    # graph: dict of {node: [(neighbor, weight), ...]}
+    distances = {node: float('inf') for node in graph}
+    distances[start] = 0
+    pq = [(0, start)]  # (distance, node)
+    visited = set()
+
+    while pq:
+        current_dist, u = heapq.heappop(pq)
+
+        if u in visited:
+            continue
+        visited.add(u)
+
+        for v, weight in graph[u]:
+            distance = current_dist + weight
+
+            if distance < distances[v]:
+                distances[v] = distance
+                heapq.heappush(pq, (distance, v))
+
+    return distances
+```
+
+### **Complexity Analysis**
+
+| Operation | Time |
+|---------|------|
+| Initialization | \( O(V) \) |
+| Priority Queue Operations (push/pop) | \( O(\log V) \) per operation |
+| Each edge processed once | \( O(E) \) |
+| Total | \( O((V + E) \log V) \) |
+
+- **Best case**: Sparse graph (\( E \approx V \)) → \( O(V \log V) \)
+- **Worst case**: Dense graph (\( E \approx V^2 \)) → \( O(V^2 \log V) \)
+
+> **Space Complexity**: \( O(V) \) for distances and queue.
+
+> **Note**: Using a Fibonacci heap, you can achieve \( O(E + V \log V) \), but it’s rarely used in practice due to high constant factors.
+
+---
+
+## **3. Bellman-Ford Algorithm**
+
+### **When to Use**
+- Graphs with **negative edge weights**
+- Need to detect **negative cycles**
+- You want to handle more general cases than Dijkstra
+
+### **Intuition**
+Relax all edges \( V - 1 \) times. After \( V - 1 \) iterations, all shortest paths are guaranteed to be found (if no negative cycles).
+
+If you can still relax an edge after \( V - 1 \) iterations, a **negative cycle** exists.
+
+### **Algorithm Steps**
+
+1. Initialize:
+   - \( d[s] = 0 \)
+   - \( d[v] = \infty \) for all \( v \neq s \)
+
+2. For \( i = 1 \) to \( V - 1 \):
+   - For each edge \( (u, v) \) with weight \( w \):
+     - If \( d[u] + w < d[v] \), update \( d[v] = d[u] + w \)
+
+3. For each edge \( (u, v) \):
+   - If \( d[u] + w < d[v] \), return ""Negative cycle detected""
+
+4. Return distances
+
+### **Example**
+
+Graph with negative edge:
+```
+A --3-- B --1-- C
+|       |       |
+2       -2      1
+|       |       |
+D --4-- E --1-- F
+```
+
+Source: A
+
+**Step 1**: Initialize \( d[A] = 0 \), others \( \infty \)
+
+**Iteration 1**:
+- A → B: \( 0 + 3 = 3 \) → update B
+- A → D: \( 0 + 2 = 2 \) → update D
+- B → C: \( 3 + 1 = 4 \) → update C
+- B → E: \( 3 + (-2) = 1 \) → update E
+- D → E: \( 2 + 4 = 6 \) → no change
+- E → F: \( 1 + 1 = 2 \) → update F
+- C → F: \( 4 + 1 = 5 \) → no change
+
+**Iteration 2**: No further updates
+
+Final distances:
+- A: 0
+- B: 3
+- D: 2
+- E: 1
+- C: 4
+- F: 2
+
+No negative cycle detected.
+
+---
+
+### **Implementation (Python)**
+
+```python
+def bellman_ford(graph, start, nodes):
+    # graph: list of (u, v, w) tuples
+    # nodes: list of all nodes
+    distances = {node: float('inf') for node in nodes}
+    distances[start] = 0
+
+    # Relax edges V-1 times
+    for _ in range(len(nodes) - 1):
+        updated = False
+        for u, v, w in graph:
+            if distances[u] != float('inf') and distances[u] + w < distances[v]:
+                distances[v] = distances[u] + w
+                updated = True
+        if not updated:
+            break  # Early termination
+
+    # Check for negative cycles
+    for u, v, w in graph:
+        if distances[u] != float('inf') and distances[u] + w < distances[v]:
+            raise ValueError(""Negative cycle detected"")
+
+    return distances
+```
+
+### **Complexity Analysis**
+
+| Operation | Time |
+|---------|------|
+| Initialization | \( O(V) \) |
+| Relax all edges \( V - 1 \) times | \( O(V \cdot E) \) |
+| Final cycle check | \( O(E) \) |
+
+- **Time Complexity**: \( O(V \cdot E) \)
+- **Space Complexity**: \( O(V) \)
+
+> **Best case**: If no updates occur early, still \( O(V \cdot E) \)
+
+> **Note**: For sparse graphs (\( E = O(V) \)), this becomes \( O(V^2) \). For dense graphs (\( E = O(V^2) \)), it becomes \( O(V^3) \).
+
+---
+
+## **4. Comparison: Dijkstra vs Bellman-Ford**
+
+| Feature | Dijkstra | Bellman-Ford |
+|--------|----------|--------------|
+| Negative weights | ❌ Not allowed | ✅ Allowed |
+| Negative cycle detection | ❌ No | ✅ Yes |
+| Time Complexity | \( O((V + E) \log V) \) | \( O(V \cdot E) \) |
+| Space Complexity | \( O(V) \) | \( O(V) \) |
+| Best for | Large graphs, non-negative weights | Small to medium graphs, negative weights |
+| Optimizations | Heap, Fibonacci heap | Early termination |
+| Use Case | GPS, routing | Financial networks, shortest paths with penalties |
+
+---
+
+## **5. When to Use Which?**
+
+| Scenario | Recommended Algorithm |
+|--------|------------------------|
+| Road networks (Google Maps) | Dijkstra |
+| Network routing (OSPF, RIP) | Dijkstra |
+| Graphs with negative weights | Bellman-Ford |
+| Need to detect negative cycles | Bellman-Ford |
+| Large graphs with non-negative weights | Dijkstra (with heap) |
+| Small graphs with mixed weights | Bellman-Ford |
+
+> **Bonus**: For **all-pairs shortest paths**, consider **Floyd-Warshall** (\( O(V^3) \)) or run Dijkstra from each node (\( O(V \cdot (V + E) \log V) \)).
+
+---
+
+## **6. Summary**
+
+- **Dijkstra**: Fast, greedy, only for non-negative weights.
+- **Bellman-Ford**: Slower but more robust; handles negative weights and detects negative cycles.
+- Always choose based on graph properties and requirements.
+
+---
+
+## **Further Reading**
+
+- *Introduction to Algorithms* by Cormen, Leiserson, Rivest, Stein (CLRS)
+- [GeeksforGeeks: Dijkstra’s Algorithm](https://www.geeksforgeeks.org/dijkstras-shortest-path-algorithm-greedy-algo-7/)
+- [Wikipedia: Bellman-Ford Algorithm](https://en.wikipedia.org/wiki/Bellman%E2%80%93Ford_algorithm)
+
+---
+
+✅ **You now have the tools to solve shortest path problems efficiently in any graph!**  
+Use Dijkstra when you can, Bellman-Ford when you must.",
+542,req-15,batch,low,200,742.45,openwebui,deepseek-r1:70b,689.36,,,690.97,,
+543,req-16,batch,mid,0,60207.22,openwebui,gemma3:27b,60249.57,,,60252.14,,
+544,req-17,batch,low,0,60225.13,openwebui,qwen3:30b-a3b,60253.58,,,60255.31,,
+545,req-18,batch,mid,200,460.10,openwebui,deepseek-r1:70b,406.49,,,407.73,,
+546,req-19,batch,low,0,60332.78,openwebui,gemma3:27b,60287.88,,,60289.56,,
+547,req-20,batch,mid,0,60219.76,openwebui,qwen3:30b-a3b,60197.71,,,60199.06,,

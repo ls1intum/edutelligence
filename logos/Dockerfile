@@ -5,13 +5,14 @@ WORKDIR /app
 # Install system packages
 RUN apt-get update && apt-get install -y \
     gcc \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip
 
 COPY ./logos/pyproject.toml ./logos/poetry.lock* ./
 
 COPY ./logos/src/ ./src/
-COPY ./logos/tests/ ./logos/tests/
+COPY ./logos/tests/ ./tests/
 COPY ./logos/db/ ./logos/db/
 COPY ../shared/ ./shared/
 COPY ./logos/README.md ./logos/README.md
