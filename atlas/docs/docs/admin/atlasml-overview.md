@@ -51,9 +51,9 @@ This guide is for system administrators deploying and operating AtlasML in produ
 ```mermaid
 graph TB
     A[Artemis] -->|REST API| B[AtlasML Service]
-    B -->|HTTPS/gRPC| C[Centralized Weaviate]
+    B -->|HTTPS REST| C[Centralized Weaviate]
     B -->|Generate Embeddings| D[OpenAI API]
-    E[Iris Service] -->|HTTPS/gRPC| C
+    E[Iris Service] -->|HTTPS REST| C
 
     C -->|Multi2vec-CLIP| F[Embedding Module]
 
@@ -70,7 +70,7 @@ graph TB
 **Communication**:
 - **Unidirectional**: Artemis calls AtlasML via REST API (AtlasML never calls Artemis)
 - **Shared Weaviate**: Centralized Weaviate instance with API key authentication
-- **HTTPS + gRPC**: Secure connections to Weaviate (ports 443 and 50051)
+- **HTTPS REST**: Secure connections to Weaviate over port 443 (gRPC not required)
 - **Token-based Auth**: API key authentication for all requests
 
 ---
@@ -95,14 +95,14 @@ AtlasML **requires** the centralized Weaviate setup. See the [Weaviate README](h
 - **RAM**: 8GB+ (16GB+ recommended for production)
 - **Disk**: 50GB+ SSD (depends on data volume)
 - **Domain**: Public domain with DNS configured
-- **Ports**: 80, 443 (HTTPS), 50051 (gRPC) accessible
+- **Ports**: 80, 443 (HTTPS REST) accessible
 
 ### Network Requirements
 
 - **Outbound**:
   - OpenAI API: `https://*.openai.azure.com` (port 443)
   - Docker registries: `ghcr.io` (port 443)
-  - Weaviate server: `https://your-weaviate-domain.com` (ports 443, 50051)
+  - Weaviate server: `https://your-weaviate-domain.com` (port 443)
 
 - **Inbound**:
   - Artemis server (port 8000 or custom)
