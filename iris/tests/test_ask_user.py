@@ -2,7 +2,7 @@ import unittest
 import re
 from collections import Counter
 
-from test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
+from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 
 from iris.domain import ExerciseChatPipelineExecutionDTO
 from iris.domain.data.course_dto import CourseDTO
@@ -11,7 +11,7 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
 from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
-from TestCallback import TestExerciseChatCallback
+from .TestCallback import TestExerciseChatCallback
 
 
 # Helper function to extract keywords from code input, that are less often used in exercise template
@@ -53,34 +53,33 @@ def extract_keywords(task_template: str, code: str, top_n: int = 10):
     return keywords
 
 
-class AskUserTest(unittest.TestCase):
+class TestAskUser(unittest.TestCase):
 
-    def setUp(self):
-        self.task = TASK_SORTING
-        self.template = TEMPLATE_SORTING
-        self.code = CODE_SORTING
-        self.keywords = extract_keywords(self.template, self.code)
+    @classmethod
+    def setUpClass(cls):
+        cls.task = TASK_SORTING
+        cls.template = TEMPLATE_SORTING
+        cls.code = CODE_SORTING
+        cls.keywords = extract_keywords(cls.template, cls.code)
 
-
-
-        self.dto = ExerciseChatPipelineExecutionDTO(
-            submission=ProgrammingSubmissionDTO(id=1, repository=self.code, isPractice=False, buildFailed=False),
-            exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=self.template, problemStatement=self.task),
+        cls.dto = ExerciseChatPipelineExecutionDTO(
+            submission=ProgrammingSubmissionDTO(id=1, repository=cls.code, isPractice=False, buildFailed=False),
+            exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
             course=CourseDTO(id=1,name="Intro to Programming", description=None),
             eventPayload=PyrisEventDTO(eventType="", event=""),
             customInstructions=None, settings=None, user=None)
 
-        self.variant = ExerciseChatVariant(
+        cls.variant = ExerciseChatVariant(
             variant_id="exercise_chat_v1", name="Exercise Chat",
             description="Variant for exercise explanations",
             agent_model="gpt-4o-mini",citation_model="gpt-4o")
 
-        self.callback = TestExerciseChatCallback()
+        cls.callback = TestExerciseChatCallback()
 
-        self.pipeline = ExerciseChatAgentPipeline()
-        self.pipeline(self.dto, self.variant, self.callback)
+        cls.pipeline = ExerciseChatAgentPipeline()
+        cls.pipeline(cls.dto, cls.variant, cls.callback)
 
-        self.question = self.callback.final_result
+        cls.question = cls.callback.final_result
 
     def test_question_is_thematically_relevant(self):
         assert (any(k in self.question.lower() for k in self.keywords) or any(k in self.question.lower() for k in self.task))

@@ -1,14 +1,15 @@
 import unittest
 
-from iris.tests.test_data import TASK_SORTING, CODE_SORTING
+from .test_data import TASK_SORTING, CODE_SORTING
 
 
-class CheckUserAnswerTest(unittest.TestCase):
+class TestCheckUserAnswer(unittest.TestCase):
 
-    def setUp(self):
-        self.task = TASK_SORTING
-        self.code = CODE_SORTING
-        self.question = "How is the swap of two elements implemented in your implementation of the bubble sort algorithm?"
+    @classmethod
+    def setUpClass(cls):
+        cls.task = TASK_SORTING
+        cls.code = CODE_SORTING
+        cls.question = "How is the swap of two elements implemented in your implementation of the bubble sort algorithm?"
 
 
 
