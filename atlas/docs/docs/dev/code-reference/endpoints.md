@@ -68,7 +68,6 @@ curl http://localhost:8000/api/v1/health/
 
 #### Use Cases
 - Docker healthchecks
-- Kubernetes liveness/readiness probes
 - Load balancer health monitoring
 - Uptime monitoring tools
 

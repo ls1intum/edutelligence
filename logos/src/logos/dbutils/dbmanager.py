@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
+from logos.dbutils.dbmodules import JobStatus
 
 
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
@@ -100,6 +101,53 @@ class DBManager:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         result = self.session.execute(table.select()).mappings().all()
         return [dict(row) for row in result]
+
+    def create_job_record(
+        self,
+        request_payload: Dict[str, Any],
+        process_id: int,
+        status: str = JobStatus.PENDING.value,
+    ) -> int:
+        """
+        Persist a new async job.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return self.insert(
+            "jobs",
+            {
+                "status": status,
+                "process_id": process_id,
+                "request_payload": request_payload,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+    def update_job_status(
+        self,
+        job_id: int,
+        status: str,
+        result_payload: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """
+        Update job status and optional payloads.
+        """
+        update_data = {
+            "status": status,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc),
+        }
+        if result_payload is not None:
+            update_data["result_payload"] = result_payload
+        if error_message is not None:
+            update_data["error_message"] = error_message
+        self.update("jobs", job_id, update_data)
+
+    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Fetch job state by id.
+        """
+        return self.fetch_by_id("jobs", job_id)
 
     def fetch_llm_key(self, logos_key: str):
         sql = text("""
@@ -1001,7 +1049,8 @@ class DBManager:
             "log_entry",
             "token_types",
             "usage_tokens",
-            "token_prices"
+            "token_prices",
+            "jobs"
         ]:
             # Check if table exists
             table = Base.metadata.tables.get(table_name)
@@ -1049,7 +1098,8 @@ class DBManager:
             "log_entry",
             "token_types",
             "usage_tokens",
-            "token_prices"
+            "token_prices",
+            "jobs"
         ]
         for table_name in table_names:
             if table_name not in json_data:

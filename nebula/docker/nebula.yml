@@ -12,6 +12,7 @@ services:
       - "3870"
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
+      - NEBULA_TEMP_DIR=/app/temp
     restart: unless-stopped
     networks:
       - nebula
