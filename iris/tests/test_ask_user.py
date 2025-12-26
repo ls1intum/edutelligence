@@ -4,7 +4,7 @@ from collections import Counter
 
 from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 
-from iris.domain import ExerciseChatPipelineExecutionDTO
+from iris.domain import ExerciseChatPipelineExecutionDTO, PipelineExecutionSettingsDTO
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
@@ -60,7 +60,11 @@ class TestAskUser(unittest.TestCase):
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
-        cls.keywords = extract_keywords(cls.template, cls.code)
+        cls.keywords = extract_keywords("\n".join(cls.template.values()), "\n".join(cls.code.values()))
+
+        pipelineExecutionSettings = PipelineExecutionSettingsDTO(
+
+        )
 
         cls.dto = ExerciseChatPipelineExecutionDTO(
             submission=ProgrammingSubmissionDTO(id=1, repository=cls.code, isPractice=False, buildFailed=False),
@@ -77,7 +81,7 @@ class TestAskUser(unittest.TestCase):
         cls.callback = TestExerciseChatCallback()
 
         cls.pipeline = ExerciseChatAgentPipeline()
-        cls.pipeline(cls.dto, cls.variant, cls.callback)
+        cls.pipeline(cls.dto, cls.variant, cls.callback, None)
 
         cls.question = cls.callback.final_result
 

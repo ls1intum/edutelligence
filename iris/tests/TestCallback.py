@@ -40,12 +40,17 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
         self.done_messages: List[str] = []
         self.error_messages: List[str] = []
 
+        print("\n\n\nHallo Init\n\n\n")
+
     # ------------------------------------------------------------------
     # Disable network calls
     # ------------------------------------------------------------------
 
     def on_status_update(self):
         """Override to disable HTTP requests during tests."""
+
+        print("\n\n\nHallo on status update\n\n\n")
+
         pass
 
     # ------------------------------------------------------------------
@@ -55,6 +60,9 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
     def in_progress(self, message: Optional[str] = None):
         self.in_progress_messages.append(message)
         super().in_progress(message)
+
+        print("\n\n\nHallo in progress\n\n\n")
+
 
     # ------------------------------------------------------------------
     # Capture final result
@@ -68,10 +76,9 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
             tokens: Optional[List[TokenUsageDTO]] = None,
             **kwargs,
     ):
-        self.final_result = final_result
-        self.suggestions = suggestions
-        self.tokens = tokens
-        self.done_messages.append(message)
+
+        print(final_result)
+        print("\n\n\nHallo done\n\n\n")
 
         # Call parent to keep pipeline logic intact
         super().done(
@@ -81,6 +88,11 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
             tokens=tokens,
             **kwargs,
         )
+
+        self.final_result = final_result
+        self.suggestions = suggestions
+        self.tokens = tokens
+        self.done_messages.append(message)
 
     # ------------------------------------------------------------------
     # Capture errors
