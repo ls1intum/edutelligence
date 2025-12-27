@@ -66,8 +66,11 @@ class ContextResolver:
                 logger.error(f"No provider linked to model {model_id}")
                 return None
 
+            auth_name = (provider.get("auth_name") or "").strip()
+            auth_format = provider.get("auth_format") or ""
+
             api_key = db.get_key_to_model_provider(model_id, provider["id"])
-            if not api_key:
+            if not api_key and (auth_name or auth_format):
                 logger.error(f"No API key for model {model_id} / provider {provider['id']}")
                 return None
 
@@ -78,8 +81,8 @@ class ContextResolver:
             provider_id=provider["id"],
             provider_name=provider["name"],
             forward_url=forward_url,
-            auth_header=provider["auth_name"],
-            auth_value=provider["auth_format"].format(api_key),
+            auth_header=auth_name,
+            auth_value=auth_format.format(api_key or ""),
             model_name=model["name"],
         )
 
@@ -99,13 +102,12 @@ class ContextResolver:
         Returns:
             Tuple of (headers, modified_payload)
         """
-        headers = {
-            context.auth_header: context.auth_value,
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if context.auth_header and context.auth_value:
+            headers[context.auth_header] = context.auth_value
 
         # OpenWebUI requires model name injection
-        if "openwebui" in context.provider_name.lower():
+        if "openwebui" in context.provider_name.lower() or "ollama" in context.provider_name.lower():
             payload = {**payload, "model": context.model_name}
 
         return headers, payload
