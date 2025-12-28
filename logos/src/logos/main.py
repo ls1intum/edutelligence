@@ -22,7 +22,6 @@ from logos.responses import (
     get_client_ip,
     extract_model,
     request_setup,
-    proxy_behaviour,
     extract_token_usage
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
@@ -558,80 +557,42 @@ async def _execute_proxy_mode(
     is_async_job: bool
 ):
     """
-    Execute request in PROXY mode (direct forwarding to provider).
+    Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
 
-    PROXY mode bypasses classification/scheduling and forwards directly to the provider
-    specified in the request headers. Used when body["model"] is specified by the client.
-
-    This mode is useful when users want to:
-    - Target a specific model/provider combination
-    - Bypass the classification and scheduling pipeline
-    - Have direct control over which backend handles their request
-
-    Args:
-        body: Request payload (must contain "model" field)
-        headers: Request headers (used to identify provider)
-        logos_key: User's logos authentication key
-        path: API endpoint path (e.g., "chat/completions")
-        log_id: Usage log ID for tracking (None for requests without logging)
-        is_async_job: Whether this is a background job (affects error handling)
-            - False: Direct endpoint - raises HTTPException for errors
-            - True: Background job - returns error dict for errors
-
-    Returns:
-        - For direct endpoints (is_async_job=False):
-            - StreamingResponse if body["stream"] is True
-            - JSONResponse if body["stream"] is False
-        - For background jobs (is_async_job=True):
-            - Dict with {"status_code": int, "data": response_payload}
-
-    Raises:
-        HTTPException: Only when is_async_job=False and an error occurs
+    Resolves the requested model from the DB (access-controlled by logos_key), then reuses the
+    resource-mode pipeline with allowed_models restricted to that model.
     """
+    model_name = body.get("model")
+    if not model_name:
+        raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
+
     with DBManager() as db:
-        providers = db.get_providers(logos_key)
+        models_info = db.get_models_info(logos_key)
 
-    out = proxy_behaviour(headers, providers, path)
-    if isinstance(out[0], dict) and "error" in out[0]:
-        if is_async_job:
-            status_code = out[1] if len(out) > 1 else 500
-            return {"status_code": status_code, "data": out[0]}
-        else:
-            raise HTTPException(status_code=out[1], detail=out[0]["error"])
-
-    proxy_headers, forward_url, provider_id = out
     model_id = None
-    policy_id = -1
-    classified = {}
+    for row in models_info:
+        mid, name = row[0], row[1]
+        if name == model_name:
+            model_id = mid
+            break
 
-    # Forward request (streaming or sync) using executor
-    try:
-        if is_async_job:
-            # Async jobs are always non-streaming - use helper
-            return await _proxy_sync_response(
-                forward_url, proxy_headers, body,
-                log_id, provider_id, model_id, policy_id, classified,
-                is_async_job=True
-            )
-        else:
-            # Sync endpoints support streaming
-            if body.get("stream"):
-                return _proxy_streaming_response(
-                    forward_url, proxy_headers, body,
-                    log_id, provider_id, model_id, policy_id, classified
-                )
-            else:
-                response = await _proxy_sync_response(
-                    forward_url, proxy_headers, body,
-                    log_id, provider_id, model_id, policy_id, classified
-                )
-                return response
-    except Exception as e:
-        logger.error(f"Proxy mode request failed: {e}")
-        if is_async_job:
-            return {"status_code": 500, "data": {"error": f"Provider error: {str(e)}"}}
-        else:
-            raise HTTPException(status_code=500, detail=f"Provider error: {str(e)}")
+    if model_id is None:
+        raise HTTPException(status_code=404, detail=f"Model '{model_name}' not available for this key")
+
+    # Ensure payload model matches DB name (avoid user-supplied mismatch)
+    body = {**body, "model": model_name}
+
+    # Proxy mode reuses the execution from RESOURCE mode with single allowed model -> effectively skipping the classification
+    return await _execute_resource_mode(
+        models=[model_id],
+        body=body,
+        headers=headers,
+        logos_key=logos_key,
+        path=path,
+        log_id=log_id,
+        is_async_job=is_async_job,
+        allowed_models_override=[model_id],
+    )
 
 
 async def _execute_resource_mode(
@@ -641,7 +602,8 @@ async def _execute_resource_mode(
     logos_key: str,
     path: str,
     log_id: Optional[int],
-    is_async_job: bool
+    is_async_job: bool,
+    allowed_models_override: Optional[list] = None
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -682,8 +644,8 @@ async def _execute_resource_mode(
     Raises:
         HTTPException: Only when is_async_job=False and an error occurs
     """
-    # Use all available models for classification
-    allowed_models = None  # None means "use all models from DB"
+    # Use all available models for classification unless overridden
+    allowed_models = allowed_models_override  # None means "use all models from DB"
 
     # Extract policy
     policy = _extract_policy(headers, logos_key, body)
