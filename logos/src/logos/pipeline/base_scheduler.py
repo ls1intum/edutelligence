@@ -126,7 +126,8 @@ class BaseScheduler(SchedulerInterface):
 
         self._check_starvation(model_id)
 
-        has_waiters = (self._queue_mgr.get_total_depth(model_id) > 0)
+        depth_before = self._queue_mgr.get_total_depth(model_id)
+        has_waiters = depth_before > 0
 
         if provider_type == 'ollama':
             try:
@@ -145,15 +146,51 @@ class BaseScheduler(SchedulerInterface):
             except KeyError:
                 pass
 
-        next_task = self._queue_mgr.dequeue(model_id)
+        next_task, entry = self._queue_mgr.dequeue_with_entry(model_id)
         if next_task and isinstance(next_task, asyncio.Future):
             if not next_task.done():
+                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
+                priority_int = entry.current_priority.value if entry else Priority.NORMAL.value
+
+                provider_metrics = {}
+                is_cold_start = None
+
+                if provider_type == 'ollama':
+                    try:
+                        status = self._ollama.get_model_status(model_id)
+                        is_cold_start = not status.is_loaded
+                    except ValueError:
+                        is_cold_start = None
+
+                    try:
+                        cap = self._ollama.get_capacity_info(
+                            self._ollama._model_to_provider.get(model_id)
+                        )
+                        provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                    except Exception:
+                        pass
+                elif provider_type == 'azure':
+                    try:
+                        cap = self._azure.get_model_capacity(model_id)
+                        if cap:
+                            provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
+                            provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
+                    except Exception:
+                        pass
+
                 result = SchedulingResult(
                     model_id=model_id,
                     provider_type=provider_type,
                     queue_entry_id=None,
                     was_queued=True,
-                    queue_depth_at_schedule=self._queue_mgr.get_total_depth(model_id),
+                    queue_depth_at_schedule=depth_before,
+                    queue_depth_at_arrival=depth_before,
+                    priority_when_scheduled=priority_str,
+                    is_cold_start=is_cold_start,
+                    provider_metrics=provider_metrics,
+                    available_vram_mb=provider_metrics.get('available_vram_mb'),
+                    azure_rate_remaining_requests=provider_metrics.get('azure_rate_remaining_requests'),
+                    azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
                 )
 
                 logger.info("Waking up queued request for model %s", model_id)

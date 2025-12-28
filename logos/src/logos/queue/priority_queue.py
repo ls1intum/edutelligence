@@ -124,17 +124,42 @@ class PriorityQueueManager:
         with self._lock:
             if priority is not None:
                 # Dequeue from specific priority
-                return self._dequeue_from_priority(model_id, priority)
+                task, _ = self._dequeue_from_priority(model_id, priority)
+                return task
             else:
                 # Dequeue from highest available priority
                 # Check HIGH → NORMAL → LOW
                 for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                    task = self._dequeue_from_priority(model_id, p)
+                    task, _ = self._dequeue_from_priority(model_id, p)
                     if task is not None:
                         return task
                 return None
 
-    def _dequeue_from_priority(self, model_id: int, priority: Priority) -> Optional[any]:
+    def dequeue_with_entry(self, model_id: int, priority: Optional[Priority] = None) -> Tuple[Optional[any], Optional[QueueEntry]]:
+        """
+        Dequeue and return both the task and its QueueEntry metadata.
+
+        Args:
+            model_id: Which model to dequeue from
+            priority: If specified, only dequeue from this priority level.
+                     If None, dequeue from highest available priority.
+
+        Returns:
+            (task, QueueEntry) or (None, None)
+
+        Thread-safe.
+        """
+        with self._lock:
+            if priority is not None:
+                return self._dequeue_from_priority(model_id, priority)
+            # Highest available priority: HIGH → NORMAL → LOW
+            for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+                task, entry = self._dequeue_from_priority(model_id, p)
+                if task is not None:
+                    return task, entry
+            return None, None
+
+    def _dequeue_from_priority(self, model_id: int, priority: Priority) -> Tuple[Optional[any], Optional[QueueEntry]]:
         """
         Internal helper to dequeue from a specific priority queue.
 
@@ -143,7 +168,7 @@ class PriorityQueueManager:
         queue = self._queues[model_id][priority]
 
         if not queue:
-            return None
+            return None, None
 
         # Pop from heap
         _, _, entry_id, entry = heapq.heappop(queue)
@@ -156,7 +181,7 @@ class PriorityQueueManager:
             f"from model {model_id} priority {priority.name} (entry_id={entry_id})"
         )
 
-        return entry.task
+        return entry.task, entry
 
     def peek(self, model_id: int) -> Optional[Tuple[any, Priority]]:
         """
