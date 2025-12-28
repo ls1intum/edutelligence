@@ -82,7 +82,7 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
 ### `RequestPipeline` (`pipeline.py`)
 The main entry point. It coordinates the flow and ensures that monitoring data is recorded.
 
-### `UtilizationAwareScheduler` (`scheduler_interface.py`)
+### `UtilizationAwareScheduler` (`utilization_scheduler.py`)
 The brain of the operation.
 *   **Availability Awareness**: Uses SDI to avoid sending requests to overloaded or rate-limited models.
 *   **Async Queuing**: Handles backpressure by queuing requests when necessary.

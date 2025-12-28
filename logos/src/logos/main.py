@@ -26,7 +26,7 @@ from logos.responses import (
     extract_token_usage
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
-from logos.pipeline.scheduler_interface import UtilizationAwareScheduler
+from logos.pipeline.fcfs_scheduler import FcfScheduler
 from logos.pipeline.executor import Executor
 from logos.pipeline.context_resolver import ContextResolver
 from logos.queue.priority_queue import PriorityQueueManager
@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
         force=True
     )
     logging.getLogger("logos").setLevel(logging.INFO)
+    logging.getLogger("logos.sdi.providers.ollama_provider").setLevel(logging.DEBUG)
 
     # Start Pipeline
     await start_pipeline()
@@ -163,7 +164,7 @@ async def start_pipeline():
     await _register_models_with_facades(_ollama_facade, _azure_facade)
 
     model_registry = _build_model_registry()
-    scheduler = UtilizationAwareScheduler( # Swap in other schedulers as needed
+    scheduler = FcfScheduler(
         queue_manager=_queue_mgr,
         ollama_facade=_ollama_facade,
         azure_facade=_azure_facade,

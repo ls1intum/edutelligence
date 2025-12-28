@@ -196,6 +196,11 @@ class OllamaDataProvider:
             return
 
         models = data.get("models", [])
+        logger.debug(
+            "[%s] /api/ps payload models=%s",
+            self.name,
+            json.dumps(models, default=str)
+        )
 
         # Update cache with lock
         with self._lock:
@@ -209,7 +214,19 @@ class OllamaDataProvider:
                     }
             self._last_refresh = now
 
-        logger.debug(f"[{self.name}] Refreshed /api/ps: {len(self._loaded_models)} models loaded")
+        loaded_debug = {
+            name: {
+                "size_vram": info.get("size_vram", 0),
+                "expires_at": info.get("expires_at").isoformat() if info.get("expires_at") else None,
+            }
+            for name, info in self._loaded_models.items()
+        }
+        logger.debug(
+            "[%s] Refreshed /api/ps: %d models loaded details=%s",
+            self.name,
+            len(self._loaded_models),
+            json.dumps(loaded_debug, default=str)
+        )
 
     def _fetch_ps_data(self) -> Optional[Dict[str, Any]]:
         """
