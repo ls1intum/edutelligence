@@ -1,2 +1,17 @@
 {
-  "LectureUnits": 
+  "LectureUnits": {
+    "objects": []
+  },
+  "Lectures": {
+    "objects": []
+  },
+  "LectureTranscriptions": {
+    "objects": []
+  },
+  "Faqs": {
+    "objects": []
+  },
+  "LectureUnitSegments": {
+    "objects": []
+  }
+}
