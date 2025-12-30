@@ -1,37 +1,38 @@
-import React, {useContext, useEffect, useState} from 'react';
-import {View, Text, StyleSheet, ActivityIndicator, ScrollView} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {ThemeContext} from '@/components/theme';
-import Footer from '@/components/footer';
-import Header from '@/components/header';
-import Sidebar from '@/components/sidebar';
-import {useRouter} from "expo-router";
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator } from 'react-native';
+
+import { useAuth } from '@/components/auth-shell';
+import { Box } from "@/components/ui/box";
+import { VStack } from "@/components/ui/vstack";
+import { HStack } from "@/components/ui/hstack";
+import { Text } from "@/components/ui/text";
+import { Center } from "@/components/ui/center";
 
 export default function Dashboard() {
-    const {theme} = useContext(ThemeContext);
+    const { apiKey } = useAuth();
     const [stats, setStats] = useState<{ models: number; requests: number; users: number } | null>(null);
     const [loading, setLoading] = useState(true);
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
-    const [apiKey, setApiKey] = useState('');
-    const router = useRouter();
 
     useEffect(() => {
+        console.log('[Dashboard] Mounted');
         const fetchStats = async () => {
+            if (!apiKey) return;
             try {
-                const key = await AsyncStorage.getItem('logos_api_key');
                 const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/generalstats', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'logos_key': key || ''
+                        'logos_key': apiKey,
+                        'Authorization': `Bearer ${apiKey}`,
                     },
                     body: JSON.stringify({
-                      logos_key: key
+                      logos_key: apiKey
                     })
                 });
-                const [data, code] = JSON.parse(await response.text());
-                console.log(code);
-                console.log(data);
+                const text = await response.text();
+                console.log('[Dashboard] stats response text:', text);
+                const [data, code] = JSON.parse(text);
+                console.log('[Dashboard] stats code:', code);
                 if (code === 200) {
                     setStats({
                         models: data.models,
@@ -39,6 +40,12 @@ export default function Dashboard() {
                         users: data.users
                     });
                 } else {
+                    setStats({
+                        models: -1,
+                        requests: -1,
+                        users: -1
+                    });
+                    console.warn('[Dashboard] Stats returned non-200 code:', code);
                 }
             } catch (e) {
                 setStats({
@@ -52,134 +59,43 @@ export default function Dashboard() {
             }
         };
         fetchStats();
-    }, []);
-
-    useEffect(() => {
-        const checkLogin = async () => {
-            const key = await AsyncStorage.getItem('logos_api_key');
-            if (!key) {
-                requestAnimationFrame(() => {
-                    router.replace('/');
-                });
-            } else {
-                setIsLoggedIn(true);
-                setApiKey(key);
-            }
-        };
-        checkLogin();
-    }, []);
-    if (!isLoggedIn) return null;
+        return () => console.log('[Dashboard] Unmounting');
+    }, [apiKey]);
 
     return (
-        <View style={styles.outer_container}>
-            <ScrollView>
-            <Header/>
-            <View style={[styles.page, theme === 'light' ? styles.light : styles.dark]}>
-                <Sidebar/>
-                <View style={styles.content}>
-                    <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>
-                        Logos-Dashboard
-                    </Text>
+        <VStack className="w-full">
+            <Text size="2xl" className="font-bold mb-6 self-center">
+                Logos-Dashboard
+            </Text>
 
-                    {loading ? (
-                        <ActivityIndicator size="large" color="#888" style={{marginTop: 40}}/>
-                    ) : stats ? (
-                        <View style={styles.statsContainer}>
-                            <View style={styles.statBox}>
-                                <Text
-                                    style={[styles.statNumber, theme === 'light' ? styles.textLight : styles.textDark]}>{stats.models}</Text>
-                                <Text
-                                    style={[styles.statLabel, theme === 'light' ? styles.textLight : styles.textDark]}>Models</Text>
-                            </View>
-                            <View style={styles.statBox}>
-                                <Text
-                                    style={[styles.statNumber, theme === 'light' ? styles.textLight : styles.textDark]}>{stats.requests}</Text>
-                                <Text
-                                    style={[styles.statLabel, theme === 'light' ? styles.textLight : styles.textDark]}>Requests</Text>
-                            </View>
-                            <View style={styles.statBox}>
-                                <Text
-                                    style={[styles.statNumber, theme === 'light' ? styles.textLight : styles.textDark]}>{stats.users}</Text>
-                                <Text
-                                    style={[styles.statLabel, theme === 'light' ? styles.textLight : styles.textDark]}>User</Text>
-                            </View>
-                        </View>
-                    ) : (
-                        <Text style={{marginTop: 20, color: 'red'}}>Error while loading statistics.</Text>
-                    )}
+            {loading ? (
+                <Center className="mt-10">
+                    <ActivityIndicator size="large" color="#888" />
+                </Center>
+            ) : stats ? (
+                <HStack space="xl" className="justify-center gap-6 mb-8 w-full">
+                    <VStack className="items-center bg-background-50 border border-outline-200 dark:border-none p-4 rounded-2xl min-w-[100px]">
+                        <Text size="xl" className="font-bold text-black dark:text-white">{stats.models}</Text>
+                        <Text size="sm" className="mt-1 text-black dark:text-white">Models</Text>
+                    </VStack>
+                    <VStack className="items-center bg-background-50 border border-outline-200 dark:border-none p-4 rounded-2xl min-w-[100px]">
+                        <Text size="xl" className="font-bold text-black dark:text-white">{stats.requests}</Text>
+                        <Text size="sm" className="mt-1 text-black dark:text-white">Requests</Text>
+                    </VStack>
+                    <VStack className="items-center bg-background-50 border border-outline-200 dark:border-none p-4 rounded-2xl min-w-[100px]">
+                        <Text size="xl" className="font-bold text-black dark:text-white">{stats.users}</Text>
+                        <Text size="sm" className="mt-1 text-black dark:text-white">User</Text>
+                    </VStack>
+                </HStack>
+            ) : (
+                <Text className="mt-5 text-red-500">Error while loading statistics.</Text>
+            )}
 
-                    <View style={styles.dummyCard}>
-                        <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
-                            Hier erscheinen bald anpassbare Informationsboxen...
-                        </Text>
-                    </View>
-                </View>
-            </View>
-        </ScrollView>
-            <Footer/>
-        </View>
-
+            <Box className="mt-5 self-center p-5 rounded-[30px] border border-[#aaa]">
+                <Text className="text-black dark:text-white">
+                    Hier erscheinen bald anpassbare Informationsboxen...
+                </Text>
+            </Box>
+        </VStack>
     );
-}
-
-const styles = StyleSheet.create({
-    page: {
-        flex: 1,
-        flexDirection: 'row'
-    },
-    outer_container: {
-        flex: 1
-    },
-    content: {
-        flex: 1,
-        padding: 32,
-        width: '100%',
-    },
-    title: {
-        fontSize: 28,
-        fontWeight: 'bold',
-        marginBottom: 24,
-        alignSelf: 'center'
-    },
-    statsContainer: {
-        flexDirection: 'row',
-        justifyContent: 'center',
-        gap: 24,
-        marginBottom: 32
-    },
-    statBox: {
-        alignItems: 'center',
-        backgroundColor: '#3c3c3c20',
-        padding: 16,
-        borderRadius: 16,
-        minWidth: 100
-    },
-    statNumber: {
-        fontSize: 22,
-        fontWeight: 'bold'
-    },
-    statLabel: {
-        marginTop: 4,
-        fontSize: 14
-    },
-    dummyCard: {
-        marginTop: 20,
-        alignSelf: 'center',
-        padding: 20,
-        borderRadius: 30,
-        borderWidth: 1,
-        borderColor: '#aaa'
-    },
-    light: {
-        backgroundColor: '#fff'
-    },
-    dark: {
-        backgroundColor: '#1e1e1e'
-    },
-    textLight: {
-        color: '#000'
-    },
-    textDark: {
-        color: '#fff'
-    }
-});
+};

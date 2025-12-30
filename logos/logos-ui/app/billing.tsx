@@ -1,118 +1,22 @@
-import React, {useContext, useEffect, useState} from 'react';
-import {View, Text, StyleSheet, ActivityIndicator, ScrollView} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {ThemeContext} from '@/components/theme';
-import Footer from '@/components/footer';
-import Header from '@/components/header';
-import Sidebar from '@/components/sidebar';
-import {useRouter} from "expo-router";
+import React from 'react';
+
+import { useAuth } from '@/components/auth-shell';
+import { Box } from "@/components/ui/box";
+import { Text } from "@/components/ui/text";
+import { VStack } from "@/components/ui/vstack";
 
 export default function Billing() {
-    const {theme} = useContext(ThemeContext);
-    const [stats, setStats] = useState<{ models: number; requests: number; users: number } | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
-    const [apiKey, setApiKey] = useState('');
-    const router = useRouter();
-
-    useEffect(() => {
-        const checkLogin = async () => {
-            const key = await AsyncStorage.getItem('logos_api_key');
-            if (!key) {
-                requestAnimationFrame(() => {
-                    router.replace('/');
-                });
-            } else {
-                setIsLoggedIn(true);
-                setApiKey(key);
-            }
-        };
-        checkLogin();
-    }, []);
-    if (!isLoggedIn) return null;
-
+    useAuth();
     return (
-        <View style={styles.outer_container}>
-            <ScrollView>
-            <Header/>
-            <View style={[styles.page, theme === 'light' ? styles.light : styles.dark]}>
-                <Sidebar/>
-                <View style={styles.content}>
-                    <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>
-                        Billing Management
-                    </Text>
-                    <View style={styles.dummyCard}>
-                        <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
-                            Hier erscheinen bald Kosten...
-                        </Text>
-                    </View>
-                </View>
-            </View>
-        </ScrollView>
-            <Footer/>
-        </View>
-
+        <VStack className="flex-1 w-full">
+            <Text size="2xl" className="font-bold mb-6 text-center text-black dark:text-white">
+                Billing Management
+            </Text>
+            <Box className="mt-5 p-5 rounded-3xl border border-gray-400 self-center">
+                <Text className="text-black dark:text-white">
+                    Hier erscheinen bald Kosten...
+                </Text>
+            </Box>
+        </VStack>
     );
 }
-
-const styles = StyleSheet.create({
-    page: {
-        flex: 1,
-        flexDirection: 'row'
-    },
-    outer_container: {
-        flex: 1
-    },
-    content: {
-        flex: 1,
-        padding: 32,
-        width: '100%',
-    },
-    title: {
-        fontSize: 28,
-        fontWeight: 'bold',
-        marginBottom: 24,
-        alignSelf: 'center'
-    },
-    statsContainer: {
-        flexDirection: 'row',
-        justifyContent: 'center',
-        gap: 24,
-        marginBottom: 32
-    },
-    statBox: {
-        alignItems: 'center',
-        backgroundColor: '#3c3c3c20',
-        padding: 16,
-        borderRadius: 16,
-        minWidth: 100
-    },
-    statNumber: {
-        fontSize: 22,
-        fontWeight: 'bold'
-    },
-    statLabel: {
-        marginTop: 4,
-        fontSize: 14
-    },
-    dummyCard: {
-        marginTop: 20,
-        alignSelf: 'center',
-        padding: 20,
-        borderRadius: 30,
-        borderWidth: 1,
-        borderColor: '#aaa'
-    },
-    light: {
-        backgroundColor: '#fff'
-    },
-    dark: {
-        backgroundColor: '#1e1e1e'
-    },
-    textLight: {
-        color: '#000'
-    },
-    textDark: {
-        color: '#fff'
-    }
-});

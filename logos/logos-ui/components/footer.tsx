@@ -1,75 +1,31 @@
-import React, { useContext } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { ThemeContext } from './theme';
+import React from 'react';
+import { Box } from "@/components/ui/box";
+import { Text } from "@/components/ui/text";
+import { HStack } from "@/components/ui/hstack";
 
 export default function Footer() {
-  const { theme } = useContext(ThemeContext);
-  const isLight = theme === 'light';
-
   return (
-    <View style={[styles.footer, isLight ? styles.lightFooter : styles.darkFooter]}>
-      <Text style={[styles.footerContent, isLight ? styles.lightText : styles.darkText]}>
-          <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="/about" style={styles.citeText}><b>About</b></a>
+    <Box className="w-full p-3 border-t border-outline-200 bg-background-light dark:bg-[#2a2a2a] dark:border-outline-700">
+      <Box className="self-center w-[80%] flex-row justify-between items-center">
+          <HStack space="md">
+              <Text className="text-gray-500">
+                <a href="/about" style={{ textDecoration: 'none', color: 'inherit' }}><b>About</b></a>
               </Text>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="https://github.com/ls1intum/edutelligence" style={styles.citeText}><b>Releases</b></a>
+              <Text className="text-gray-500">
+                <a href="https://github.com/ls1intum/edutelligence" style={{ textDecoration: 'none', color: 'inherit' }}><b>Releases</b></a>
               </Text>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="/privacy" style={styles.citeText}><b>Privacy</b></a>
+              <Text className="text-gray-500">
+                <a href="/privacy" style={{ textDecoration: 'none', color: 'inherit' }}><b>Privacy</b></a>
               </Text>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="/imprint" style={styles.citeText}><b>Imprint</b></a>
+              <Text className="text-gray-500">
+                <a href="/imprint" style={{ textDecoration: 'none', color: 'inherit' }}><b>Imprint</b></a>
               </Text>
+          </HStack>
+          <Text className="text-right text-sm">
+            Built by <a href="https://github.com/flbrgit" style={{ color: '#969696' }}><b>Florian Briksa</b></a> at <a href="https://www.tum.de/en/" style={{ color: '#969696' }}><b>TUM</b></a>.
+            The source code is available on <a href="https://github.com/ls1intum/edutelligence" style={{ color: '#969696' }}><b>Github</b></a>.
           </Text>
-          <Text style={[styles.footerRight, isLight ? styles.lightText : styles.darkText]}>
-            Built by <a href="https://github.com/flbrgit" style={styles.citeText}><b>Florian Briksa</b></a> at <a href="https://www.tum.de/en/" style={styles.citeText}><b>TUM</b></a>.
-            The source code is available on <a href="https://github.com/ls1intum/edutelligence" style={styles.citeText}><b>Github</b></a>.
-          </Text>
-      </Text>
-    </View>
+      </Box>
+    </Box>
   );
 }
-
-const styles = StyleSheet.create({
-  footer: {
-    width: '100%',
-    padding: 12,
-  },
-  lightFooter: {
-    backgroundColor: '#f5f5f5',
-    borderTopColor: '#cccccc'
-  },
-  darkFooter: {
-    backgroundColor: '#2a2a2a',
-    borderTopColor: '#555555'
-  },
-  lightText: {
-    color: '#111111',
-    fontSize: 14
-  },
-  darkText: {
-    color: '#f0f0f0',
-    fontSize: 14
-  },
-  citeText: {
-    color: '#969696'
-  },
-    footerContent: {
-      alignSelf: 'center',
-      width: '80%',
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-    },
-
-    footerLeft: {
-      textAlign: "left",
-        paddingRight: 20,
-    },
-
-    footerRight: {
-      textAlign: "right",
-    }
-});
