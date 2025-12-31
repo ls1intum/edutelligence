@@ -1,15 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, PanResponder, Platform, RefreshControl, ScrollView, View } from 'react-native';
-import { BarChart, LineChart, PieChart } from 'react-native-gifted-charts';
+import { LineChart, PieChart } from 'react-native-gifted-charts';
 
 import { useAuth } from '@/components/auth-shell';
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
-import { Button, ButtonIcon, ButtonText } from "@/components/ui/button";
+import { Button, ButtonIcon } from "@/components/ui/button";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
-import { CheckIcon } from '@/components/ui/icon';
+import { CheckIcon, CloseIcon } from '@/components/ui/icon';
 
 type RequestEventRow = {
   request_id: string;
@@ -243,41 +243,29 @@ const API_BASE =
     ? ''
     : process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:8080';
 
-const formatRelativeTime = (date: Date | null) => {
-  if (!date) return 'never';
-  const diffSeconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diffSeconds < 60) return `${diffSeconds}s ago`;
-  if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m ago`;
-  if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h ago`;
-  return `${Math.floor(diffSeconds / 86400)}d ago`;
-};
-
-const formatSeconds = (value: number | null | undefined) => {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—';
-  if (value >= 90) return `${(value / 60).toFixed(1)}m`;
-  return `${value.toFixed(1)}s`;
-};
-
-const formatBucketLabel = (bucket: string | null) => {
-  if (!bucket) return '';
-  const d = new Date(bucket);
-  return `${d.getHours().toString().padStart(2, '0')}:00`;
+const formatRangeLabel = (range: { start: Date; end: Date }) => {
+  const format = (d: Date) =>
+    `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d
+      .getDate()
+      .toString()
+      .padStart(2, '0')}`;
+  return `${format(range.start)} → ${format(range.end)}`;
 };
 
 export default function Statistics() {
   const { apiKey } = useAuth();
   
   // State
-  const [timeWindow, setTimeWindow] = useState<'30d' | '7d' | '24h'>('30d');
+  const timeWindow: '30d' = '30d';
   const [customRange, setCustomRange] = useState<{ start: Date; end: Date } | null>(null);
+  const [showRangeBadge, setShowRangeBadge] = useState(false);
+  const rangeBadgeAnim = useRef(new Animated.Value(0)).current;
   
   // Data
   const [allRows, setAllRows] = useState<RequestEventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
   
   // Compute filtered rows
   const filteredRows = useMemo(() => {
@@ -501,15 +489,11 @@ export default function Statistics() {
       }
       const data: RequestEventResponse = await response.json();
       setAllRows(data.rows);
-      setLastUpdatedAt(new Date());
-      setWarning(null);
     } catch (err) {
       console.error('[Statistics] failed to load stats', err);
       // Fallback to mock data for local troubleshooting
       setAllRows(MOCK_RESPONSE.rows);
-      setWarning('Showing mock data (API fetch failed).');
       setError(null);
-      setLastUpdatedAt(new Date());
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -519,6 +503,28 @@ export default function Statistics() {
   useEffect(() => {
     fetchStats();
   }, [fetchStats]);
+
+  // Show/hide badge with same vibe as the approve button, but 200ms
+  useEffect(() => {
+    if (customRange) {
+      setShowRangeBadge(true);
+      Animated.timing(rangeBadgeAnim, {
+        toValue: 1,
+        duration: 200,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }).start();
+    } else {
+      Animated.timing(rangeBadgeAnim, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) setShowRangeBadge(false);
+      });
+    }
+  }, [customRange, rangeBadgeAnim]);
 
   const modelBarData = useMemo(() => {
     return (stats?.modelBreakdown ?? [])
@@ -587,19 +593,6 @@ export default function Statistics() {
     return { totalLineData: total, cloudLineData: cloud, localLineData: local };
   }, [stats]);
 
-  const runtimeBars = useMemo(() => {
-    return (stats?.runtimeByColdStart ?? []).map((r, index) => {
-      const isCyan = index % 2 !== 0; // Alternating colors
-      return {
-        value: r.avgRunSeconds || 0,
-        label: r.type === 'cold' ? 'Cold start' : 'Warm start',
-        frontColor: isCyan ? '#3BE9DE' : '#006DFF',
-        gradientColor: isCyan ? '#93FCF8' : '#009FFF',
-        showGradient: true,
-      };
-    });
-  }, [stats]);
-
   const providerPieData = useMemo(() => {
     if (!stats) return [];
     return [
@@ -631,8 +624,6 @@ export default function Statistics() {
     }));
   }, [stats]);
 
-  const lastEventDate = stats?.lastEventTs ? new Date(stats.lastEventTs) : null;
-
   return (
     <ScrollView
       className="w-full"
@@ -645,51 +636,6 @@ export default function Statistics() {
         <Text className="text-center text-gray-500 dark:text-gray-300">
           Live insights from the request_events table: request volumes, timings, and health.
         </Text>
-
-        {/* Time Frame Picker */}
-        <HStack className="justify-center space-x-2 mb-4">
-            {(['24h', '7d', '30d'] as const).map((tf) => (
-                <Button 
-                    key={tf}
-                    size="sm"
-                    variant={timeWindow === tf ? "solid" : "outline"}
-                    action={timeWindow === tf ? "primary" : "secondary"}
-                    onPress={() => setTimeWindow(tf)}
-                >
-                    <ButtonText>{tf === '24h' ? 'Last 24h' : tf === '7d' ? 'Last 7 Days' : 'Last 30 Days'}</ButtonText>
-                </Button>
-            ))}
-            {customRange && (
-                <Button 
-                    size="sm"
-                    variant="outline"
-                    action="negative"
-                    onPress={() => setCustomRange(null)}
-                >
-                    <ButtonText>Reset Zoom</ButtonText>
-                </Button>
-            )}
-        </HStack>
-
-        <Box className="p-4 rounded-2xl border border-outline-200 dark:border-outline-800 bg-gray-50 dark:bg-[#111] space-y-2">
-          <HStack className="justify-between items-center">
-            <VStack>
-              <Text className="text-black dark:text-white font-semibold">Data freshness</Text>
-              <Text className="text-gray-700 dark:text-gray-200">
-                Last event: {lastEventDate ? `${formatRelativeTime(lastEventDate)} (${lastEventDate.toLocaleString()})` : 'No events yet'}
-              </Text>
-              <Text className="text-gray-700 dark:text-gray-200">
-                Last fetched: {formatRelativeTime(lastUpdatedAt)}
-              </Text>
-            </VStack>
-            <Button onPress={fetchStats}>
-              <ButtonText>Refresh</ButtonText>
-            </Button>
-          </HStack>
-          <Text className="text-xs text-gray-500">
-            Endpoint: {API_BASE}/logosdb/request_event_stats
-          </Text>
-        </Box>
 
         {loading ? (
           <VStack space="lg">
@@ -704,17 +650,39 @@ export default function Statistics() {
           </VStack>
         ) : stats ? (
           <VStack space="lg">
-            {warning ? <Text className="text-center text-amber-600">{warning}</Text> : null}
-
-            <HStack space="md" className="justify-center flex-wrap gap-3">
-              <MetricCard label="Total requests" value={stats.totals.requests} />
-              <MetricCard label="Cold starts" value={stats.totals.coldStarts} />
-              <MetricCard label="Warm starts" value={stats.totals.warmStarts} />
-              <MetricCard label="Avg queue" value={formatSeconds(stats.totals.avgQueueSeconds)} />
-              <MetricCard label="Avg run" value={formatSeconds(stats.totals.avgRunSeconds)} />
-            </HStack>
-
-
+            {showRangeBadge && (
+              <Animated.View
+                style={{
+                  opacity: rangeBadgeAnim,
+                  transform: [
+                    {
+                      scale: rangeBadgeAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.95, 1],
+                      }),
+                    },
+                  ],
+                }}
+              >
+                <HStack className="justify-center">
+                  <View className="flex-row items-center rounded-full bg-secondary-200 px-3 py-2 border border-outline-200">
+                    <Text className="text-typography-900 text-sm mr-2">
+                      {customRange ? formatRangeLabel(customRange) : ''}
+                    </Text>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      action="negative"
+                      onPress={() => setCustomRange(null)}
+                      className="p-0 h-7 w-7 rounded-full"
+                      accessibilityLabel="Clear selected range"
+                    >
+                      <ButtonIcon as={CloseIcon} className=" text-xs" />
+                    </Button>
+                  </View>
+                </HStack>
+              </Animated.View>
+            )}
 
             <ChartCard 
                 title="Cumulative Request Volume (Total vs Cloud vs Local)"
@@ -847,89 +815,6 @@ export default function Statistics() {
                       },
                     }}
                 />
-              )}
-            </ChartCard>
-            <ChartCard title="Runtime by cold start">
-              {(width) => {
-                const barWidth = 42;
-                const n = runtimeBars.length;
-                const yAxisLabelWidth = 30; 
-                const availableWidth = width - yAxisLabelWidth;
-                
-                let spacing = 40;
-                let initialSpacing = 20;
-
-                if (n > 0) {
-                     const totalBarWidth = n * barWidth;
-                     const clusterWidth = totalBarWidth + Math.max(0, n - 1) * spacing;
-                     
-                     if (clusterWidth < availableWidth) {
-                         initialSpacing = (availableWidth - clusterWidth) / 2;
-                     } else {
-                         spacing = Math.max(4, (availableWidth - totalBarWidth) / n);
-                         initialSpacing = spacing;
-                     }
-                }
-
-                return runtimeBars.length ? (
-                  <BarChart
-                    data={runtimeBars}
-                    width={width}
-                    barWidth={barWidth}
-                    spacing={spacing}
-                    initialSpacing={initialSpacing}
-                    barBorderRadius={4}
-                    showGradient
-                    yAxisThickness={0}
-                    xAxisType="dashed"
-                    xAxisColor="#525252"
-                    yAxisTextStyle={{ color: '#A3A3A3' }}
-                    xAxisLabelTextStyle={{ color: '#A3A3A3', textAlign: 'center' }}
-                    noOfSections={4}
-                    rulesType="dashed"
-                    rulesColor="#525252"
-                    isAnimated
-                    animationDuration={600}
-                    renderTooltip={(item: any) => {
-                      return (
-                        <View
-                          style={{
-                            marginBottom: 4,
-                            marginLeft: -6,
-                            backgroundColor: '#1f2937',
-                            paddingHorizontal: 8,
-                            paddingVertical: 4,
-                            borderRadius: 6,
-                            shadowColor: '#000',
-                            shadowOffset: { width: 0, height: 2 },
-                            shadowOpacity: 0.25,
-                            shadowRadius: 3.84,
-                            elevation: 5,
-                          }}
-                        >
-                          <Text style={{ color: '#f3f4f6', fontSize: 12, fontWeight: 'bold' }}>
-                            {Number(item.value).toFixed(2)}s
-                          </Text>
-                        </View>
-                      );
-                    }}
-                    leftShiftForTooltip={5}
-                    leftShiftForLastIndexTooltip={5}
-                  />
-                ) : (
-                  <EmptyState message="No completed requests yet." />
-                );
-              }}
-            </ChartCard>
-
-            <ChartCard title="Queue depth snapshot">
-              {() => (
-                <HStack className="flex-wrap gap-4">
-                  <MetricCard label="Avg enqueue depth" value={stats.queueDepth?.avgEnqueueDepth ?? 0} />
-                  <MetricCard label="Avg schedule depth" value={stats.queueDepth?.avgScheduleDepth ?? 0} />
-                  <MetricCard label="p95 enqueue depth" value={stats.queueDepth?.p95EnqueueDepth ?? 0} />
-                  <MetricCard label="p95 schedule depth" value={stats.queueDepth?.p95ScheduleDepth ?? 0} />
-                </HStack>
               )}
             </ChartCard>
           </VStack>
@@ -1068,7 +953,7 @@ const InteractiveZoomableChart = ({
         ref={containerRef}
         {...panResponder.panHandlers} 
         className="web:select-none"
-        style={{ position: 'relative', width: width, height: 280, justifyContent: 'center', backgroundColor: 'transparent', userSelect: 'none' as any }}
+        style={{ position: 'relative', width: width, height: 340, justifyContent: 'center', backgroundColor: 'transparent', userSelect: 'none' as any }}
     >
      {selection ? (
          <View 
@@ -1162,17 +1047,6 @@ const InteractiveZoomableChart = ({
     <EmptyState message="No timeline data available." />
   );
 }
-
-const MetricCard = ({ label, value }: { label: string; value: string | number }) => (
-  <View className="bg-secondary-200 rounded-2xl p-3 min-w-[120px] items-center mb-2.5 shadow-hard-1">
-    <Text className="text-xl font-bold text-typography-900 dark:text-typography-50">
-      {typeof value === 'number' ? (Number.isInteger(value) ? value : value.toFixed(1)) : value}
-    </Text>
-    <Text className="text-xs text-typography-500 mt-1 text-center">
-      {label}
-    </Text>
-  </View>
-);
 
 const ChartCard = ({ title, subtitle, children }: { title: string; subtitle?: string; children: (width: number) => React.ReactNode }) => {
   const [layoutWidth, setLayoutWidth] = useState(0);
