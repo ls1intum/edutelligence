@@ -57,13 +57,13 @@ export default function Sidebar() {
                 onPress={() => handlePress(item)}
                 className={`py-3 px-4 rounded-lg border transition-all duration-200 active:opacity-80 active:scale-95
                   ${active
-                    ? 'border-2 border-primary-500 bg-primary-50/80 dark:bg-primary-900/30 shadow-soft-2'
+                    ? 'border-2 border-primary-500 bg-background-100 shadow-soft-2'
                     : 'border-outline-100 bg-transparent hover:bg-background-50'
                   }`}
               >
                 <Text
-                  className={`text-base font-semibold transition-colors duration-200
-                    ${active ? 'text-primary-800 dark:text-primary-100' : 'text-typography-900'}`}
+                  className={`text-base transition-colors duration-200
+                    ${active ? 'text-typography font-semibold' : 'text-typography-900'}`}
                 >
                   {item.label}
                 </Text>

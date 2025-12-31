@@ -4,7 +4,7 @@ import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
 import { Pressable } from 'react-native';
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react-native';
 import { useRouter } from "expo-router";
 
 type HeaderProps = {
@@ -45,9 +45,9 @@ export default function Header({ colorMode = 'light', onToggleColorMode }: Heade
           accessibilityLabel="Toggle color mode"
         >
           {colorMode === 'dark' ? (
-            <Sun size={28} className="text-yellow-400 font-semibold" />
+            <Sun size={28} color="#facc15" strokeWidth={2.5} />
           ) : (
-            <Moon size={28} className="text-slate-700 font-semibold" />
+            <Moon size={28} color="#334155" strokeWidth={2.5} />
           )}
         </Pressable>
       </HStack>

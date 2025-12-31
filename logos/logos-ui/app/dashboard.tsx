@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator } from 'react-native';
-
 import { useAuth } from '@/components/auth-shell';
 import { Box } from "@/components/ui/box";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
 import { Text } from "@/components/ui/text";
 import { Center } from "@/components/ui/center";
+import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 
 export default function Dashboard() {
     const { apiKey } = useAuth();
@@ -69,9 +68,21 @@ export default function Dashboard() {
             </Text>
 
             {loading ? (
-                <Center className="mt-10">
-                    <ActivityIndicator size="large" color="#888" />
-                </Center>
+                <VStack className="w-full" space="lg">
+                    <HStack space="xl" className="justify-center gap-6 mb-4 w-full">
+                        {Array.from({ length: 3 }).map((_, idx) => (
+                            <Skeleton
+                                key={idx}
+                                className="h-[110px] w-[150px] rounded-2xl bg-background-200"
+                                variant="rounded"
+                            />
+                        ))}
+                    </HStack>
+
+                    <Box className="mt-2 self-center p-5 rounded-[30px] border border-[#aaa] w-full max-w-[420px]">
+                        <SkeletonText _lines={3} className="h-3 bg-background-200 rounded-md" />
+                    </Box>
+                </VStack>
             ) : stats ? (
                 <HStack space="xl" className="justify-center gap-6 mb-8 w-full">
                     <VStack className="items-center bg-background-50 border border-outline-200 dark:border-none p-4 rounded-2xl min-w-[100px]">

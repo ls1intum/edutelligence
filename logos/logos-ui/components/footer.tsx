@@ -1,29 +1,44 @@
 import React from 'react';
+import { Linking, Pressable } from 'react-native';
+import { Link } from "expo-router";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
 
 export default function Footer() {
+  const openExternal = (url: string) => Linking.openURL(url);
+
   return (
     <Box className="w-full p-3 border-t border-outline-200 bg-background-light dark:bg-[#2a2a2a] dark:border-outline-700">
       <Box className="self-center w-[80%] flex-row justify-between items-center">
           <HStack space="md">
-              <Text className="text-gray-500">
-                <a href="/about" style={{ textDecoration: 'none', color: 'inherit' }}><b>About</b></a>
-              </Text>
-              <Text className="text-gray-500">
-                <a href="https://github.com/ls1intum/edutelligence" style={{ textDecoration: 'none', color: 'inherit' }}><b>Releases</b></a>
-              </Text>
-              <Text className="text-gray-500">
-                <a href="/privacy" style={{ textDecoration: 'none', color: 'inherit' }}><b>Privacy</b></a>
-              </Text>
-              <Text className="text-gray-500">
-                <a href="/imprint" style={{ textDecoration: 'none', color: 'inherit' }}><b>Imprint</b></a>
-              </Text>
+              <Link href="/about" asChild>
+                <Text className="text-gray-500 font-semibold">About</Text>
+              </Link>
+              <Pressable onPress={() => openExternal('https://github.com/ls1intum/edutelligence')}>
+                <Text className="text-gray-500 font-semibold">Releases</Text>
+              </Pressable>
+              <Link href="/privacy" asChild>
+                <Text className="text-gray-500 font-semibold">Privacy</Text>
+              </Link>
+              <Link href="/imprint" asChild>
+                <Text className="text-gray-500 font-semibold">Imprint</Text>
+              </Link>
           </HStack>
-          <Text className="text-right text-sm">
-            Built by <a href="https://github.com/flbrgit" style={{ color: '#969696' }}><b>Florian Briksa</b></a> at <a href="https://www.tum.de/en/" style={{ color: '#969696' }}><b>TUM</b></a>.
-            The source code is available on <a href="https://github.com/ls1intum/edutelligence" style={{ color: '#969696' }}><b>Github</b></a>.
+          <Text className="text-right text-sm text-gray-500">
+            Built by{' '}
+            <Text className="text-[#969696] font-semibold" onPress={() => openExternal('https://github.com/flbrgit')}>
+              Florian Briksa
+            </Text>{' '}
+            at{' '}
+            <Text className="text-[#969696] font-semibold" onPress={() => openExternal('https://www.tum.de/en/')}>
+              TUM
+            </Text>
+            . The source code is available on{' '}
+            <Text className="text-[#969696] font-semibold" onPress={() => openExternal('https://github.com/ls1intum/edutelligence')}>
+              Github
+            </Text>
+            .
           </Text>
       </Box>
     </Box>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollView, ActivityIndicator } from 'react-native';
+import { ScrollView } from 'react-native';
 import { useRouter } from "expo-router";
 
 import { useAuth } from '@/components/auth-shell';
@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Center } from "@/components/ui/center";
+import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 
 type Provider = {
   id: number;
@@ -133,9 +133,31 @@ export default function Providers() {
       </Box>
 
       {loading ? (
-        <Center className="py-10">
-          <ActivityIndicator size="large" color="#0000ff" />
-        </Center>
+        <VStack space="lg">
+          <HStack space="xl" className="justify-center">
+            {Array.from({ length: 2 }).map((_, idx) => (
+              <Skeleton
+                key={idx}
+                className="h-[110px] w-[150px] rounded-xl bg-background-200"
+                variant="rounded"
+              />
+            ))}
+          </HStack>
+
+          <Box className="w-full overflow-hidden border border-outline-200 bg-secondary-200 rounded-lg p-2">
+            <VStack space="sm">
+              <Skeleton className="h-10 w-full rounded-md bg-background-200" variant="rounded" />
+              {Array.from({ length: 4 }).map((_, idx) => (
+                <Skeleton
+                  key={idx}
+                  className="h-9 w-full rounded-md bg-background-200"
+                  variant="rounded"
+                />
+              ))}
+              <SkeletonText _lines={2} className="h-3 bg-background-200 rounded-md" />
+            </VStack>
+          </Box>
+        </VStack>
       ) : (
         <Box className="w-full overflow-hidden border border-outline-200 bg-secondary-200 rounded-lg p-2">
           <ScrollView horizontal contentContainerStyle={{ flexGrow: 1 }}>

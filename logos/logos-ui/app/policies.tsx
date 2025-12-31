@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView } from 'react-native';
+import { ScrollView } from 'react-native';
 import { useRouter } from "expo-router";
 
 import { useAuth } from '@/components/auth-shell';
@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Center } from "@/components/ui/center";
+import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 
 type Policy = {
   id: number;
@@ -101,9 +101,19 @@ export default function Policies() {
       </Box>
 
       {loading ? (
-        <Center className="py-10">
-          <ActivityIndicator size="large" color="#0000ff" />
-        </Center>
+        <Box className="w-full overflow-hidden border border-outline-200 rounded-lg p-2 bg-secondary-200">
+          <VStack space="sm">
+            <Skeleton className="h-10 w-full rounded-md bg-background-200" variant="rounded" />
+            {Array.from({ length: 5 }).map((_, idx) => (
+              <Skeleton
+                key={idx}
+                className="h-9 w-full rounded-md bg-background-200"
+                variant="rounded"
+              />
+            ))}
+            <SkeletonText _lines={2} className="h-3 bg-background-200 rounded-md" />
+          </VStack>
+        </Box>
       ) : (
         <Box className="w-full overflow-hidden border border-outline-200 rounded-lg p-2 bg-secondary-200">
           <ScrollView horizontal contentContainerStyle={{ flexGrow: 1 }}>
