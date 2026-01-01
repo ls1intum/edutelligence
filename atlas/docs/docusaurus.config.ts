@@ -82,12 +82,6 @@ const config: Config = {
       items: [
         {
           type: 'docSidebar',
-          sidebarId: 'userSidebar',
-          position: 'left',
-          label: 'User Guide',
-        },
-        {
-          type: 'docSidebar',
           sidebarId: 'devSidebar',
           position: 'left',
           label: 'Contributor Guide',
@@ -111,10 +105,6 @@ const config: Config = {
         {
           title: 'Documentation',
           items: [
-            {
-              label: 'User Guide',
-              to: '/user',
-            },
             {
               label: 'Contributor Guide',
               to: '/dev/development-process',

@@ -62,15 +62,12 @@ WeaviateConnectionError: Could not connect to Weaviate
 
 **Solution**:
 ```bash
-# Check if Weaviate is running
-docker ps | grep weaviate
-
-# If not running, start it
-docker-compose -f compose.weaviate.yaml up -d
-
-# Wait for Weaviate to be ready
-curl http://localhost:8085/v1/.well-known/ready
+# Check if Weaviate is accessible
+curl -H "Authorization: Bearer YOUR_WEAVIATE_API_KEY" https://your-weaviate-domain.com/v1/.well-known/ready
 # Should return: {"status":"ok"}
+
+# If Weaviate is not accessible, check the centralized Weaviate service
+# (Weaviate runs on a separate server - see /weaviate directory)
 
 # Restart AtlasML
 docker-compose -f compose.atlas.yaml restart atlasml
@@ -178,19 +175,21 @@ If fails, check network connectivity and Weaviate status.
 
 **Symptom**:
 ```
-WeaviateConnectionError: Could not connect to Weaviate at localhost:8085
+WeaviateConnectionError: Could not connect to Weaviate at https://your-weaviate-domain.com
 ```
 
 **Diagnosis**:
 ```bash
-# 1. Check if Weaviate is running
-docker ps | grep weaviate
+# 1. Check if Weaviate is accessible
+curl -H "Authorization: Bearer YOUR_WEAVIATE_API_KEY" https://your-weaviate-domain.com/v1/.well-known/ready
 
-# 2. Test connectivity from host
-curl http://localhost:8085/v1/.well-known/ready
+# 2. Check Weaviate service status on Weaviate server
+# SSH to the Weaviate server and check:
+docker ps | grep weaviate
+docker logs weaviate
 
 # 3. Test from AtlasML container
-docker exec atlasml curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
+docker exec atlasml curl -H "Authorization: Bearer ${WEAVIATE_API_KEY}" ${WEAVIATE_HOST}/v1/.well-known/ready
 
 # 4. Check network
 docker network inspect shared-network
@@ -198,30 +197,39 @@ docker network inspect shared-network
 
 **Solutions**:
 
-#### If Weaviate Not Running
+#### If Weaviate Not Accessible
 
 ```bash
-# Start Weaviate
-docker-compose -f compose.weaviate.yaml up -d
+# Check DNS resolution
+nslookup your-weaviate-domain.com
 
-# Verify
-docker logs weaviate
-curl http://localhost:8085/v1/.well-known/ready
+# Check if Weaviate server is reachable
+ping your-weaviate-domain.com
+
+# Verify Weaviate API key is correct in .env
+cat /opt/atlasml/.env | grep WEAVIATE_API_KEY
+
+# Restart AtlasML with updated configuration
+docker-compose -f compose.atlas.yaml restart
 ```
 
-#### If Network Issue
+#### If Weaviate Server Down
+
+SSH to the Weaviate server and check the service:
 
 ```bash
-# Check both containers on same network
-docker network inspect shared-network | jq '.[0].Containers'
+# Check Weaviate status
+cd /path/to/edutelligence/weaviate
+docker-compose ps
 
-# Recreate network if needed
-docker network rm shared-network
-docker network create shared-network
+# View Weaviate logs
+docker-compose logs weaviate
 
-# Restart both services
-docker-compose -f compose.weaviate.yaml restart
-docker-compose -f compose.atlas.yaml restart
+# Restart if needed
+docker-compose restart weaviate
+
+# Verify it's accessible
+curl -H "Authorization: Bearer YOUR_API_KEY" https://your-weaviate-domain.com/v1/.well-known/ready
 ```
 
 #### If Host Resolution Issue

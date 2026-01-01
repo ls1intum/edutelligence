@@ -43,13 +43,15 @@ Docker Compose 2.0+
 
 ---
 
-## Installation Methods
+## Installation with Docker Compose
 
-### Method 1: Docker Compose (Recommended)
+Docker Compose is the **only supported method** for production deployments.
 
-This is the simplest method for single-server deployments.
+:::warning
+For local development setup, see the [Development Setup Guide](/dev/setup). Manual installation is not supported for production.
+:::
 
-#### Step 1: Install Docker
+### Step 1: Install Docker
 
 ```bash
 # Update packages
@@ -68,7 +70,7 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-#### Step 2: Install Docker Compose
+### Step 2: Install Docker Compose
 
 ```bash
 # Download Docker Compose
@@ -82,7 +84,7 @@ docker-compose --version
 # Should show: Docker Compose version 2.0+ or higher
 ```
 
-#### Step 3: Create Installation Directory
+### Step 3: Create Installation Directory
 
 ```bash
 # Create directory
@@ -93,7 +95,7 @@ cd /opt/atlasml
 sudo chown $USER:$USER /opt/atlasml
 ```
 
-#### Step 4: Download Compose File
+### Step 4: Download Compose File
 
 ```bash
 # Download from GitHub
@@ -140,54 +142,39 @@ networks:
 EOF
 ```
 
-#### Step 5: Install Weaviate
+### Step 5: Set Up Weaviate
 
-AtlasML requires Weaviate as its vector database.
+AtlasML requires Weaviate as its vector database. **Use the centralized Weaviate setup** in the `/weaviate` directory.
 
-```bash
-# Download Weaviate compose file
-curl -o compose.weaviate.yaml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/compose.weaviate.yaml
+:::warning Required
+AtlasML requires the centralized Weaviate setup with Traefik and API key authentication. Other Weaviate deployment methods are **not supported**.
+:::
 
-# Or create manually
-cat > compose.weaviate.yaml << 'EOF'
-services:
-  weaviate:
-    image: semitechnologies/weaviate:latest
-    ports:
-      - "8085:8080"
-      - "50051:50051"
-    environment:
-      QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      DEFAULT_VECTORIZER_MODULE: 'none'
-      ENABLE_MODULES: ''
-      CLUSTER_HOSTNAME: 'node1'
-    volumes:
-      - weaviate-data:/var/lib/weaviate
-    networks:
-      - shared-network
-    restart: unless-stopped
+**Follow the Weaviate setup instructions:**
 
-volumes:
-  weaviate-data:
+1. Navigate to the weaviate directory:
+   ```bash
+   cd /path/to/edutelligence/weaviate
+   ```
 
-networks:
-  shared-network:
-    name: shared-network
-    driver: bridge
-    external: true
-EOF
+2. Follow the complete setup guide in the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md), which includes:
+   - Docker and Traefik configuration
+   - SSL/TLS certificates via Let's Encrypt
+   - API key authentication setup
+   - Production-ready configuration
 
-# Start Weaviate
-docker-compose -f compose.weaviate.yaml up -d
+3. After Weaviate is running, verify it's accessible:
+   ```bash
+   curl -H "Authorization: Bearer YOUR_WEAVIATE_API_KEY" https://your-weaviate-domain.com/v1/.well-known/ready
+   # Should return: {"status":"ok"}
+   ```
 
-# Verify Weaviate is running
-curl http://localhost:8085/v1/.well-known/ready
-# Should return: {"status":"ok"}
-```
+4. **Save the following for AtlasML configuration:**
+   - Weaviate domain (e.g., `weaviate.example.com`)
+   - Weaviate API key
+   - Weaviate ports: `443` (HTTPS), `50051` (gRPC)
 
-#### Step 6: Create Environment File
+### Step 6: Create Environment File
 
 See [Configuration Guide](./atlasml-configuration.md) for detailed explanation of each variable.
 
@@ -196,10 +183,11 @@ cat > /opt/atlasml/.env << 'EOF'
 # API Authentication
 ATLAS_API_KEYS='["your-secure-api-key-here"]'
 
-# Weaviate Connection
-WEAVIATE_HOST=localhost
-WEAVIATE_PORT=8085
+# Weaviate Connection (from centralized Weaviate setup)
+WEAVIATE_HOST=https://your-weaviate-domain.com
+WEAVIATE_PORT=443
 WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=your-weaviate-api-key
 
 # OpenAI Configuration (Azure)
 OPENAI_API_KEY=your-openai-api-key
@@ -222,11 +210,15 @@ EOF
 chmod 600 /opt/atlasml/.env
 ```
 
+:::tip
+Use the same `WEAVIATE_API_KEY` that you configured in the centralized Weaviate setup (`/weaviate/.env`).
+:::
+
 :::warning Security
 Never commit the `.env` file to version control. Keep your API keys secure.
 :::
 
-#### Step 7: Pull and Start AtlasML
+### Step 7: Pull and Start AtlasML
 
 ```bash
 cd /opt/atlasml
@@ -247,7 +239,7 @@ NAME      IMAGE                                   STATUS    PORTS
 atlasml   ghcr.io/ls1intum/edutelligence/atlasml  healthy   0.0.0.0:80->8000/tcp
 ```
 
-#### Step 8: Verify Installation
+### Step 8: Verify Installation
 
 ```bash
 # Check health endpoint
@@ -261,147 +253,6 @@ docker logs atlasml
 # Should see:
 # INFO:     Started server process
 # INFO:     Uvicorn running on http://0.0.0.0:8000
-```
-
----
-
-### Method 2: Manual Docker Run
-
-For simple deployments without docker-compose:
-
-```bash
-# Pull image
-docker pull ghcr.io/ls1intum/edutelligence/atlasml:main
-
-# Run container
-docker run -d \
-  --name atlasml \
-  --restart unless-stopped \
-  -p 80:8000 \
-  -e WEAVIATE_HOST=localhost \
-  -e WEAVIATE_PORT=8085 \
-  -e WEAVIATE_GRPC_PORT=50051 \
-  -e ATLAS_API_KEYS='["your-api-key"]' \
-  -e OPENAI_API_KEY=your-openai-key \
-  -e OPENAI_API_URL=https://your-resource.openai.azure.com \
-  -e ENV=production \
-  ghcr.io/ls1intum/edutelligence/atlasml:main
-
-# Verify
-curl http://localhost/api/v1/health
-```
-
----
-
-### Method 3: Kubernetes (For Large Deployments)
-
-For institutions requiring high availability and auto-scaling:
-
-#### Prerequisites
-
-- Kubernetes cluster (1.20+)
-- kubectl configured
-- Helm 3.0+
-
-#### Create Namespace
-
-```bash
-kubectl create namespace atlasml
-```
-
-#### Create Secrets
-
-```bash
-# API keys
-kubectl create secret generic atlasml-secrets \
-  --from-literal=api-keys='["key1","key2"]' \
-  --from-literal=openai-key='your-openai-key' \
-  -n atlasml
-```
-
-#### Create Deployment
-
-```yaml
-# atlasml-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: atlasml
-  namespace: atlasml
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: atlasml
-  template:
-    metadata:
-      labels:
-        app: atlasml
-    spec:
-      containers:
-      - name: atlasml
-        image: ghcr.io/ls1intum/edutelligence/atlasml:main
-        ports:
-        - containerPort: 8000
-        env:
-        - name: WEAVIATE_HOST
-          value: "weaviate-service"
-        - name: WEAVIATE_PORT
-          value: "80"
-        - name: ATLAS_API_KEYS
-          valueFrom:
-            secretKeyRef:
-              name: atlasml-secrets
-              key: api-keys
-        - name: OPENAI_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: atlasml-secrets
-              key: openai-key
-        - name: ENV
-          value: "production"
-        resources:
-          limits:
-            memory: "2Gi"
-            cpu: "2000m"
-          requests:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          httpGet:
-            path: /api/v1/health
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 30
-        readinessProbe:
-          httpGet:
-            path: /api/v1/health
-            port: 8000
-          initialDelaySeconds: 5
-          periodSeconds: 10
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: atlasml-service
-  namespace: atlasml
-spec:
-  selector:
-    app: atlasml
-  ports:
-  - port: 80
-    targetPort: 8000
-  type: LoadBalancer
-```
-
-#### Deploy
-
-```bash
-kubectl apply -f atlasml-deployment.yaml
-
-# Check status
-kubectl get pods -n atlasml
-kubectl get svc -n atlasml
 ```
 
 ---
@@ -634,5 +485,4 @@ curl http://localhost/api/v1/health
 
 - **Docker Documentation**: https://docs.docker.com/
 - **Docker Compose**: https://docs.docker.com/compose/
-- **Kubernetes**: https://kubernetes.io/docs/
 - **Weaviate Installation**: https://weaviate.io/developers/weaviate/installation
