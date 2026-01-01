@@ -6,11 +6,11 @@ from pydantic import ConfigDict, BaseModel, Field
 from athena import emit_meta
 from athena.programming import Exercise, Submission, Feedback
 
-from module_programming_quality_llm.config import GradedBasicApproachConfig
-from module_programming_quality_llm.split_grading_instructions_by_file import (
+from module_programming_llm.config import GradedBasicApproachConfig
+from module_programming_llm.split_grading_instructions_by_file import (
     split_grading_instructions_by_file,
 )
-from module_programming_quality_llm.split_problem_statement_by_file import (
+from module_programming_llm.split_problem_statement_by_file import (
     split_problem_statement_by_file,
 )
 from llm_core.utils.llm_utils import (
@@ -20,7 +20,7 @@ from llm_core.utils.llm_utils import (
 )
 from llm_core.core.predict_and_parse import predict_and_parse
 
-from module_programming_quality_llm.helpers.utils import (
+from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo,
     add_line_numbers,
