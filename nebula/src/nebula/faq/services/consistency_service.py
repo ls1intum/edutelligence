@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Any
 
-from nebula.common.llm_config import get_openai_client
+from nebula.common.config import get_openai_client
 from nebula.faq.domains.data.faq_dto import FaqConsistencyResponse, FaqDTO
 from nebula.faq.prompts.faq_consistency_prompt import faq_consistency_prompt
 
