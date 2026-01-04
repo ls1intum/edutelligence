@@ -186,14 +186,19 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
         callback.error("Fatal error.", exception=e)
 
 
-def run_lecture_chat_pipeline_worker(dto, variant):
+def run_lecture_chat_pipeline_worker(dto, variant_id):
     try:
         callback = LectureChatCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = LectureChatPipeline(callback=callback, dto=dto, variant=variant)
+        for variant in LectureChatPipeline.get_variants():
+            if variant.id == variant_id:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {variant_id}")
+        pipeline = LectureChatPipeline()
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -201,7 +206,7 @@ def run_lecture_chat_pipeline_worker(dto, variant):
         return
 
     try:
-        pipeline(dto=dto)
+        pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
         logger.error("Error running lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())

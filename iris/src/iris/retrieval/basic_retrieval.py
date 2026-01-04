@@ -111,9 +111,11 @@ class BaseRetrieval(SubPipeline, ABC):
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
+        # Escape curly braces in student_query for LangChain template compatibility
+        safe_query = student_query.replace("{", "{{").replace("}", "}}")
         prompt += ChatPromptTemplate.from_messages(
             [
-                ("user", student_query),
+                ("user", safe_query),
             ]
         )
         prompt += ChatPromptTemplate.from_messages(
