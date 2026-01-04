@@ -14,6 +14,16 @@ class ExerciseType(str, Enum):
     TEXT = "TEXT"
     FILE_UPLOAD = "FILE_UPLOAD"
 
+    @classmethod
+    def _missing_(cls, value):
+        """Allow case-insensitive lookup"""
+        if isinstance(value, str):
+            value = value.upper().replace("-", "_")
+            for member in cls:
+                if member.value == value:
+                    return member
+        return None
+
 
 class ExerciseMode(str, Enum):
     INDIVIDUAL = "INDIVIDUAL"

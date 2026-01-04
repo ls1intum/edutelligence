@@ -188,6 +188,10 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
 
 def run_lecture_chat_pipeline_worker(dto, variant_id):
     try:
+        is_local = bool(
+            getattr(dto, "settings", None)
+            and dto.settings.is_local()
+        )
         callback = LectureChatCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
@@ -198,7 +202,7 @@ def run_lecture_chat_pipeline_worker(dto, variant_id):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = LectureChatPipeline()
+        pipeline = LectureChatPipeline(local=local)
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())
