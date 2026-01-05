@@ -202,7 +202,7 @@ def run_lecture_chat_pipeline_worker(dto, variant_id):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = LectureChatPipeline(local=local)
+        pipeline = LectureChatPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -292,7 +292,10 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        is_local = dto.execution.settings.is_local()
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
         match variant:
             case "faq" | "problem_statement":
                 pipeline = RewritingPipeline(
@@ -340,8 +343,12 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
         pipeline = InconsistencyCheckPipeline(
-            callback=callback, local=dto.execution.settings.is_local()
+            callback=callback, local=is_local
         )
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline: %s", e)
