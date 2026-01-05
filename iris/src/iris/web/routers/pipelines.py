@@ -188,10 +188,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
 
 def run_lecture_chat_pipeline_worker(dto, variant_id):
     try:
-        is_local = bool(
-            getattr(dto, "settings", None)
-            and dto.settings.is_local()
-        )
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
         callback = LectureChatCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
@@ -347,9 +344,7 @@ def run_inconsistency_check_pipeline_worker(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
         )
-        pipeline = InconsistencyCheckPipeline(
-            callback=callback, local=is_local
-        )
+        pipeline = InconsistencyCheckPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline: %s", e)
 
