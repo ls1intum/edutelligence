@@ -412,5 +412,3 @@ class LectureChatPipeline(
                 local_citation_model="llama3.3:latest",
             ),
         ]
-
-    # method get_agent_params from course chat is not implemented here since it is the same as in the superclass
