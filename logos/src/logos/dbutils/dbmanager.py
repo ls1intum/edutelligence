@@ -4,7 +4,7 @@ Central Manager for all Database-related actions for Logos
 import datetime
 import os
 import secrets
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Dict, Any, Optional, Tuple, Union, List
 from dateutil.parser import isoparse
 
 import sqlalchemy.exc
@@ -581,6 +581,27 @@ class DBManager:
             "requests": request_count
         }, 200
 
+    def get_request_event_stats(self, logos_key: str):
+        """
+        Return raw request_events rows (client handles aggregation).
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        sql = text("SELECT * FROM request_events")
+        rows = self.session.execute(sql).mappings().all()
+
+        def serialize(row):
+            out = {}
+            for k, v in row.items():
+                if isinstance(v, datetime.datetime):
+                    out[k] = v.isoformat()
+                else:
+                    out[k] = v
+            return out
+
+        return {"rows": [serialize(r) for r in rows]}, 200
+
     def get_token_name(self, name):
         sql = text("""
                    SELECT *
@@ -883,6 +904,72 @@ class DBManager:
             "result": "Updated provider SDI configuration",
             "provider_id": row[0]
         }, 200
+
+    def get_distinct_ollama_urls(self) -> List[str]:
+        """
+        Get all distinct ollama_admin_urls from providers table.
+
+        Returns:
+            List of unique Ollama admin URLs (e.g., ["http://host.docker.internal:11435"])
+        """
+        sql = text("""
+            SELECT DISTINCT ollama_admin_url
+            FROM providers
+            WHERE ollama_admin_url IS NOT NULL
+              AND ollama_admin_url != ''
+            ORDER BY ollama_admin_url
+        """)
+
+        result = self.session.execute(sql).fetchall()
+        return [row[0] for row in result]
+
+    def insert_provider_snapshot(
+        self,
+        ollama_admin_url: str,
+        total_models_loaded: int,
+        total_vram_used_bytes: int,
+        loaded_models: List[Dict[str, Any]],
+        poll_success: bool = True,
+        error_message: Optional[str] = None
+    ) -> None:
+        """
+        Insert Ollama provider snapshot into monitoring table.
+
+        Args:
+            ollama_admin_url: Ollama admin URL (e.g., "http://host.docker.internal:11435")
+            total_models_loaded: Number of models currently loaded
+            total_vram_used_bytes: Total VRAM used by all loaded models (in bytes)
+            loaded_models: List of model details (name, size_vram, expires_at)
+            poll_success: Whether the poll was successful
+            error_message: Error message if poll failed
+        """
+        sql = text("""
+            INSERT INTO ollama_provider_snapshots (
+                ollama_admin_url,
+                total_models_loaded,
+                total_vram_used_bytes,
+                loaded_models,
+                poll_success,
+                error_message
+            ) VALUES (
+                :ollama_admin_url,
+                :total_models_loaded,
+                :total_vram_used_bytes,
+                :loaded_models,
+                :poll_success,
+                :error_message
+            )
+        """)
+
+        self.session.execute(sql, {
+            "ollama_admin_url": ollama_admin_url,
+            "total_models_loaded": total_models_loaded,
+            "total_vram_used_bytes": total_vram_used_bytes,
+            "loaded_models": json.dumps(loaded_models),
+            "poll_success": poll_success,
+            "error_message": error_message
+        })
+        self.session.commit()
 
     def connect_model_api(self, logos_key: str, model_id: int, api_id: int):
         if not self.check_authorization(logos_key):

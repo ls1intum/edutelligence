@@ -31,11 +31,13 @@ from logos.pipeline.context_resolver import ContextResolver
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.monitoring.ollama_monitor import OllamaProviderMonitor
 from scripts import setup_proxy
 
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
+_ollama_monitor: Optional[OllamaProviderMonitor] = None
 
 
 @asynccontextmanager
@@ -56,6 +58,12 @@ async def lifespan(app: FastAPI):
 
     # Start Pipeline
     await start_pipeline()
+
+    # Start Ollama provider monitoring
+    global _ollama_monitor
+    _ollama_monitor = OllamaProviderMonitor()
+    await _ollama_monitor.start()
+    logger.info("Ollama provider monitoring started")
 
     # Start gRPC server
     global _grpc_server
@@ -84,6 +92,10 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    # Stop Ollama provider monitoring
+    if _ollama_monitor:
+        await _ollama_monitor.stop()
+
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -98,6 +110,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],  # logos_key etc.
 )
+
+
+# Temporary CORS helper to unblock local testing; safe to remove when Traefik/CORS is stable.
+@app.middleware("http")
+async def add_star_cors_headers(request: Request, call_next):
+    if request.method == "OPTIONS":
+        response = JSONResponse(content={}, status_code=200)
+    else:
+        response = await call_next(request)
+
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
 
 
 # ============================================================================
@@ -1219,6 +1245,53 @@ async def add_billing(data: AddBillingRequest):
 async def generalstats(data: LogosKeyModel):
     with DBManager() as db:
         return db.generalstats(**data.dict())
+
+
+@app.post("/logosdb/request_event_stats")
+async def request_event_stats(request: Request):
+    """
+    Aggregate request_events metrics for dashboards.
+
+    Args:
+        request: FastAPI request; must include authentication headers.
+
+    Auth:
+        - `logos_key` header (preferred), or
+        - `Authorization: Bearer <logos_key>`
+
+    Returns:
+        Tuple[dict, int]: (payload, status) from DBManager.get_request_event_stats.
+    """
+    headers = dict(request.headers)
+    logos_key, _ = authenticate_logos_key(headers)
+
+    with DBManager() as db:
+        payload, status = db.get_request_event_stats(logos_key)
+        return JSONResponse(
+            content=payload,
+            status_code=status,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+            },
+        )
+
+
+@app.options("/logosdb/request_event_stats")
+async def request_event_stats_options():
+    """
+    Local testing helper to dodge CORS preflight failures.
+    Safe to remove once Traefik/CORS is sorted.
+    """
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+    )
 
 
 # ============================================================================
