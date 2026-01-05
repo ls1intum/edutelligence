@@ -9,7 +9,9 @@ from iris.domain.data.simple_submission_dto import SimpleSubmissionDTO
 
 class ExerciseType(str, Enum):
     """Defines multiple exercise types for Iris.
-    Supports case-insensitive lookup and automatic conversion of hyphens to underscores."""
+    Supports case-insensitive lookup and automatic conversion of hyphens to underscores.
+    """
+
     PROGRAMMING = "PROGRAMMING"
     QUIZ = "QUIZ"
     MODELING = "MODELING"
