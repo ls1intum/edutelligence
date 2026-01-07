@@ -1254,6 +1254,10 @@ async def request_event_stats(request: Request):
 
     Args:
         request: FastAPI request; must include authentication headers.
+        Body supports:
+            - start_date / end_date: ISO strings for the time window (defaults to last 30 days)
+            - target_buckets: hint for how granular the time-series should be
+            - include_raw_rows: optional raw rows for debugging (capped)
 
     Auth:
         - `logos_key` header (preferred), or
@@ -1265,8 +1269,22 @@ async def request_event_stats(request: Request):
     headers = dict(request.headers)
     logos_key, _ = authenticate_logos_key(headers)
 
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+
+    start_date = body.get("start_date")
+    end_date = body.get("end_date")
+    target_buckets = body.get("target_buckets", 120)
+
     with DBManager() as db:
-        payload, status = db.get_request_event_stats(logos_key)
+        payload, status = db.get_request_event_stats(
+            logos_key,
+            start_date=start_date,
+            end_date=end_date,
+            target_buckets=target_buckets,
+        )
         return JSONResponse(
             content=payload,
             status_code=status,
@@ -1291,6 +1309,65 @@ async def request_event_stats_options():
             "Access-Control-Allow-Headers": "*",
             "Access-Control-Allow-Methods": "POST, OPTIONS",
         },
+    )
+
+
+@app.post("/logosdb/get_ollama_vram_stats")
+async def get_ollama_vram_stats(request: Request):
+    """
+    Return time-series VRAM usage from ollama_provider_snapshots table.
+
+    Request body:
+    {
+        "day": "2025-01-05",                    # Required: fetch a single UTC day
+        "bucket_seconds": 5                     # Optional (ignored): kept for compatibility
+    }
+
+    Response:
+    {
+        "providers": [
+            {
+                "url": "http://host.docker.internal:11435",
+                "data": [
+                    {"timestamp": "2025-01-05T10:00:00Z", "vram_mb": 4608},
+                    ...
+                ]
+            }
+        ]
+    }
+    """
+    headers = dict(request.headers)
+    logos_key, _ = authenticate_logos_key(headers)
+
+    # Parse request body for date filters (tolerate empty/no-body requests)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    day = body.get("day")
+    if not day:
+        return JSONResponse(content={"error": "Parameter 'day' is required (YYYY-MM-DD)."}, status_code=400)
+    bucket_seconds = body.get("bucket_seconds", 5)  # Default 5s buckets to match UI expectation
+
+    with DBManager() as db:
+        payload, status = db.get_ollama_vram_stats(
+            logos_key,
+            day=day,
+            bucket_seconds=bucket_seconds,
+        )
+        return JSONResponse(content=payload, status_code=status)
+
+
+@app.options("/logosdb/get_ollama_vram_stats")
+async def get_ollama_vram_stats_options():
+    """CORS preflight for get_ollama_vram_stats."""
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, logos_key",
+        }
     )
 
 

@@ -8,8 +8,10 @@ import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
 import { Button, ButtonIcon } from "@/components/ui/button";
-import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
+
 import { CheckIcon, CloseIcon } from '@/components/ui/icon';
+import { RotateCw } from 'lucide-react-native';
+import { ActivityIndicator, Appearance } from 'react-native';
 
 type RequestEventRow = {
   request_id: string;
@@ -31,7 +33,12 @@ type RequestEventRow = {
   error_message: string | null;
 };
 
-type RequestEventResponse = { rows: RequestEventRow[] };
+type RequestEventResponse = {
+  stats?: RequestEventStats;
+  bucketSeconds?: number;
+  range?: { start: string; end: string };
+  rows?: RequestEventRow[];
+};
 
 type RequestEventStats = {
   lastEventTs: string | null;
@@ -252,6 +259,64 @@ const formatRangeLabel = (range: { start: Date; end: Date }) => {
   return `${format(range.start)} → ${format(range.end)}`;
 };
 
+const applyTimeSeriesLabels = (
+  series: RequestEventStats['timeSeries'],
+  rangeStart: Date,
+  rangeEnd: Date
+): RequestEventStats['timeSeries'] => {
+  if (!series.length) return [];
+
+  const durationMs = Math.max(rangeEnd.getTime() - rangeStart.getTime(), 0);
+  const labelStep = Math.max(1, Math.ceil(series.length / 10));
+  let lastLabel = '';
+
+  return series.map((pt, idx) => {
+    const next = { ...pt };
+    if (idx % labelStep === 0) {
+      const date = new Date(pt.timestamp);
+      let newLabel = '';
+      if (durationMs < 24 * 3600 * 1000) {
+        newLabel = date.toLocaleTimeString("en-GB", { hour: '2-digit', minute: '2-digit', hour12: false });
+      } else if (durationMs < 7 * 24 * 3600 * 1000) {
+        newLabel = date.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ` ${date.getHours()}h`;
+      } else {
+        newLabel = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      }
+      if (newLabel !== lastLabel) {
+        next.label = newLabel;
+        lastLabel = newLabel;
+      }
+    }
+    return next;
+  });
+};
+
+const calculateDateRange = (
+    period: string,
+    customRange?: { start: Date; end: Date } | null
+): { startDate: Date; endDate: Date } => {
+    const endDate = new Date();
+    let startDate = new Date();
+
+    if (period === "custom" && customRange) {
+      return { startDate: customRange.start, endDate: customRange.end };
+    }
+
+    switch (period) {
+      case "24h":
+        startDate.setHours(startDate.getHours() - 24);
+        break;
+      case "7d":
+        startDate.setDate(startDate.getDate() - 7);
+        break;
+      case "30d":
+        startDate.setDate(startDate.getDate() - 30);
+        break;
+    }
+
+    return { startDate, endDate };
+};
+
 export default function Statistics() {
   const { apiKey } = useAuth();
   
@@ -262,37 +327,47 @@ export default function Statistics() {
   const rangeBadgeAnim = useRef(new Animated.Value(0)).current;
   
   // Data
+  const [stats, setStats] = useState<RequestEventStats | null>(null);
   const [allRows, setAllRows] = useState<RequestEventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
-  
+  const [vramError, setVramError] = useState<string | null>(null);
+  const [isUsingDemoData, setIsUsingDemoData] = useState(false);
+  const [nowRef] = useState<number>(Date.now()); // Stable hydration
+  const [vramDayOffset, setVramDayOffset] = useState(0); // 0 = today, 1 = yesterday, etc.
+  const [vramDataByProvider, setVramDataByProvider] = useState<{
+    [url: string]: Array<{ value: number; label: string; timestamp: string }>;
+  }>({});
+  const [vramBaseline, setVramBaseline] = useState<any[]>([]);
+  const [vramBucketSizeSec, setVramBucketSizeSec] = useState(10);
+  const [vramTotalBuckets, setVramTotalBuckets] = useState(8640);
+  const initialFetchDone = useRef(false);
+
   // Compute filtered rows
   const filteredRows = useMemo(() => {
     if (!allRows.length) return [];
     
-    // 1. Determine base cutoff
-    const now = new Date();
-    let cutoff = new Date();
-    if (timeWindow === '30d') cutoff.setDate(now.getDate() - 30);
-    else if (timeWindow === '7d') cutoff.setDate(now.getDate() - 7);
-    else if (timeWindow === '24h') cutoff.setHours(now.getHours() - 24);
-    
-    // 2. Apply Custom Range Zoom if active (override window or refine it?)
-    // Usually zoom is within the window. Let's say filter first by window, then by range.
-    // Or range implies specific filtered view.
-    // Let's filter by window first.
-    let rows = allRows.filter(r => r.enqueue_ts && new Date(r.enqueue_ts) >= cutoff);
+    let rows = [...allRows];
 
     if (customRange) {
-        rows = rows.filter(r => {
-            if (!r.enqueue_ts) return false;
-            const t = new Date(r.enqueue_ts);
-            return t >= customRange.start && t <= customRange.end;
-        });
+      rows = rows.filter(r => {
+        if (!r.enqueue_ts) return false;
+        const t = new Date(r.enqueue_ts);
+        return t >= customRange.start && t <= customRange.end;
+      });
+    } else {
+      // Default to 30-day window
+      const now = new Date(nowRef);
+      const cutoff = new Date(nowRef);
+      if (timeWindow === '30d') cutoff.setDate(now.getDate() - 30);
+      else if (timeWindow === '7d') cutoff.setDate(now.getDate() - 7);
+      else if (timeWindow === '24h') cutoff.setHours(now.getHours() - 24);
+      rows = rows.filter(r => r.enqueue_ts && new Date(r.enqueue_ts) >= cutoff);
     }
     return rows;
-  }, [allRows, timeWindow, customRange]);
+  }, [allRows, timeWindow, customRange, nowRef]);
 
   // Recalculate stats whenever filteredRows changes
   const computeStats = useCallback((rows: RequestEventRow[]): RequestEventStats => {
@@ -370,11 +445,43 @@ export default function Statistics() {
     }).sort((a, b) => b.requestCount - a.requestCount);
 
     // Dynamic Bucketing
-    const now = Date.now();
-    let bucketMs = 3600 * 1000; // default 1h
-    if (timeWindow === '30d') bucketMs = 24 * 3600 * 1000; // 1 day
-    else if (timeWindow === '7d') bucketMs = 4 * 3600 * 1000; // 4 hours
-    else if (timeWindow === '24h') bucketMs = 30 * 60 * 1000; // 30 min
+    const now = nowRef;
+    
+    // Determine the full time range of the *current view* (timeWindow or customRange)
+    // We want ~100-150 data points for good granularity
+    let startTs = now;
+    let endTs = now;
+    if (customRange) {
+        startTs = customRange.start.getTime();
+        endTs = customRange.end.getTime();
+    } else {
+        if (timeWindow === '30d') startTs = now - 30 * 24 * 3600 * 1000;
+        else if (timeWindow === '7d') startTs = now - 7 * 24 * 3600 * 1000;
+        else if (timeWindow === '24h') startTs = now - 24 * 3600 * 1000;
+    }
+    const durationMs = endTs - startTs;
+    const targetPoints = 120; // Target resolution
+    let rawBucketMs = durationMs / targetPoints;
+
+    // Snap to nice intervals
+    const niceIntervals = [
+      60 * 1000,          // 1m
+      5 * 60 * 1000,      // 5m
+      15 * 60 * 1000,     // 15m
+      60 * 60 * 1000,     // 1h
+      4 * 60 * 60 * 1000, // 4h
+      12 * 60 * 60 * 1000,// 12h
+      24 * 60 * 60 * 1000 // 1d
+    ];
+    // Find closest nice interval, default to raw if nothing close (or just use raw for max precision?)
+    // Let's use raw for max precision so it fits exactly, or just snap to nearest larger nice one?
+    // User wants "visible spikes". Strict 120 points is good.
+    // But buckets align better if they are round numbers.
+    let bucketMs = niceIntervals.reduce((prev, curr) => 
+      Math.abs(curr - rawBucketMs) < Math.abs(prev - rawBucketMs) ? curr : prev
+    );
+    // Ensure we don't go too small or too large if outside bounds
+    if (rawBucketMs < 60 * 1000) bucketMs = 60 * 1000; 
 
     const bucketMap: Record<number, { cloud: number; local: number; run: number[]; vram: number[] }> = {};
     
@@ -398,15 +505,10 @@ export default function Statistics() {
     const timeSeries = Object.entries(bucketMap)
       .map(([tsStr, data]) => {
         const ts = Number(tsStr);
-        const date = new Date(ts);
-        let label = '';
-        if (timeWindow === '24h') label = `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
-        else if (timeWindow === '7d') label = `${date.getDate()}/${date.getMonth()+1} ${date.getHours()}h`;
-        else label = `${date.getDate()}/${date.getMonth()+1}`;
-        
+        // Labeling logic happens later to avoid clutter
         return {
             timestamp: ts,
-            label,
+            label: '', // Placeholder, populated below
             cloud: data.cloud,
             local: data.local,
             total: data.cloud + data.local,
@@ -415,6 +517,34 @@ export default function Statistics() {
         };
       })
       .sort((a, b) => a.timestamp - b.timestamp);
+
+    // Post-process labels: ~10 labels max
+    const labelStep = Math.ceil(timeSeries.length / 10);
+    let lastLabel = '';
+
+    timeSeries.forEach((pt, idx) => {
+        if (idx % labelStep === 0) {
+            const date = new Date(pt.timestamp);
+            let newLabel = '';
+            // Smart formatting
+            if (durationMs < 24 * 3600 * 1000) {
+                // < 24h: Show time
+                newLabel = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } else if (durationMs < 7 * 24 * 3600 * 1000) {
+                // < 7d: Show Day + Time or Date + Time
+                // Showing MM/DD HH:mm for compactness
+                newLabel = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}h`;
+            } else {
+                // > 7d: Show Date
+                newLabel = `${date.getDate()}/${date.getMonth() + 1}`;
+            }
+
+            if (newLabel !== lastLabel) {
+                pt.label = newLabel;
+                lastLabel = newLabel;
+            }
+        }
+    });
 
     const enqueueDepths = rows.map(r => r.queue_depth_at_enqueue).filter((v): v is number => typeof v === 'number');
     const scheduleDepths = rows.map(r => r.queue_depth_at_schedule).filter((v): v is number => typeof v === 'number');
@@ -459,50 +589,379 @@ export default function Statistics() {
       queueDepth,
       runtimeByColdStart,
     };
-  }, [timeWindow]);
+  }, [timeWindow, customRange, nowRef]);
 
-  const stats = useMemo(() => computeStats(filteredRows), [computeStats, filteredRows]);
+  // Recompute stats locally only in demo/fallback mode
+  useEffect(() => {
+    if (!isUsingDemoData) return;
+    setStats(computeStats(filteredRows));
+  }, [isUsingDemoData, filteredRows, computeStats]);
+
+  // Helper functions for VRAM data
+
+
+  const formatTimestampLabel = useCallback((timestamp: string, period: string): string => {
+    const date = new Date(timestamp);
+
+    switch (period) {
+      case "day":
+        return date.toLocaleTimeString("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
+      case "24h":
+        return date.toLocaleTimeString("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
+      case "7d":
+      case "30d":
+        return date.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric"
+        });
+      default:
+        return date.toLocaleString();
+    }
+  }, []);
+
+  const resolveVramBucketSize = useCallback(() => {
+    // Keep demo-mode lighter on web to avoid massive renders/refresh traversals
+    if (Platform.OS === 'web' && isUsingDemoData) return 60; // 1m buckets in demo on web
+    return 10; // 10s buckets otherwise
+  }, [isUsingDemoData]);
+
+  const processVramData = useCallback((providers: Array<{url: string; data: Array<any>}>, period: string, dayAnchor?: Date) => {
+    const bucketSec = resolveVramBucketSize();
+    const TOTAL_POINTS = Math.floor((24 * 3600) / bucketSec);
+    
+    // Determine start of the day (UTC)
+    const dayStart = dayAnchor
+      ? new Date(Date.UTC(dayAnchor.getUTCFullYear(), dayAnchor.getUTCMonth(), dayAnchor.getUTCDate()))
+      : new Date(new Date().setUTCHours(0, 0, 0, 0));
+    const dayStartMs = dayStart.getTime();
+
+    const processed: { [url: string]: Array<any> } = {};
+    const timeline: Array<{ timestamp: number; label: string }> = [];
+    
+    // Build timeline skeleton
+    for (let i = 0; i < TOTAL_POINTS; i++) {
+        const ts = dayStartMs + i * bucketSec * 1000;
+        // Label every hour based on bucket size
+        const isHour = i % Math.max(1, Math.round(3600 / bucketSec)) === 0;
+        const date = new Date(ts);
+        const label = isHour ? date.toLocaleTimeString("en-GB", { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) : '';
+        timeline.push({ timestamp: ts, label });
+    }
+    
+    const getBucketIndex = (ts: number) => {
+        const diff = ts - dayStartMs;
+        if (diff < 0) return -1;
+        const idx = Math.floor(diff / (bucketSec * 1000));
+        return idx < TOTAL_POINTS ? idx : -1;
+    };
+
+    providers.forEach(p => {
+        const buckets: Array<{ sum: number; count: number; raw: any } | null> = new Array(TOTAL_POINTS).fill(null);
+        
+        p.data.forEach(sample => {
+             const ts = new Date(sample.timestamp).getTime();
+             const idx = getBucketIndex(ts);
+             if (idx >= 0) {
+                 if (!buckets[idx]) buckets[idx] = { sum: 0, count: 0, raw: sample };
+                 const used = sample.vram_mb ?? 0;
+                 buckets[idx]!.sum += used;
+                 buckets[idx]!.count += 1;
+                 // Keep the sample with the latest timestamp within the bucket
+                 if (ts > new Date(buckets[idx]!.raw.timestamp).getTime()) {
+                     buckets[idx]!.raw = sample;
+                 }
+             }
+        });
+        
+        const lineData = timeline.map((t, i) => {
+            const b = buckets[i];
+            
+            if (!b) {
+                 // Gaps go to ZERO as per user request
+                 return {
+                    value: 0, 
+                    label: t.label,
+                    timestamp: t.timestamp,
+                    hideDataPoint: true,
+                    _empty: true
+                 };
+            }
+            
+            // User wants "Remaining Memory" logic
+            const raw = b.raw;
+            const remainingMb = raw.remaining_vram_mb || 0;
+            const remainingGb = Number((remainingMb / 1024).toFixed(2));
+            const usedGb = Number(((raw.used_vram_mb || raw.vram_mb || 0) / 1024).toFixed(2));
+            const loadedModelNames = (raw.loaded_models || []).map((m: any) => m.name);
+            
+            return {
+                value: remainingGb, // Chart Remaining VRAM
+                label: t.label, // Time label for hourly markers
+                timestamp: t.timestamp,
+                used_vram_gb: usedGb,
+                remaining_vram_gb: remainingGb,
+                models_loaded: raw.models_loaded ?? 0,
+                loaded_model_names: loadedModelNames,
+                // Ensure we have properties needed for render
+                hideDataPoint: false, // Show data points
+                dataPointRadius: 2,
+                _empty: false
+            };
+        });
+        processed[p.url] = lineData;
+    });
+
+    // Provide a baseline for the x-axis labels and total width.
+    const baseline = timeline.map(t => ({ value: 0, label: t.label, _isBaseline: true }));
+    
+    setVramBucketSizeSec(bucketSec);
+    setVramTotalBuckets(TOTAL_POINTS);
+    setVramBaseline(baseline);
+    setVramDataByProvider(processed);
+  }, [resolveVramBucketSize]);
+
+  // Mock VRAM data for troubleshooting when API fails
+  const buildMockVramProviders = useCallback((day: Date) => {
+    const base = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+    const points = 100;
+    const spanMs = 24 * 3600 * 1000;
+    const samples = Array.from({ length: points }).map((_, i) => {
+      const ts = new Date(base.getTime() + (spanMs * i) / (points - 1)).toISOString();
+      // oscillate between 6 GB and 24 GB free with slight noise
+      const freeMb = 6000 + Math.abs(Math.sin(i / 8)) * 18000 + Math.random() * 800;
+      const usedMb = Math.max(0, 32000 - freeMb);
+      return {
+        timestamp: ts,
+        remaining_vram_mb: Math.round(freeMb),
+        vram_mb: Math.round(usedMb),
+        models_loaded: Math.floor(Math.random() * 4),
+        loaded_models: [],
+      };
+    });
+    return [{
+      url: 'mock.provider',
+      data: samples,
+    }];
+  }, []);
+
+  // Central Palette
+  const CHART_PALETTE = {
+    total: '#1E3A8A', // Dark Blue for cumulative total
+    cloud: '#3BE9DE', // Cyan
+    local: '#F29C6E', // Orange for local
+    provider1: '#F59E0B', // Amber
+    provider2: '#9D4EDD', // Purple
+    provider3: '#06FFA5', // Green
+    textLight: '#64748B', // Slate-500 (readable on light)
+    textDark: '#94A3B8',  // Slate-400 (readable on dark)
+  };
+
+  const VRAM_HOUR_SPACING_PX = 91; // ~30% more horizontal breathing room
+
+  const PROVIDER_COLORS = [
+    CHART_PALETTE.provider1,
+    CHART_PALETTE.cloud,
+    CHART_PALETTE.local,
+    CHART_PALETTE.provider2,
+    CHART_PALETTE.provider3,
+  ];
+
+  const getProviderColor = (index: number): string => {
+    return PROVIDER_COLORS[index % PROVIDER_COLORS.length];
+  };
+
+    const [isVramLoading, setIsVramLoading] = useState(false);
+
+
+
 
   const fetchStats = useCallback(async () => {
-    if (!apiKey) {
-        // use mock data immediately if no key provided?
-        // or just wait. 
-        // For debugging we can use mock data if apiKey is missing too
-        setAllRows(MOCK_RESPONSE.rows);
-        setLoading(false);
-        return;
-    }
+    // Note: apiKey check skipped to allow demo mode or immediate mock fallback
     setRefreshing(true);
+    setLoading(true);
     setError(null);
+    setIsUsingDemoData(false);
+
+    const rangePeriod = customRange ? 'custom' : timeWindow;
+    const { startDate, endDate } = calculateDateRange(rangePeriod, customRange);
+    
+    // VRAM day calculation moved to fetchVramStats specifically, 
+    // but we can keep 'now' ref if needed for other things.
+
     try {
-      const response = await fetch(`${API_BASE}/logosdb/request_event_stats`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'logos_key': apiKey,
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ logos_key: apiKey }),
-      });
-      if (!response.ok) {
-        throw new Error(`Status ${response.status}`);
+      let data: RequestEventResponse | null = null;
+      let usedMock = false;
+
+      // Fetch aggregated request events
+      try {
+        const response = await fetch(`${API_BASE}/logosdb/request_event_stats`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'logos_key': apiKey || '',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            logos_key: apiKey,
+            start_date: startDate.toISOString(),
+            end_date: endDate.toISOString(),
+            target_buckets: 120
+          }),
+        });
+        if (!response.ok) {
+          console.warn(`[Statistics] Backend returned ${response.status}, falling back to demo data.`);
+          throw new Error(`Status ${response.status}`);
+        }
+        data = await response.json();
+      } catch (fetchErr) {
+        console.warn('[Statistics] Main fetch failed, using demo data', fetchErr);
+        usedMock = true;
+        data = MOCK_RESPONSE;
+        setIsUsingDemoData(true);
+        setStats(null);
       }
-      const data: RequestEventResponse = await response.json();
-      setAllRows(data.rows);
+
+        if (data?.stats) {
+          const rangeStart = data.range?.start ? new Date(data.range.start) : startDate;
+          const rangeEnd = data.range?.end ? new Date(data.range.end) : endDate;
+          const labeled = applyTimeSeriesLabels(data.stats.timeSeries || [], rangeStart, rangeEnd);
+          setStats({ ...data.stats, timeSeries: labeled });
+          setAllRows([]);
+        } else if (usedMock && data) {
+          // Fallback mock path still uses client-side computation
+          setAllRows(MOCK_RESPONSE.rows || []);
+          setIsUsingDemoData(true);
+          setStats(computeStats(MOCK_RESPONSE.rows || []));
+        } else {
+          throw new Error('Unexpected stats payload');
+        }
+
     } catch (err) {
-      console.error('[Statistics] failed to load stats', err);
-      // Fallback to mock data for local troubleshooting
-      setAllRows(MOCK_RESPONSE.rows);
+      console.error('[Statistics] Unexpected error in fetchStats', err);
+      setAllRows(MOCK_RESPONSE.rows || []);
+      setIsUsingDemoData(true);
       setError(null);
+      setStats(computeStats(MOCK_RESPONSE.rows || []));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [apiKey]);
+  }, [apiKey, timeWindow, customRange, applyTimeSeriesLabels, computeStats]);
 
+  const fetchVramStats = useCallback(async () => {
+     if (isUsingDemoData) {
+         // In demo mode, show mock VRAM data
+         // Re-calculate vramDayDate locally here
+         const now = new Date(nowRef);
+         const vramDayDate = new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - vramDayOffset
+         ));
+         
+         const mockProviders = buildMockVramProviders(vramDayDate);
+         setVramError(null);
+         processVramData(mockProviders, 'day', vramDayDate);
+         return;
+     }
+
+     setIsVramLoading(true);
+     setVramError(null);
+     
+     // Calculate vramDayDate
+     const now = new Date(nowRef);
+     const vramDayDate = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() - vramDayOffset
+     ));
+     const vramDayStr = vramDayDate.toISOString().slice(0, 10);
+     
+     try {
+        const vramResponse = await fetch(`${API_BASE}/logosdb/get_ollama_vram_stats`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'logos_key': apiKey || '',
+                'Authorization': `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify({
+                day: vramDayStr,
+              }),
+            });
+
+            if (vramResponse.ok) {
+              const vramData = await vramResponse.json();
+              if (vramData?.error) {
+                console.warn('[Statistics] VRAM stats error, falling back to mock', vramData.error);
+                const mockProviders = buildMockVramProviders(vramDayDate);
+                setVramError(null);
+                processVramData(mockProviders, 'day', vramDayDate);
+              } else {
+                  console.log('[Statistics] VRAM stats response', {
+                    day: vramDayStr,
+                    providers: vramData?.providers?.length ?? 0
+                  });
+                  
+                  if (vramData.providers) {
+                     processVramData(vramData.providers || [], 'day', vramDayDate);
+                  } else {
+                     const mockProviders = buildMockVramProviders(vramDayDate);
+                     setVramError(null);
+                     processVramData(mockProviders, 'day', vramDayDate);
+                  }
+              }
+            } else {
+               console.warn('[Statistics] VRAM stats fetch failed');
+               // Fallback mock
+               const mockProviders = buildMockVramProviders(vramDayDate);
+               processVramData(mockProviders, 'day', vramDayDate);
+            }
+     } catch (e) {
+        console.error('[Statistics] Error fetching VRAM stats', e);
+        const mockProviders = buildMockVramProviders(vramDayDate);
+        setVramError(null);
+        processVramData(mockProviders, 'day', vramDayDate);
+     } finally {
+        setIsVramLoading(false);
+     }
+  }, [apiKey, vramDayOffset, nowRef, isUsingDemoData, buildMockVramProviders, processVramData]);
+
+  // Separate effect for VRAM fetching
   useEffect(() => {
+     fetchVramStats();
+  }, [fetchVramStats]);
+
+  // Initial + custom-range-driven fetch for main stats
+  useEffect(() => {
+    // Avoid double fire on mount; still refetch on any range change
+    if (!initialFetchDone.current) {
+      initialFetchDone.current = true;
+      fetchStats();
+      return;
+    }
     fetchStats();
-  }, [fetchStats]);
+  }, [fetchStats, customRange]);
+
+  const onRefresh = useCallback(() => {
+      fetchStats();
+      fetchVramStats();
+  }, [fetchStats, fetchVramStats]);
+
+  const handleClearCustomRange = useCallback(() => {
+    setCustomRange(null);
+    setShowRangeBadge(false);
+    rangeBadgeAnim.setValue(0);
+    fetchStats();
+  }, [fetchStats, rangeBadgeAnim]);
 
   // Show/hide badge with same vibe as the approve button, but 200ms
   useEffect(() => {
@@ -576,18 +1035,26 @@ export default function Statistics() {
     const cloud: any[] = [];
     const local: any[] = [];
 
-    const step = Math.ceil(stats.timeSeries.length / 10);
-
-    stats.timeSeries.forEach((e, index) => {
+    stats.timeSeries.forEach((e) => {
         accTotal += e.total;
         accCloud += e.cloud;
         accLocal += e.local;
 
-        const label = index % step === 0 ? e.label : '';
+        // Reformat label if present
+        let label = '';
+        if (e.label) {
+             const date = new Date(e.timestamp);
+             const duration = (new Date(stats.timeSeries[stats.timeSeries.length-1].timestamp).getTime() - new Date(stats.timeSeries[0].timestamp).getTime());
+            if (duration < 24 * 3600 * 1000) {
+                label = date.toLocaleTimeString("en-GB", { hour: '2-digit', minute: '2-digit', hour12: false });
+            } else {
+                label = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            }
+        }
 
-        total.push({ value: accTotal, label, dataPointText: '', timestamp: e.timestamp });
-        cloud.push({ value: accCloud, label, dataPointText: '', timestamp: e.timestamp });
-        local.push({ value: accLocal, label, dataPointText: '', timestamp: e.timestamp });
+        total.push({ value: accTotal, label: label, dataPointText: '', timestamp: e.timestamp });
+        cloud.push({ value: accCloud, label: label, dataPointText: '', timestamp: e.timestamp });
+        local.push({ value: accLocal, label: label, dataPointText: '', timestamp: e.timestamp });
     });
     
     return { totalLineData: total, cloudLineData: cloud, localLineData: local };
@@ -596,17 +1063,18 @@ export default function Statistics() {
   const providerPieData = useMemo(() => {
     if (!stats) return [];
     return [
-      { value: stats.totals.cloudRequests, color: '#3BE9DE', text: 'Cloud' },
-      { value: stats.totals.localRequests, color: '#006DFF', text: 'Local' },
+      { value: stats.totals.cloudRequests, color: CHART_PALETTE.cloud, text: 'Cloud' },
+      { value: stats.totals.localRequests, color: CHART_PALETTE.local, text: 'Local' },
     ].filter(d => d.value > 0);
   }, [stats]);
 
   const modelPieData = useMemo(() => {
+    const palette = [CHART_PALETTE.local, CHART_PALETTE.cloud, CHART_PALETTE.provider2, CHART_PALETTE.provider3, CHART_PALETTE.provider1];
     return (stats?.modelBreakdown ?? [])
      .slice(0, 5)
      .map((m, index) => ({
         value: m.requestCount,
-        color: index % 2 === 0 ? '#006DFF' : '#3BE9DE',
+        color: palette[index % palette.length],
         text: m.modelName,
      }));
   }, [stats]);
@@ -627,7 +1095,8 @@ export default function Statistics() {
   return (
     <ScrollView
       className="w-full"
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchStats} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      showsVerticalScrollIndicator={false}
     >
       <VStack className="w-full space-y-4">
         <Text size="2xl" className="font-bold text-center text-black dark:text-white">
@@ -637,34 +1106,39 @@ export default function Statistics() {
           Live insights from the request_events table: request volumes, timings, and health.
         </Text>
 
-        {loading ? (
-          <VStack space="lg">
-            <HStack space="md" className="justify-center">
-              {Array.from({ length: 3 }).map((_, idx) => (
-                <Skeleton key={idx} className="h-[90px] w-[120px] rounded-xl bg-background-200" variant="rounded" />
-              ))}
-            </HStack>
-            <Box className="p-4 rounded-2xl border border-outline-200 bg-background-50">
-              <SkeletonText _lines={3} className="h-3 bg-background-200 rounded-md" />
-            </Box>
+        {isUsingDemoData && (
+          <Box className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded-lg mb-4">
+             <Text className="text-amber-500 text-center font-medium">
+                Running in Demo Mode (Backend Unavailable)
+             </Text>
+          </Box>
+        )}
+        
+        {loading || (!stats && (refreshing || isUsingDemoData)) ? (
+          <VStack space="lg" className="items-center justify-center p-12">
+            <ActivityIndicator size="large" color="#006DFF" />
+            <Text className="text-gray-500">Loading statistics...</Text>
           </VStack>
         ) : stats ? (
           <VStack space="lg">
-            {showRangeBadge && (
-              <Animated.View
-                style={{
-                  opacity: rangeBadgeAnim,
-                  transform: [
-                    {
-                      scale: rangeBadgeAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.95, 1],
-                      }),
-                    },
-                  ],
-                }}
-              >
-                <HStack className="justify-center">
+            <View className="w-full h-[1px] bg-outline-200 mt-12" />
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 3, paddingHorizontal: 12 }}>
+              {showRangeBadge && (
+                <Animated.View
+                  style={{
+                    opacity: rangeBadgeAnim,
+                    transform: [
+                      {
+                        scale: rangeBadgeAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.95, 1],
+                        }),
+                      },
+                    ],
+                    marginRight: 12,
+                  }}
+                >
                   <View className="flex-row items-center rounded-full bg-secondary-200 px-3 py-2 border border-outline-200">
                     <Text className="text-typography-900 text-sm mr-2">
                       {customRange ? formatRangeLabel(customRange) : ''}
@@ -673,58 +1147,94 @@ export default function Statistics() {
                       size="sm"
                       variant="outline"
                       action="negative"
-                      onPress={() => setCustomRange(null)}
+                      onPress={handleClearCustomRange}
                       className="p-0 h-7 w-7 rounded-full"
                       accessibilityLabel="Clear selected range"
                     >
                       <ButtonIcon as={CloseIcon} className=" text-xs" />
                     </Button>
                   </View>
-                </HStack>
-              </Animated.View>
-            )}
+                </Animated.View>
+              )}
+              <Button
+                size="sm"
+                variant="solid"
+                action="primary"
+                className="rounded-full w-9 h-9 p-0 items-center justify-center text-typography-200"
+                onPress={() => fetchStats()}
+                accessibilityLabel="Refresh request statistics"
+              >
+                <ButtonIcon as={RotateCw} />
+              </Button>
+            </View>
 
             <ChartCard 
                 title="Cumulative Request Volume (Total vs Cloud vs Local)"
                 subtitle="Drag horizontally to zoom, Tap to inspect"
             >
               {(width) => (
-                  <InteractiveZoomableChart
-                      width={width}
-                      totalLineData={totalLineData}
-                      cloudLineData={cloudLineData}
-                      localLineData={localLineData}
-                      timeWindow={timeWindow}
-                      onZoom={setCustomRange}
-                  />
+                  <View>
+                      {/* Legend */}
+                      <View style={{ flexDirection: 'row', justifyContent: 'flex-start', marginBottom: 10, paddingHorizontal: 10 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 16 }}>
+                              <View style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: CHART_PALETTE.total, marginRight: 6 }} />
+                              <Text style={{ fontSize: 12, color: CHART_PALETTE.textLight }}>Total</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 16 }}>
+                              <View style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: CHART_PALETTE.cloud, marginRight: 6 }} />
+                              <Text style={{ fontSize: 12, color: CHART_PALETTE.textLight }}>Cloud</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 16 }}>
+                              <View style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: CHART_PALETTE.local, marginRight: 6 }} />
+                              <Text style={{ fontSize: 12, color: CHART_PALETTE.textLight }}>Local</Text>
+                          </View>
+                      </View>
+                      
+                      <InteractiveZoomableChart
+                          width={width}
+                          totalLineData={totalLineData}
+                          cloudLineData={cloudLineData}
+                          localLineData={localLineData}
+                          timeWindow={timeWindow}
+                          onZoom={setCustomRange}
+                          colors={{ total: CHART_PALETTE.total, cloud: CHART_PALETTE.cloud, local: CHART_PALETTE.local }}
+                      />
+                  </View>
               )}
             </ChartCard>
 
 
             <HStack space="md" className="w-full">
                 <View style={{ flex: 1 }}>
-                    <ChartCard title="Request Type">
+                    <ChartCard title="Request Type" className="flex-1">
                       {(width) => (
                         <View style={{ alignItems: 'center' }}>
-                            <PieChart
-                                data={providerPieData}
-                                donut
-                                innerRadius={width / 4}
-                                radius={width / 2.5}
-                                showText
-                                textColor="white"
-                                textSize={12}
-                                showValuesAsLabels
-                                isAnimated
-                                animationDuration={600}
-                                focusOnPress
-                                toggleFocusOnPress
-                            />
+                            <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                                <PieChart
+                                    data={providerPieData}
+                                    donut
+                                    innerRadius={width / 4}
+                                    radius={width / 2.5}
+                                    showText={false}
+                                    textColor="white"
+                                    textSize={12}
+                                    showValuesAsLabels
+                                    isAnimated={false}
+                                    animationDuration={600}
+                                    focusOnPress
+                                    toggleFocusOnPress
+                                />
+                                <View 
+                                    pointerEvents="none"
+                                    className="absolute bg-secondary-200 rounded-full"
+                                    style={{ width: width / 2, height: width / 2 }}
+                                />
+                            </View>
                             <VStack className="mt-4 space-y-1">
                                 {providerPieData.map((d, i) => (
                                     <HStack key={i} space="xs" className="items-center">
                                         <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: d.color }} />
-                                        <Text className="text-gray-300 text-xs">{d.text}: {d.value}</Text>
+                                        <Text className="text-typography-700 text-xs">{d.text}: {d.value}</Text>
                                     </HStack>
                                 ))}
                             </VStack>
@@ -733,25 +1243,32 @@ export default function Statistics() {
                     </ChartCard>
                 </View>
                 <View style={{ flex: 1 }}>
-                    <ChartCard title="Model Share">
+                    <ChartCard title="Model Share" className="flex-1">
                       {(width) => (
                         <View style={{ alignItems: 'center' }}>
-                            <PieChart
-                                data={modelPieData}
-                                donut
-                                innerRadius={width / 4}
-                                radius={width / 2.5}
-                                showText={false}
-                                isAnimated
-                                animationDuration={600}
-                                focusOnPress
-                                toggleFocusOnPress
-                            />
+                            <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                                <PieChart
+                                    data={modelPieData}
+                                    donut
+                                    innerRadius={width / 4}
+                                    radius={width / 2.5}
+                                    showText={false}
+                                    isAnimated={false}
+                                    animationDuration={600}
+                                    focusOnPress
+                                    toggleFocusOnPress
+                                />
+                                <View 
+                                    pointerEvents="none"
+                                    className="absolute bg-secondary-200 rounded-full"
+                                    style={{ width: width / 2, height: width / 2 }}
+                                />
+                            </View>
                              <VStack className="mt-4 space-y-1">
                                 {modelPieData.map((d, i) => (
                                     <HStack key={i} space="xs" className="items-center">
                                         <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: d.color }} />
-                                        <Text className="text-gray-300 text-xs">{d.text}</Text>
+                                        <Text className="text-typography-700 text-xs">{d.text}</Text>
                                     </HStack>
                                 ))}
                             </VStack>
@@ -761,61 +1278,325 @@ export default function Statistics() {
                 </View>
             </HStack>
 
-            <ChartCard title="Resource Usage (VRAM)">
-              {(width) => (
-                <LineChart
-                    data={vramLineData}
-                    width={width - 20}
-                    thickness={3}
-                    color="#F29C6E"
-                    startFillColor="#F29C6E"
-                    endFillColor="#F29C6E"
-                    startOpacity={0.2}
-                    endOpacity={0.0}
-                    areaChart
-                    curved
-                    rulesType="dashed"
-                    rulesColor="#525252"
-                    yAxisThickness={0}
-                    xAxisType="dashed"
-                    xAxisColor="#525252"
-                    yAxisTextStyle={{ color: '#A3A3A3', fontWeight: '500', top: 4 }}
-                    xAxisLabelTextStyle={{ color: '#A3A3A3' }}
-                    noOfSections={5}
-                    isAnimated
-                    animationDuration={600}
-                    animateOnDataChange
-                    pointerConfig={{
-                      pointerStripUptoDataPoint: true,
-                      pointerStripColor: 'rgba(255, 255, 255, 0.2)',
-                      pointerStripWidth: 2,
-                      pointerColor: 'white',
-                      radius: 6,
-                      pointerLabelWidth: 100,
-                      pointerLabelHeight: 90,
-                      activatePointersOnLongPress: false,
-                      autoAdjustPointerLabelPosition: true,
-                      pointerLabelComponent: (items: any) => {
-                        const item = items[0];
+            <View className="w-full h-[1px] bg-outline-200 my-12" />
+
+            <ChartCard title="VRAM Remaining" subtitle="Per Ollama-Provider">
+              {(width) => {
+                const dayButtons = Array.from({ length: 7 }).map((_, idx) => {
+                  const label =
+                    idx === 0
+                      ? 'Today'
+                      : idx === 1
+                        ? 'Yesterday'
+                        : `${idx} days ago`;
+                  const isActive = vramDayOffset === idx;
+                  return (
+                    <Button
+                      key={idx}
+                      size="sm"
+                      variant={isActive ? "solid" : "outline"}
+                      className="mr-2 mb-2"
+                      onPress={() => setVramDayOffset(idx)}
+                      accessibilityLabel={`Load VRAM for ${label}`}
+                    >
+                      <Text className={isActive ? "text-typography-200" : "text-typography-900"}>{label}</Text>
+                    </Button>
+                  );
+                });
+
+                const controls = (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 }}>
+                      {dayButtons}
+                      <Button
+                        size="sm"
+                        variant="solid"
+                        action="primary"
+                        className="rounded-full w-9 h-9 p-0 items-center justify-center mr-2 mb-2 text-typography-200"
+                        onPress={() => fetchVramStats()}
+                        accessibilityLabel="Refresh VRAM Stats"
+                      >
+                        <ButtonIcon as={RotateCw}/>
+                      </Button>
+                    </View>
+                );
+
+                if (isVramLoading) {
+                    return (
+                        <View>
+                            {controls}
+                            <View style={{height: 220, alignItems: 'center', justifyContent: 'center'}}>
+                                <ActivityIndicator size="large" color="#006DFF" />
+                            </View>
+                        </View>
+                    );
+                }
+
+                if (vramError) {
+                  return (
+                      <View>
+                          {controls}
+                          <EmptyState message={vramError} />
+                      </View>
+                  );
+                }
+
+                let providers = Object.keys(vramDataByProvider);
+                const displayData = vramDataByProvider;
+                if (providers.length === 0) {
+                  return (
+                    <View>
+                      {controls}
+                      <EmptyState message="No VRAM data available for the selected day." />
+                    </View>
+                  );
+                }
+
+                // Normal render
+                return (
+                  <View>
+                    {controls}
+                    {/* Legend */}
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16, paddingHorizontal: 8 }}>
+                      {providers.map((url, index) => {
+                         if (url === 'No Data') return null; 
+                        const color = getProviderColor(index);
+                        const shortUrl = url.replace("http://", "").split(":")[0];
+
                         return (
-                          <View
-                            style={{
-                              width: 100,
-                              justifyContent: 'center',
-                              alignItems: 'center',
-                              backgroundColor: '#1f2937',
-                              borderRadius: 8,
-                              padding: 8,
-                            }}
-                          >
-                            <Text style={{ color: '#9ca3af', fontSize: 10, marginBottom: 4 }}>{item.label}</Text>
-                            <Text style={{ color: 'white', fontWeight: 'bold' }}>{Math.round(item.value)} MB</Text>
+                          <View key={url} style={{ flexDirection: 'row', alignItems: 'center', marginRight: 16, marginBottom: 8 }}>
+                            <View
+                              style={{
+                                width: 12,
+                                height: 12,
+                                backgroundColor: color,
+                                borderRadius: 2,
+                                marginRight: 6,
+                              }}
+                            />
+                            <Text style={{ fontSize: 12, color: CHART_PALETTE.textLight }}>{shortUrl}</Text>
                           </View>
                         );
-                      },
-                    }}
-                />
-              )}
+                      })}
+                    </View>
+                    
+
+                    {/* Multi-line Chart */}
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={true}
+                      style={{ maxWidth: width - 32 }}
+                      contentContainerStyle={{ paddingRight: 70, paddingLeft: 0 }}
+                    >
+                    {(() => {
+                      const VRAM_SPACING = 1; // pixels per bucket
+                      const bucketsPerHour = 3600 / vramBucketSizeSec;
+                      const PIXELS_PER_HOUR = VRAM_SPACING * bucketsPerHour; 
+                      
+                      const yAxisLabelWidth = 38;
+                      const initialSpacing = 0;
+                      const endSpacing = 50;
+                      
+                      const totalBuckets = vramTotalBuckets || 8640;
+                      const chartWidth = totalBuckets * VRAM_SPACING + initialSpacing + endSpacing;
+
+                      const dataSet: any[] = [];
+                      if (vramBaseline.length) {
+                        dataSet.push({
+                          data: vramBaseline,
+                          color: 'transparent',
+                          thickness: 0.0001,
+                          hideDataPoints: true,
+                          hidePointers: true,
+                        });
+                      }
+                      providers.forEach((url, idx) => {
+                        dataSet.push({
+                            data: displayData[url] || [],
+                            color: getProviderColor(idx),
+                            thickness: 1.5,
+                            hideDataPoints: true,
+                            dataPointsRadius: 2,
+                            dataPointsColor: getProviderColor(idx),
+                            areaChart: true,
+                            startFillColor: getProviderColor(idx),
+                            endFillColor: getProviderColor(idx),
+                            startOpacity: 0.3,
+                            endOpacity: 0.1,
+                        });
+                      });
+                      
+                      // Manual Hour Labels 
+                      const hourLabels = [];
+                      for(let h=0; h<=24; h++) {
+                          hourLabels.push({
+                              time: `${h}:00`,
+                              x: initialSpacing + h * PIXELS_PER_HOUR
+                          });
+                      }
+
+                      // Calculate "now" position if viewing today (in UTC)
+                      const now = new Date();
+                      const isToday = vramDayOffset === 0;
+                      let nowXPosition: number | null = null;
+
+                      if (isToday) {
+                        const nowMs = now.getTime();
+                        const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+                        const todayStartMs = todayUtc.getTime();
+                        
+                        const diffSec = (nowMs - todayStartMs) / 1000;
+                        if (diffSec >= 0 && diffSec <= 86400) {
+                            const bucketsFromStart = diffSec / vramBucketSizeSec;
+                            nowXPosition = initialSpacing + bucketsFromStart * VRAM_SPACING;
+                        }
+                      }
+
+                      return (
+                        <View style={{ position: 'relative', paddingBottom: 40 }}>
+                          <LineChart
+                            key={`vram-${vramDayOffset}-${Object.keys(displayData).length}-${Object.values(displayData).map(d => d.length).reduce((a, b) => a + b, 0)}`}
+                            isAnimated={true}
+                            dataSet={dataSet}
+                            height={220}
+                            adjustToWidth={false}
+                            width={chartWidth}
+                            initialSpacing={initialSpacing}
+                            endSpacing={endSpacing}
+                            spacing={VRAM_SPACING}
+                            yAxisThickness={0}
+                            yAxisLabelWidth={yAxisLabelWidth}
+                            xAxisThickness={1}
+                            xAxisColor="#334155"
+                            yAxisTextStyle={{ color: CHART_PALETTE.textLight, fontSize: 10, top: 4 }}
+                            hideAxesAndRules={false}
+                            rulesType="dashed"
+                            rulesColor="#334155"
+                            dashWidth={4}
+                            dashGap={4}
+                            noOfSections={5}
+                            yAxisLabelSuffix=" GB"
+                            xAxisLabelsHeight={0}
+                            pointerConfig={{
+                            pointerStripHeight: 220,
+                            pointerStripColor: CHART_PALETTE.textLight,
+                            pointerStripWidth: 1,
+                            pointerColor: CHART_PALETTE.provider1,
+                            radius: 4,
+                            pointerLabelWidth: 160,
+                            pointerLabelHeight: 110,
+                            activatePointersOnLongPress: false,
+                            autoAdjustPointerLabelPosition: true,
+                            pointerLabelComponent: (items: any) => {
+                              const providerItems = (items || [])
+                                .filter((item: any) => item && !item._empty && !item._isBaseline);
+                              
+                              const anyItem = (items||[])[0];
+                              const ts = anyItem?.timestamp;
+                              const labelText = ts 
+                                ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: 'UTC' })
+                                : (anyItem?.label || '');
+
+                              return (
+                                <View
+                                  style={{
+                                    backgroundColor: '#1f2937',
+                                    padding: 8,
+                                    borderRadius: 8,
+                                    borderWidth: 1,
+                                    borderColor: '#374151',
+                                  }}
+                                >
+                                  <Text style={{ color: '#9ca3af', fontSize: 10, marginBottom: 4 }}>
+                                    {labelText}
+                                  </Text>
+                                  {providerItems.length === 0 ? (
+                                    <Text style={{ color: '#ef4444', fontSize: 10, fontWeight: '600' }}>
+                                      No connection to the server
+                                    </Text>
+                                  ) : (
+                                    providerItems.map((item: any, index: number) => {
+                                    return (
+                                      <View key={index} style={{ marginTop: 6 }}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                            <View
+                                            style={{
+                                                width: 8,
+                                                height: 8,
+                                                backgroundColor: item.dataPointsColor || 'gray',
+                                                borderRadius: 2,
+                                                marginRight: 6,
+                                            }}
+                                            />
+                                            <View>
+                                            <Text style={{ color: 'white', fontSize: 10 }}>
+                                                {item.remaining_vram_gb} GB free
+                                            </Text>
+                                            <Text style={{ color: '#e2e8f0', fontSize: 10 }}>
+                                                Used: {item.used_vram_gb} GB
+                                            </Text>
+                                            </View>
+                                        </View>
+                                        {/* Loaded Models */}
+                                        {item.loaded_model_names && item.loaded_model_names.length > 0 && (
+                                            <View style={{ marginTop: 4, paddingLeft: 14 }}>
+                                                {item.loaded_model_names.map((name: string, mIdx: number) => (
+                                                    <Text key={mIdx} style={{ color: '#F29C6E', fontSize: 9 }}>
+                                                        • {name}
+                                                    </Text>
+                                                ))}
+                                            </View>
+                                        )}
+                                      </View>
+                                    );
+                                  })
+                                  )}
+                                </View>
+                              );
+                            },
+                          }}
+                          interpolateMissingValues={false}
+                        />
+                        {/* "Now" indicator line */}
+                        {nowXPosition !== null && (
+                          <View
+                            style={{
+                              position: 'absolute',
+                              left: Math.max((nowXPosition ?? 0) - 1, 0),
+                              top: 0,
+                              bottom: 0,
+                              width: 1,
+                              borderStyle: 'dashed',
+                              borderWidth: 1,
+                              borderColor: '#ef4444',
+                              zIndex: 10,
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            <View style={{position: 'absolute', top: -16, left: -14, backgroundColor: '#ef4444', paddingHorizontal: 4, borderRadius: 4}}>
+                              <Text style={{color: 'white', fontSize: 9, fontWeight: 'bold'}}>NOW</Text>
+                            </View>
+                          </View>
+                        )}
+                        {/* Custom X Axis Labels */}
+                        <View style={{ position: 'absolute', bottom: 5, left: 0, right: 0, height: 30 }}>
+                             {hourLabels.map((lbl, i) => (
+                                 <Text key={i} style={{ 
+                                     position: 'absolute', 
+                                     left: lbl.x - 10, 
+                                     color: CHART_PALETTE.textLight, 
+                                     fontSize: 10 
+                                  }}>
+                                     {lbl.time}
+                                 </Text>
+                             ))}
+                        </View>
+                      </View>
+                    );
+                    })()}
+                    </ScrollView>
+                  </View>
+                );
+              }}
             </ChartCard>
           </VStack>
         ) : (
@@ -841,7 +1622,8 @@ const InteractiveZoomableChart = ({
   cloudLineData, 
   localLineData, 
   timeWindow, 
-  onZoom 
+  onZoom,
+  colors
 }: { 
   width: number; 
   totalLineData: any[]; 
@@ -849,6 +1631,7 @@ const InteractiveZoomableChart = ({
   localLineData: any[]; 
   timeWindow: string;
   onZoom: (range: { start: Date; end: Date }) => void;
+  colors: { total: string; cloud: string; local: string };
 }) => {
     const [selection, setSelection] = useState<SelectionState | null>(null);
     const selectionRef = useRef<SelectionState | null>(null);
@@ -1011,35 +1794,49 @@ const InteractiveZoomableChart = ({
      ) : null}
     <View pointerEvents={selection?.active ? 'none' : 'auto'}> 
     <LineChart
+      isAnimated={true}
       key={totalLineData.length ? `${totalLineData[0].timestamp}-${totalLineData[totalLineData.length - 1].timestamp}` : 'chart'}
       height={chartHeight}
       data={totalLineData}
       data2={cloudLineData}
       data3={localLineData}
-      spacing={spacing}
-      initialSpacing={0}
-      endSpacing={0}
+      disableScroll
+      adjustToWidth
       hideDataPoints
-      width={width - 20}
+      width={width - 50} // Increased padding to prevent right-side cutoff
       thickness={3}
-      color1="#9ca3af" // gray-400
-      color2="#3BE9DE"
+      color1={colors.total}
+      color2={colors.cloud}
       thickness2={3}
-      color3="#006DFF"
+      color3={colors.local}
       thickness3={3}
-      curved
       rulesType="dashed"
       rulesColor="#525252"
       yAxisThickness={0}
       xAxisType="dashed"
       xAxisColor="#525252"
-      yAxisTextStyle={{ color: '#A3A3A3', top: 4 }}
-      xAxisLabelTextStyle={{ color: '#A3A3A3' }}
+      yAxisTextStyle={{ color: '#64748B', top: 4 }} // Slate-500
+      xAxisLabelTextStyle={{ color: '#64748B', width: 60 }}   // Slate-500
+      xAxisTextNumberOfLines={2}
       xAxisLabelsVerticalShift={20}
       labelsExtraHeight={20}
       noOfSections={5}
-      showScrollIndicator
-      isAnimated={false}
+      curved
+      areaChart
+      startFillColor1={colors.total}
+      endFillColor1={colors.total}
+      startOpacity1={0.3}
+      endOpacity1={0.1}
+      
+      startFillColor2={colors.cloud}
+      endFillColor2={colors.cloud}
+      startOpacity2={0.3}
+      endOpacity2={0.1}
+      
+      startFillColor3={colors.local}
+      endFillColor3={colors.local}
+      startOpacity3={0.3}
+      endOpacity3={0.1}
     />
     </View>
     </View>
@@ -1048,13 +1845,16 @@ const InteractiveZoomableChart = ({
   );
 }
 
-const ChartCard = ({ title, subtitle, children }: { title: string; subtitle?: string; children: (width: number) => React.ReactNode }) => {
+const ChartCard = ({ title, subtitle, children, className }: { title: string; subtitle?: string; children: (width: number) => React.ReactNode; className?: string }) => {
   const [layoutWidth, setLayoutWidth] = useState(0);
 
   return (
     <View
-      className="bg-secondary-200 rounded-2xl p-4 my-2.5 shadow-hard-2"
-      onLayout={(e) => setLayoutWidth(e.nativeEvent.layout.width)}
+      className={`bg-secondary-200 rounded-2xl p-4 my-2.5 shadow-hard-2 ${className || ''}`}
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        if (Math.abs(w - layoutWidth) > 1) setLayoutWidth(w);
+      }}
     >
       <View className="mb-5">
         <Text className="text-lg font-semibold text-typography-900">{title}</Text>

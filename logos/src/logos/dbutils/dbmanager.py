@@ -12,12 +12,14 @@ import yaml
 import json
 import logging
 from sqlalchemy import Table, MetaData, create_engine
-from sqlalchemy import text, func
+from sqlalchemy import text, func, bindparam
 from sqlalchemy.orm import sessionmaker
 
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 from logos.dbutils.dbmodules import JobStatus
+
+logger = logging.getLogger(__name__)
 
 
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
@@ -581,26 +583,234 @@ class DBManager:
             "requests": request_count
         }, 200
 
-    def get_request_event_stats(self, logos_key: str):
+    def get_request_event_stats(
+        self,
+        logos_key: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        target_buckets: int = 120
+    ):
         """
-        Return raw request_events rows (client handles aggregation).
+        Aggregate request_events metrics for a given time range.
+
+        Args:
+            logos_key: authentication key
+            start_date: ISO timestamp (inclusive). Defaults to 30 days before end_date.
+            end_date: ISO timestamp (inclusive). Defaults to now (UTC).
+            target_buckets: Desired number of buckets for time-series aggregation (auto-adjusted).
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
 
-        sql = text("SELECT * FROM request_events")
-        rows = self.session.execute(sql).mappings().all()
+        # Resolve date range
+        now = datetime.datetime.now(datetime.timezone.utc)
+        end_dt = isoparse(end_date).astimezone(datetime.timezone.utc) if end_date else now
+        start_dt = isoparse(start_date).astimezone(datetime.timezone.utc) if start_date else end_dt - datetime.timedelta(days=30)
+        if start_dt > end_dt:
+            return {"error": "start_date must be before end_date"}, 400
 
-        def serialize(row):
-            out = {}
-            for k, v in row.items():
-                if isinstance(v, datetime.datetime):
-                    out[k] = v.isoformat()
-                else:
-                    out[k] = v
-            return out
+        # Bucket sizing: tighter buckets for narrow ranges, looser for broad ranges
+        duration_seconds = max((end_dt - start_dt).total_seconds(), 1)
+        target_buckets = max(int(target_buckets or 120), 1)
+        raw_bucket = max(duration_seconds / target_buckets, 60)  # never below 1 minute
+        nice_candidates = [60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400]  # 1m .. 24h
+        bucket_seconds = min(nice_candidates, key=lambda b: abs(b - raw_bucket))
 
-        return {"rows": [serialize(r) for r in rows]}, 200
+        params = {
+            "start_ts": start_dt,
+            "end_ts": end_dt,
+            "bucket_seconds": bucket_seconds
+        }
+        ts_expr = "COALESCE(scheduled_ts, enqueue_ts, request_complete_ts)"
+
+        # Last event timestamp
+        last_ts = self.session.execute(
+            text(f"SELECT MAX({ts_expr}) AS last_ts FROM request_events WHERE {ts_expr} BETWEEN :start_ts AND :end_ts"),
+            params
+        ).scalar()
+        last_event_ts = last_ts.isoformat() if last_ts else None
+
+        # Totals and averages
+        totals_row = self.session.execute(text(f"""
+            SELECT
+                COUNT(*) AS requests,
+                COUNT(*) FILTER (WHERE is_cloud) AS cloud_requests,
+                COUNT(*) FILTER (WHERE NOT is_cloud) AS local_requests,
+                COUNT(*) FILTER (WHERE cold_start IS TRUE) AS cold_starts,
+                COUNT(*) FILTER (WHERE cold_start IS NOT TRUE) AS warm_starts,
+                AVG(queue_seconds) AS avg_queue_seconds,
+                AVG(run_seconds) AS avg_run_seconds
+            FROM (
+                SELECT
+                    re.cold_start,
+                    CASE WHEN m.weight_privacy = 'LOCAL' THEN FALSE ELSE TRUE END AS is_cloud,
+                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
+                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
+                FROM request_events re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            ) stats
+        """), params).mappings().first() or {}
+
+        totals = {
+            "requests": int(totals_row.get("requests") or 0),
+            "cloudRequests": int(totals_row.get("cloud_requests") or 0),
+            "localRequests": int(totals_row.get("local_requests") or 0),
+            "coldStarts": int(totals_row.get("cold_starts") or 0),
+            "warmStarts": int(totals_row.get("warm_starts") or 0),
+            "avgQueueSeconds": float(totals_row["avg_queue_seconds"]) if totals_row.get("avg_queue_seconds") is not None else None,
+            "avgRunSeconds": float(totals_row["avg_run_seconds"]) if totals_row.get("avg_run_seconds") is not None else None,
+        }
+
+        # Status counts
+        status_rows = self.session.execute(text(f"""
+            SELECT COALESCE(result_status::text, 'unknown') AS status, COUNT(*) AS count
+            FROM request_events
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            GROUP BY COALESCE(result_status::text, 'unknown')
+        """), params).mappings().all()
+        status_counts = {row["status"].lower(): int(row["count"]) for row in status_rows}
+
+        # Model breakdown
+        model_rows = self.session.execute(text(f"""
+            SELECT
+                re.model_id,
+                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
+                re.provider_id,
+                COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
+                COUNT(*) AS request_count,
+                AVG(queue_seconds) AS avg_queue_seconds,
+                AVG(run_seconds) AS avg_run_seconds,
+                SUM(CASE WHEN re.cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
+                SUM(CASE WHEN re.cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
+                SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success' OR (re.error_message IS NOT NULL AND re.error_message != '') THEN 1 ELSE 0 END) AS error_count
+            FROM (
+                SELECT
+                    re.*,
+                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
+                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
+                FROM request_events re
+                WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            ) re
+            LEFT JOIN models m ON m.id = re.model_id
+            LEFT JOIN providers p ON p.id = re.provider_id
+            GROUP BY re.model_id, model_name, re.provider_id, provider_name
+            ORDER BY request_count DESC
+        """), params).mappings().all()
+        model_breakdown = [{
+            "modelId": row["model_id"] if row["model_id"] is not None else -1,
+            "modelName": row["model_name"],
+            "providerName": row["provider_name"],
+            "requestCount": int(row["request_count"] or 0),
+            "avgQueueSeconds": float(row["avg_queue_seconds"]) if row["avg_queue_seconds"] is not None else None,
+            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
+            "coldStarts": int(row["cold_starts"] or 0),
+            "warmStarts": int(row["warm_starts"] or 0),
+            "errorCount": int(row["error_count"] or 0),
+        } for row in model_rows]
+
+        # Time series bucketed by bucket_seconds, with gap filling for idle periods
+        time_rows = self.session.execute(text(f"""
+            WITH bucket_series AS (
+                SELECT generate_series(
+                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM :start_ts) / :bucket_seconds) * :bucket_seconds),
+                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM :end_ts) / :bucket_seconds) * :bucket_seconds),
+                    (:bucket_seconds || ' seconds')::interval
+                ) AS bucket_ts
+            ),
+            agg AS (
+                SELECT
+                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM {ts_expr}) / :bucket_seconds) * :bucket_seconds) AS bucket_ts,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 0 ELSE 1 END) AS cloud,
+                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 1 ELSE 0 END) AS local,
+                    AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds,
+                    AVG(re.available_vram_mb) AS avg_vram
+                FROM request_events re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+                GROUP BY 1
+            )
+            SELECT
+                EXTRACT(EPOCH FROM bs.bucket_ts) AS bucket_ts,
+                COALESCE(agg.total, 0) AS total,
+                COALESCE(agg.cloud, 0) AS cloud,
+                COALESCE(agg.local, 0) AS local,
+                agg.avg_run_seconds,
+                agg.avg_vram
+            FROM bucket_series bs
+            LEFT JOIN agg ON agg.bucket_ts = bs.bucket_ts
+            ORDER BY bs.bucket_ts
+        """), params).mappings().all()
+        time_series = [{
+            "timestamp": int(row["bucket_ts"]) * 1000 if row["bucket_ts"] is not None else None,
+            "label": "",
+            "cloud": int(row["cloud"] or 0),
+            "local": int(row["local"] or 0),
+            "total": int(row["total"] or 0),
+            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
+            "avgVram": float(row["avg_vram"]) if row["avg_vram"] is not None else None,
+        } for row in time_rows if row["bucket_ts"] is not None]
+
+        # Queue depth
+        queue_row = self.session.execute(text(f"""
+            SELECT
+                AVG(queue_depth_at_enqueue) AS avg_enqueue,
+                AVG(queue_depth_at_schedule) AS avg_schedule,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_enqueue) AS p95_enqueue,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_schedule) AS p95_schedule
+            FROM request_events re
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+              AND (queue_depth_at_enqueue IS NOT NULL OR queue_depth_at_schedule IS NOT NULL)
+        """), params).mappings().first()
+        queue_depth = None
+        if queue_row:
+            queue_depth = {
+                "avgEnqueueDepth": float(queue_row["avg_enqueue"]) if queue_row.get("avg_enqueue") is not None else None,
+                "avgScheduleDepth": float(queue_row["avg_schedule"]) if queue_row.get("avg_schedule") is not None else None,
+                "p95EnqueueDepth": float(queue_row["p95_enqueue"]) if queue_row.get("p95_enqueue") is not None else None,
+                "p95ScheduleDepth": float(queue_row["p95_schedule"]) if queue_row.get("p95_schedule") is not None else None,
+            }
+
+        # Runtime by cold/warm
+        runtime_rows = self.session.execute(text(f"""
+            SELECT
+                CASE WHEN cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
+                COUNT(*) AS count,
+                AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds
+            FROM request_events re
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            GROUP BY kind
+        """), params).mappings().all()
+        runtime_by_cold = [{
+            "type": row["kind"],
+            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
+            "count": int(row["count"] or 0),
+        } for row in runtime_rows]
+
+        payload = {
+            "range": {
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+            },
+            "bucketSeconds": bucket_seconds,
+            "stats": {
+                "lastEventTs": last_event_ts,
+                "totals": totals,
+                "statusCounts": status_counts,
+                "modelBreakdown": model_breakdown,
+                "timeSeries": time_series,
+                "queueDepth": queue_depth,
+                "runtimeByColdStart": runtime_by_cold,
+            },
+        }
+        return payload, 200
 
     def get_token_name(self, name):
         sql = text("""
@@ -970,6 +1180,92 @@ class DBManager:
             "error_message": error_message
         })
         self.session.commit()
+
+    def get_ollama_vram_stats(
+        self,
+        logos_key: str,
+        day: str,
+        bucket_seconds: int = 5,  # kept for signature compatibility; ignored
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return per-provider VRAM snapshots for a single UTC day. No bucketing/zero-fill; raw rows only.
+
+        `day` is required (YYYY-MM-DD or ISO date). If no rows exist for that day, an error is returned.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+
+        # Date range resolution: required day
+        try:
+            parsed_day = isoparse(day)
+        except Exception:
+            return {"error": f"Invalid day format: {day}"}, 400
+
+        day_date = parsed_day.date()
+        start_dt = datetime.datetime.combine(day_date, datetime.time.min, tzinfo=tz_utc)
+        end_dt = start_dt + datetime.timedelta(days=1)
+
+        now = datetime.datetime.now(tz_utc)
+        if start_dt > now:
+            return {"error": "Requested day is in the future."}, 400
+        # Clamp end to "now" if requesting today
+        if end_dt > now:
+            end_dt = now
+
+        params = {
+            "start_ts": start_dt,
+            "end_ts": end_dt,
+        }
+
+        sql = text("""
+            SELECT
+                ollama_admin_url,
+                snapshot_ts,
+                total_vram_used_bytes,
+                total_models_loaded,
+                loaded_models,
+                MAX(total_vram_used_bytes) OVER (PARTITION BY ollama_admin_url) AS capacity_bytes
+            FROM ollama_provider_snapshots
+            WHERE poll_success = TRUE
+              AND snapshot_ts >= :start_ts
+              AND snapshot_ts < :end_ts
+            ORDER BY ollama_admin_url, snapshot_ts
+        """)
+
+        try:
+            rows = self.session.execute(sql, params).fetchall()
+            if not rows:
+                return {"error": "No VRAM data available for the requested day."}, 404
+
+            providers_data: Dict[str, List[Dict[str, Any]]] = {}
+
+            for url, ts, used_bytes, models_loaded, loaded_models, capacity_bytes in rows:
+                used = int(used_bytes or 0)
+                cap = int(capacity_bytes or 0)
+                remaining_bytes = (cap - used) if cap and cap > used else None
+                if url not in providers_data:
+                    providers_data[url] = []
+                providers_data[url].append({
+                    "timestamp": ts.isoformat() if ts else None,
+                    "vram_mb": used // (1024 * 1024),
+                    "vram_bytes": used,
+                    "used_vram_mb": used // (1024 * 1024),
+                    "remaining_vram_mb": (remaining_bytes // (1024 * 1024)) if isinstance(remaining_bytes, int) else None,
+                    "models_loaded": models_loaded,
+                    "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
+                })
+
+            providers_list = [
+                {"url": url, "data": data_points}
+                for url, data_points in providers_data.items()
+            ]
+            return {"providers": providers_list}, 200
+
+        except Exception as e:
+            logger.error(f"Failed to query ollama_vram_stats: {e}")
+            return {"error": str(e)}, 500
 
     def connect_model_api(self, logos_key: str, model_id: int, api_id: int):
         if not self.check_authorization(logos_key):

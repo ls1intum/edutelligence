@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
+import { ActivityIndicator } from 'react-native';
 
 type Policy = {
   id: number;
@@ -101,18 +101,9 @@ export default function Policies() {
       </Box>
 
       {loading ? (
-        <Box className="w-full overflow-hidden border border-outline-200 rounded-lg p-2 bg-secondary-200">
-          <VStack space="sm">
-            <Skeleton className="h-10 w-full rounded-md bg-background-200" variant="rounded" />
-            {Array.from({ length: 5 }).map((_, idx) => (
-              <Skeleton
-                key={idx}
-                className="h-9 w-full rounded-md bg-background-200"
-                variant="rounded"
-              />
-            ))}
-            <SkeletonText _lines={2} className="h-3 bg-background-200 rounded-md" />
-          </VStack>
+        <Box className="w-full overflow-hidden border border-outline-200 rounded-lg p-8 bg-secondary-200 items-center justify-center">
+             <ActivityIndicator size="large" color="#006DFF" />
+              <Text className="text-gray-500 mt-2">Loading policies...</Text>
         </Box>
       ) : (
         <Box className="w-full overflow-hidden border border-outline-200 rounded-lg p-2 bg-secondary-200">

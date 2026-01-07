@@ -16,7 +16,7 @@ import {
   TableRow,
   TableData,
 } from '@/components/ui/table';
-import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
+import { ActivityIndicator } from 'react-native';
 
 export default function Models() {
     const { apiKey } = useAuth();
@@ -122,30 +122,9 @@ export default function Models() {
             </Box>
 
             {loading ? (
-                <VStack space="lg">
-                    <HStack space="xl" className="justify-center">
-                        {Array.from({ length: 2 }).map((_, idx) => (
-                            <Skeleton
-                                key={idx}
-                                className="h-[110px] w-[150px] rounded-xl bg-background-200"
-                                variant="rounded"
-                            />
-                        ))}
-                    </HStack>
-
-                    <Box className="w-full overflow-hidden border border-outline-200 bg-secondary-200 rounded-lg p-2">
-                        <VStack space="sm">
-                            <Skeleton className="h-10 w-full rounded-md bg-background-200" variant="rounded" />
-                            {Array.from({ length: 5 }).map((_, idx) => (
-                                <Skeleton
-                                    key={idx}
-                                    className="h-9 w-full rounded-md bg-background-200"
-                                    variant="rounded"
-                                />
-                            ))}
-                            <SkeletonText _lines={2} className="h-3 bg-background-200 rounded-md" />
-                        </VStack>
-                    </Box>
+                <VStack space="lg" className="items-center justify-center p-8">
+                    <ActivityIndicator size="large" color="#006DFF" />
+                    <Text className="text-gray-500 mt-2">Loading models...</Text>
                 </VStack>
             ) : (
                 <Box className="w-full overflow-hidden border border-outline-200 bg-secondary-200 rounded-lg p-2">
