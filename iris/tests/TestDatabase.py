@@ -1,6 +1,8 @@
 from conftest import TEST_WEAVIATE_HOST, TEST_WEAVIATE_PORT, TEST_WEAVIATE_GRPC_PORT
 
 import atexit
+import threading
+
 import weaviate
 from weaviate.classes.query import Filter
 
@@ -10,11 +12,20 @@ from iris.vector_database.lecture_unit_page_chunk_schema import init_lecture_uni
 from iris.vector_database.lecture_unit_schema import init_lecture_unit_schema
 from iris.vector_database.lecture_unit_segment_schema import init_lecture_unit_segment_schema
 
+batch_update_lock = threading.Lock()
 
-# - Version of VectorDatabase class which resets on every run
+# - Version of VectorDatabase class which uses port and host from test settings and resets on every run.
 # - used in code via monkey patch
 class TestVectorDatabase:
+
+    _lock = threading.Lock()
+    _client_instance = None
+
+
     def __init__(self):
+
+        print("TestVectorDatabase is in use!")
+
         with TestVectorDatabase._lock:
             TestVectorDatabase._client_instance = weaviate.connect_to_local(
                 host=TEST_WEAVIATE_HOST,
