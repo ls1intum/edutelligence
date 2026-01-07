@@ -1,6 +1,6 @@
 import yaml
 
-from nebula.common import llm_config
+from nebula.common import config as llm_config
 
 
 def _write_llm_config(tmp_path, entries):

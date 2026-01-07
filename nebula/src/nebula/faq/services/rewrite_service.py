@@ -1,6 +1,6 @@
 import logging
 
-from nebula.common.llm_config import get_openai_client
+from nebula.common.config import get_openai_client
 from nebula.faq.prompts.rewrite_faq_prompt import system_prompt_faq_rewriting
 
 logger = logging.getLogger("nebula.faq.rewrite_service")
