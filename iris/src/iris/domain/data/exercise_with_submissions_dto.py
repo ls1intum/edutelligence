@@ -8,11 +8,22 @@ from iris.domain.data.simple_submission_dto import SimpleSubmissionDTO
 
 
 class ExerciseType(str, Enum):
+    """The type of an exercise (e.g., programming, quiz, text)."""
+
     PROGRAMMING = "PROGRAMMING"
     QUIZ = "QUIZ"
     MODELING = "MODELING"
     TEXT = "TEXT"
     FILE_UPLOAD = "FILE_UPLOAD"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            upper_value = value.upper()
+            for member in cls:
+                if member.value == upper_value:
+                    return member
+        return None
 
 
 class ExerciseMode(str, Enum):
