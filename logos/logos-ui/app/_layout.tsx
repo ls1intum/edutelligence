@@ -38,10 +38,12 @@ export default function _layout() {
       <GluestackUIProvider mode={colorMode}>
         <SafeAreaView style={[styles.safeArea]}>
           <View style={styles.container}>
-            <Box className="flex-1 min-h-screen bg-white dark:bg-[#1e1e1e]">
+            <Box className="min-h-screen flex-1 bg-white dark:bg-[#1e1e1e]">
               <Header
                 colorMode={colorMode}
-                onToggleColorMode={() => setColorMode(colorMode === 'light' ? 'dark' : 'light')}
+                onToggleColorMode={() =>
+                  setColorMode(colorMode === "light" ? "dark" : "light")
+                }
               />
               {isPublic ? (
                 <Slot />

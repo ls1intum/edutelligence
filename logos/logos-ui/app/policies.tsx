@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView } from 'react-native';
+import React, { useEffect, useState } from "react";
+import { ScrollView } from "react-native";
 import { useRouter } from "expo-router";
 
-import { useAuth } from '@/components/auth-shell';
+import { useAuth } from "@/components/auth-shell";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ActivityIndicator } from 'react-native';
+import { ActivityIndicator } from "react-native";
 
 type Policy = {
   id: number;
@@ -46,17 +46,20 @@ export default function Policies() {
   const loadPolicies = async (key: string) => {
     try {
       setLoading(true);
-      const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_policies', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          'logos_key': key,
-        },
-        body: JSON.stringify({
-          logos_key: key,
-        }),
-      });
+      const response = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/get_policies",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+            logos_key: key,
+          },
+          body: JSON.stringify({
+            logos_key: key,
+          }),
+        }
+      );
       const [data, code] = JSON.parse(await response.text());
       if (code === 200) {
         const formattedPolicies = data.map((policy: any[][]) => ({
@@ -86,7 +89,10 @@ export default function Policies() {
   return (
     <VStack className="w-full space-y-6">
       <VStack className="space-y-1">
-        <Text size="2xl" className="font-bold text-center text-black dark:text-white">
+        <Text
+          size="2xl"
+          className="text-center font-bold text-black dark:text-white"
+        >
           Policies
         </Text>
         <Text className="text-center text-gray-500 dark:text-gray-300">
@@ -95,18 +101,18 @@ export default function Policies() {
       </VStack>
 
       <Box className="self-end">
-        <Button onPress={() => router.push('/policies')}>
+        <Button onPress={() => router.push("/policies")}>
           <ButtonText>+ Add</ButtonText>
         </Button>
       </Box>
 
       {loading ? (
-        <Box className="w-full overflow-hidden border border-outline-200 rounded-lg p-8 bg-secondary-200 items-center justify-center">
-             <ActivityIndicator size="large" color="#006DFF" />
-              <Text className="text-gray-500 mt-2">Loading policies...</Text>
+        <Box className="w-full items-center justify-center overflow-hidden rounded-lg border border-outline-200 bg-secondary-200 p-8">
+          <ActivityIndicator size="large" color="#006DFF" />
+          <Text className="mt-2 text-gray-500">Loading policies...</Text>
         </Box>
       ) : (
-        <Box className="w-full overflow-hidden border border-outline-200 rounded-lg p-2 bg-secondary-200">
+        <Box className="w-full overflow-hidden rounded-lg border border-outline-200 bg-secondary-200 p-2">
           <ScrollView horizontal contentContainerStyle={{ flexGrow: 1 }}>
             <Box className="min-w-full bg-background-500">
               <PoliciesTable policies={policies} />
@@ -138,7 +144,7 @@ const PoliciesTable = ({ policies }: { policies: Policy[] }) => {
       </TableHeader>
       <TableBody>
         {policies.map((policy) => (
-          <TableRow key={policy.id} className= "bg-secondary-200">
+          <TableRow key={policy.id} className="bg-secondary-200">
             <TableData>{policy.id}</TableData>
             <TableData>{policy.entity_id}</TableData>
             <TableData>{policy.name}</TableData>

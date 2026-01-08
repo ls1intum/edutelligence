@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator } from 'react-native';
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
 
-import { useAuth } from '@/components/auth-shell';
+import { useAuth } from "@/components/auth-shell";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
@@ -21,13 +21,13 @@ import {
 import { Center } from "@/components/ui/center";
 
 const privacyOptions = [
-  'LOCAL',
-  'CLOUD_IN_EU_BY_US_PROVIDER',
-  'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
-  'CLOUD_IN_EU_BY_EU_PROVIDER',
+  "LOCAL",
+  "CLOUD_IN_EU_BY_US_PROVIDER",
+  "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+  "CLOUD_IN_EU_BY_EU_PROVIDER",
 ];
 
-type WeightKeys = 'latency' | 'accuracy' | 'cost' | 'quality';
+type WeightKeys = "latency" | "accuracy" | "cost" | "quality";
 
 type ModelOption = { id: number; name: string };
 
@@ -39,16 +39,16 @@ export default function AddModel() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const [models, setModels] = useState<ModelOption[]>([]);
-  const [name, setName] = useState('');
-  const [endpoint, setEndpoint] = useState('');
-  const [tags, setTags] = useState('');
-  const [parallel, setParallel] = useState('1');
-  const [privacy, setPrivacy] = useState('LOCAL');
+  const [name, setName] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [tags, setTags] = useState("");
+  const [parallel, setParallel] = useState("1");
+  const [privacy, setPrivacy] = useState("LOCAL");
   const [weights, setWeights] = useState<Record<WeightKeys, string>>({
-    latency: '',
-    accuracy: '',
-    cost: '',
-    quality: '',
+    latency: "",
+    accuracy: "",
+    cost: "",
+    quality: "",
   });
 
   useEffect(() => {
@@ -59,17 +59,20 @@ export default function AddModel() {
   const loadModels = async (key: string) => {
     try {
       setLoadingModels(true);
-      const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_models', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          'logos_key': key,
-        },
-        body: JSON.stringify({
-          logos_key: key,
-        }),
-      });
+      const response = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/get_models",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+            logos_key: key,
+          },
+          body: JSON.stringify({
+            logos_key: key,
+          }),
+        }
+      );
 
       const [data, code] = JSON.parse(await response.text());
       if (code === 200) {
@@ -90,7 +93,7 @@ export default function AddModel() {
 
   const handleSubmit = async () => {
     if (!name || !endpoint) {
-      setStatusMessage('Please fill in the required fields.');
+      setStatusMessage("Please fill in the required fields.");
       return;
     }
 
@@ -114,30 +117,33 @@ export default function AddModel() {
     try {
       setSubmitting(true);
       setStatusMessage(null);
-      const res = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/add_model', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'logos_key': apiKey,
-        },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/add_model",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+            logos_key: apiKey,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
 
       if (res.ok) {
-        setStatusMessage('Model added successfully.');
-        setName('');
-        setEndpoint('');
-        setTags('');
-        setParallel('1');
-        setPrivacy('LOCAL');
-        setWeights({ latency: '', accuracy: '', cost: '', quality: '' });
+        setStatusMessage("Model added successfully.");
+        setName("");
+        setEndpoint("");
+        setTags("");
+        setParallel("1");
+        setPrivacy("LOCAL");
+        setWeights({ latency: "", accuracy: "", cost: "", quality: "" });
         loadModels(apiKey);
       } else {
-        setStatusMessage('Could not add the model. Please try again.');
+        setStatusMessage("Could not add the model. Please try again.");
       }
     } catch (e) {
-      setStatusMessage('Unexpected error while adding the model.');
+      setStatusMessage("Unexpected error while adding the model.");
     } finally {
       setSubmitting(false);
     }
@@ -146,7 +152,10 @@ export default function AddModel() {
   return (
     <VStack className="w-full space-y-6">
       <VStack className="space-y-1">
-        <Text size="2xl" className="font-bold text-center text-black dark:text-white">
+        <Text
+          size="2xl"
+          className="text-center font-bold text-black dark:text-white"
+        >
           Add Model
         </Text>
         <Text className="text-center text-gray-500 dark:text-gray-300">
@@ -154,8 +163,8 @@ export default function AddModel() {
         </Text>
       </VStack>
 
-      <Box className="bg-secondary-200 border border-outline-200 rounded-2xl p-6 space-y-6">
-        <HStack className="gap-6 flex-col md:flex-row">
+      <Box className="space-y-6 rounded-2xl border border-outline-200 bg-secondary-200 p-6">
+        <HStack className="flex-col gap-6 md:flex-row">
           <VStack className="flex-1 space-y-4">
             <Field
               label="Name"
@@ -193,9 +202,9 @@ export default function AddModel() {
               </Text>
               <Select
                 selectedValue={privacy}
-                onValueChange={(val) => setPrivacy(val || 'LOCAL')}
+                onValueChange={(val) => setPrivacy(val || "LOCAL")}
               >
-                <SelectTrigger className="border border-outline-200 dark:border-outline-700 rounded-md px-3 py-2 bg-white dark:bg-[#1b1b1b]">
+                <SelectTrigger className="rounded-md border border-outline-200 bg-white px-3 py-2 dark:border-outline-700 dark:bg-[#1b1b1b]">
                   <SelectInput
                     placeholder="Select privacy"
                     value={privacy}
@@ -204,7 +213,7 @@ export default function AddModel() {
                 </SelectTrigger>
                 <SelectPortal>
                   <SelectBackdrop />
-                  <SelectContent className="bg-white dark:bg-[#111] border border-outline-200 dark:border-outline-700">
+                  <SelectContent className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#111]">
                     {privacyOptions.map((opt) => (
                       <SelectItem key={opt} label={opt} value={opt} />
                     ))}
@@ -218,49 +227,55 @@ export default function AddModel() {
             <Text className="text-base font-semibold text-black dark:text-white">
               Compare weights
             </Text>
-            {(['latency', 'accuracy', 'cost', 'quality'] as WeightKeys[]).map((key) => (
-              <Box key={key} className="space-y-2">
-                <Text className="text-sm font-semibold capitalize text-black dark:text-white">
-                  {key} weight
-                </Text>
-                {loadingModels ? (
-                  <Center className="h-10">
-                    <ActivityIndicator size="small" color="#666" />
-                  </Center>
-                ) : (
-                  <Select
-                    selectedValue={weights[key]}
-                    onValueChange={(val) =>
-                      setWeights((prev) => ({ ...prev, [key]: val || '' }))
-                    }
-                  >
-                    <SelectTrigger className="border border-outline-200 dark:border-outline-700 rounded-md px-3 py-2 bg-white dark:bg-[#1b1b1b]">
-                      <SelectInput
-                        placeholder="No model selected"
-                        value={
-                          models.find((m) => m.id.toString() === weights[key])?.name ||
-                          ''
-                        }
-                        className="text-black dark:text-white"
-                      />
-                    </SelectTrigger>
-                    <SelectPortal>
-                      <SelectBackdrop />
-                      <SelectContent className="bg-white dark:bg-[#111] border border-outline-200 dark:border-outline-700">
-                        <SelectItem label="None" value="" />
-                        {models.map((m) => (
-                          <SelectItem key={m.id} label={m.name} value={m.id.toString()} />
-                        ))}
-                      </SelectContent>
-                    </SelectPortal>
-                  </Select>
-                )}
-              </Box>
-            ))}
+            {(["latency", "accuracy", "cost", "quality"] as WeightKeys[]).map(
+              (key) => (
+                <Box key={key} className="space-y-2">
+                  <Text className="text-sm font-semibold capitalize text-black dark:text-white">
+                    {key} weight
+                  </Text>
+                  {loadingModels ? (
+                    <Center className="h-10">
+                      <ActivityIndicator size="small" color="#666" />
+                    </Center>
+                  ) : (
+                    <Select
+                      selectedValue={weights[key]}
+                      onValueChange={(val) =>
+                        setWeights((prev) => ({ ...prev, [key]: val || "" }))
+                      }
+                    >
+                      <SelectTrigger className="rounded-md border border-outline-200 bg-white px-3 py-2 dark:border-outline-700 dark:bg-[#1b1b1b]">
+                        <SelectInput
+                          placeholder="No model selected"
+                          value={
+                            models.find((m) => m.id.toString() === weights[key])
+                              ?.name || ""
+                          }
+                          className="text-black dark:text-white"
+                        />
+                      </SelectTrigger>
+                      <SelectPortal>
+                        <SelectBackdrop />
+                        <SelectContent className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#111]">
+                          <SelectItem label="None" value="" />
+                          {models.map((m) => (
+                            <SelectItem
+                              key={m.id}
+                              label={m.name}
+                              value={m.id.toString()}
+                            />
+                          ))}
+                        </SelectContent>
+                      </SelectPortal>
+                    </Select>
+                  )}
+                </Box>
+              )
+            )}
           </VStack>
         </HStack>
 
-        <HStack className="justify-between items-center flex-wrap gap-3">
+        <HStack className="flex-wrap items-center justify-between gap-3">
           {statusMessage && (
             <Text className="text-sm text-gray-700 dark:text-gray-300">
               {statusMessage}
@@ -281,7 +296,7 @@ export default function AddModel() {
             <Button
               variant="solid"
               action="negative"
-              onPress={() => router.push('/models')}
+              onPress={() => router.push("/models")}
             >
               <ButtonText>Cancel</ButtonText>
             </Button>
@@ -298,7 +313,7 @@ type FieldProps = {
   value: string;
   onChangeText: (val: string) => void;
   placeholder?: string;
-  keyboardType?: 'default' | 'numeric';
+  keyboardType?: "default" | "numeric";
 };
 
 const Field = ({
@@ -307,22 +322,26 @@ const Field = ({
   value,
   onChangeText,
   placeholder,
-  keyboardType = 'default',
+  keyboardType = "default",
 }: FieldProps) => {
   return (
     <Box className="space-y-2">
-      <Text className="text-sm font-semibold text-black dark:text-white">{label}</Text>
-      <Input className="bg-white dark:bg-[#1b1b1b] border border-outline-200 dark:border-outline-700">
+      <Text className="text-sm font-semibold text-black dark:text-white">
+        {label}
+      </Text>
+      <Input className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#1b1b1b]">
         <InputField
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder}
           keyboardType={keyboardType}
-          className="text-black dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+          className="text-black placeholder:text-gray-500 dark:text-white dark:placeholder:text-gray-400"
         />
       </Input>
       {helper && (
-        <Text className="text-xs text-gray-500 dark:text-gray-400">{helper}</Text>
+        <Text className="text-xs text-gray-500 dark:text-gray-400">
+          {helper}
+        </Text>
       )}
     </Box>
   );

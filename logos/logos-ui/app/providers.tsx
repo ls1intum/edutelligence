@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView } from 'react-native';
+import React, { useEffect, useState } from "react";
+import { ScrollView } from "react-native";
 import { useRouter } from "expo-router";
 
-import { useAuth } from '@/components/auth-shell';
+import { useAuth } from "@/components/auth-shell";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ActivityIndicator } from 'react-native';
+import { ActivityIndicator } from "react-native";
 
 type Provider = {
   id: number;
@@ -28,7 +28,10 @@ type Provider = {
 
 export default function Providers() {
   const { apiKey } = useAuth();
-  const [stats, setStats] = useState<{ totalProviders: number; mostUsedProvider: string } | null>(null);
+  const [stats, setStats] = useState<{
+    totalProviders: number;
+    mostUsedProvider: string;
+  } | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
@@ -42,17 +45,20 @@ export default function Providers() {
   const loadProviders = async (key: string) => {
     try {
       setLoading(true);
-      const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_providers', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          'logos_key': key,
-        },
-        body: JSON.stringify({
-          logos_key: key,
-        }),
-      });
+      const response = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/get_providers",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+            logos_key: key,
+          },
+          body: JSON.stringify({
+            logos_key: key,
+          }),
+        }
+      );
 
       const [data, code] = JSON.parse(await response.text());
       if (code === 200) {
@@ -76,32 +82,38 @@ export default function Providers() {
 
   const loadStats = async (key: string) => {
     try {
-      const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_general_provider_stats', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          'logos_key': key,
-        },
-        body: JSON.stringify({
-          logos_key: key,
-        }),
-      });
+      const response = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/get_general_provider_stats",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+            logos_key: key,
+          },
+          body: JSON.stringify({
+            logos_key: key,
+          }),
+        }
+      );
       const [data, code] = JSON.parse(await response.text());
       if (code === 200) {
         setStats(data);
       } else {
-        setStats({ totalProviders: 0, mostUsedProvider: 'None' });
+        setStats({ totalProviders: 0, mostUsedProvider: "None" });
       }
     } catch (e) {
-      setStats({ totalProviders: 0, mostUsedProvider: 'None' });
+      setStats({ totalProviders: 0, mostUsedProvider: "None" });
     }
   };
 
   return (
     <VStack className="w-full space-y-6">
       <VStack className="space-y-1">
-        <Text size="2xl" className="font-bold text-center text-black dark:text-white">
+        <Text
+          size="2xl"
+          className="text-center font-bold text-black dark:text-white"
+        >
           Providers
         </Text>
         <Text className="text-center text-gray-500 dark:text-gray-300">
@@ -111,34 +123,38 @@ export default function Providers() {
 
       {stats && (
         <HStack space="xl" className="justify-center">
-          <VStack className="items-center bg-background-50 border border-outline-200 dark:border-none p-4 rounded-xl min-w-[120px]">
+          <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
             <Text size="xl" className="font-bold text-black dark:text-white">
               {stats.totalProviders}
             </Text>
-            <Text size="sm" className="mt-1 text-black dark:text-white">Provider(s)</Text>
+            <Text size="sm" className="mt-1 text-black dark:text-white">
+              Provider(s)
+            </Text>
           </VStack>
-          <VStack className="items-center bg-background-50 border border-outline-200 dark:border-none p-4 rounded-xl min-w-[120px]">
+          <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
             <Text size="xl" className="font-bold text-black dark:text-white">
               {stats.mostUsedProvider}
             </Text>
-            <Text size="sm" className="mt-1 text-black dark:text-white">Most frequently used</Text>
+            <Text size="sm" className="mt-1 text-black dark:text-white">
+              Most frequently used
+            </Text>
           </VStack>
         </HStack>
       )}
 
       <Box className="self-end">
-        <Button onPress={() => router.push('/add_provider')}>
+        <Button onPress={() => router.push("/add_provider")}>
           <ButtonText>+ Add</ButtonText>
         </Button>
       </Box>
 
       {loading ? (
         <VStack space="lg" className="items-center justify-center p-8">
-            <ActivityIndicator size="large" color="#006DFF" />
-            <Text className="text-gray-500 mt-2">Loading providers...</Text>
+          <ActivityIndicator size="large" color="#006DFF" />
+          <Text className="mt-2 text-gray-500">Loading providers...</Text>
         </VStack>
       ) : (
-        <Box className="w-full overflow-hidden border border-outline-200 bg-secondary-200 rounded-lg p-2">
+        <Box className="w-full overflow-hidden rounded-lg border border-outline-200 bg-secondary-200 p-2">
           <ScrollView horizontal contentContainerStyle={{ flexGrow: 1 }}>
             <Box className="min-w-full">
               <ProvidersTable providers={providers} />
@@ -148,7 +164,7 @@ export default function Providers() {
       )}
     </VStack>
   );
-};
+}
 
 const ProvidersTable = ({ providers }: { providers: Provider[] }) => {
   return (

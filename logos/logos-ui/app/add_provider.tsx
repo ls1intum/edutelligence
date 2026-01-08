@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { ActivityIndicator } from 'react-native';
+import React, { useState } from "react";
+import { ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
 
-import { useAuth } from '@/components/auth-shell';
+import { useAuth } from "@/components/auth-shell";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
@@ -23,15 +23,15 @@ export default function AddProvider() {
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const [name, setName] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [providerKey, setProviderKey] = useState('');
-  const [authName, setAuthName] = useState('');
-  const [authFormat, setAuthFormat] = useState('');
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [providerKey, setProviderKey] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authFormat, setAuthFormat] = useState("");
 
   const handleSubmit = async () => {
     if (!name || !baseUrl || !providerKey) {
-      setStatusMessage('Name, Base URL, and API Key are required.');
+      setStatusMessage("Name, Base URL, and API Key are required.");
       return;
     }
 
@@ -47,28 +47,31 @@ export default function AddProvider() {
     try {
       setSubmitting(true);
       setStatusMessage(null);
-      const res = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/add_provider', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'logos_key': apiKey,
-        },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/add_provider",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+            logos_key: apiKey,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
 
       if (res.ok) {
-        setStatusMessage('Provider added successfully.');
-        setName('');
-        setBaseUrl('');
-        setProviderKey('');
-        setAuthName('');
-        setAuthFormat('');
+        setStatusMessage("Provider added successfully.");
+        setName("");
+        setBaseUrl("");
+        setProviderKey("");
+        setAuthName("");
+        setAuthFormat("");
       } else {
-        setStatusMessage('Could not add the provider. Please try again.');
+        setStatusMessage("Could not add the provider. Please try again.");
       }
     } catch (e) {
-      setStatusMessage('Unexpected error while adding the provider.');
+      setStatusMessage("Unexpected error while adding the provider.");
     } finally {
       setSubmitting(false);
     }
@@ -77,7 +80,10 @@ export default function AddProvider() {
   return (
     <VStack className="w-full space-y-6">
       <VStack className="space-y-1">
-        <Text size="2xl" className="font-bold text-center text-black dark:text-white">
+        <Text
+          size="2xl"
+          className="text-center font-bold text-black dark:text-white"
+        >
           Add Provider
         </Text>
         <Text className="text-center text-gray-500 dark:text-gray-300">
@@ -85,7 +91,7 @@ export default function AddProvider() {
         </Text>
       </VStack>
 
-      <Box className="bg-secondary-200 border border-outline-200 rounded-2xl p-6 space-y-5">
+      <Box className="space-y-5 rounded-2xl border border-outline-200 bg-secondary-200 p-6">
         <VStack className="space-y-4">
           <FormField
             label="Provider Name"
@@ -119,7 +125,7 @@ export default function AddProvider() {
           />
         </VStack>
 
-        <HStack className="justify-between items-center flex-wrap gap-3">
+        <HStack className="flex-wrap items-center justify-between gap-3">
           {statusMessage && (
             <Text className="text-sm text-gray-700 dark:text-gray-300">
               {statusMessage}
@@ -140,7 +146,7 @@ export default function AddProvider() {
             <Button
               variant="solid"
               action="negative"
-              onPress={() => router.push('/providers')}
+              onPress={() => router.push("/providers")}
             >
               <ButtonText>Cancel</ButtonText>
             </Button>
@@ -153,13 +159,15 @@ export default function AddProvider() {
 
 const FormField = ({ label, value, onChangeText, placeholder }: FieldProps) => (
   <Box className="space-y-2">
-    <Text className="text-sm font-semibold text-black dark:text-white">{label}</Text>
-    <Input className="bg-white dark:bg-[#1b1b1b] border border-outline-200 dark:border-outline-700">
+    <Text className="text-sm font-semibold text-black dark:text-white">
+      {label}
+    </Text>
+    <Input className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#1b1b1b]">
       <InputField
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        className="text-black dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+        className="text-black placeholder:text-gray-500 dark:text-white dark:placeholder:text-gray-400"
       />
     </Input>
   </Box>
