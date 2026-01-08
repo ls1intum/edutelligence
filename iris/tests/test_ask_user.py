@@ -1,10 +1,7 @@
 import unittest
-from unittest.mock import patch
 import re
 from collections import Counter
 
-from TestDatabase import TestVectorDatabase
-from iris.vector_database.database import VectorDatabase
 from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 
 from iris.domain import ExerciseChatPipelineExecutionDTO
@@ -14,7 +11,6 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
 from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
-from iris.vector_database.database import VectorDatabase
 from .TestCallback import TestExerciseChatCallback
 
 
@@ -56,10 +52,10 @@ def extract_keywords(task_template: str, code: str, top_n: int = 10):
 
     return keywords
 
+
 class TestAskUser(unittest.TestCase):
 
     @classmethod
-    @patch("iris.vector_database.database.VectorDatabase", TestVectorDatabase)
     def setUpClass(cls):
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
@@ -78,11 +74,7 @@ class TestAskUser(unittest.TestCase):
             description="Variant for exercise explanations",
             agent_model="gpt-4o-mini",citation_model="gpt-4o")
 
-        cls.db = VectorDatabase()
-
         print("setup is running")
-
-        cls.db.get_client()
 
         cls.callback = TestExerciseChatCallback()
 
