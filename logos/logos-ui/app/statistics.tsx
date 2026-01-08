@@ -267,7 +267,7 @@ const applyTimeSeriesLabels = (
   if (!series.length) return [];
 
   const durationMs = Math.max(rangeEnd.getTime() - rangeStart.getTime(), 0);
-  const labelStep = Math.max(1, Math.ceil(series.length / 10));
+  const labelStep = Math.max(1, Math.ceil(series.length / 5)); // halve the label count
   let lastLabel = '';
 
   return series.map((pt, idx) => {
@@ -519,7 +519,7 @@ export default function Statistics() {
       .sort((a, b) => a.timestamp - b.timestamp);
 
     // Post-process labels: ~10 labels max
-    const labelStep = Math.ceil(timeSeries.length / 10);
+    const labelStep = Math.max(1, Math.ceil(timeSeries.length / 5)); // halve the label count
     let lastLabel = '';
 
     timeSeries.forEach((pt, idx) => {
@@ -778,10 +778,7 @@ export default function Statistics() {
     return PROVIDER_COLORS[index % PROVIDER_COLORS.length];
   };
 
-    const [isVramLoading, setIsVramLoading] = useState(false);
-
-
-
+  const [isVramLoading, setIsVramLoading] = useState(false);
 
   const fetchStats = useCallback(async () => {
     // Note: apiKey check skipped to allow demo mode or immediate mock fallback
@@ -1003,25 +1000,6 @@ export default function Statistics() {
     });
   }, [stats]);
 
-  const statusPieData = useMemo(() => {
-    if (!stats) return [];
-    const colors: Record<string, string> = {
-      success: '#22c55e',
-      failed: '#ef4444',
-      error: '#ef4444',
-      unknown: '#94a3b8',
-    };
-    return Object.entries(stats.statusCounts || {})
-      .filter(([, count]) => count > 0)
-      .map(([status, count]) => ({
-        value: count,
-        color: colors[status] || '#6366f1',
-        text: `${status} (${count})`,
-        onPress: () => console.log('pressed', status),
-        focused: true,
-      }));
-  }, [stats]);
-
   const { totalLineData, cloudLineData, localLineData } = useMemo(() => {
     if (!stats?.timeSeries) return { totalLineData: [], cloudLineData: [], localLineData: [] };
     
@@ -1030,6 +1008,31 @@ export default function Statistics() {
     let accTotal = 0;
     let accCloud = 0;
     let accLocal = 0;
+
+    const firstTs = stats.timeSeries[0]?.timestamp ?? 0;
+    const lastTs = stats.timeSeries[stats.timeSeries.length - 1]?.timestamp ?? firstTs;
+    const durationMs = Math.max(0, lastTs - firstTs);
+    const isLongRange = durationMs > 3 * 24 * 3600 * 1000; // > 3 days
+
+    const formatXAxisLabel = (ts: number) => {
+        const date = new Date(ts);
+        if (isLongRange) {
+            // Example: "Jan 01"
+            const month = date.toLocaleString("en-US", { month: "short" });
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${month} ${day}`;
+        }
+        // Example: "1/12 11:00"
+        const day = date.getDate();
+        const monthNum = date.getMonth() + 1;
+        const time = date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+        // Use space instead of newline for single line
+        return `${day}/${monthNum} ${time}`;
+    };
+
+
+
+
 
     const total: any[] = [];
     const cloud: any[] = [];
@@ -1042,19 +1045,21 @@ export default function Statistics() {
 
         // Reformat label if present
         let label = '';
-        if (e.label) {
-             const date = new Date(e.timestamp);
-             const duration = (new Date(stats.timeSeries[stats.timeSeries.length-1].timestamp).getTime() - new Date(stats.timeSeries[0].timestamp).getTime());
-            if (duration < 24 * 3600 * 1000) {
-                label = date.toLocaleTimeString("en-GB", { hour: '2-digit', minute: '2-digit', hour12: false });
-            } else {
-                label = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-            }
-        }
+        if (e.label) label = formatXAxisLabel(e.timestamp);
 
-        total.push({ value: accTotal, label: label, dataPointText: '', timestamp: e.timestamp });
-        cloud.push({ value: accCloud, label: label, dataPointText: '', timestamp: e.timestamp });
-        local.push({ value: accLocal, label: label, dataPointText: '', timestamp: e.timestamp });
+        const labelComponent = label ? () => (
+          <View style={{ width: 100, marginLeft: -50, marginTop: -30 }}>
+            <Text style={{ color: '#64748B', fontSize: 11, textAlign: 'center', lineHeight: 14 }}>{label}</Text>
+          </View>
+        ) : undefined;
+
+    // ... (rest of code) ...
+
+
+
+        total.push({ value: accTotal, labelComponent: labelComponent, dataPointText: '', timestamp: e.timestamp });
+        cloud.push({ value: accCloud, labelComponent: labelComponent, dataPointText: '', timestamp: e.timestamp });
+        local.push({ value: accLocal, labelComponent: labelComponent, dataPointText: '', timestamp: e.timestamp });
     });
     
     return { totalLineData: total, cloudLineData: cloud, localLineData: local };
@@ -1077,19 +1082,6 @@ export default function Statistics() {
         color: palette[index % palette.length],
         text: m.modelName,
      }));
-  }, [stats]);
-
-  const vramLineData = useMemo(() => {
-    if (!stats?.timeSeries) return [];
-    
-    // Filter first to ensure step calculation is based on actual visible points
-    const filtered = stats.timeSeries.filter(d => d.avgVram !== null);
-    const step = Math.ceil(filtered.length / 10);
-
-    return filtered.map((d, index) => ({
-        value: d.avgVram!,
-        label: index % step === 0 ? d.label : '',
-    }));
   }, [stats]);
 
   return (
@@ -1170,7 +1162,7 @@ export default function Statistics() {
 
             <ChartCard 
                 title="Cumulative Request Volume (Total vs Cloud vs Local)"
-                subtitle="Drag horizontally to zoom, Tap to inspect"
+                subtitle="Drag horizontally to select a custom time range"
             >
               {(width) => (
                   <View>
@@ -1637,23 +1629,32 @@ const InteractiveZoomableChart = ({
     const selectionRef = useRef<SelectionState | null>(null);
     const containerRef = useRef<View | null>(null);
     const confirmAnim = useRef(new Animated.Value(0)).current;
-    const chartWidth = width - 20;
+    const chartPadding = 50; // keep visual padding on the right so the line doesn't feel cut off
+    const chartWidth = Math.max(width - chartPadding, 0);
+    const containerWidth = Math.max(width, 0); // selection canvas spans the whole card area
+    const MIN_SELECTION_PX = 14; // allow small selections, but avoid accidental taps
+    const EDGE_SNAP_PX = 16; // snap to the right-most data when dragging near the chart edge
     const chartHeight = 250; // Match LineChart height
-    const clampX = useCallback((x: number) => Math.max(0, Math.min(chartWidth, x)), [chartWidth]);
+    const clampSelectionX = useCallback(
+      (x: number) => Math.max(0, Math.min(containerWidth, x)),
+      [containerWidth]
+    );
 
     // Calculate dynamic spacing to fill the width
     const dataLength = totalLineData.length;
     const spacing = dataLength > 1 ? chartWidth / (dataLength - 1) : chartWidth;
 
-    // Helper: Map x in chart-space to timestamp
+    // Helper: Map x in chart-space to timestamp (anything beyond the drawn chart maps to the latest point)
     const getTimestampFromX = useCallback((x: number) => {
         if (!totalLineData.length) return 0;
         const firstTs = totalLineData[0].timestamp;
         const lastTs = totalLineData[totalLineData.length - 1].timestamp;
         const duration = lastTs - firstTs;
-        const pct = Math.max(0, Math.min(1, clampX(x) / chartWidth));
+        if (chartWidth <= 0 || duration <= 0) return lastTs;
+        const usableX = Math.max(0, Math.min(x, chartWidth));
+        const pct = usableX / chartWidth;
         return firstTs + pct * duration;
-    }, [totalLineData, chartWidth, clampX]);
+    }, [totalLineData, chartWidth]);
 
     const confirmSelection = useCallback(() => {
         if (!selection || !selection.confirmable) return;
@@ -1661,6 +1662,13 @@ const InteractiveZoomableChart = ({
         const endX = Math.max(selection.start, selection.end);
         const startTs = getTimestampFromX(startX);
         const endTs = getTimestampFromX(endX);
+
+        console.log('[InteractiveZoomableChart] confirmSelection', {
+          startX,
+          endX,
+          startIso: new Date(startTs).toISOString(),
+          endIso: new Date(endTs).toISOString(),
+        });
 
         setSelection(null);
         selectionRef.current = null;
@@ -1690,7 +1698,7 @@ const InteractiveZoomableChart = ({
         onPanResponderGrant: (_evt, gestureState) => {
              // Measure relative to page to be robust against child targets (web issue)
              containerRef.current?.measure((_x, _y, _w, _h, pageX, _pageY) => {
-                 const localStart = clampX(gestureState.x0 - pageX);
+                 const localStart = clampSelectionX(gestureState.x0 - pageX);
                  const newSel: SelectionState = { start: localStart, end: localStart, active: true, pageX, confirmable: false };
                  selectionRef.current = newSel;
                  setSelection({ ...newSel });
@@ -1702,7 +1710,7 @@ const InteractiveZoomableChart = ({
             if (!sel) return;
             
             // Calculate new end based on moveX and captured pageX
-            let localEnd = clampX(gestureState.moveX - (sel.pageX || 0));
+            let localEnd = clampSelectionX(gestureState.moveX - (sel.pageX || 0));
             
             // update ref
             sel.end = localEnd;
@@ -1713,11 +1721,33 @@ const InteractiveZoomableChart = ({
 
         onPanResponderRelease: () => {
              const sel = selectionRef.current;
-             if (sel && Math.abs(sel.end - sel.start) > 20) {
-                 const startX = clampX(Math.min(sel.start, sel.end));
-                 const endX = clampX(Math.max(sel.start, sel.end));
-                 
-                 const finalized: SelectionState = { start: startX, end: endX, active: false, confirmable: true };
+             if (!sel) {
+               setSelection(null);
+               selectionRef.current = null;
+               return;
+             }
+
+             const rawStart = Math.min(sel.start, sel.end);
+             const rawEnd = Math.max(sel.start, sel.end);
+             const hitRightEdge = rawEnd >= chartWidth - EDGE_SNAP_PX;
+
+             const startX = clampSelectionX(rawStart);
+             const endX = hitRightEdge ? chartWidth : clampSelectionX(rawEnd);
+             const finalStart = Math.min(startX, endX);
+             const finalEnd = Math.max(startX, endX);
+             const span = finalEnd - finalStart;
+
+             console.log('[InteractiveZoomableChart] release', {
+               rawStart,
+               rawEnd,
+               finalStart,
+               finalEnd,
+               hitRightEdge,
+               span,
+             });
+
+             if (span > MIN_SELECTION_PX || hitRightEdge) {
+                 const finalized: SelectionState = { start: finalStart, end: finalEnd, active: false, confirmable: true };
                  selectionRef.current = finalized;
                  setSelection(finalized);
              } else {
@@ -1729,7 +1759,7 @@ const InteractiveZoomableChart = ({
             setSelection(null);
             selectionRef.current = null;
         },
-   }), [clampX]); 
+   }), [clampSelectionX, chartWidth]); 
 
    return totalLineData.length ? (
     <View 
@@ -1803,8 +1833,8 @@ const InteractiveZoomableChart = ({
       disableScroll
       adjustToWidth
       hideDataPoints
-      width={width - 50} // Increased padding to prevent right-side cutoff
-      thickness={3}
+      width={chartWidth} // Match selection math to the drawn chart width; selection canvas spans full container
+      thickness={4}
       color1={colors.total}
       color2={colors.cloud}
       thickness2={3}
@@ -1816,9 +1846,8 @@ const InteractiveZoomableChart = ({
       xAxisType="dashed"
       xAxisColor="#525252"
       yAxisTextStyle={{ color: '#64748B', top: 4 }} // Slate-500
-      xAxisLabelTextStyle={{ color: '#64748B', width: 60 }}   // Slate-500
-      xAxisTextNumberOfLines={2}
-      xAxisLabelsVerticalShift={20}
+      xAxisLabelTextStyle={{ color: '#64748B', textAlign: 'center', lineHeight: 14, fontSize: 11 }}   // Slate-500
+      xAxisTextNumberOfLines={1}
       labelsExtraHeight={20}
       noOfSections={5}
       curved
