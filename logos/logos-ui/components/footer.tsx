@@ -1,75 +1,61 @@
-import React, { useContext } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { ThemeContext } from './theme';
+import React from "react";
+import { Linking, Pressable } from "react-native";
+import { Link } from "expo-router";
+import { Box } from "@/components/ui/box";
+import { Text } from "@/components/ui/text";
+import { HStack } from "@/components/ui/hstack";
 
 export default function Footer() {
-  const { theme } = useContext(ThemeContext);
-  const isLight = theme === 'light';
+  const openExternal = (url: string) => Linking.openURL(url);
 
   return (
-    <View style={[styles.footer, isLight ? styles.lightFooter : styles.darkFooter]}>
-      <Text style={[styles.footerContent, isLight ? styles.lightText : styles.darkText]}>
-          <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="/about" style={styles.citeText}><b>About</b></a>
-              </Text>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="https://github.com/ls1intum/edutelligence" style={styles.citeText}><b>Releases</b></a>
-              </Text>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="/privacy" style={styles.citeText}><b>Privacy</b></a>
-              </Text>
-              <Text style={[styles.footerLeft, isLight ? styles.lightText : styles.darkText]}>
-                <a href="/imprint" style={styles.citeText}><b>Imprint</b></a>
-              </Text>
+    <Box className="w-full border-t border-outline-200 bg-background-light p-3 dark:border-outline-700 dark:bg-[#2a2a2a]">
+      <Box className="w-[80%] flex-row items-center justify-between self-center">
+        <HStack space="md">
+          <Link href="/about" asChild>
+            <Text className="font-semibold text-gray-500">About</Text>
+          </Link>
+          <Pressable
+            onPress={() =>
+              openExternal("https://github.com/ls1intum/edutelligence")
+            }
+          >
+            <Text className="font-semibold text-gray-500">Releases</Text>
+          </Pressable>
+          <Link href="/privacy" asChild>
+            <Text className="font-semibold text-gray-500">Privacy</Text>
+          </Link>
+          <Link href="/imprint" asChild>
+            <Text className="font-semibold text-gray-500">Imprint</Text>
+          </Link>
+        </HStack>
+        <Text className="text-right text-sm text-gray-500">
+          Built by{" "}
+          <Text
+            className="font-semibold text-[#969696]"
+            onPress={() => openExternal("https://github.com/flbrgit")}
+          >
+            Florian Briksa
+          </Text>{" "}
+          at{" "}
+          <Text
+            className="font-semibold text-[#969696]"
+            onPress={() => openExternal("https://www.tum.de/en/")}
+          >
+            TUM
           </Text>
-          <Text style={[styles.footerRight, isLight ? styles.lightText : styles.darkText]}>
-            Built by <a href="https://github.com/flbrgit" style={styles.citeText}><b>Florian Briksa</b></a> at <a href="https://www.tum.de/en/" style={styles.citeText}><b>TUM</b></a>.
-            The source code is available on <a href="https://github.com/ls1intum/edutelligence" style={styles.citeText}><b>Github</b></a>.
+          . The source code is available on{" "}
+          <Text
+            className="font-semibold text-[#969696]"
+            onPress={() =>
+              openExternal("https://github.com/ls1intum/edutelligence")
+            }
+          >
+            Github
           </Text>
-      </Text>
-    </View>
+          .
+        </Text>
+      </Box>
+    </Box>
   );
 }
-
-const styles = StyleSheet.create({
-  footer: {
-    width: '100%',
-    padding: 12,
-  },
-  lightFooter: {
-    backgroundColor: '#f5f5f5',
-    borderTopColor: '#cccccc'
-  },
-  darkFooter: {
-    backgroundColor: '#2a2a2a',
-    borderTopColor: '#555555'
-  },
-  lightText: {
-    color: '#111111',
-    fontSize: 14
-  },
-  darkText: {
-    color: '#f0f0f0',
-    fontSize: 14
-  },
-  citeText: {
-    color: '#969696'
-  },
-    footerContent: {
-      alignSelf: 'center',
-      width: '80%',
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-    },
-
-    footerLeft: {
-      textAlign: "left",
-        paddingRight: 20,
-    },
-
-    footerRight: {
-      textAlign: "right",
-    }
-});

@@ -4,7 +4,7 @@ Central Manager for all Database-related actions for Logos
 import datetime
 import os
 import secrets
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Dict, Any, Optional, Tuple, Union, List
 from dateutil.parser import isoparse
 
 import sqlalchemy.exc
@@ -12,12 +12,14 @@ import yaml
 import json
 import logging
 from sqlalchemy import Table, MetaData, create_engine
-from sqlalchemy import text, func
+from sqlalchemy import text, func, bindparam
 from sqlalchemy.orm import sessionmaker
 
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 from logos.dbutils.dbmodules import JobStatus
+
+logger = logging.getLogger(__name__)
 
 
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
@@ -73,6 +75,52 @@ class DBManager:
         result = self.session.execute(insert_stmt)
         self.session.commit()
         return result.inserted_primary_key[0]
+
+    def upsert_request_event(self, request_id: str, **fields: Any) -> None:
+        """
+        Insert or update a request_events row identified by request_id.
+
+        Only provided fields are updated; omitted fields remain unchanged.
+        """
+        allowed_fields = {
+            "model_id",
+            "provider_id",
+            "initial_priority",
+            "priority_when_scheduled",
+            "queue_depth_at_enqueue",
+            "queue_depth_at_schedule",
+            "timeout_s",
+            "enqueue_ts",
+            "scheduled_ts",
+            "request_complete_ts",
+            "available_vram_mb",
+            "azure_rate_remaining_requests",
+            "azure_rate_remaining_tokens",
+            "cold_start",
+            "result_status",
+            "error_message",
+        }
+
+        payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
+        columns = ["request_id"] + list(payload.keys())
+        params = {"request_id": request_id, **payload}
+
+        if payload:
+            assignments = ", ".join(f"{col}=EXCLUDED.{col}" for col in payload.keys())
+            placeholders = ", ".join(f":{col}" for col in columns)
+            sql = text(
+                f"INSERT INTO request_events ({', '.join(columns)}) "
+                f"VALUES ({placeholders}) "
+                f"ON CONFLICT (request_id) DO UPDATE SET {assignments}"
+            )
+        else:
+            sql = text(
+                "INSERT INTO request_events (request_id) VALUES (:request_id) "
+                "ON CONFLICT (request_id) DO NOTHING"
+            )
+
+        self.session.execute(sql, params)
+        self.session.commit()
 
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
@@ -535,6 +583,278 @@ class DBManager:
             "requests": request_count
         }, 200
 
+    def get_request_event_stats(
+        self,
+        logos_key: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        target_buckets: int = 120
+    ):
+        """
+        Aggregate request_events metrics for a given time range.
+
+        Args:
+            logos_key: authentication key
+            start_date: ISO timestamp (inclusive). Defaults to 30 days before end_date.
+            end_date: ISO timestamp (inclusive). Defaults to now (UTC).
+            target_buckets: Desired number of buckets for time-series aggregation (auto-adjusted).
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        # Resolve date range
+        now = datetime.datetime.now(datetime.timezone.utc)
+        end_dt = isoparse(end_date).astimezone(datetime.timezone.utc) if end_date else now
+        start_dt = isoparse(start_date).astimezone(datetime.timezone.utc) if start_date else end_dt - datetime.timedelta(days=30)
+        if start_dt > end_dt:
+            return {"error": "start_date must be before end_date"}, 400
+
+        # Bucket sizing: tighter buckets for narrow ranges, looser for broad ranges
+        duration_seconds = max((end_dt - start_dt).total_seconds(), 1)
+        target_buckets = max(int(target_buckets or 120), 1)
+        raw_bucket = max(duration_seconds / target_buckets, 60)  # never below 1 minute
+        nice_candidates = [60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400]  # 1m .. 24h
+        bucket_seconds = min(nice_candidates, key=lambda b: abs(b - raw_bucket))
+
+        params = {
+            "start_ts": start_dt,
+            "end_ts": end_dt,
+            "bucket_seconds": bucket_seconds
+        }
+        ts_expr = "COALESCE(scheduled_ts, enqueue_ts, request_complete_ts)"
+
+        # Last event timestamp
+        last_ts = self.session.execute(
+            text(f"SELECT MAX({ts_expr}) AS last_ts FROM request_events WHERE {ts_expr} BETWEEN :start_ts AND :end_ts"),
+            params
+        ).scalar()
+        last_event_ts = last_ts.isoformat() if last_ts else None
+
+        # Totals and averages
+        totals_row = self.session.execute(text(f"""
+            SELECT
+                COUNT(*) AS requests,
+                COUNT(*) FILTER (WHERE is_cloud) AS cloud_requests,
+                COUNT(*) FILTER (WHERE NOT is_cloud) AS local_requests,
+                COUNT(*) FILTER (WHERE cold_start IS TRUE) AS cold_starts,
+                COUNT(*) FILTER (WHERE cold_start IS NOT TRUE) AS warm_starts,
+                AVG(queue_seconds) AS avg_queue_seconds,
+                AVG(run_seconds) AS avg_run_seconds
+            FROM (
+                SELECT
+                    re.cold_start,
+                    CASE WHEN m.weight_privacy = 'LOCAL' THEN FALSE ELSE TRUE END AS is_cloud,
+                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
+                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
+                FROM request_events re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            ) stats
+        """), params).mappings().first() or {}
+
+        totals = {
+            "requests": int(totals_row.get("requests") or 0),
+            "cloudRequests": int(totals_row.get("cloud_requests") or 0),
+            "localRequests": int(totals_row.get("local_requests") or 0),
+            "coldStarts": int(totals_row.get("cold_starts") or 0),
+            "warmStarts": int(totals_row.get("warm_starts") or 0),
+            "avgQueueSeconds": float(totals_row["avg_queue_seconds"]) if totals_row.get("avg_queue_seconds") is not None else None,
+            "avgRunSeconds": float(totals_row["avg_run_seconds"]) if totals_row.get("avg_run_seconds") is not None else None,
+        }
+
+        # Status counts
+        status_rows = self.session.execute(text(f"""
+            SELECT COALESCE(result_status::text, 'unknown') AS status, COUNT(*) AS count
+            FROM request_events
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            GROUP BY COALESCE(result_status::text, 'unknown')
+        """), params).mappings().all()
+        status_counts = {row["status"].lower(): int(row["count"]) for row in status_rows}
+
+        # Model breakdown
+        model_rows = self.session.execute(text(f"""
+            SELECT
+                re.model_id,
+                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
+                re.provider_id,
+                COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
+                COUNT(*) AS request_count,
+                AVG(queue_seconds) AS avg_queue_seconds,
+                AVG(run_seconds) AS avg_run_seconds,
+                SUM(CASE WHEN re.cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
+                SUM(CASE WHEN re.cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
+                SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success' OR (re.error_message IS NOT NULL AND re.error_message != '') THEN 1 ELSE 0 END) AS error_count
+            FROM (
+                SELECT
+                    re.*,
+                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
+                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
+                FROM request_events re
+                WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            ) re
+            LEFT JOIN models m ON m.id = re.model_id
+            LEFT JOIN providers p ON p.id = re.provider_id
+            GROUP BY re.model_id, model_name, re.provider_id, provider_name
+            ORDER BY request_count DESC
+        """), params).mappings().all()
+        model_breakdown = [{
+            "modelId": row["model_id"] if row["model_id"] is not None else -1,
+            "modelName": row["model_name"],
+            "providerName": row["provider_name"],
+            "requestCount": int(row["request_count"] or 0),
+            "avgQueueSeconds": float(row["avg_queue_seconds"]) if row["avg_queue_seconds"] is not None else None,
+            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
+            "coldStarts": int(row["cold_starts"] or 0),
+            "warmStarts": int(row["warm_starts"] or 0),
+            "errorCount": int(row["error_count"] or 0),
+        } for row in model_rows]
+
+        # Time series bucketed by bucket_seconds, with gap filling for idle periods
+        time_rows = self.session.execute(text(f"""
+            WITH bucket_series AS (
+                SELECT generate_series(
+                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM :start_ts) / :bucket_seconds) * :bucket_seconds),
+                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM :end_ts) / :bucket_seconds) * :bucket_seconds),
+                    (:bucket_seconds || ' seconds')::interval
+                ) AS bucket_ts
+            ),
+            agg AS (
+                SELECT
+                    to_timestamp(FLOOR(EXTRACT(EPOCH FROM {ts_expr}) / :bucket_seconds) * :bucket_seconds) AS bucket_ts,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 0 ELSE 1 END) AS cloud,
+                    SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 1 ELSE 0 END) AS local,
+                    AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds,
+                    AVG(re.available_vram_mb) AS avg_vram
+                FROM request_events re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+                GROUP BY 1
+            )
+            SELECT
+                EXTRACT(EPOCH FROM bs.bucket_ts) AS bucket_ts,
+                COALESCE(agg.total, 0) AS total,
+                COALESCE(agg.cloud, 0) AS cloud,
+                COALESCE(agg.local, 0) AS local,
+                agg.avg_run_seconds,
+                agg.avg_vram
+            FROM bucket_series bs
+            LEFT JOIN agg ON agg.bucket_ts = bs.bucket_ts
+            ORDER BY bs.bucket_ts
+        """), params).mappings().all()
+        time_series = [{
+            "timestamp": int(row["bucket_ts"]) * 1000 if row["bucket_ts"] is not None else None,
+            "label": "",
+            "cloud": int(row["cloud"] or 0),
+            "local": int(row["local"] or 0),
+            "total": int(row["total"] or 0),
+            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
+            "avgVram": float(row["avg_vram"]) if row["avg_vram"] is not None else None,
+        } for row in time_rows if row["bucket_ts"] is not None]
+
+        # Queue depth
+        queue_row = self.session.execute(text(f"""
+            SELECT
+                AVG(queue_depth_at_enqueue) AS avg_enqueue,
+                AVG(queue_depth_at_schedule) AS avg_schedule,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_enqueue) AS p95_enqueue,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_schedule) AS p95_schedule
+            FROM request_events re
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+              AND (queue_depth_at_enqueue IS NOT NULL OR queue_depth_at_schedule IS NOT NULL)
+        """), params).mappings().first()
+        queue_depth = None
+        if queue_row:
+            queue_depth = {
+                "avgEnqueueDepth": float(queue_row["avg_enqueue"]) if queue_row.get("avg_enqueue") is not None else None,
+                "avgScheduleDepth": float(queue_row["avg_schedule"]) if queue_row.get("avg_schedule") is not None else None,
+                "p95EnqueueDepth": float(queue_row["p95_enqueue"]) if queue_row.get("p95_enqueue") is not None else None,
+                "p95ScheduleDepth": float(queue_row["p95_schedule"]) if queue_row.get("p95_schedule") is not None else None,
+            }
+
+        # Runtime by cold/warm
+        runtime_rows = self.session.execute(text(f"""
+            SELECT
+                CASE WHEN cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
+                COUNT(*) AS count,
+                AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds
+            FROM request_events re
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+            GROUP BY kind
+        """), params).mappings().all()
+        runtime_by_cold = [{
+            "type": row["kind"],
+            "avgRunSeconds": float(row["avg_run_seconds"]) if row["avg_run_seconds"] is not None else None,
+            "count": int(row["count"] or 0),
+        } for row in runtime_rows]
+
+        payload = {
+            "range": {
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+            },
+            "bucketSeconds": bucket_seconds,
+            "stats": {
+                "lastEventTs": last_event_ts,
+                "totals": totals,
+                "statusCounts": status_counts,
+                "modelBreakdown": model_breakdown,
+                "timeSeries": time_series,
+                "queueDepth": queue_depth,
+                "runtimeByColdStart": runtime_by_cold,
+            },
+        }
+        return payload, 200
+
+    def get_latest_requests(self, logos_key: str, limit: int = 10):
+        """
+        Fetch the most recent request events.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        sql = text("""
+            SELECT
+                re.request_id,
+                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
+                COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
+                re.result_status,
+                re.enqueue_ts,
+                re.request_complete_ts,
+                CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts))
+                     ELSE NULL
+                END AS run_seconds,
+                re.cold_start
+            FROM request_events re
+            LEFT JOIN models m ON m.id = re.model_id
+            LEFT JOIN providers p ON p.id = re.provider_id
+            ORDER BY re.enqueue_ts DESC NULLS LAST
+            LIMIT :limit
+        """)
+
+        rows = self.session.execute(sql, {"limit": limit}).mappings().all()
+
+        results = []
+        for row in rows:
+            results.append({
+                "request_id": row["request_id"],
+                "model_name": row["model_name"],
+                "provider_name": row["provider_name"],
+                "status": row["result_status"] if row["result_status"] else "unknown",
+                "timestamp": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "duration": float(row["run_seconds"]) if row["run_seconds"] is not None else None,
+                "cold_start": row["cold_start"]
+            })
+
+        return {"requests": results}, 200
+
     def get_token_name(self, name):
         sql = text("""
                    SELECT *
@@ -602,6 +922,393 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("model_provider", {"provider_id": int(provider_id), "model_id": int(model_id)})
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
+
+    def add_model_provider_config(
+        self,
+        logos_key: str,
+        model_id: int,
+        provider_name: str,
+        cold_start_threshold_ms: float = None,
+        parallel_capacity: int = None,
+        keep_alive_seconds: int = None,
+        observed_avg_cold_load_ms: float = None,
+        observed_avg_warm_load_ms: float = None
+    ) -> Tuple[dict, int]:
+        """
+        Add or update SDI configuration for a model-provider pair.
+
+        This configures the Scheduling Data Interface (SDI) parameters for how
+        a specific model behaves when served by a specific provider.
+
+        Args:
+            logos_key: Authorization key (root user only)
+            model_id: Model ID to configure
+            provider_name: Provider name (e.g., "openwebui", "azure", "openai")
+            cold_start_threshold_ms: Threshold for detecting cold starts (ms)
+            parallel_capacity: Max concurrent requests this model can handle
+            keep_alive_seconds: How long model stays loaded when idle
+            observed_avg_cold_load_ms: Observed average cold start time (ms)
+            observed_avg_warm_load_ms: Observed average warm start time (ms)
+
+        Returns:
+            Tuple of (result dict, status code)
+        """
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+
+        # Build config dict with only provided values
+        config = {
+            "model_id": int(model_id),
+            "provider_name": provider_name
+        }
+
+        if cold_start_threshold_ms is not None:
+            config["cold_start_threshold_ms"] = float(cold_start_threshold_ms)
+        if parallel_capacity is not None:
+            config["parallel_capacity"] = int(parallel_capacity)
+        if keep_alive_seconds is not None:
+            config["keep_alive_seconds"] = int(keep_alive_seconds)
+        if observed_avg_cold_load_ms is not None:
+            config["observed_avg_cold_load_ms"] = float(observed_avg_cold_load_ms)
+        if observed_avg_warm_load_ms is not None:
+            config["observed_avg_warm_load_ms"] = float(observed_avg_warm_load_ms)
+
+        # Use INSERT ... ON CONFLICT UPDATE pattern for upsert
+        from sqlalchemy import text
+
+        # Build column lists dynamically
+        columns = list(config.keys())
+        placeholders = [f":{col}" for col in columns]
+
+        # Build UPDATE clause for conflict resolution (exclude PK columns)
+        update_columns = [col for col in columns if col not in ["model_id", "provider_name"]]
+        if update_columns:
+            set_expressions = ", ".join(f"{col} = EXCLUDED.{col}" for col in update_columns)
+            set_clause = f"{set_expressions}, last_updated = CURRENT_TIMESTAMP"
+        else:
+            # Only PKs present; still advance timestamp on conflict
+            set_clause = "last_updated = CURRENT_TIMESTAMP"
+
+        sql = text(f"""
+            INSERT INTO model_provider_config ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            ON CONFLICT (model_id, provider_name)
+            DO UPDATE SET {set_clause}
+            RETURNING model_id, provider_name
+        """)
+
+        result = self.session.execute(sql, config)
+        self.session.commit()
+        row = result.fetchone()
+
+        return {
+            "result": "Created/updated SDI model-provider configuration",
+            "model_id": row[0],
+            "provider_name": row[1]
+        }, 200
+
+    def get_model_provider_config(
+        self,
+        model_id: int,
+        provider_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve SDI configuration for a model-provider pair.
+
+        Args:
+            model_id: Model ID to query
+            provider_name: Provider name (e.g., "openwebui", "azure", "openai")
+
+        Returns:
+            Dictionary with configuration fields if found, None otherwise
+        """
+        sql = text("""
+            SELECT model_id, provider_name, cold_start_threshold_ms,
+                   parallel_capacity, keep_alive_seconds,
+                   observed_avg_cold_load_ms, observed_avg_warm_load_ms, last_updated
+            FROM model_provider_config
+            WHERE model_id = :model_id AND provider_name = :provider_name
+        """)
+
+        result = self.session.execute(sql, {
+            "model_id": model_id,
+            "provider_name": provider_name
+        }).fetchone()
+
+        if result:
+            return {
+                "model_id": result[0],
+                "provider_name": result[1],
+                "cold_start_threshold_ms": result[2],
+                "parallel_capacity": result[3],
+                "keep_alive_seconds": result[4],
+                "observed_avg_cold_load_ms": result[5],
+                "observed_avg_warm_load_ms": result[6],
+                "last_updated": result[7]
+            }
+        return None
+
+    def get_provider_config(
+        self,
+        provider_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve SDI provider-level configuration from providers table.
+
+        Args:
+            provider_id: Provider ID to query
+
+        Returns:
+            Dictionary with configuration fields if found, None otherwise
+        """
+        sql = text("""
+            SELECT id, ollama_admin_url, total_vram_mb, parallel_capacity,
+                   keep_alive_seconds, max_loaded_models, updated_at
+            FROM providers
+            WHERE id = :provider_id
+        """)
+
+        result = self.session.execute(sql, {
+            "provider_id": provider_id
+        }).fetchone()
+
+        if result:
+            return {
+                "provider_id": result[0],
+                "ollama_admin_url": result[1],
+                "total_vram_mb": result[2],
+                "parallel_capacity": result[3],
+                "keep_alive_seconds": result[4],
+                "max_loaded_models": result[5],
+                "updated_at": result[6],
+            }
+        return None
+
+    def update_provider_sdi_config(
+        self,
+        logos_key: str,
+        provider_id: int,
+        ollama_admin_url: str = None,
+        total_vram_mb: int = None,
+        parallel_capacity: int = None,
+        keep_alive_seconds: int = None,
+        max_loaded_models: int = None,
+    ) -> Tuple[dict, int]:
+        """
+        Update SDI configuration fields in providers table.
+
+        Args:
+            logos_key: Authorization key (root user only)
+            provider_id: Provider ID to configure
+            ollama_admin_url: Internal admin endpoint for Ollama (e.g., http://gpu-vm-1:11434)
+            total_vram_mb: Total VRAM capacity in MB (e.g., 49152 for 48GB)
+            parallel_capacity: Max concurrent requests per model
+            keep_alive_seconds: How long models stay loaded when idle
+            max_loaded_models: Max models that can be loaded simultaneously
+
+        Returns:
+            Tuple of (result dict, status code)
+        """
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+
+        # Build UPDATE SET clauses for non-None fields
+        updates = []
+        params = {"provider_id": int(provider_id)}
+
+        if ollama_admin_url is not None:
+            updates.append("ollama_admin_url = :ollama_admin_url")
+            params["ollama_admin_url"] = ollama_admin_url
+        if total_vram_mb is not None:
+            updates.append("total_vram_mb = :total_vram_mb")
+            params["total_vram_mb"] = int(total_vram_mb)
+        if parallel_capacity is not None:
+            updates.append("parallel_capacity = :parallel_capacity")
+            params["parallel_capacity"] = int(parallel_capacity)
+        if keep_alive_seconds is not None:
+            updates.append("keep_alive_seconds = :keep_alive_seconds")
+            params["keep_alive_seconds"] = int(keep_alive_seconds)
+        if max_loaded_models is not None:
+            updates.append("max_loaded_models = :max_loaded_models")
+            params["max_loaded_models"] = int(max_loaded_models)
+
+
+        if not updates:
+            return {"error": "No fields to update"}, 400
+
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        update_clause = ", ".join(updates)
+
+        sql = text(f"""
+            UPDATE providers
+            SET {update_clause}
+            WHERE id = :provider_id
+            RETURNING id
+        """)
+
+        result = self.session.execute(sql, params)
+        self.session.commit()
+        row = result.fetchone()
+
+        if not row:
+            return {"error": "Provider not found"}, 404
+
+        return {
+            "result": "Updated provider SDI configuration",
+            "provider_id": row[0]
+        }, 200
+
+    def get_distinct_ollama_urls(self) -> List[str]:
+        """
+        Get all distinct ollama_admin_urls from providers table.
+
+        Returns:
+            List of unique Ollama admin URLs (e.g., ["http://host.docker.internal:11435"])
+        """
+        sql = text("""
+            SELECT DISTINCT ollama_admin_url
+            FROM providers
+            WHERE ollama_admin_url IS NOT NULL
+              AND ollama_admin_url != ''
+            ORDER BY ollama_admin_url
+        """)
+
+        result = self.session.execute(sql).fetchall()
+        return [row[0] for row in result]
+
+    def insert_provider_snapshot(
+        self,
+        ollama_admin_url: str,
+        total_models_loaded: int,
+        total_vram_used_bytes: int,
+        loaded_models: List[Dict[str, Any]],
+        poll_success: bool = True,
+        error_message: Optional[str] = None
+    ) -> None:
+        """
+        Insert Ollama provider snapshot into monitoring table.
+
+        Args:
+            ollama_admin_url: Ollama admin URL (e.g., "http://host.docker.internal:11435")
+            total_models_loaded: Number of models currently loaded
+            total_vram_used_bytes: Total VRAM used by all loaded models (in bytes)
+            loaded_models: List of model details (name, size_vram, expires_at)
+            poll_success: Whether the poll was successful
+            error_message: Error message if poll failed
+        """
+        sql = text("""
+            INSERT INTO ollama_provider_snapshots (
+                ollama_admin_url,
+                total_models_loaded,
+                total_vram_used_bytes,
+                loaded_models,
+                poll_success,
+                error_message
+            ) VALUES (
+                :ollama_admin_url,
+                :total_models_loaded,
+                :total_vram_used_bytes,
+                :loaded_models,
+                :poll_success,
+                :error_message
+            )
+        """)
+
+        self.session.execute(sql, {
+            "ollama_admin_url": ollama_admin_url,
+            "total_models_loaded": total_models_loaded,
+            "total_vram_used_bytes": total_vram_used_bytes,
+            "loaded_models": json.dumps(loaded_models),
+            "poll_success": poll_success,
+            "error_message": error_message
+        })
+        self.session.commit()
+
+    def get_ollama_vram_stats(
+        self,
+        logos_key: str,
+        day: str,
+        bucket_seconds: int = 5,  # kept for signature compatibility; ignored
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return per-provider VRAM snapshots for a single UTC day. No bucketing/zero-fill; raw rows only.
+
+        `day` is required (YYYY-MM-DD or ISO date). If no rows exist for that day, an error is returned.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+
+        # Date range resolution: required day
+        try:
+            parsed_day = isoparse(day)
+        except Exception:
+            return {"error": f"Invalid day format: {day}"}, 400
+
+        day_date = parsed_day.date()
+        start_dt = datetime.datetime.combine(day_date, datetime.time.min, tzinfo=tz_utc)
+        end_dt = start_dt + datetime.timedelta(days=1)
+
+        now = datetime.datetime.now(tz_utc)
+        if start_dt > now:
+            return {"error": "Requested day is in the future."}, 400
+        # Clamp end to "now" if requesting today
+        if end_dt > now:
+            end_dt = now
+
+        params = {
+            "start_ts": start_dt,
+            "end_ts": end_dt,
+        }
+
+        sql = text("""
+            SELECT
+                ollama_admin_url,
+                snapshot_ts,
+                total_vram_used_bytes,
+                total_models_loaded,
+                loaded_models,
+                MAX(total_vram_used_bytes) OVER (PARTITION BY ollama_admin_url) AS capacity_bytes
+            FROM ollama_provider_snapshots
+            WHERE poll_success = TRUE
+              AND snapshot_ts >= :start_ts
+              AND snapshot_ts < :end_ts
+            ORDER BY ollama_admin_url, snapshot_ts
+        """)
+
+        try:
+            rows = self.session.execute(sql, params).fetchall()
+            if not rows:
+                return {"error": "No VRAM data available for the requested day."}, 404
+
+            providers_data: Dict[str, List[Dict[str, Any]]] = {}
+
+            for url, ts, used_bytes, models_loaded, loaded_models, capacity_bytes in rows:
+                used = int(used_bytes or 0)
+                cap = int(capacity_bytes or 0)
+                remaining_bytes = (cap - used) if cap and cap > used else None
+                if url not in providers_data:
+                    providers_data[url] = []
+                providers_data[url].append({
+                    "timestamp": ts.isoformat() if ts else None,
+                    "vram_mb": used // (1024 * 1024),
+                    "vram_bytes": used,
+                    "used_vram_mb": used // (1024 * 1024),
+                    "remaining_vram_mb": (remaining_bytes // (1024 * 1024)) if isinstance(remaining_bytes, int) else None,
+                    "models_loaded": models_loaded,
+                    "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
+                })
+
+            providers_list = [
+                {"url": url, "data": data_points}
+                for url, data_points in providers_data.items()
+            ]
+            return {"providers": providers_list}, 200
+
+        except Exception as e:
+            logger.error(f"Failed to query ollama_vram_stats: {e}")
+            return {"error": str(e)}, 500
 
     def connect_model_api(self, logos_key: str, model_id: int, api_id: int):
         if not self.check_authorization(logos_key):
@@ -971,7 +1678,7 @@ class DBManager:
         return {"result": "timestamp_response set"}, 200
 
     def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None, policy_id=-1,
-                             classified=None):
+                             classified=None, **kwargs):
         # Hole Privacy-Level
         if classified is None:
             classified = dict()
@@ -1005,19 +1712,23 @@ class DBManager:
                    SET response_payload = :payload,
                        provider_id      = COALESCE(:provider_id, provider_id),
                        model_id         = COALESCE(:model_id, model_id),
-                       policy_id         = COALESCE(:policy_id, policy_id),
-                       timestamp_response = :timestamp_response,
-                       classification_statistics = :classification_statistics
+                       timestamp_response = :timestamp,
+                       policy_id        = COALESCE(:policy_id, policy_id),
+                       classification_statistics = :classification_statistics,
+                       queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
+                       utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
                    WHERE id = :log_id
                    """)
         self.session.execute(sql, {
-            "payload": json.dumps(payload),
+            "payload": json.dumps(payload) if payload else None,
             "provider_id": provider_id,
             "model_id": model_id,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
             "log_id": log_id,
-            "policy_id": policy_id if policy_id >= 0 else None,
-            "timestamp_response": datetime.datetime.now(datetime.timezone.utc),
-            "classification_statistics": json.dumps(classified)
+            "policy_id": policy_id if policy_id != -1 else None,
+            "classification_statistics": json.dumps(classified),
+            "queue_depth": kwargs.get("queue_depth_at_arrival"),
+            "utilization": kwargs.get("utilization_at_arrival")
         })
         self.session.commit()
         return {"result": "response_payload set"}, 200
