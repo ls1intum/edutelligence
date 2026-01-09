@@ -480,7 +480,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
@@ -528,7 +528,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
@@ -578,7 +578,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from retirval pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
@@ -633,7 +633,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e

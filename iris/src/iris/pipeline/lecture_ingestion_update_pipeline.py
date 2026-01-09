@@ -1,9 +1,9 @@
 import traceback
-from asyncio.log import logger
 from typing import List
 
 from sentry_sdk import capture_exception
 
+from iris.common.logging_config import get_logger
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -19,6 +19,8 @@ from iris.pipeline.transcription_ingestion_pipeline import (
 )
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
+
+logger = get_logger(__name__)
 
 
 class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):

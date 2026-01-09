@@ -1,10 +1,10 @@
-from asyncio.log import logger
 from typing import Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
 )
@@ -21,6 +21,8 @@ from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
 from ..web.status.faq_ingestion_status_callback import FaqIngestionStatus
 from . import Pipeline
+
+logger = get_logger(__name__)
 
 
 class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):

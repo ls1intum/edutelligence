@@ -234,11 +234,6 @@ class OpenAIChatModel(ChatModel):
         try:
             # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
 
-            for message in messages:
-                if message.sender == "SYSTEM":
-                    print("SYSTEM MESSAGE: " + message.contents[0].text_content)
-                    break
-
             messages = convert_to_open_ai_messages(messages)
 
             for attempt in range(retries):

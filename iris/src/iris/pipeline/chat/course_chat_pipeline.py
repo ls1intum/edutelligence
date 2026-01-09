@@ -1,7 +1,5 @@
 import json
-import logging
 import os
-import traceback
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
@@ -9,6 +7,7 @@ import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
@@ -51,7 +50,7 @@ from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CourseChatPipeline(
@@ -549,7 +548,6 @@ class CourseChatPipeline(
                 "An error occurred while running the course chat interaction suggestion pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return None
 
     def _generate_session_title(
@@ -607,7 +605,6 @@ class CourseChatPipeline(
                 "An error occurred while running the course chat pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             callback.error(
                 "An error occurred while running the course chat pipeline.",
                 tokens=[],

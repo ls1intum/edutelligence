@@ -122,7 +122,7 @@ class BaseRetrieval(SubPipeline, ABC):
 
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info("Response from assessment pipeline: %s", response)
+            logger.debug("Assessment completed | result=%s", response)
             return response == "YES"
         except Exception as e:
             raise e
