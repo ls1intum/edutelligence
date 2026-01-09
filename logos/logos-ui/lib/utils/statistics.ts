@@ -1,12 +1,11 @@
 import type { RequestEventStats } from "@/components/statistics/types";
 
-export const formatRangeLabel = (range: { start: Date; end: Date }) => {
-  const format = (d: Date) =>
-    `${(d.getMonth() + 1).toString().padStart(2, "0")}/${d
-      .getDate()
+export function formatRangeLabel(range: { start: Date; end: Date }) {
+  const f = (d: Date) =>
+    `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1)
       .toString()
       .padStart(2, "0")}`;
-  return `${format(range.start)} → ${format(range.end)}`;
+  return `${f(range.start)} → ${f(range.end)}`;
 };
 
 export const applyTimeSeriesLabels = (

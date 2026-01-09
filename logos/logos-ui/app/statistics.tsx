@@ -8,10 +8,12 @@ import React, {
 import {
   Animated,
   Easing,
+  LayoutAnimation,
   PanResponder,
   Platform,
   RefreshControl,
   ScrollView,
+  UIManager,
   View,
 } from "react-native";
 import { PieChart } from "react-native-gifted-charts";
@@ -25,7 +27,7 @@ import { Button, ButtonIcon } from "@/components/ui/button";
 
 import { CheckIcon, CloseIcon } from "@/components/ui/icon";
 import { RotateCw } from "lucide-react-native";
-import { ActivityIndicator } from "react-native";
+
 
 import type {
   RequestEventRow,
@@ -47,6 +49,10 @@ import {
   applyTimeSeriesLabels,
   calculateDateRange,
 } from "@/lib/utils/statistics";
+import RequestStack, {
+  RequestItem,
+} from "@/components/statistics/request-stack";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export default function Statistics() {
   const { apiKey } = useAuth();
@@ -61,11 +67,21 @@ export default function Statistics() {
   const [showRangeBadge, setShowRangeBadge] = useState(false);
   const rangeBadgeAnim = useRef(new Animated.Value(0)).current;
 
+  // Recent Requests Stack
+  const [latestRequests, setLatestRequests] = useState<RequestItem[]>([]);
+  const [latestRequestsError, setLatestRequestsError] = useState<string | null>(
+    null
+  );
+  const latestRequestsRef = useRef(latestRequests);
+  useEffect(() => {
+    latestRequestsRef.current = latestRequests;
+  }, [latestRequests]);
+
   // Data
   const [stats, setStats] = useState<RequestEventStats | null>(null);
   const [allRows, setAllRows] = useState<RequestEventRow[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [chartsRefreshing, setChartsRefreshing] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [vramError, setVramError] = useState<string | null>(null);
@@ -546,91 +562,97 @@ export default function Statistics() {
 
   const [isVramLoading, setIsVramLoading] = useState(false);
 
-  const fetchStats = useCallback(async () => {
-    // Note: apiKey check skipped to allow demo mode or immediate mock fallback
-    setRefreshing(true);
-    setLoading(true);
-    setError(null);
-    setIsUsingDemoData(false);
+  const fetchStats = useCallback(
+    async () => {
+      // Note: apiKey check skipped to allow demo mode or immediate mock fallback
+      setRefreshing(true);
+      setError(null);
+      setIsUsingDemoData(false);
 
-    const rangePeriod = customRange ? "custom" : timeWindow;
-    const { startDate, endDate } = calculateDateRange(rangePeriod, customRange);
+      const rangePeriod = customRange ? "custom" : timeWindow;
+      const { startDate, endDate } = calculateDateRange(
+        rangePeriod,
+        customRange
+      );
 
-    // VRAM day calculation moved to fetchVramStats specifically,
-    // but we can keep 'now' ref if needed for other things.
+      // VRAM day calculation moved to fetchVramStats specifically,
+      // but we can keep 'now' ref if needed for other things.
 
-    try {
-      let data: RequestEventResponse | null = null;
-      let usedMock = false;
-
-      // Fetch aggregated request events
       try {
-        const response = await fetch(
-          `${API_BASE}/logosdb/request_event_stats`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              logos_key: apiKey || "",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              logos_key: apiKey,
-              start_date: startDate.toISOString(),
-              end_date: endDate.toISOString(),
-              target_buckets: 120,
-            }),
-          }
-        );
-        if (!response.ok) {
-          console.warn(
-            `[Statistics] Backend returned ${response.status}, falling back to demo data.`
-          );
-          throw new Error(`Status ${response.status}`);
-        }
-        data = await response.json();
-      } catch (fetchErr) {
-        console.warn(
-          "[Statistics] Main fetch failed, using demo data",
-          fetchErr
-        );
-        usedMock = true;
-        data = MOCK_RESPONSE;
-        setIsUsingDemoData(true);
-        setStats(null);
-      }
+        let data: RequestEventResponse | null = null;
+        let usedMock = false;
 
-      if (data?.stats) {
-        const rangeStart = data.range?.start
-          ? new Date(data.range.start)
-          : startDate;
-        const rangeEnd = data.range?.end ? new Date(data.range.end) : endDate;
-        const labeled = applyTimeSeriesLabels(
-          data.stats.timeSeries || [],
-          rangeStart,
-          rangeEnd
-        );
-        setStats({ ...data.stats, timeSeries: labeled });
-        setAllRows([]);
-      } else if (usedMock && data) {
-        // Fallback mock path still uses client-side computation
+        // Fetch aggregated request events
+        // Note: We used to fetch latest requests here, but now it's polled separately
+        try {
+          const response = await fetch(
+            `${API_BASE}/logosdb/request_event_stats`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                logos_key: apiKey || "",
+                Authorization: `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify({
+                logos_key: apiKey,
+                start_date: startDate.toISOString(),
+                end_date: endDate.toISOString(),
+                target_buckets: 120,
+              }),
+            }
+          );
+
+          if (!response.ok) {
+            console.warn(
+              `[Statistics] Backend returned ${response.status}, falling back to demo data.`
+            );
+            throw new Error(`Status ${response.status}`);
+          }
+          data = await response.json();
+        } catch (fetchErr) {
+          console.warn(
+            "[Statistics] Main fetch failed, using demo data",
+            fetchErr
+          );
+          usedMock = true;
+          data = MOCK_RESPONSE;
+          setIsUsingDemoData(true);
+          setStats(null);
+        }
+
+        if (data?.stats) {
+          const rangeStart = data.range?.start
+            ? new Date(data.range.start)
+            : startDate;
+          const rangeEnd = data.range?.end ? new Date(data.range.end) : endDate;
+          const labeled = applyTimeSeriesLabels(
+            data.stats.timeSeries || [],
+            rangeStart,
+            rangeEnd
+          );
+          setStats({ ...data.stats, timeSeries: labeled });
+          setAllRows([]);
+        } else if (usedMock && data) {
+          // Fallback mock path still uses client-side computation
+          setAllRows(MOCK_RESPONSE.rows || []);
+          setIsUsingDemoData(true);
+          setStats(computeStats(MOCK_RESPONSE.rows || []));
+        } else {
+          throw new Error("Unexpected stats payload");
+        }
+      } catch (err) {
+        console.error("[Statistics] Unexpected error in fetchStats", err);
         setAllRows(MOCK_RESPONSE.rows || []);
         setIsUsingDemoData(true);
+        setError(null);
         setStats(computeStats(MOCK_RESPONSE.rows || []));
-      } else {
-        throw new Error("Unexpected stats payload");
+      } finally {
+        setRefreshing(false);
       }
-    } catch (err) {
-      console.error("[Statistics] Unexpected error in fetchStats", err);
-      setAllRows(MOCK_RESPONSE.rows || []);
-      setIsUsingDemoData(true);
-      setError(null);
-      setStats(computeStats(MOCK_RESPONSE.rows || []));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [apiKey, timeWindow, customRange, applyTimeSeriesLabels, computeStats]);
+    },
+    [apiKey, timeWindow, customRange, applyTimeSeriesLabels, computeStats]
+  );
 
   const fetchVramStats = useCallback(async () => {
     if (isUsingDemoData) {
@@ -733,6 +755,59 @@ export default function Statistics() {
     fetchVramStats();
   }, [fetchVramStats]);
 
+  // Poll for latest requests every 2 seconds
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLatest = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/logosdb/latest_requests`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            logos_key: apiKey || "",
+            Authorization: `Bearer ${apiKey}`,
+          },
+        });
+        if (response.ok && isMounted) {
+          const reqData = await response.json();
+          if (reqData.requests) {
+            const newRequests = reqData.requests as RequestItem[];
+            const currentIds = latestRequestsRef.current.map(r => r.request_id).join(',');
+            const newIds = newRequests.map(r => r.request_id).join(',');
+
+            if (currentIds !== newIds) {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
+            }
+            setLatestRequests(newRequests);
+            // setLatestRequestsError(null); // Keep error state clean if success
+          }
+        } else if (!response.ok && isMounted) {
+          // We might not want to show transient errors every 2s, but for initial load it's good.
+          // Let's only set error if we have NO requests yet, or just log warn?
+          // User asked for "refresh button should be just for... cumulative request volume chart... update the clouds pls".
+          // User also asked: "Add also some information when the fetch was unsuccessful (only the first one )"
+          if (latestRequests.length === 0) {
+            setLatestRequestsError(`Status ${response.status}`);
+          }
+        }
+      } catch (err) {
+        console.warn("[Statistics] Failed to poll latest requests", err);
+        if (isMounted && latestRequests.length === 0) {
+          setLatestRequestsError("Connection failed");
+        }
+      }
+    };
+
+    // Initial fetch
+    fetchLatest();
+
+    const intervalId = setInterval(fetchLatest, 2000);
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [apiKey]);
+
   // Initial + custom-range-driven fetch for main stats
   useEffect(() => {
     // Avoid double fire on mount; still refetch on any range change
@@ -744,10 +819,18 @@ export default function Statistics() {
     fetchStats();
   }, [fetchStats, customRange]);
 
+  // onRefresh for pull-to-refresh refreshes everything
   const onRefresh = useCallback(() => {
     fetchStats();
     fetchVramStats();
   }, [fetchStats, fetchVramStats]);
+
+  // onRefreshCharts only refreshes the charts (shows skeletons during fetch)
+  const onRefreshCharts = useCallback(async () => {
+    setChartsRefreshing(true);
+    await fetchStats();
+    setChartsRefreshing(false);
+  }, [fetchStats]);
 
   const handleClearCustomRange = useCallback(() => {
     setCustomRange(null);
@@ -928,22 +1011,26 @@ export default function Statistics() {
           </Box>
         )}
 
-        {loading || (!stats && (refreshing || isUsingDemoData)) ? (
-          <VStack space="lg" className="items-center justify-center p-12">
-            <ActivityIndicator size="large" color="#006DFF" />
-            <Text className="text-gray-500">Loading statistics...</Text>
-          </VStack>
-        ) : stats ? (
+        {stats ? (
           <VStack space="lg">
-            <View className="mt-12 h-[1px] w-full bg-outline-200" />
+            {/* Latest Requests Stack - Positioned ABOVE the refresh/controls */}
+            <RequestStack
+              requests={latestRequests}
+              error={latestRequestsError}
+            />
 
+            <View className="mt-8 h-[1px] w-full bg-outline-200" />
+
+            {/* Controls Container */}
             <View
               style={{
                 flexDirection: "row",
                 alignItems: "center",
                 justifyContent: "center",
-                marginTop: 3,
+                marginTop: 24,
+                marginBottom: 24,
                 paddingHorizontal: 12,
+                gap: 12, // Gap between range badge and refresh button
               }}
             >
               {showRangeBadge && (
@@ -958,238 +1045,280 @@ export default function Statistics() {
                         }),
                       },
                     ],
-                    marginRight: 12,
                   }}
                 >
-                  <View className="flex-row items-center rounded-full border border-outline-200 bg-secondary-200 px-3 py-2">
-                    <Text className="mr-2 text-sm text-typography-900">
+                  <View className="flex-row items-center rounded-full border border-outline-200 bg-background-50 py-1 pl-4 pr-1">
+                    <Text className="mr-3 text-sm font-medium text-typography-700">
                       {customRange ? formatRangeLabel(customRange) : ""}
                     </Text>
                     <Button
-                      size="sm"
-                      variant="outline"
+                      size="xs"
+                      variant="link"
                       action="negative"
                       onPress={handleClearCustomRange}
-                      className="h-7 w-7 rounded-full p-0"
+                      className="h-6 w-6 items-center justify-center rounded-full border border-outline-200 bg-red-50 p-0 dark:bg-red-950"
                       accessibilityLabel="Clear selected range"
                     >
-                      <ButtonIcon as={CloseIcon} className=" text-xs" />
+                      <ButtonIcon as={CloseIcon} size="xs" />
                     </Button>
                   </View>
                 </Animated.View>
               )}
+
               <Button
+                variant="outline"
+                action="secondary"
                 size="sm"
-                variant="solid"
-                action="primary"
-                className="h-9 w-9 items-center justify-center rounded-full p-0 text-typography-200"
-                onPress={() => fetchStats()}
-                accessibilityLabel="Refresh request statistics"
+                onPress={onRefreshCharts}
+                className="rounded-full border-outline-200"
+                disabled={refreshing || chartsRefreshing}
               >
-                <ButtonIcon as={RotateCw} />
+                <HStack space="sm" className="items-center">
+                  <ButtonIcon as={RotateCw} size="sm" />
+                  <Text className="font-medium text-typography-700">
+                    Refresh Charts
+                  </Text>
+                </HStack>
               </Button>
             </View>
 
-            <ChartCard
-              title="Cumulative Request Volume (Total vs Cloud vs Local)"
-              subtitle="Drag horizontally to select a custom time range"
-            >
-              {(width) => (
-                <View>
-                  {/* Legend */}
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      justifyContent: "flex-start",
-                      marginBottom: 10,
-                      paddingHorizontal: 10,
-                    }}
-                  >
+            {/* Main Volume Chart Card */}
+            {chartsRefreshing || !stats?.timeSeries?.length ? (
+              <Skeleton
+                variant="rounded"
+                className="w-full rounded-lg"
+                style={{ height: 420 }}
+                startColor="bg-secondary-300"
+              />
+            ) : (
+              <ChartCard
+                title="Cumulative Request Volume (Total vs Cloud vs Local)"
+                subtitle="Drag horizontally to select a custom time range"
+              >
+                {(width) => (
+                  <View>
+                    {/* Legend */}
                     <View
                       style={{
                         flexDirection: "row",
-                        alignItems: "center",
-                        marginRight: 16,
+                        justifyContent: "flex-start",
+                        marginBottom: 10,
+                        paddingHorizontal: 10,
                       }}
                     >
                       <View
                         style={{
-                          width: 12,
-                          height: 12,
-                          borderRadius: 2,
-                          backgroundColor: CHART_PALETTE.total,
-                          marginRight: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          marginRight: 16,
                         }}
-                      />
-                      <Text
-                        style={{ fontSize: 12, color: CHART_PALETTE.textLight }}
                       >
-                        Total
-                      </Text>
-                    </View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        marginRight: 16,
-                      }}
-                    >
+                        <View
+                          style={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: 2,
+                            backgroundColor: CHART_PALETTE.total,
+                            marginRight: 6,
+                          }}
+                        />
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            color: CHART_PALETTE.textLight,
+                          }}
+                        >
+                          Total
+                        </Text>
+                      </View>
                       <View
                         style={{
-                          width: 12,
-                          height: 12,
-                          borderRadius: 2,
-                          backgroundColor: CHART_PALETTE.cloud,
-                          marginRight: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          marginRight: 16,
                         }}
-                      />
-                      <Text
-                        style={{ fontSize: 12, color: CHART_PALETTE.textLight }}
                       >
-                        Cloud
-                      </Text>
-                    </View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        marginRight: 16,
-                      }}
-                    >
+                        <View
+                          style={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: 2,
+                            backgroundColor: CHART_PALETTE.cloud,
+                            marginRight: 6,
+                          }}
+                        />
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            color: CHART_PALETTE.textLight,
+                          }}
+                        >
+                          Cloud
+                        </Text>
+                      </View>
                       <View
                         style={{
-                          width: 12,
-                          height: 12,
-                          borderRadius: 2,
-                          backgroundColor: CHART_PALETTE.local,
-                          marginRight: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          marginRight: 16,
                         }}
-                      />
-                      <Text
-                        style={{ fontSize: 12, color: CHART_PALETTE.textLight }}
                       >
-                        Local
-                      </Text>
+                        <View
+                          style={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: 2,
+                            backgroundColor: CHART_PALETTE.local,
+                            marginRight: 6,
+                          }}
+                        />
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            color: CHART_PALETTE.textLight,
+                          }}
+                        >
+                          Local
+                        </Text>
+                      </View>
                     </View>
-                  </View>
 
-                  <InteractiveZoomableChart
-                    width={width}
-                    totalLineData={totalLineData}
-                    cloudLineData={cloudLineData}
-                    localLineData={localLineData}
-                    onZoom={setCustomRange}
-                    colors={{
-                      total: CHART_PALETTE.total,
-                      cloud: CHART_PALETTE.cloud,
-                      local: CHART_PALETTE.local,
-                    }}
-                  />
-                </View>
-              )}
-            </ChartCard>
+                    <InteractiveZoomableChart
+                      width={width}
+                      totalLineData={totalLineData}
+                      cloudLineData={cloudLineData}
+                      localLineData={localLineData}
+                      onZoom={setCustomRange}
+                      colors={{
+                        total: CHART_PALETTE.total,
+                        cloud: CHART_PALETTE.cloud,
+                        local: CHART_PALETTE.local,
+                      }}
+                    />
+                  </View>
+                )}
+              </ChartCard>
+            )}
 
             <HStack space="md" className="w-full">
               <View style={{ flex: 1 }}>
-                <ChartCard title="Request Type" className="flex-1">
-                  {(width) => (
-                    <View style={{ alignItems: "center" }}>
-                      <View
-                        style={{
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <PieChart
-                          data={providerPieData}
-                          donut
-                          innerRadius={width / 4}
-                          radius={width / 2.5}
-                          showText={false}
-                          textColor="white"
-                          textSize={12}
-                          showValuesAsLabels
-                          isAnimated={false}
-                          animationDuration={600}
-                          focusOnPress
-                          toggleFocusOnPress
-                        />
+                {chartsRefreshing || !providerPieData.length ? (
+                  <Skeleton
+                    variant="rounded"
+                    className="rounded-lg"
+                    style={{ height: 600 }}
+                    startColor="bg-secondary-300"
+                  />
+                ) : (
+                  <ChartCard title="Request Type" className="flex-1">
+                    {(width) => (
+                      <View style={{ alignItems: "center" }}>
                         <View
-                          pointerEvents="none"
-                          className="absolute rounded-full bg-secondary-200"
-                          style={{ width: width / 2, height: width / 2 }}
-                        />
+                          style={{
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <PieChart
+                            data={providerPieData}
+                            donut
+                            innerRadius={width / 4}
+                            radius={width / 2.5}
+                            showText={false}
+                            textColor="white"
+                            textSize={12}
+                            showValuesAsLabels
+                            isAnimated={false}
+                            animationDuration={600}
+                            focusOnPress
+                            toggleFocusOnPress
+                          />
+                          <View
+                            pointerEvents="none"
+                            className="absolute rounded-full bg-secondary-200"
+                            style={{ width: width / 2, height: width / 2 }}
+                          />
+                        </View>
+                        <VStack className="mt-4 space-y-1">
+                          {providerPieData.map((d, i) => (
+                            <HStack key={i} space="xs" className="items-center">
+                              <View
+                                style={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: 5,
+                                  backgroundColor: d.color,
+                                }}
+                              />
+                              <Text className="text-xs text-typography-700">
+                                {d.text}: {d.value}
+                              </Text>
+                            </HStack>
+                          ))}
+                        </VStack>
                       </View>
-                      <VStack className="mt-4 space-y-1">
-                        {providerPieData.map((d, i) => (
-                          <HStack key={i} space="xs" className="items-center">
-                            <View
-                              style={{
-                                width: 10,
-                                height: 10,
-                                borderRadius: 5,
-                                backgroundColor: d.color,
-                              }}
-                            />
-                            <Text className="text-xs text-typography-700">
-                              {d.text}: {d.value}
-                            </Text>
-                          </HStack>
-                        ))}
-                      </VStack>
-                    </View>
-                  )}
-                </ChartCard>
+                    )}
+                  </ChartCard>
+                )}
               </View>
               <View style={{ flex: 1 }}>
-                <ChartCard title="Model Share" className="flex-1">
-                  {(width) => (
-                    <View style={{ alignItems: "center" }}>
-                      <View
-                        style={{
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <PieChart
-                          data={modelPieData}
-                          donut
-                          innerRadius={width / 4}
-                          radius={width / 2.5}
-                          showText={false}
-                          isAnimated={false}
-                          animationDuration={600}
-                          focusOnPress
-                          toggleFocusOnPress
-                        />
-                        <View
-                          pointerEvents="none"
-                          className="absolute rounded-full bg-secondary-200"
-                          style={{ width: width / 2, height: width / 2 }}
-                        />
-                      </View>
-                      <VStack className="mt-4 space-y-1">
-                        {modelPieData.map((d, i) => (
-                          <HStack key={i} space="xs" className="items-center">
-                            <View
-                              style={{
-                                width: 10,
-                                height: 10,
-                                borderRadius: 5,
-                                backgroundColor: d.color,
-                              }}
+              {chartsRefreshing || !modelPieData.length ? (
+                  <Skeleton
+                    variant="rounded"
+                    className="rounded-lg"
+                    style={{ height: 600 }}
+                    startColor="bg-secondary-300"
+                  />
+                ) : (
+                  <ChartCard title="Model Share" className="flex-1">
+                      {(width) => (
+                        <View style={{ alignItems: "center" }}>
+                          <View
+                            style={{
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <PieChart
+                              data={modelPieData}
+                              donut
+                              innerRadius={width / 4}
+                              radius={width / 2.5}
+                              showText={false}
+                              isAnimated={false}
+                              animationDuration={600}
+                              focusOnPress
+                              toggleFocusOnPress
                             />
-                            <Text className="text-xs text-typography-700">
-                              {d.text}
-                            </Text>
-                          </HStack>
-                        ))}
-                      </VStack>
-                    </View>
+                            <View
+                              pointerEvents="none"
+                              className="absolute rounded-full bg-secondary-200"
+                              style={{ width: width / 2, height: width / 2 }}
+                            />
+                          </View>
+                          <VStack className="mt-4 space-y-1">
+                            {modelPieData.map((d, i) => (
+                              <HStack key={i} space="xs" className="items-center">
+                                <View
+                                  style={{
+                                    width: 10,
+                                    height: 10,
+                                    borderRadius: 5,
+                                    backgroundColor: d.color,
+                                  }}
+                                />
+                                <Text className="text-xs text-typography-700">
+                                  {d.text}
+                                </Text>
+                              </HStack>
+                            ))}
+                          </VStack>
+                        </View>
+                      )}
+                    </ChartCard>
                   )}
-                </ChartCard>
-              </View>
-            </HStack>
+                </View>
+              </HStack>
 
             <View className="my-12 h-[1px] w-full bg-outline-200" />
 

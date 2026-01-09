@@ -1466,3 +1466,28 @@ async def get_job_status(job_id: int, request: Request):
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
     }
+
+
+@app.post("/logosdb/latest_requests")
+async def latest_requests(request: Request):
+    """
+    Fetch the latest 10 requests for the dashboard stack.
+    """
+    headers = dict(request.headers)
+    logos_key, _ = authenticate_logos_key(headers)
+
+    with DBManager() as db:
+        payload, status = db.get_latest_requests(logos_key, limit=10)
+        return JSONResponse(content=payload, status_code=status)
+
+
+@app.options("/logosdb/latest_requests")
+async def latest_requests_options():
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+    )

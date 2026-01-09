@@ -812,6 +812,49 @@ class DBManager:
         }
         return payload, 200
 
+    def get_latest_requests(self, logos_key: str, limit: int = 10):
+        """
+        Fetch the most recent request events.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        sql = text("""
+            SELECT
+                re.request_id,
+                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
+                COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
+                re.result_status,
+                re.enqueue_ts,
+                re.request_complete_ts,
+                CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts))
+                     ELSE NULL
+                END AS run_seconds,
+                re.cold_start
+            FROM request_events re
+            LEFT JOIN models m ON m.id = re.model_id
+            LEFT JOIN providers p ON p.id = re.provider_id
+            ORDER BY re.enqueue_ts DESC NULLS LAST
+            LIMIT :limit
+        """)
+
+        rows = self.session.execute(sql, {"limit": limit}).mappings().all()
+
+        results = []
+        for row in rows:
+            results.append({
+                "request_id": row["request_id"],
+                "model_name": row["model_name"],
+                "provider_name": row["provider_name"],
+                "status": row["result_status"] if row["result_status"] else "unknown",
+                "timestamp": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "duration": float(row["run_seconds"]) if row["run_seconds"] is not None else None,
+                "cold_start": row["cold_start"]
+            })
+
+        return {"requests": results}, 200
+
     def get_token_name(self, name):
         sql = text("""
                    SELECT *
