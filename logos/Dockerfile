@@ -9,19 +9,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip
 
-COPY ./logos/pyproject.toml ./logos/poetry.lock* ./
-
-COPY ./logos/src/ ./src/
-COPY ./logos/tests/ ./tests/
-COPY ./logos/db/ ./logos/db/
-COPY ../shared/ ./shared/
-COPY ./logos/README.md ./logos/README.md
-COPY ./logos/docker-compose.yaml ./logos/docker-compose.yaml
-COPY ./logos/config/ ./logos/config/
-
 RUN pip install poetry && \
     poetry self update && \
     poetry env activate
+
+COPY ../shared/ ./shared/
+COPY ./logos/pyproject.toml ./logos/poetry.lock* ./
+
 RUN poetry install
 RUN poetry run python -m grpc_tools.protoc \
   -I . \
@@ -29,6 +23,9 @@ RUN poetry run python -m grpc_tools.protoc \
   --grpc_python_out=. \
   src/grpclocal/model.proto
 
+COPY ./logos/db/ ./logos/db/
+COPY ./logos/tests/ ./tests/
+COPY ./logos/src/ ./src/
 
 EXPOSE 8080
 EXPOSE 50051

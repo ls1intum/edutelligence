@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Logos is an LLM Engineering Platform that includes usage logging, billing, central resouce management, policy-based model selection, scheduling, and monitoring."
 authors = [
     {name = "Tobias Wasner",email = "tobias.wasner@tum.de"},
-    {name = "Florian Briksa",email = "florian.briksa@tum.de"}
+    {name = "Florian Briksa",email = "florian.briksa@tum.de"},
+    {name = "Jakub Jakubczyk", email = "jakub.jakubczyk@tum.de"}
 ]
 readme = "./logos/README.md"
 requires-python = ">=3.13,<4.0.0"
