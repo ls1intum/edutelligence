@@ -1,5 +1,4 @@
 import concurrent.futures
-from asyncio.log import logger
 from enum import Enum
 from typing import List
 
@@ -12,6 +11,7 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -66,6 +66,8 @@ from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+
+logger = get_logger(__name__)
 
 
 class QueryRewriteMode(Enum):
