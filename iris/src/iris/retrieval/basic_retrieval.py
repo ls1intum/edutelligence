@@ -8,7 +8,6 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
 )
-from iris.tracing import observe
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -18,6 +17,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.tracing import observe
 
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,

@@ -2,7 +2,6 @@ from asyncio.log import logger
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
-from iris.tracing import observe
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -24,6 +23,7 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,

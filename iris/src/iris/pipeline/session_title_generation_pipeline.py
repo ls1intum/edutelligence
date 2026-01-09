@@ -5,7 +5,6 @@ from typing import Optional
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from iris.tracing import observe
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
@@ -15,6 +14,7 @@ from iris.pipeline.prompts.session_title_generation_prompt import (
     session_title_generation_prompt,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 
 logger = logging.getLogger(__name__)
 

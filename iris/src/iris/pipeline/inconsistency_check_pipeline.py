@@ -4,7 +4,6 @@ from typing import Dict, List, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
-from iris.tracing import observe
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
@@ -19,6 +18,7 @@ from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
     solver_prompt,
 )
+from iris.tracing import observe
 from iris.web.status.status_update import InconsistencyCheckCallback
 
 logger = logging.getLogger(__name__)

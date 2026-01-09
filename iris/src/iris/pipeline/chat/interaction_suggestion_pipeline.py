@@ -8,7 +8,6 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from langchain_core.runnables import Runnable
-from iris.tracing import observe
 from pydantic.v1 import BaseModel, Field
 
 from iris.common.pipeline_enum import PipelineEnum
@@ -16,6 +15,7 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from iris.tracing import observe
 
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,

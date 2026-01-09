@@ -29,7 +29,7 @@ def _get_langfuse_module():
     global _langfuse_module
     if _langfuse_module is None:
         try:
-            import langfuse
+            import langfuse  # pylint: disable=import-outside-toplevel
 
             _langfuse_module = langfuse
         except ImportError:
@@ -42,6 +42,7 @@ def _is_enabled() -> bool:
     """Check if LangFuse tracing is enabled."""
     # Import here to avoid circular dependency
     try:
+        # pylint: disable=import-outside-toplevel
         from iris.config import settings
 
         return (
@@ -82,6 +83,7 @@ def init_langfuse() -> Optional[Any]:
             return None
 
         try:
+            # pylint: disable=import-outside-toplevel
             from iris.config import settings
 
             _langfuse_client = langfuse_mod.Langfuse(
@@ -103,7 +105,6 @@ def init_langfuse() -> Optional[Any]:
 
 def get_langfuse_client() -> Optional[Any]:
     """Get the LangFuse client (initializes if needed)."""
-    global _langfuse_client
     if _langfuse_client is None and not _is_initialized:
         init_langfuse()
     return _langfuse_client
@@ -377,9 +378,7 @@ def observe(
     return decorator
 
 
-def get_langchain_callback(
-    ctx: Optional[TracingContext] = None,
-) -> Optional[Any]:
+def get_langchain_callback() -> Optional[Any]:
     """
     Get a LangFuse CallbackHandler for LangChain integrations.
 
@@ -409,6 +408,7 @@ def get_langchain_callback(
         return None
 
     try:
+        # pylint: disable=import-outside-toplevel
         from langfuse.langchain import CallbackHandler
 
         return CallbackHandler()

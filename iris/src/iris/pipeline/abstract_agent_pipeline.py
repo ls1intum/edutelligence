@@ -139,7 +139,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             client = get_langfuse_client()
             if client:
                 # Use langfuse's get_client to update the current trace
-                import langfuse
+                import langfuse  # pylint: disable=import-outside-toplevel
 
                 langfuse.get_client().update_current_trace(**ctx.to_langfuse_params())
         except Exception as e:
