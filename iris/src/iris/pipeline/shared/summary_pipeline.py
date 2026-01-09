@@ -10,6 +10,7 @@ from langchain_core.runnables import Runnable
 
 from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
+from ...tracing import observe
 from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class SummaryPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @observe(name="Summary Pipeline")
     def __call__(self, query: str, **kwargs) -> str:
         """
         Runs the pipeline

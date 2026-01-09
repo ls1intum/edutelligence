@@ -2,7 +2,7 @@ from asyncio.log import logger
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
-from langsmith import traceable
+from iris.tracing import observe
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -80,7 +80,7 @@ class LecturePageChunkRetrieval(SubPipeline):
 
         self.tokens = []
 
-    @traceable(name="Full Lecture Retrieval")
+    @observe(name="Full Lecture Retrieval")
     def __call__(
         self,
         student_query: str,
@@ -129,7 +129,7 @@ class LecturePageChunkRetrieval(SubPipeline):
         )
         return reranked_page_chunks
 
-    @traceable(name="Retrieval: Search in DB")
+    @observe(name="Retrieval: Search in DB")
     def search_in_db(
         self,
         query: str,

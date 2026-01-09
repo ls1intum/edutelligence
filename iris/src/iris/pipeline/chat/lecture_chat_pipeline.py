@@ -6,7 +6,7 @@ from typing import Any, Callable, List, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langsmith import traceable
+from iris.tracing import TracingContext, observe
 
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
@@ -372,7 +372,7 @@ class LectureChatPipeline(
             return super()._create_session_title(state, output, first_user_msg)
         return None
 
-    @traceable(name="Lecture Chat Pipeline")
+    @observe(name="Lecture Chat Pipeline")
     def __call__(
         self,
         dto: LectureChatPipelineExecutionDTO,

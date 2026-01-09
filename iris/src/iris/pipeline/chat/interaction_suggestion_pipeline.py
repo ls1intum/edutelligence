@@ -8,7 +8,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from langchain_core.runnables import Runnable
-from langsmith import traceable
+from iris.tracing import observe
 from pydantic.v1 import BaseModel, Field
 
 from iris.common.pipeline_enum import PipelineEnum
@@ -82,7 +82,7 @@ class InteractionSuggestionPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    @traceable(name="Interaction Suggestion Pipeline")
+    @observe(name="Interaction Suggestion Pipeline")
     def __call__(
         self,
         dto: InteractionSuggestionPipelineExecutionDTO,

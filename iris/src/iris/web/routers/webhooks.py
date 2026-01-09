@@ -11,6 +11,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )
+from iris.tracing import observe
 from iris.web.utils import validate_pipeline_variant
 
 from ...domain.ingestion.deletion_pipeline_execution_dto import (
@@ -123,6 +124,7 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
+@observe(name="POST /webhooks/lectures/ingest")
 def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """
     Webhook endpoint to trigger the exercise chat pipeline
@@ -143,6 +145,7 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
+@observe(name="POST /webhooks/lectures/delete")
 def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
     """
     Webhook endpoint to trigger the lecture deletion
@@ -158,6 +161,7 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
+@observe(name="POST /webhooks/faqs/ingest")
 def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
     """
     Webhook endpoint to trigger the faq ingestion pipeline
@@ -174,6 +178,7 @@ def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
+@observe(name="POST /webhooks/faqs/delete")
 def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     """
     Webhook endpoint to trigger the faq deletion pipeline

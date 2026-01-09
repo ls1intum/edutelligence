@@ -5,7 +5,7 @@ from typing import Any, Callable, List, Optional
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langsmith import traceable
+from iris.tracing import TracingContext, observe
 
 from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
@@ -481,7 +481,7 @@ class TextExerciseChatPipeline(
             return super()._create_session_title(state, output, first_user_msg)
         return None
 
-    @traceable(name="Text Exercise Chat Pipeline")
+    @observe(name="Text Exercise Chat Pipeline")
     def __call__(
         self,
         dto: TextExerciseChatPipelineExecutionDTO,

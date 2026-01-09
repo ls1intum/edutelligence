@@ -8,7 +8,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langsmith import traceable
+from iris.tracing import TracingContext, observe
 
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
@@ -552,7 +552,7 @@ class ExerciseChatAgentPipeline(
             return super()._create_session_title(state, output, first_user_msg)
         return None
 
-    @traceable(name="Exercise Chat Agent Pipeline")
+    @observe(name="Exercise Chat Agent Pipeline")
     def __call__(
         self,
         dto: ExerciseChatPipelineExecutionDTO,

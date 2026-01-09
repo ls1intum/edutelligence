@@ -11,6 +11,8 @@ from openai import (
     RateLimitError,
 )
 
+from iris.tracing import observe
+
 from ...llm.external.model import EmbeddingModel
 
 
@@ -23,6 +25,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     api_key: str
     _client: OpenAIEmbeddings
 
+    @observe(name="OpenAI Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:
         retries = 5
         backoff_factor = 2

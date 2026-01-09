@@ -19,6 +19,7 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -47,6 +48,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
         self.cohere_client = RerankRequestHandler("cohere")
         self.tokens = []
 
+    @observe(name="Lecture Transcription Retrieval")
     def __call__(
         self,
         student_query: str,
@@ -88,6 +90,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
 
         return reranked_answers
 
+    @observe(name="Lecture Transcription: Search in DB")
     def search_in_db(
         self,
         lecture_unit_dto: LectureUnitRetrievalDTO,

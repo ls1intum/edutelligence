@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
-from langsmith import traceable
+from iris.tracing import observe
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
@@ -55,7 +55,7 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         self.callback = callback
         self.tokens = []
 
-    @traceable(name="Inconsistency Check Pipeline")
+    @observe(name="Inconsistency Check Pipeline")
     def __call__(self, dto: InconsistencyCheckPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline to check for inconsistencies in the exercise

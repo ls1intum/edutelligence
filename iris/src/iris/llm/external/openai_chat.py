@@ -30,6 +30,7 @@ from openai.types.shared_params import ResponseFormatJSONObject
 from pydantic import BaseModel
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.tracing import observe
 
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage
@@ -218,6 +219,7 @@ class OpenAIChatModel(ChatModel):
 
     api_key: str
 
+    @observe(name="OpenAI Chat Completion", as_type="generation")
     def chat(
         self,
         messages: list[PyrisMessage],
@@ -233,11 +235,6 @@ class OpenAIChatModel(ChatModel):
         client = self.get_client()
         try:
             # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
-
-            for message in messages:
-                if message.sender == "SYSTEM":
-                    print("SYSTEM MESSAGE: " + message.contents[0].text_content)
-                    break
 
             messages = convert_to_open_ai_messages(messages)
 
