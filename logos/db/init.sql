@@ -217,6 +217,7 @@ CREATE TABLE jobs (
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 -- Request-level monitoring (one row per request)
 CREATE TABLE request_events (
