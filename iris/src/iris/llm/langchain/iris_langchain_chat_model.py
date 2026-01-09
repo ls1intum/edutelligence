@@ -1,4 +1,3 @@
-import logging
 from logging import Logger
 from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 
@@ -13,6 +12,7 @@ from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 
@@ -29,7 +29,7 @@ class IrisLangchainChatModel(BaseChatModel):
     request_handler: RequestHandler
     completion_args: CompletionArguments
     tokens: TokenUsageDTO = None
-    logger: Logger = logging.getLogger(__name__)
+    logger: Logger = get_logger(__name__)
     tools: Optional[
         Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
     ] = Field(default_factory=list, alias="tools")
