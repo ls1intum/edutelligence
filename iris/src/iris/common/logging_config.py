@@ -38,6 +38,25 @@ def abbreviate_logger_name(name: str) -> str:
     return result
 
 
+class HealthCheckFilter(logging.Filter):
+    """
+    Filter out health check endpoint logs from uvicorn.access.
+
+    Health checks are called frequently and flood the logs with noise.
+    """
+
+    EXCLUDED_PATHS = {"/api/v1/health/", "/api/v1/health", "/health", "/health/"}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return False to suppress the log record, True to allow it."""
+        message = record.getMessage()
+        # Check if any excluded path appears in the log message
+        for path in self.EXCLUDED_PATHS:
+            if path in message:
+                return False
+        return True
+
+
 class IrisFormatter(logging.Formatter):
     """
     Custom log formatter for Iris with:
@@ -156,6 +175,10 @@ def setup_logging(level: str = "INFO") -> None:
         uvicorn_logger.handlers.clear()
         uvicorn_logger.addHandler(console_handler)
         uvicorn_logger.propagate = False
+
+    # Add filter to suppress health check logs from uvicorn.access
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.addFilter(HealthCheckFilter())
 
 
 def get_logger(name: str) -> logging.Logger:
