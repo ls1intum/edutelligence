@@ -7,7 +7,7 @@ def session_title_generation_prompt(user_language: str = "en"):
     base_prompt = """ You are a helpful assistant that creates short, descriptive titles for conversations.
         Write a short, descriptive chat title based on a single user message and a reply.
         Requirements:
-        - 2–5 words
+        - 2-5 words
         - No quotes, no emojis
         - No ending punctuation
         - Sentence case (capitalize first word only unless proper noun)

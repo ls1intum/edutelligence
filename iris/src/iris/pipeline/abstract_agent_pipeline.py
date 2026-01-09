@@ -318,10 +318,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
-        # Extract user language
+        # Extract user language (using getattr for DTOs that may not have user attr)
         user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        user = getattr(state.dto, "user", None)
+        if user and getattr(user, "lang_key", None):
+            user_language = user.lang_key
 
         try:
             if output:
