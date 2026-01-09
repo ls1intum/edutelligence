@@ -1,4 +1,3 @@
-import traceback
 from typing import List
 
 from sentry_sdk import capture_exception
@@ -99,8 +98,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             )
 
         except Exception as e:
-            logger.error("Error Ingestion pipeline: %s", e)
-            logger.error(traceback.format_exc())
+            logger.error("Error in ingestion pipeline", exc_info=e)
             capture_exception(e)
 
     @classmethod

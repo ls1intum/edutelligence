@@ -1,5 +1,4 @@
 import concurrent.futures
-import logging
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -12,6 +11,7 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
@@ -26,7 +26,7 @@ from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
 from ..pipeline.sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def merge_retrieved_chunks(
