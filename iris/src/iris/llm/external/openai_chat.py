@@ -1,5 +1,4 @@
 import json
-import logging
 import time
 from datetime import datetime
 from typing import (
@@ -31,6 +30,7 @@ from pydantic import BaseModel
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 
+from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage
 from ...common.token_usage_dto import TokenUsageDTO
@@ -40,6 +40,8 @@ from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel
+
+logger = get_logger(__name__)
 
 
 def convert_content_to_openai_format(content):
@@ -255,7 +257,7 @@ class OpenAIChatModel(ChatModel):
                         params["tools"] = [
                             convert_to_openai_tool(tool) for tool in tools
                         ]
-                        logging.info("Using tools: %s", tools)
+                        logger.debug("Using tools: %s", [t.name for t in tools])
 
                     response = client.chat.completions.create(**params)
                     choice = response.choices[0]
@@ -272,13 +274,13 @@ class OpenAIChatModel(ChatModel):
                         or choice.message.content is None
                         or len(choice.message.content) == 0
                     ):
-                        logging.error("Model returned an empty message")
-                        logging.error("Finish reason: %s", choice.finish_reason)
+                        logger.error("Model returned an empty message")
+                        logger.error("Finish reason: %s", choice.finish_reason)
                         if (
                             choice.message is not None
                             and choice.message.refusal is not None
                         ):
-                            logging.error("Refusal: %s", choice.message.refusal)
+                            logger.error("Refusal: %s", choice.message.refusal)
 
                     return convert_to_iris_message(choice.message, usage, self.model)
                 except (
@@ -288,8 +290,8 @@ class OpenAIChatModel(ChatModel):
                     RateLimitError,
                 ):
                     wait_time = initial_delay * (backoff_factor**attempt)
-                    logging.exception("OpenAI error on attempt %s:", attempt + 1)
-                    logging.info("Retrying in %s seconds...", wait_time)
+                    logger.exception("OpenAI error on attempt %s:", attempt + 1)
+                    logger.info("Retrying in %s seconds...", wait_time)
                     time.sleep(wait_time)
             raise RuntimeError(
                 f"Failed to get response from OpenAI after {retries} retries"
@@ -301,7 +303,7 @@ class OpenAIChatModel(ChatModel):
                 try:
                     close()
                 except Exception:
-                    logging.debug("Failed to close OpenAI client", exc_info=True)
+                    logger.debug("Failed to close OpenAI client", exc_info=True)
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):
