@@ -8,7 +8,6 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -54,6 +53,7 @@ from iris.retrieval.lecture.lecture_transcription_retrieval import (
 from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
+from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -106,6 +106,7 @@ class LectureRetrieval(SubPipeline):
 
         self.cohere_client = RerankRequestHandler("cohere")
 
+    @observe(name="Lecture Retrieval")
     def __call__(
         self,
         query: str,
@@ -312,7 +313,7 @@ class LectureRetrieval(SubPipeline):
                 ],
             )
 
-    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
+    @observe(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(
         self,
         chat_history: list[PyrisMessage],
@@ -443,7 +444,7 @@ class LectureRetrieval(SubPipeline):
             hypothetical_lecture_transcriptions_answer_query,
         )
 
-    @traceable(name="Retrieval: Rewrite Student Query")
+    @observe(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
         chat_history: List[PyrisMessage],
@@ -485,7 +486,7 @@ class LectureRetrieval(SubPipeline):
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Student Query with Exercise Context")
+    @observe(name="Retrieval: Rewrite Student Query with Exercise Context")
     def rewrite_student_query_with_exercise_context(
         self,
         chat_history: List[PyrisMessage],
@@ -533,7 +534,7 @@ class LectureRetrieval(SubPipeline):
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Elaborated Query")
+    @observe(name="Retrieval: Rewrite Elaborated Query")
     def rewrite_elaborated_query(
         self,
         chat_history: list[PyrisMessage],
@@ -583,7 +584,7 @@ class LectureRetrieval(SubPipeline):
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
+    @observe(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
     def rewrite_elaborated_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],

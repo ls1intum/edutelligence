@@ -1,9 +1,10 @@
 import logging
 from typing import List
 
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.collections.classes.filters import Filter
+
+from iris.tracing import observe
 
 from ..common.pipeline_enum import PipelineEnum
 from ..common.pyris_message import PyrisMessage
@@ -40,7 +41,7 @@ class FaqRetrieval(BaseRetrieval):
             FaqSchema.QUESTION_ANSWER.value,
         ]
 
-    @traceable(name="Full Faq Retrieval")
+    @observe(name="Full Faq Retrieval")
     def __call__(
         self,
         chat_history: list[PyrisMessage],
@@ -77,6 +78,7 @@ class FaqRetrieval(BaseRetrieval):
         ]
         return merge_retrieved_chunks(basic_retrieved_faqs, hyde_retrieved_faqs)
 
+    @observe(name="FAQ: Search in DB")
     def get_faqs_from_db(
         self,
         course_id: int,

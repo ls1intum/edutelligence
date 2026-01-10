@@ -25,6 +25,7 @@ from iris.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -67,6 +68,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+    @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
             self.callback.in_progress("Deleting existing transcription data")

@@ -20,6 +20,7 @@ from iris.llm import (
 )
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
+from iris.tracing import observe
 from iris.web.status.status_update import CompetencyExtractionCallback
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 
+    @observe(name="Competency Extraction Pipeline")
     def __call__(
         self,
         dto: CompetencyExtractionPipelineExecutionDTO,

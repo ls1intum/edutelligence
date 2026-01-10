@@ -7,7 +7,6 @@ from typing import Any, Callable, List, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langsmith import traceable
 
 from iris.common.pyris_message import IrisMessageRole
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
@@ -37,6 +36,7 @@ from iris.tools import (
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
 )
+from iris.tracing import observe
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
@@ -350,7 +350,7 @@ class TutorSuggestionPipeline(
             query += f"The user also asked specifically for: {user_query}"
         return query
 
-    @traceable(name="Tutor Suggestion Pipeline")
+    @observe(name="Tutor Suggestion Pipeline")
     def __call__(
         self,
         dto: CommunicationTutorSuggestionPipelineExecutionDTO,

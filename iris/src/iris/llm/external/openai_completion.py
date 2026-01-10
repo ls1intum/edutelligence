@@ -3,6 +3,8 @@ from typing import Literal
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
+from iris.tracing import observe
+
 from ...llm.external.model import CompletionModel
 from ..completion_arguments import CompletionArguments
 
@@ -14,6 +16,7 @@ class OpenAICompletionModel(CompletionModel):
     api_key: str
     _client: OpenAI
 
+    @observe(name="OpenAI Completion", as_type="generation")
     def complete(self, prompt: str, arguments: CompletionArguments) -> any:
         response = self._client.completions.create(
             model=self.model,

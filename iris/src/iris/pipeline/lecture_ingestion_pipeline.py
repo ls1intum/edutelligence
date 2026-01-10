@@ -32,6 +32,7 @@ from ..llm import (
     ModelVersionRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
+from ..tracing import observe
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
@@ -146,6 +147,7 @@ class LectureUnitPageIngestionPipeline(
             ),
         ]
 
+    @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
             if not self.check_if_attachment_needs_update():
