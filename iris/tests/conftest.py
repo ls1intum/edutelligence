@@ -15,15 +15,25 @@ os.environ.setdefault("APPLICATION_YML_PATH", str(ROOT / "application.example.ym
 os.environ.setdefault("LLM_CONFIG_PATH", str(ROOT / "llm_config.example.yml"))
 
 TEST_WEAVIATE_HOST = "localhost"
-TEST_WEAVIATE_PORT = 8002
-TEST_WEAVIATE_GRPC_PORT = 50052
+TEST_WEAVIATE_HTTP_PORT = 8001
+TEST_WEAVIATE_GRPC_PORT = 50051
 
 
 @pytest.fixture(scope="session")
 def weaviate_container():
     container = (
         DockerContainer("cr.weaviate.io/semitechnologies/weaviate:1.32.2")
-        .with_exposed_ports(TEST_WEAVIATE_PORT, TEST_WEAVIATE_GRPC_PORT)
+        .with_command(
+            [
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(TEST_WEAVIATE_HTTP_PORT),
+                "--scheme",
+                "http",
+            ]
+        )
+        .with_exposed_ports(TEST_WEAVIATE_HTTP_PORT, TEST_WEAVIATE_GRPC_PORT)
         .with_env("QUERY_DEFAULTS_LIMIT", "25")
         .with_env("AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED", "true")
         .with_env("DEFAULT_VECTORIZER_MODULE", "none")
@@ -38,20 +48,20 @@ def weaviate_container():
 
 
 def wait_for_weaviate(port, timeout=30):
-    url = f"http://localhost:{port}/v1/.well-known/ready"
+    url = f"http://{TEST_WEAVIATE_HOST}:{port}/v1/.well-known/ready"
     start = time.time()
     while time.time() - start < timeout:
         try:
-            if requests.get(url).status_code == 200:
+            if requests.get(url, timeout=2).status_code == 200:
                 return True
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.RequestException:
             time.sleep(0.5)
     return False
 
 
 @pytest.fixture(scope="session")
 def weaviate_client(weaviate_container):
-    http_port = int(weaviate_container.get_exposed_port(TEST_WEAVIATE_PORT))
+    http_port = int(weaviate_container.get_exposed_port(TEST_WEAVIATE_HTTP_PORT))
     grpc_port = int(weaviate_container.get_exposed_port(TEST_WEAVIATE_GRPC_PORT))
 
     if not wait_for_weaviate(http_port):
@@ -69,37 +79,9 @@ def weaviate_client(weaviate_container):
 
 
 @pytest.fixture(autouse=True)
-def patch_vector_db_init(weaviate_client):
-    from iris.vector_database.database import VectorDatabase
-    from iris.vector_database.faq_schema import init_faq_schema
-    from iris.vector_database.lecture_transcription_schema import (
-        init_lecture_transcription_schema,
-    )
-    from iris.vector_database.lecture_unit_page_chunk_schema import (
-        init_lecture_unit_page_chunk_schema,
-    )
-    from iris.vector_database.lecture_unit_schema import init_lecture_unit_schema
-    from iris.vector_database.lecture_unit_segment_schema import (
-        init_lecture_unit_segment_schema,
-    )
-
-    def _mocked_init(self):
-        VectorDatabase.static_client_instance = weaviate_client
-        VectorDatabase._static_collections = {
-            "lectures": init_lecture_unit_page_chunk_schema(weaviate_client),
-            "transcriptions": init_lecture_transcription_schema(weaviate_client),
-            "lecture_segments": init_lecture_unit_segment_schema(weaviate_client),
-            "lecture_units": init_lecture_unit_schema(weaviate_client),
-            "faqs": init_faq_schema(weaviate_client),
-        }
-
-        self.client = VectorDatabase.static_client_instance
-        collections = VectorDatabase._static_collections
-        self.lectures = collections["lectures"]
-        self.transcriptions = collections["transcriptions"]
-        self.lecture_segments = collections["lecture_segments"]
-        self.lecture_units = collections["lecture_units"]
-        self.faqs = collections["faqs"]
-
-    with patch.object(VectorDatabase, "__init__", _mocked_init):
+def patch_weaviate_connect(weaviate_client):
+    with patch(
+        "iris.vector_database.database.weaviate.connect_to_custom",
+        return_value=weaviate_client,
+    ):
         yield
