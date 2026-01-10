@@ -22,7 +22,6 @@ from iris.tracing import (
     TracingContext,
     clear_current_context,
     get_langchain_config,
-    get_langfuse_client,
     observe,
     set_current_context,
 )
@@ -136,12 +135,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         with user_id, session_id, course/exercise info, and other metadata.
         """
         try:
-            client = get_langfuse_client()
-            if client:
-                # Use langfuse's get_client to update the current trace
-                import langfuse  # pylint: disable=import-outside-toplevel
+            # Use langfuse.get_client() which returns the decorator-aware global client
+            import langfuse  # pylint: disable=import-outside-toplevel
 
-                langfuse.get_client().update_current_trace(**ctx.to_langfuse_params())
+            client = langfuse.get_client()
+            if client:
+                client.update_current_trace(**ctx.to_langfuse_params())
         except Exception as e:
             logger.debug("Failed to update LangFuse trace: %s", e)
 

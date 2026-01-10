@@ -111,16 +111,17 @@ def get_langfuse_client() -> Optional[Any]:
 
 
 def shutdown_langfuse():
-    """Flush and shutdown the LangFuse client."""
+    """Flush and shutdown the LangFuse client. Thread-safe."""
     global _langfuse_client, _is_initialized
-    if _langfuse_client:
-        try:
-            _langfuse_client.flush()
-            logger.info("LangFuse client flushed and shutdown")
-        except Exception as e:
-            logger.error("Error shutting down LangFuse: %s", e)
-        _langfuse_client = None
-    _is_initialized = False
+    with _init_lock:
+        if _langfuse_client:
+            try:
+                _langfuse_client.flush()
+                logger.info("LangFuse client flushed and shutdown")
+            except Exception as e:
+                logger.error("Error shutting down LangFuse: %s", e)
+            _langfuse_client = None
+        _is_initialized = False
 
 
 @dataclass
