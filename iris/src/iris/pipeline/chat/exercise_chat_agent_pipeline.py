@@ -66,17 +66,19 @@ class ExerciseChatAgentPipeline(
     system_prompt_template: Any
     guide_prompt_template: Any
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         """
         Initialize the exercise chat agent pipeline.
         """
         super().__init__(implementation_id="exercise_chat_pipeline")
 
         # Create the pipelines
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.code_feedback_pipeline = CodeFeedbackPipeline()
-        self.citation_pipeline = CitationPipeline()
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
+        self.suggestion_pipeline = InteractionSuggestionPipeline(
+            variant="exercise", local=local
+        )
+        self.code_feedback_pipeline = CodeFeedbackPipeline(local=local)
+        self.citation_pipeline = CitationPipeline(local=local)
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -111,15 +113,19 @@ class ExerciseChatAgentPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1-mini",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="llama3.3:latest",
+                local_citation_model="llama3.3:latest",
             ),
             ExerciseChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="llama3.3:latest",
             ),
         ]
 
@@ -220,7 +226,9 @@ class ExerciseChatAgentPipeline(
 
         # Add lecture content retrieval if available
         if should_allow_lecture_tool(state.db, dto.course.id):
-            lecture_retriever = LectureRetrieval(state.db.client)
+            lecture_retriever = LectureRetrieval(
+                state.db.client, local=state.dto.settings.is_local()
+            )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     lecture_retriever,
@@ -235,7 +243,9 @@ class ExerciseChatAgentPipeline(
 
         # Add FAQ retrieval if available
         if should_allow_faq_tool(state.db, dto.course.id):
-            faq_retriever = FaqRetrieval(state.db.client)
+            faq_retriever = FaqRetrieval(
+                state.db.client, local=state.dto.settings.is_local()
+            )
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     faq_retriever,
@@ -389,7 +399,13 @@ class ExerciseChatAgentPipeline(
             # Create small LLM for refinement
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version="gpt-4.1-mini"),
+                request_handler=ModelVersionRequestHandler(
+                    version=(
+                        "llama3.3:latest"
+                        if state.dto.settings.is_local()
+                        else "gpt-4.1-mini"
+                    )
+                ),
                 completion_args=completion_args,
             )
 
@@ -574,7 +590,7 @@ class ExerciseChatAgentPipeline(
             self.event = event
 
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback)
+            super().__call__(dto, variant, callback, local=dto.settings.is_local())
 
         except Exception as e:
             logger.error("Error in exercise chat pipeline", exc_info=e)
