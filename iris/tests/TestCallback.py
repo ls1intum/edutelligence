@@ -40,16 +40,12 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
         self.done_messages: List[str] = []
         self.error_messages: List[str] = []
 
-        print("\n\n\nHallo Init\n\n\n")
-
     # ------------------------------------------------------------------
     # Disable network calls
     # ------------------------------------------------------------------
 
     def on_status_update(self):
         """Override to disable HTTP requests during tests."""
-
-        print("\n\n\nHallo on status update\n\n\n")
 
         pass
 

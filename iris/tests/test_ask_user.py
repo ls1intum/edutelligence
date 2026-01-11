@@ -10,7 +10,6 @@ from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
-from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
 from .TestCallback import TestExerciseChatCallback
 
 
@@ -74,9 +73,9 @@ class TestAskUser(unittest.TestCase):
             description="Variant for exercise explanations",
             agent_model="gpt-4o-mini",citation_model="gpt-4o")
 
-        print("setup is running")
-
         cls.callback = TestExerciseChatCallback()
+
+        from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
 
         cls.pipeline = ExerciseChatAgentPipeline()
         cls.pipeline(cls.dto, cls.variant, cls.callback, None)
@@ -85,7 +84,7 @@ class TestAskUser(unittest.TestCase):
 
     def test_question_is_thematically_relevant(self):
         assert(True)
-        # assert (any(k in self.question.lower() for k in self.keywords) or any(k in self.question.lower() for k in self.task))
+        #assert (any(k in self.question.lower() for k in self.keywords) or any(k in self.question.lower() for k in self.task))
 
 
     def test_question_not_too_easy(self):
