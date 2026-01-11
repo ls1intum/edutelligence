@@ -50,10 +50,14 @@ class SessionTitleGenerationPipeline(SubPipeline):
 
     @traceable(name="Session Title Generation Pipeline")
     def __call__(
-        self, first_user_msg: str, llm_response: str, **kwargs
+        self,
+        first_user_msg: str,
+        llm_response: str,
+        user_language: str = "en",
+        **kwargs,
     ) -> Optional[str]:
         prompt = ChatPromptTemplate.from_messages(
-            [("system", session_title_generation_prompt())]
+            [("system", session_title_generation_prompt(user_language))]
         )
         try:
             logger.info("Running Session Title Generation Pipeline")

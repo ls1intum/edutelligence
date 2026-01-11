@@ -255,6 +255,11 @@ class CourseChatPipeline(
         Returns:
             str: The system message content
         """
+        # Extract user language with fallback
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         # Get tool permissions
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
@@ -280,6 +285,7 @@ class CourseChatPipeline(
         # Prepare template context
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
             "has_competencies": bool(state.dto.course.competencies),
             "has_exercises": bool(state.dto.course.exercises),
             "allow_lecture_tool": allow_lecture_tool,
@@ -468,6 +474,11 @@ class CourseChatPipeline(
         Returns:
             str: The output with citations added
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         if lecture_content_storage.get("content"):
             base_url = dto.settings.artemis_base_url if dto.settings else ""
             output = self.citation_pipeline(
@@ -475,6 +486,7 @@ class CourseChatPipeline(
                 output,
                 InformationType.PARAGRAPHS,
                 variant=variant.id,
+                user_language=user_language,
                 base_url=base_url,
             )
         if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
@@ -488,6 +500,7 @@ class CourseChatPipeline(
                 output,
                 InformationType.FAQS,
                 variant=variant.id,
+                user_language=user_language,
                 base_url=base_url,
             )
 
@@ -512,12 +525,19 @@ class CourseChatPipeline(
         Returns:
             The generated suggestions or None if generation failed
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             if output:
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = dto.chat_history
                 suggestion_dto.last_message = output
-                suggestions = self.suggestion_pipeline(suggestion_dto)
+                suggestions = self.suggestion_pipeline(
+                    suggestion_dto, user_language=user_language
+                )
 
                 if self.suggestion_pipeline.tokens is not None:
                     self._track_tokens(state, self.suggestion_pipeline.tokens)

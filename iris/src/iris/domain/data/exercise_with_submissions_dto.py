@@ -8,9 +8,7 @@ from iris.domain.data.simple_submission_dto import SimpleSubmissionDTO
 
 
 class ExerciseType(str, Enum):
-    """Defines multiple exercise types for Iris.
-    Supports case-insensitive lookup and automatic conversion of hyphens to underscores.
-    """
+    """The type of an exercise (e.g., programming, quiz, text)."""
 
     PROGRAMMING = "PROGRAMMING"
     QUIZ = "QUIZ"
@@ -19,12 +17,11 @@ class ExerciseType(str, Enum):
     FILE_UPLOAD = "FILE_UPLOAD"
 
     @classmethod
-    def _missing_(cls, value):
-        """Allow case-insensitive lookup"""
+    def _missing_(cls, value: object):
         if isinstance(value, str):
-            value = value.upper().replace("-", "_")
+            upper_value = value.upper()
             for member in cls:
-                if member.value == value:
+                if member.value == upper_value:
                     return member
         return None
 
