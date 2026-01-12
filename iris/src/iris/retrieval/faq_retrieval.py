@@ -1,4 +1,3 @@
-import logging
 from typing import List
 
 from weaviate import WeaviateClient
@@ -6,6 +5,7 @@ from weaviate.collections.classes.filters import Filter
 
 from iris.tracing import observe
 
+from ..common.logging_config import get_logger
 from ..common.pipeline_enum import PipelineEnum
 from ..common.pyris_message import PyrisMessage
 from ..pipeline.prompts.faq_retrieval_prompts import (
@@ -18,7 +18,7 @@ from ..pipeline.prompts.lecture_retrieval_prompts import (
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
 from .basic_retrieval import BaseRetrieval, merge_retrieved_chunks
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FaqRetrieval(BaseRetrieval):

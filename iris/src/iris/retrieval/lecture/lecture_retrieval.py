@@ -1,5 +1,4 @@
 import concurrent.futures
-from asyncio.log import logger
 from enum import Enum
 from typing import List
 
@@ -11,6 +10,7 @@ from langchain_core.prompts import (
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -66,6 +66,8 @@ from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+
+logger = get_logger(__name__)
 
 
 class QueryRewriteMode(Enum):
@@ -481,7 +483,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
@@ -529,7 +531,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
@@ -579,7 +581,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from retirval pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
@@ -634,7 +636,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e

@@ -1,4 +1,3 @@
-import logging
 import os
 
 from langchain_core.output_parsers import StrOutputParser
@@ -8,12 +7,14 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
+from iris.common.logging_config import get_logger
+
 from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
 from ...tracing import observe
 from ..sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SummaryPipeline(SubPipeline):
@@ -68,5 +69,5 @@ class SummaryPipeline(SubPipeline):
             raise ValueError("Query must not be None")
         logger.info("Running summary pipeline...")
         response: str = self.pipeline.invoke({"text": query})
-        logger.info("Response from summary pipeline: %s...", response[:20])
+        logger.info("Summary pipeline completed | response_length=%d", len(response))
         return response

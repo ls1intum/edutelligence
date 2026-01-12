@@ -1,10 +1,10 @@
-from asyncio.log import logger
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -32,6 +32,8 @@ from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+
+logger = get_logger(__name__)
 
 
 def _add_last_four_messages_to_prompt(

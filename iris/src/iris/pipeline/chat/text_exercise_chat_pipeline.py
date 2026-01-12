@@ -1,4 +1,3 @@
-import logging
 import os
 from datetime import datetime
 from typing import Any, Callable, List, Optional
@@ -6,6 +5,7 @@ from typing import Any, Callable, List, Optional
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from iris.common.logging_config import get_logger
 from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
@@ -31,7 +31,7 @@ from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecut
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import datetime_to_string, format_custom_instructions
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TextExerciseChatPipeline(

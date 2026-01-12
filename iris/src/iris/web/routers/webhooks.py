@@ -1,11 +1,10 @@
-import traceback
-from asyncio.log import logger
 from multiprocessing import Process
 from threading import Semaphore, Thread
 
 from fastapi import APIRouter, Depends, status
 from sentry_sdk import capture_exception
 
+from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
@@ -27,6 +26,8 @@ from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.lecture_deletion_status_callback import (
     LecturesDeletionStatusCallback,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
@@ -65,8 +66,7 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         )
         pipeline()
     except Exception as e:
-        logger.error("Error while deleting lectures: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error while deleting lectures", exc_info=e)
 
 
 def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
@@ -87,8 +87,7 @@ def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
             pipeline()
 
         except Exception as e:
-            logger.error("Error Faq Ingestion pipeline: %s", e)
-            logger.error(traceback.format_exc())
+            logger.error("Error in FAQ ingestion pipeline", exc_info=e)
             capture_exception(e)
         finally:
             semaphore.release()
@@ -112,8 +111,7 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
             pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
 
         except Exception as e:
-            logger.error("Error Ingestion pipeline: %s", e)
-            logger.error(traceback.format_exc())
+            logger.error("Error in FAQ deletion pipeline", exc_info=e)
             capture_exception(e)
         finally:
             semaphore.release()

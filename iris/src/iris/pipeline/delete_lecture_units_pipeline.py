@@ -1,9 +1,9 @@
-from asyncio.log import logger
 from typing import List
 
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from iris.domain.variant.lecture_unit_deletion_variant import LectureUnitDeletionVariant
 from iris.pipeline import Pipeline
@@ -27,6 +27,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
 from iris.web.status.lecture_deletion_status_callback import (
     LecturesDeletionStatusCallback,
 )
+
+logger = get_logger(__name__)
 
 
 class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):

@@ -1,4 +1,3 @@
-import logging
 import os
 from typing import Dict, List, Optional
 
@@ -7,6 +6,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.tracing import observe
@@ -22,7 +22,7 @@ from ...llm.langchain import IrisLangchainChatModel
 from ...web.status.status_update import StatusCallback
 from ..sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FileSelectionDTO(BaseModel):

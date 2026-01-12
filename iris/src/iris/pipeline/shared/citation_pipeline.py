@@ -1,11 +1,11 @@
 import datetime
 import os
-from asyncio.log import logger
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -18,6 +18,8 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 from iris.vector_database.faq_schema import FaqSchema
+
+logger = get_logger(__name__)
 
 
 class InformationType(str, Enum):

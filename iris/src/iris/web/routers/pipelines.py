@@ -1,11 +1,10 @@
-import logging
-import traceback
 from threading import Thread
 from typing import List
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
 
+from iris.common.logging_config import get_logger, get_request_id, set_request_id
 from iris.dependencies import TokenValidator
 from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
@@ -59,14 +58,16 @@ from iris.web.status.status_update import (
 from iris.web.utils import validate_pipeline_variant
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def run_exercise_chat_pipeline_worker(
     dto: ExerciseChatPipelineExecutionDTO,
     variant_id: str,
-    event: str | None = None,
+    event: str | None,
+    request_id: str,
 ):
+    set_request_id(request_id)
     try:
         callback = ExerciseChatStatusCallback(
             run_id=dto.settings.authentication_token,
@@ -75,8 +76,7 @@ def run_exercise_chat_pipeline_worker(
         )
         pipeline = ExerciseChatAgentPipeline()
     except Exception as e:
-        logger.error("Error preparing exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error preparing exercise chat pipeline", exc_info=e)
         capture_exception(e)
         return
 
@@ -89,8 +89,7 @@ def run_exercise_chat_pipeline_worker(
 
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
     except Exception as e:
-        logger.error("Error running exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error running exercise chat pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
 
 
@@ -107,14 +106,16 @@ def run_exercise_chat_pipeline(
     ),
 ):
     variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
+    request_id = get_request_id()
     thread = Thread(
         target=run_exercise_chat_pipeline_worker,
-        args=(dto, variant, event),
+        args=(dto, variant, event, request_id),
     )
     thread.start()
 
 
-def run_course_chat_pipeline_worker(dto, variant_id, event):
+def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
+    set_request_id(request_id)
     try:
         callback = CourseChatStatusCallback(
             run_id=dto.settings.authentication_token,
@@ -128,16 +129,14 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
             raise ValueError(f"Unknown variant: {variant_id}")
         pipeline = CourseChatPipeline(event=event)
     except Exception as e:
-        logger.error("Error preparing exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error preparing course chat pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
         pipeline(dto=dto, callback=callback, variant=variant)
     except Exception as e:
-        logger.error("Error running exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error running course chat pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
 
 
@@ -154,12 +153,16 @@ def run_course_chat_pipeline(
     ),
 ):
     variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
-
-    thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_course_chat_pipeline_worker,
+        args=(dto, variant, event, request_id),
+    )
     thread.start()
 
 
-def run_text_exercise_chat_pipeline_worker(dto, variant_id):
+def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
+    set_request_id(request_id)
     try:
         callback = TextExerciseChatCallback(
             run_id=dto.settings.authentication_token,
@@ -173,20 +176,19 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
             raise ValueError(f"Unknown variant: {variant_id}")
         pipeline = TextExerciseChatPipeline()
     except Exception as e:
-        logger.error("Error preparing text exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error preparing text exercise chat pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
         pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
-        logger.error("Error running text exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error running text exercise chat pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
 
 
-def run_lecture_chat_pipeline_worker(dto, variant_id):
+def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
+    set_request_id(request_id)
     try:
         callback = LectureChatCallback(
             run_id=dto.settings.authentication_token,
@@ -200,16 +202,14 @@ def run_lecture_chat_pipeline_worker(dto, variant_id):
             raise ValueError(f"Unknown variant: {variant_id}")
         pipeline = LectureChatPipeline()
     except Exception as e:
-        logger.error("Error preparing lecture chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error preparing lecture chat pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
         pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
-        logger.error("Error running lecture chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error running lecture chat pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
 
 
@@ -221,8 +221,11 @@ def run_lecture_chat_pipeline_worker(dto, variant_id):
 @observe(name="POST /text-exercise-chat")
 def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, TextExerciseChatPipeline)
-
-    thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_text_exercise_chat_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
     thread.start()
 
 
@@ -234,14 +237,18 @@ def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
 @observe(name="POST /lecture-chat")
 def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
-
-    thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_lecture_chat_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
     thread.start()
 
 
 def run_competency_extraction_pipeline_worker(
-    dto: CompetencyExtractionPipelineExecutionDTO, _variant: str
+    dto: CompetencyExtractionPipelineExecutionDTO, _variant: str, request_id: str
 ):  # pylint: disable=invalid-name
+    set_request_id(request_id)
     try:
         callback = CompetencyExtractionCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -250,16 +257,14 @@ def run_competency_extraction_pipeline_worker(
         )
         pipeline = CompetencyExtractionPipeline(callback=callback)
     except Exception as e:
-        logger.error("Error preparing competency extraction pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error preparing competency extraction pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error("Error running competency extraction pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error running competency extraction pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
 
 
@@ -273,14 +278,18 @@ def run_competency_extraction_pipeline(dto: CompetencyExtractionPipelineExecutio
     variant = validate_pipeline_variant(
         dto.execution.settings, CompetencyExtractionPipeline
     )
-
+    request_id = get_request_id()
     thread = Thread(
-        target=run_competency_extraction_pipeline_worker, args=(dto, variant)
+        target=run_competency_extraction_pipeline_worker,
+        args=(dto, variant, request_id),
     )
     thread.start()
 
 
-def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: str):
+def run_rewriting_pipeline_worker(
+    dto: RewritingPipelineExecutionDTO, variant: str, request_id: str
+):
+    set_request_id(request_id)
     try:
         callback = RewritingCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -293,16 +302,14 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
-        logger.error("Error preparing rewriting pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error preparing rewriting pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error("Error running rewriting extraction pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error running rewriting pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
 
 
@@ -316,15 +323,19 @@ def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
     variant = validate_pipeline_variant(
         dto.execution.settings, RewritingPipeline
     ).lower()
-    logger.info("Rewriting pipeline started with variant: %s and dlo: %s", variant, dto)
-
-    thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
+    logger.info("Rewriting pipeline started | variant=%s", variant)
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_rewriting_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
     thread.start()
 
 
 def run_inconsistency_check_pipeline_worker(
-    dto: InconsistencyCheckPipelineExecutionDTO, _variant: str
+    dto: InconsistencyCheckPipelineExecutionDTO, _variant: str, request_id: str
 ):  # pylint: disable=invalid-name
+    set_request_id(request_id)
     try:
         callback = InconsistencyCheckCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -333,13 +344,14 @@ def run_inconsistency_check_pipeline_worker(
         )
         pipeline = InconsistencyCheckPipeline(callback=callback)
     except Exception as e:
-        logger.error("Error preparing inconsistency check pipeline: %s", e)
+        logger.error("Error preparing inconsistency check pipeline", exc_info=e)
+        capture_exception(e)
+        return
 
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error("Error running inconsistency check pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error("Error running inconsistency check pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
 
 
@@ -353,15 +365,19 @@ def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO
     variant = validate_pipeline_variant(
         dto.execution.settings, InconsistencyCheckPipeline
     )
-
-    thread = Thread(target=run_inconsistency_check_pipeline_worker, args=(dto, variant))
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_inconsistency_check_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
     thread.start()
 
 
 def run_communication_tutor_suggestions_pipeline_worker(
-    dto: CommunicationTutorSuggestionPipelineExecutionDTO, variant_id
+    dto: CommunicationTutorSuggestionPipelineExecutionDTO, variant_id, request_id: str
 ):  # pylint: disable=invalid-name
-    logger.info("Communication tutor suggestions pipeline started with dlo: %s", dto)
+    set_request_id(request_id)
+    logger.info("Communication tutor suggestions pipeline started")
     try:
         callback = TutorSuggestionCallback(
             run_id=dto.settings.authentication_token,
@@ -375,16 +391,18 @@ def run_communication_tutor_suggestions_pipeline_worker(
             raise ValueError(f"Unknown variant: {variant_id}")
         pipeline = TutorSuggestionPipeline()
     except Exception as e:
-        logger.error("Error preparing communication tutor suggestions pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error(
+            "Error preparing communication tutor suggestions pipeline", exc_info=e
+        )
         capture_exception(e)
         return
 
     try:
         pipeline(dto=dto, callback=callback, variant=variant)
     except Exception as e:
-        logger.error("Error running communication tutor suggestions pipeline: %s", e)
-        logger.error(traceback.format_exc())
+        logger.error(
+            "Error running communication tutor suggestions pipeline", exc_info=e
+        )
         callback.error("Fatal error.", exception=e)
 
 
@@ -398,9 +416,10 @@ def run_communication_tutor_suggestions_pipeline(
     dto: CommunicationTutorSuggestionPipelineExecutionDTO,
 ):
     variant = validate_pipeline_variant(dto.settings, TutorSuggestionPipeline)
-
+    request_id = get_request_id()
     thread = Thread(
-        target=run_communication_tutor_suggestions_pipeline_worker, args=(dto, variant)
+        target=run_communication_tutor_suggestions_pipeline_worker,
+        args=(dto, variant, request_id),
     )
     thread.start()
 

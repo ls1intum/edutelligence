@@ -1,12 +1,11 @@
-import logging
 import os
-import traceback
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
@@ -32,7 +31,7 @@ from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecut
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import datetime_to_string, format_custom_instructions
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LectureChatPipeline(
@@ -397,7 +396,6 @@ class LectureChatPipeline(
                 "An error occurred while running the lecture chat pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             callback.error(
                 "An error occurred while running the lecture chat pipeline.",
                 tokens=[],

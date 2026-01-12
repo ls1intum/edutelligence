@@ -1,9 +1,8 @@
-from asyncio.log import logger
-
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitRetrievalDTO,
     LectureUnitSegmentRetrievalDTO,
@@ -28,6 +27,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,
 )
+
+logger = get_logger(__name__)
 
 
 class LectureUnitSegmentRetrieval(SubPipeline):

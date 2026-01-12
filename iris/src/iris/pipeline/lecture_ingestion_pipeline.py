@@ -2,8 +2,6 @@ import base64
 import os
 import tempfile
 import threading
-import traceback
-from asyncio.log import logger
 from typing import List, Optional
 
 import fitz
@@ -14,6 +12,7 @@ from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
@@ -39,6 +38,8 @@ from ..vector_database.lecture_unit_page_chunk_schema import (
 )
 from ..web.status import ingestion_status_callback
 from . import Pipeline
+
+logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
 
@@ -194,8 +195,7 @@ class LectureUnitPageIngestionPipeline(
             )
             return self.course_language, self.tokens
         except Exception as e:
-            logger.error("Error updating lecture unit: %s", e)
-            traceback.print_exc()
+            logger.error("Error updating lecture unit", exc_info=e)
             self.callback.error(
                 f"Failed to ingest lectures into the database: {e}",
                 exception=e,
@@ -244,8 +244,7 @@ class LectureUnitPageIngestionPipeline(
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
-                    logger.error("Error updating lecture unit: %s", e)
-                    traceback.print_exc()
+                    logger.error("Error updating lecture unit", exc_info=e)
                     self.callback.error(
                         f"Failed to ingest lectures into the database: {e}",
                         exception=e,
