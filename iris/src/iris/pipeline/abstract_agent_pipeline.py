@@ -1,5 +1,4 @@
-import logging
-import traceback
+import time
 from abc import ABC, abstractmethod
 from threading import Thread
 from typing import Any, Callable, Generic, List, Optional, TypeVar
@@ -8,6 +7,7 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from memiris.domain.memory import Memory
 
+from iris.common.logging_config import get_logger
 from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
@@ -21,7 +21,7 @@ from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import StatusCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DTO = TypeVar("DTO")
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
@@ -279,7 +279,30 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Calls on_agent_step for each step to allow subclasses to track tokens or progress.
         """
         final_output: Optional[str] = None
+        step_count = 0
         for step in agent_executor.iter(params):
+            step_count += 1
+
+            # Log tool calls from intermediate steps
+            intermediate_steps = step.get("intermediate_steps", [])
+            for action, result in intermediate_steps:
+                tool_name = getattr(action, "tool", "unknown")
+                # Log tool call without the full input/output (just key info)
+                result_preview = (
+                    str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
+                )
+                logger.info(
+                    "Tool call | step=%d tool=%s | result_length=%d",
+                    step_count,
+                    tool_name,
+                    len(str(result)),
+                )
+                logger.debug(
+                    "Tool result preview | tool=%s | result=%s",
+                    tool_name,
+                    result_preview,
+                )
+
             # Track LLM tokens
             if hasattr(state, "llm") and state.llm and hasattr(state.llm, "tokens"):
                 state.tokens.append(state.llm.tokens)
@@ -291,6 +314,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 logger.exception("Exception in on_agent_step", exc_info=exc)
             if step.get("output") is not None:
                 final_output = step["output"]
+                logger.info(
+                    "Agent finished | steps=%d output_length=%d",
+                    step_count,
+                    len(final_output) if final_output else 0,
+                )
         return final_output
 
     def _create_session_title(
@@ -318,9 +346,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
+        # Extract user language (using getattr for DTOs that may not have user attr)
+        user_language = "en"
+        user = getattr(state.dto, "user", None)
+        if user and getattr(user, "lang_key", None):
+            user_language = user.lang_key
+
         try:
             if output:
-                session_title = self.session_title_pipeline(first_user_msg, output)
+                session_title = self.session_title_pipeline(
+                    first_user_msg, output, user_language=user_language
+                )
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)
                 if session_title is None:
@@ -332,13 +368,21 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 "An error occurred while running the session title generation pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return None
 
     def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback):
         """
         Call the agent pipeline with the provided arguments.
         """
+        start_time = time.perf_counter()
+        pipeline_name = self.__class__.__name__
+
+        logger.info(
+            "Pipeline started | pipeline=%s variant=%s",
+            pipeline_name,
+            variant.id if hasattr(variant, "id") else "default",
+        )
+
         # 0. Initialize the execution state
         state = AgentPipelineExecutionState[DTO, VARIANT]()
         state.dto = dto
@@ -405,3 +449,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
         else:
             state.callback.done("No memory creation thread started.")
+
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        logger.info(
+            "Pipeline completed | pipeline=%s | duration=%dms tools_used=%d",
+            pipeline_name,
+            duration_ms,
+            len(state.tools),
+        )
