@@ -1,4 +1,3 @@
-from asyncio.log import logger
 from functools import reduce
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +7,7 @@ from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from iris.domain.data.metrics.transcription_dto import (
@@ -31,6 +31,8 @@ from iris.vector_database.lecture_transcription_schema import (
     init_lecture_transcription_schema,
 )
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
+
+logger = get_logger(__name__)
 
 CHUNK_SEPARATOR_CHAR = "\31"
 
