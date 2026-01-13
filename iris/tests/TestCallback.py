@@ -31,7 +31,7 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
         )
 
         # Captured outputs
-        self.final_result: Optional[str] = None
+        self.final_result: Optional[str] = ""
         self.suggestions: Optional[List[str]] = None
         self.tokens: Optional[List[TokenUsageDTO]] = None
 
@@ -73,9 +73,6 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
             **kwargs,
     ):
 
-        print(final_result)
-        print("\n\n\nHallo done\n\n\n")
-
         # Call parent to keep pipeline logic intact
         super().done(
             message=message,
@@ -85,7 +82,7 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
             **kwargs,
         )
 
-        self.final_result = final_result
+        self.final_result += (final_result or "") # Append new result of sub-pipeline instead of replacing
         self.suggestions = suggestions
         self.tokens = tokens
         self.done_messages.append(message)

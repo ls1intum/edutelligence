@@ -2,6 +2,7 @@ import unittest
 import re
 from collections import Counter
 
+from iris.domain.data.user_dto import UserDTO
 from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 
 from iris.domain import ExerciseChatPipelineExecutionDTO
@@ -11,6 +12,7 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
 from .TestCallback import TestExerciseChatCallback
+from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
 
 
 # Helper function to extract keywords from code input, that are less often used in exercise template
@@ -66,7 +68,8 @@ class TestAskUser(unittest.TestCase):
             exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
             course=CourseDTO(id=1,name="Intro to Programming", description=None),
             eventPayload=PyrisEventDTO(eventType="", event=""),
-            customInstructions=None, settings=None, user=None)
+            customInstructions=None, settings=None,
+            user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False))
 
         cls.variant = ExerciseChatVariant(
             variant_id="exercise_chat_v1", name="Exercise Chat",
@@ -75,16 +78,16 @@ class TestAskUser(unittest.TestCase):
 
         cls.callback = TestExerciseChatCallback()
 
-        from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
-
         cls.pipeline = ExerciseChatAgentPipeline()
         cls.pipeline(cls.dto, cls.variant, cls.callback, None)
 
         cls.question = cls.callback.final_result
 
+        print(f"Pipeline result:\n{cls.question}")
+
+
     def test_question_is_thematically_relevant(self):
-        assert(True)
-        #assert (any(k in self.question.lower() for k in self.keywords) or any(k in self.question.lower() for k in self.task))
+        assert (any(k in self.question.lower() for k in self.keywords) or any(k in self.question.lower() for k in self.task))
 
 
     def test_question_not_too_easy(self):

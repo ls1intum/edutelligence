@@ -48,29 +48,27 @@ logger.setLevel(logging.INFO)
 
 
 class PromptUserAgentPipeline(
-AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, ExerciseChatVariant]
+    AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, PromptUserVariant]
 ):
     """
-    Exercise chat agent pipeline that answers exercises related questions from students.
+    Exercise chat agent pipeline that assesses the authenticity of user submissions by generating questions and assessing the answers by the user.
     """
 
-    suggestion_pipeline: InteractionSuggestionPipeline
-    code_feedback_pipeline: CodeFeedbackPipeline
-    citation_pipeline: CitationPipeline
+    ask_user_pipeline: AskUserPipeline
+    assess_user_answer_pipeline: AssessUserAnswerPipeline
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
 
     def __init__(self):
         """
-        Initialize the exercise chat agent pipeline.
+        Initialize the prompt user agent pipeline.
         """
-        super().__init__(implementation_id="exercise_chat_pipeline")
+        super().__init__(implementation_id="prompt_user_chat_pipeline")
 
         # Create the pipelines
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.code_feedback_pipeline = CodeFeedbackPipeline()
-        self.citation_pipeline = CitationPipeline()
+        self.ask_user_pipeline = AskUserPipeline()
+        self.assess_user_answer_pipeline = AssessUserAnswerPipeline()
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -116,37 +114,6 @@ AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, ExerciseChatVariant]
                 citation_model="gpt-4.1-mini",
             ),
         ]
-
-    def is_memiris_memory_creation_enabled(
-            self,
-            state: AgentPipelineExecutionState[
-                ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-            ],
-    ) -> bool:
-        """
-        Return True if background memory creation should be enabled for this run.
-
-        Args:
-            state: The current pipeline execution state.
-
-        Returns:
-            True if memory creation should be enabled, False otherwise.
-        """
-        return False
-
-    def get_memiris_tenant(self, dto: ExerciseChatPipelineExecutionDTO) -> str:
-        """
-        Return the Memiris tenant identifier for the current user.
-
-        Args:
-            dto: The execution DTO containing user information.
-
-        Returns:
-            The tenant identifier string.
-        """
-        if not dto.user:
-            raise ValueError("User is required for memiris tenant")
-        return get_tenant_for_user(dto.user.id)
 
     def get_tools(
             self,
