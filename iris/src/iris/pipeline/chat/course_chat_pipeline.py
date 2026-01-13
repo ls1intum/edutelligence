@@ -550,39 +550,6 @@ class CourseChatPipeline(
             )
             return None
 
-    # def _generate_session_title(
-    #     self,
-    #     state: AgentPipelineExecutionState[
-    #         CourseChatPipelineExecutionDTO, CourseChatVariant
-    #     ],
-    #     output: str,
-    #     dto: CourseChatPipelineExecutionDTO,
-    # ) -> Optional[str]:
-    #     """
-    #     Generate a session title from the latest user prompt and the model output.
-    #
-    #     Args:
-    #         state: The current pipeline execution state
-    #         output: The agent's output
-    #         dto: The pipeline execution DTO
-    #
-    #     Returns:
-    #         The generated session title or None if not applicable.
-    #     """
-    #     # Course chat may start with:
-    #     # - an Iris greeting (dto.chat_history == 0)
-    #     # - the user's first message (dto.chat_history == 1)
-    #     if self.should_generate_session_title(state, dto.session_title):
-    #         latest_user_msg = ""
-    #         # Iris greeting message: dto.chat_history == 0
-    #         if len(dto.chat_history) != 0:
-    #             latest_user_msg = (
-    #                 dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
-    #             )
-    #         return super()._create_session_title(state, output, latest_user_msg)
-    #
-    #     return None
-
     def _generate_session_title(
         self,
         state: AgentPipelineExecutionState[
