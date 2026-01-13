@@ -43,7 +43,6 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
     with semaphore:
         lecture_ingestion_update_pipeline = LectureIngestionUpdatePipeline(dto)
         lecture_ingestion_update_pipeline()
-        semaphore.release()
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
