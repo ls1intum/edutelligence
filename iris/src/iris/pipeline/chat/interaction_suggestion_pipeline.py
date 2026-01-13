@@ -1,5 +1,3 @@
-import logging
-import traceback
 from typing import List
 
 from langchain_core.messages import AIMessage
@@ -11,6 +9,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic.v1 import BaseModel, Field
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
@@ -39,7 +38,7 @@ from ..prompts.iris_interaction_suggestion_prompts import (
 )
 from ..sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class Questions(BaseModel):
@@ -187,5 +186,4 @@ class InteractionSuggestionPipeline(SubPipeline):
                 "An error occurred while running the interaction suggestion pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return []

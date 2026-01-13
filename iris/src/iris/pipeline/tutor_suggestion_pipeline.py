@@ -1,7 +1,5 @@
 import json
-import logging
 import os
-import traceback
 from datetime import datetime
 from typing import Any, Callable, List, cast
 
@@ -9,6 +7,7 @@ import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.common.pyris_message import IrisMessageRole
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -39,7 +38,7 @@ from iris.tools import (
 )
 from iris.web.status.status_update import TutorSuggestionCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TutorSuggestionPipeline(
@@ -202,7 +201,6 @@ class TutorSuggestionPipeline(
             "regeneration_requested": regeneration_requested,
         }
         complete_system_prompt = self.system_prompt_template.render(template_context)
-        logger.info(complete_system_prompt)
         return complete_system_prompt
 
     def get_agent_params(
@@ -374,7 +372,6 @@ class TutorSuggestionPipeline(
                 "An error occurred while running the tutor suggestion pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             callback.error(
                 "An error occurred while running the tutor suggestion pipeline.",
                 tokens=self.tokens,

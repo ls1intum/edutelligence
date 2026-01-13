@@ -1,7 +1,6 @@
 import base64
 import inspect
 import json
-import logging
 from datetime import datetime
 from typing import (
     Any,
@@ -21,6 +20,7 @@ from ollama import Client, Message
 from pydantic import BaseModel, Field
 from requests.auth import HTTPBasicAuth
 
+from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisMessage
 from ...common.token_usage_dto import TokenUsageDTO
@@ -30,7 +30,7 @@ from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel, CompletionModel, EmbeddingModel
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def convert_to_ollama_images(base64_images: list[str]) -> list[bytes] | None:
