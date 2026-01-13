@@ -16,4 +16,5 @@ from iris.domain.event.pyris_event_dto import PyrisEventDTO
 class PromptUserChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
     submission: ProgrammingSubmissionDTO
     exercise: ProgrammingExerciseDTO
+    course: CourseDTO
     event_payload: Optional[PyrisEventDTO[Any]] = Field(None, alias="eventPayload")

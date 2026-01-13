@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from ..prompts.ask_user_prompt import generate_user_question_prompt
+from ..prompts.assess_user_answer_prompt import generate_user_question_prompt
 
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO

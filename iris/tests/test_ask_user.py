@@ -3,6 +3,7 @@ import re
 from collections import Counter
 
 from iris.domain.data.user_dto import UserDTO
+from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
 from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 
 from iris.domain import ExerciseChatPipelineExecutionDTO
@@ -12,7 +13,6 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
 from .TestCallback import TestExerciseChatCallback
-from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
 
 
 # Helper function to extract keywords from code input, that are less often used in exercise template
@@ -78,7 +78,7 @@ class TestAskUser(unittest.TestCase):
 
         cls.callback = TestExerciseChatCallback()
 
-        cls.pipeline = ExerciseChatAgentPipeline()
+        cls.pipeline = PromptUserAgentPipeline()
         cls.pipeline(cls.dto, cls.variant, cls.callback, None)
 
         cls.question = cls.callback.final_result
