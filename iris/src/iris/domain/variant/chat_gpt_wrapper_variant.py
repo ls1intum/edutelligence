@@ -9,14 +9,16 @@ class ChatGPTWrapperVariant(AbstractAgentVariant):
         variant_id: str,
         name: str,
         description: str,
-        agent_model: str,
+        cloud_agent_model: str,
+        local_agent_model: str,
     ):
         super().__init__(
             variant_id=variant_id,
             name=name,
             description=description,
-            agent_model=agent_model,
+            cloud_agent_model=cloud_agent_model,
+            local_agent_model=local_agent_model,
         )
 
     def required_models(self) -> set[str]:
-        return {self.agent_model}
+        return {self.cloud_agent_model, self.local_agent_model}

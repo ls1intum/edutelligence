@@ -9,7 +9,8 @@ class LectureIngestionUpdateVariant(AbstractVariant):
         variant_id: str,
         name: str,
         description: str,
-        chat_model: str,
+        cloud_chat_model: str,
+        local_chat_model: str,
         embedding_model: str,
     ):
         super().__init__(
@@ -17,8 +18,9 @@ class LectureIngestionUpdateVariant(AbstractVariant):
             name=name,
             description=description,
         )
-        self.chat_model = chat_model
+        self.cloud_chat_model = cloud_chat_model
+        self.local_chat_model = local_chat_model
         self.embedding_model = embedding_model
 
     def required_models(self) -> set[str]:
-        return {self.chat_model, self.embedding_model}
+        return {self.cloud_chat_model, self.local_chat_model, self.embedding_model}

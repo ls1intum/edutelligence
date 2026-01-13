@@ -48,10 +48,10 @@ class LectureChatPipeline(
     jinja_env: Environment
     system_prompt_template: Any
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="lecture_chat_pipeline")
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.citation_pipeline = CitationPipeline()
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
+        self.citation_pipeline = CitationPipeline(local=local)
         self.lecture_retriever = None
         self.faq_retriever = None
         template_dir = os.path.join(
@@ -408,16 +408,18 @@ class LectureChatPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
-                citation_model="gpt-4.1-nano",
+                cloud_agent_model="gpt-4.1-mini",
+                cloud_citation_model="gpt-4.1-nano",
+                local_agent_model="llama3.3:latest",
+                local_citation_model="llama3.3:latest",
             ),
             LectureChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="llama3.3:latest",
             ),
         ]
-
-    # method get_agent_params from course chat is not implemented here since it is the same as in the superclass
