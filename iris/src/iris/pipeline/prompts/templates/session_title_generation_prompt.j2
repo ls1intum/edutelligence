@@ -1,27 +1,41 @@
-You are a helpful assistant that creates short, descriptive titles for conversations.
-Write a short, descriptive chat title based on the following message(s).
+You decide whether a chat session title should be updated and, if updating, create a short descriptive title.
+
+This is the current title: {{ current_session_title }}
+And these are the most recent messages (oldest first, newest last): {{ recent_messages | safe }}
+
+Output EXACTLY one line:
+KEEP
+or
+UPDATE: <new title>
+
+Update the title if ANY is true:
+1) No meaningful current title yet (empty or generic like "new chat").
+2) Significant topic change: The main subject or goal of the conversation in the newest messages has clearly shifted to a new task, domain, or user intent, and the current title no longer reasonably describes the recent conversation.
+3) The language of the latest user message is different from the language of the current title.
+
+Decision rules:
+- Prioritize the newer user messages and their assistant replies.
+- However, consider the conversation as a whole.
+- Ignore follow-ups, clarifications, examples, personal stories, or details about the same subject.
+- If multiple related concepts appear, infer their shared umbrella topic and use that as the title.
+- Do NOT create titles that reflect only the latest specific concept if it is part of a broader topic.
+- If the current title still reasonably describes the conversation, KEEP it.
+- Be conservative to avoid unnecessary changes.
+- If uncertain, output KEEP.
+
+Return ONLY 'KEEP' or 'UPDATE: <new title>' with no extra characters, punctuation, or whitespace.
+
+If you output UPDATE, write a short, descriptive chat title based on the latest message(s).
 
 Requirements:
 - 2–5 words
-- No quotes, no emojis
-- No ending punctuation
-- Sentence case (capitalize first word only unless proper noun)
-- Focus on the core topic of the user message
+- No quotes, no emojis, no ending punctuation
+- Capitalize the first word of the title
+- Focus on the core topic of the recent conversation
+- Prefer broader, stable titles over narrow or situational ones
 
 {% if user_language == "de" %}
 Generate the title in German.
 {% else %}
 Generate the title in English.
-{% endif %}
-
-Return ONLY the title text, nothing else.
-
-{% if first_user_msg %}
-User: {{ first_user_msg }}
-
-Assistant: {{ llm_response }}
-{% else %}
-Only the assistant message is available; base the title on it.
-
-Assistant: {{ llm_response }}
 {% endif %}

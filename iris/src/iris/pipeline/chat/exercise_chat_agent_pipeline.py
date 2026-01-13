@@ -549,12 +549,7 @@ class ExerciseChatAgentPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if self.should_generate_session_title(state, dto.session_title):
-            latest_user_msg = (
-                dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
-            )
-            return super()._create_session_title(state, output, latest_user_msg)
-        return None
+        return self.update_session_title(state, output, dto.session_title)
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(

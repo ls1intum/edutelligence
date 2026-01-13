@@ -322,31 +322,19 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 )
         return final_output
 
-    def should_generate_session_title(
+    def _collect_recent_messages(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
-        session_title: Optional[str],
-    ) -> bool:
+        output: str,
+    ) -> list[str]:
         """
-        Determine if a session title should be generated.
+        Collect the most recent messages from the chat history.
 
         Args:
             state: The current pipeline execution state
-            session_title: The current session title
         Returns:
-            bool: True if a new session title should be generated
+            list[str]: The most recent messages
         """
-        title = (session_title or "").strip().lower()
-        # Create a first title
-        if not title or title in DEFAULT_SESSION_TITLE_ALIASES:
-            return True
-        # Check if the relevance pipeline is available
-        if not hasattr(self, "session_title_relevance_pipeline"):
-            logger.warning(
-                "session_title_relevance_pipeline not available, skipping relevance check"
-            )
-            return False
-        # Check for title relevance
         recent_messages: list[str] = []
         for msg in state.message_history[
             -self.get_history_limit(state) :  # noqa: E203
@@ -354,27 +342,61 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             if msg.contents and isinstance(msg.contents[0], TextMessageContentDTO):
                 prefix = "User" if msg.sender == IrisMessageRole.USER else "Assistant"
                 recent_messages.append(f"{prefix}: {msg.contents[0].text_content}")
-        should_update = self.session_title_relevance_pipeline(title, recent_messages)
-        self._track_tokens(
-            state, getattr(self.session_title_relevance_pipeline, "tokens", None)
+        recent_messages.append(f"Assistant: {output}")
+        return recent_messages
+
+    def update_session_title(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+        output: str,
+        current_session_title: Optional[str],
+    ) -> Optional[str]:
+        """
+        Updates session title if needed.
+
+        Args:
+            state: The current pipeline execution state
+            output: The agent's output
+            current_session_title: The current session title
+        Returns:
+            Optional[str]: Updated session title or None if not applicable
+        """
+        session_title = (current_session_title or "").strip()
+        print(f"Current session title: {session_title}")
+        recent_messages = self._collect_recent_messages(state, output)
+        print(f"Recent messages: {recent_messages}")
+
+        llm_out = self._create_session_title(
+            state, session_title, recent_messages, output
         )
-        return str(should_update).strip().upper() == "UPDATE"
+        print(f"LLM output: {llm_out}")
+
+        text = str(llm_out).strip()
+
+        if text == "KEEP":
+            return None
+        if text.startswith("UPDATE: "):
+            new_title = text[len("UPDATE: ") :].strip()  # noqa: E203
+            return new_title
+        return None
 
     def _create_session_title(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
+        current_session_title: str,
+        recent_messages: list[str],
         output: str,
-        first_user_msg: str,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the conversation history.
 
         This is a common implementation used across different chat pipelines.
 
         Args:
             state: The current pipeline execution state
+            current_session_title: The current session title (might be empty)
+            recent_messages: The most recent messages from the chat history
             output: The agent's output
-            first_user_msg: The first user message text
 
         Returns:
             The generated session title or None if not applicable
@@ -394,7 +416,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         try:
             if output:
                 session_title = self.session_title_pipeline(
-                    first_user_msg, output, user_language=user_language
+                    current_session_title, recent_messages, user_language=user_language
                 )
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)
