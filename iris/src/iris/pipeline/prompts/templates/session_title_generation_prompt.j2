@@ -7,7 +7,12 @@ Requirements:
 - No ending punctuation
 - Sentence case (capitalize first word only unless proper noun)
 - Focus on the core topic of the user message
-- The title MUST be in the same language as the user message and assistant reply
+
+{% if user_language == "de" %}
+Generate the title in German.
+{% else %}
+Generate the title in English.
+{% endif %}
 
 Return ONLY the title text, nothing else.
 

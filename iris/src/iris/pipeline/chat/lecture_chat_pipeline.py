@@ -1,6 +1,4 @@
-import logging
 import os
-import traceback
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
@@ -8,6 +6,7 @@ import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
@@ -32,7 +31,7 @@ from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecut
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import datetime_to_string, format_custom_instructions
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LectureChatPipeline(
@@ -182,6 +181,11 @@ class LectureChatPipeline(
         Returns:
             str: The system message content
         """
+        # Extract user language with fallback
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
         allow_memiris_tool = bool(
@@ -196,6 +200,7 @@ class LectureChatPipeline(
 
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
             "lecture_name": state.dto.lecture.title if state.dto.lecture else None,
             "course_name": state.dto.course.name if state.dto.course else None,
             "allow_lecture_tool": allow_lecture_tool,
@@ -316,6 +321,11 @@ class LectureChatPipeline(
         Returns:
             str: The output with citations added
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         if lecture_content_storage.get("content"):
             base_url = dto.settings.artemis_base_url if dto.settings else ""
             output = self.citation_pipeline(
@@ -323,6 +333,7 @@ class LectureChatPipeline(
                 output,
                 InformationType.PARAGRAPHS,
                 variant=variant.id,
+                user_language=user_language,
                 base_url=base_url,
             )
         if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
@@ -336,6 +347,7 @@ class LectureChatPipeline(
                 output,
                 InformationType.FAQS,
                 variant=variant.id,
+                user_language=user_language,
                 base_url=base_url,
             )
 
@@ -384,7 +396,6 @@ class LectureChatPipeline(
                 "An error occurred while running the lecture chat pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             callback.error(
                 "An error occurred while running the lecture chat pipeline.",
                 tokens=[],

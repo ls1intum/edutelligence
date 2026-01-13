@@ -1,6 +1,4 @@
-import logging
 import os
-import traceback
 from typing import Optional
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -9,13 +7,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SessionTitleGenerationPipeline(SubPipeline):
@@ -58,11 +57,16 @@ class SessionTitleGenerationPipeline(SubPipeline):
 
     @traceable(name="Session Title Generation Pipeline")
     def __call__(
-        self, first_user_msg: str, llm_response: str, **kwargs
+        self,
+        first_user_msg: str,
+        llm_response: str,
+        user_language: str = "en",
+        **kwargs,
     ) -> Optional[str]:
         prompt_text = self.prompt_template.render(
             first_user_msg=first_user_msg,
             llm_response=llm_response,
+            user_language=user_language,
         )
         prompt = ChatPromptTemplate.from_messages([("system", prompt_text)])
         try:
@@ -76,5 +80,4 @@ class SessionTitleGenerationPipeline(SubPipeline):
                 "An error occurred while running the session title generation pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return None

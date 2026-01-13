@@ -1,4 +1,3 @@
-import logging
 from typing import List, Optional
 
 from langchain.output_parsers import PydanticOutputParser
@@ -6,6 +5,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain import CompetencyExtractionPipelineExecutionDTO
@@ -22,7 +22,7 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
 from iris.web.status.status_update import CompetencyExtractionCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
