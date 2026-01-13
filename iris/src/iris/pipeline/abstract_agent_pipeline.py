@@ -362,14 +362,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             Optional[str]: Updated session title or None if not applicable
         """
         session_title = (current_session_title or "").strip()
-        print(f"Current session title: {session_title}")
         recent_messages = self._collect_recent_messages(state, output)
-        print(f"Recent messages: {recent_messages}")
-
         llm_out = self._create_session_title(
             state, session_title, recent_messages, output
         )
-        print(f"LLM output: {llm_out}")
 
         text = str(llm_out).strip()
 

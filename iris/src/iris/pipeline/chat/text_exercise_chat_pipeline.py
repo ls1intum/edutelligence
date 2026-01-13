@@ -28,7 +28,6 @@ from ...tools import (
 )
 from ...web.status.status_update import TextExerciseChatCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
-from ..session_title_relevance_pipeline import SessionTitleRelevancePipeline
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import datetime_to_string, format_custom_instructions
 
@@ -44,7 +43,6 @@ class TextExerciseChatPipeline(
     """
 
     session_title_pipeline: SessionTitleGenerationPipeline
-    session_title_relevance_pipeline: SessionTitleRelevancePipeline
     citation_pipeline: CitationPipeline
     jinja_env: Environment
     system_prompt_template: Any
@@ -58,7 +56,6 @@ class TextExerciseChatPipeline(
         # Initialize pipelines
         self.citation_pipeline = CitationPipeline()
         self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.session_title_relevance_pipeline = SessionTitleRelevancePipeline()
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(

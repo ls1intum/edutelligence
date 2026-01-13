@@ -41,7 +41,6 @@ from ..abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
-from ..session_title_relevance_pipeline import SessionTitleRelevancePipeline
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     datetime_to_string,
@@ -62,7 +61,6 @@ class CourseChatPipeline(
     """
 
     session_title_pipeline: SessionTitleGenerationPipeline
-    session_title_relevance_pipeline: SessionTitleRelevancePipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     citation_pipeline: CitationPipeline
     lecture_retriever: Optional[LectureRetrieval]
@@ -89,7 +87,6 @@ class CourseChatPipeline(
         self.lecture_retriever = None
         self.faq_retriever = None
         self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.session_title_relevance_pipeline = SessionTitleRelevancePipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
 

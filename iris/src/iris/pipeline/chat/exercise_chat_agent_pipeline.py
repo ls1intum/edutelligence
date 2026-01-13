@@ -42,7 +42,6 @@ from ...tools import (
 )
 from ...web.status.status_update import ExerciseChatStatusCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
-from ..session_title_relevance_pipeline import SessionTitleRelevancePipeline
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
@@ -59,7 +58,6 @@ class ExerciseChatAgentPipeline(
     """
 
     session_title_pipeline: SessionTitleGenerationPipeline
-    session_title_relevance_pipeline: SessionTitleRelevancePipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     code_feedback_pipeline: CodeFeedbackPipeline
     citation_pipeline: CitationPipeline
@@ -75,7 +73,6 @@ class ExerciseChatAgentPipeline(
 
         # Create the pipelines
         self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.session_title_relevance_pipeline = SessionTitleRelevancePipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.code_feedback_pipeline = CodeFeedbackPipeline()
         self.citation_pipeline = CitationPipeline()
