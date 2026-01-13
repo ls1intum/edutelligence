@@ -6,6 +6,7 @@ from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
 )
+from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.web.routers.health.Pipelines.features import Features
 from iris.web.routers.pipelines import (
     CompetencyExtractionPipeline,
@@ -25,6 +26,7 @@ PipelineType = Type[
     | CompetencyExtractionPipeline
     | InconsistencyCheckPipeline
     | TutorSuggestionPipeline
+    | RewritingPipeline
     | LectureIngestionUpdatePipeline
     | FaqIngestionPipeline
 ]
@@ -37,6 +39,7 @@ PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
     Features.COMPETENCY_GENERATION: CompetencyExtractionPipeline,
     Features.INCONSISTENCY_CHECK: InconsistencyCheckPipeline,
     Features.TUTOR_SUGGESTION: TutorSuggestionPipeline,
+    Features.REWRITING: RewritingPipeline,
     Features.LECTURE_INGESTION: LectureIngestionUpdatePipeline,
     Features.FAQ_INGESTION: FaqIngestionPipeline,
 }
