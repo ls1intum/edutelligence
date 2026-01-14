@@ -44,7 +44,6 @@ from iris.pipeline.inconsistency_check_pipeline import (
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
-from iris.tracing import observe
 from iris.web.status.status_update import (
     CompetencyExtractionCallback,
     CourseChatStatusCallback,
@@ -98,7 +97,6 @@ def run_exercise_chat_pipeline_worker(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /programming-exercise-chat")
 def run_exercise_chat_pipeline(
     event: str | None = Query(None, description="Event query parameter"),
     dto: ExerciseChatPipelineExecutionDTO = Body(
@@ -145,7 +143,6 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /course-chat")
 def run_course_chat_pipeline(
     event: str | None = Query(None, description="Event query parameter"),
     dto: CourseChatPipelineExecutionDTO = Body(
@@ -218,7 +215,6 @@ def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /text-exercise-chat")
 def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, TextExerciseChatPipeline)
     request_id = get_request_id()
@@ -234,7 +230,6 @@ def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /lecture-chat")
 def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
     request_id = get_request_id()
@@ -273,7 +268,6 @@ def run_competency_extraction_pipeline_worker(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /competency-extraction")
 def run_competency_extraction_pipeline(dto: CompetencyExtractionPipelineExecutionDTO):
     variant = validate_pipeline_variant(
         dto.execution.settings, CompetencyExtractionPipeline
@@ -318,7 +312,6 @@ def run_rewriting_pipeline_worker(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /rewriting")
 def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
     variant = validate_pipeline_variant(
         dto.execution.settings, RewritingPipeline
@@ -360,7 +353,6 @@ def run_inconsistency_check_pipeline_worker(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /inconsistency-check")
 def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO):
     variant = validate_pipeline_variant(
         dto.execution.settings, InconsistencyCheckPipeline
@@ -411,7 +403,6 @@ def run_communication_tutor_suggestions_pipeline_worker(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-@observe(name="POST /tutor-suggestion")
 def run_communication_tutor_suggestions_pipeline(
     dto: CommunicationTutorSuggestionPipelineExecutionDTO,
 ):
@@ -425,7 +416,6 @@ def run_communication_tutor_suggestions_pipeline(
 
 
 @router.get("/{feature}/variants")
-@observe(name="GET /variants")
 def get_pipeline(feature: str) -> list[FeatureDTO]:
     """
     Get the pipeline variants for the given feature.
