@@ -178,6 +178,12 @@ class TracingContext:
         # Extract user info
         if hasattr(dto, "user") and dto.user:
             ctx.user_id = str(dto.user.id)
+            first_name = getattr(dto.user, "first_name", None)
+            last_name = getattr(dto.user, "last_name", None)
+            if first_name:
+                ctx.extra_metadata["user_first_name"] = first_name
+            if last_name:
+                ctx.extra_metadata["user_last_name"] = last_name
 
         # Extract session/run ID and Artemis URL
         if hasattr(dto, "settings") and dto.settings:
