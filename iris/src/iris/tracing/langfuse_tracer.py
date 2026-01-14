@@ -379,6 +379,68 @@ def observe(
     return decorator
 
 
+# LangChain run names to filter out from traces (internal implementation noise)
+FILTERED_RUN_NAMES = frozenset(
+    {
+        "RunnableSequence",
+        "RunnableAssign",
+        "RunnableAssign<agent_scratchpad>",
+        "RunnableParallel",
+        "RunnableParallel<agent_scratchpad>",
+        "RunnableLambda",
+        "RunnablePassthrough",
+        "ChatPromptTemplate",
+        "ToolsAgentOutputParser",
+    }
+)
+
+
+class FilteringCallbackHandler:
+    """
+    Wrapper around Langfuse CallbackHandler that filters out noisy LangChain internals.
+
+    Filters run names like RunnableSequence, RunnableAssign<agent_scratchpad>, etc.
+    that clutter the trace without providing useful observability.
+    """
+
+    def __init__(self, handler: Any):
+        self._handler = handler
+        self._filtered_run_ids: set[str] = set()
+
+    def _should_filter(self, serialized: dict, name: str) -> bool:
+        """Check if this run should be filtered out."""
+        run_name = name or serialized.get("name", "")
+        # Also check the id field which sometimes contains the class name
+        run_id = serialized.get("id", [])
+        if run_id and isinstance(run_id, list) and len(run_id) > 0:
+            last_id = run_id[-1]
+            if last_id in FILTERED_RUN_NAMES:
+                return True
+        return run_name in FILTERED_RUN_NAMES
+
+    def on_chain_start(self, serialized, inputs, *, run_id, **kwargs):
+        if self._should_filter(serialized, kwargs.get("name", "")):
+            self._filtered_run_ids.add(str(run_id))
+            return
+        return self._handler.on_chain_start(serialized, inputs, run_id=run_id, **kwargs)
+
+    def on_chain_end(self, outputs, *, run_id, **kwargs):
+        if str(run_id) in self._filtered_run_ids:
+            self._filtered_run_ids.discard(str(run_id))
+            return
+        return self._handler.on_chain_end(outputs, run_id=run_id, **kwargs)
+
+    def on_chain_error(self, error, *, run_id, **kwargs):
+        if str(run_id) in self._filtered_run_ids:
+            self._filtered_run_ids.discard(str(run_id))
+            return
+        return self._handler.on_chain_error(error, run_id=run_id, **kwargs)
+
+    def __getattr__(self, name):
+        """Delegate all other methods to the wrapped handler."""
+        return getattr(self._handler, name)
+
+
 def get_langchain_callback() -> Optional[Any]:
     """
     Get a LangFuse CallbackHandler for LangChain integrations.
@@ -412,7 +474,8 @@ def get_langchain_callback() -> Optional[Any]:
         # pylint: disable=import-outside-toplevel
         from langfuse.langchain import CallbackHandler
 
-        return CallbackHandler()
+        handler = CallbackHandler()
+        return FilteringCallbackHandler(handler)
     except Exception as e:
         logger.warning("Failed to create LangFuse CallbackHandler: %s", e)
         return None
