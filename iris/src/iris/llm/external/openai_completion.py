@@ -1,7 +1,6 @@
 from typing import Literal
 
-from openai import OpenAI
-from openai.lib.azure import AzureOpenAI
+from langfuse.openai import AzureOpenAI, OpenAI
 
 from iris.tracing import observe
 

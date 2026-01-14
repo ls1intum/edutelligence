@@ -14,15 +14,14 @@ from typing import (
 
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langfuse.openai import AzureOpenAI, OpenAI
+from openai import APIConnectionError  # Added for retry logic
 from openai import (
-    APIConnectionError,
     APIError,
     APITimeoutError,
     ContentFilterFinishReasonError,
-    OpenAI,
     RateLimitError,
 )
-from openai.lib.azure import AzureOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
