@@ -380,16 +380,13 @@ def observe(
 
 
 # LangChain run names to filter out from traces (internal implementation noise)
-# Only filter leaf nodes that don't contain meaningful children
 FILTERED_RUN_NAMES = frozenset(
     {
-        # These are leaf nodes with no useful children
         "RunnableLambda",
         "RunnablePassthrough",
+        "RunnableAssign<agent_scratchpad>",
         "ChatPromptTemplate",
         "ToolsAgentOutputParser",
-        # Note: We keep RunnableSequence, RunnableAssign, RunnableParallel
-        # because they contain meaningful children (like IrisLangchainChatModel)
     }
 )
 
