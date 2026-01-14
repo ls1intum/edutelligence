@@ -83,8 +83,8 @@ class IrisFormatter(logging.Formatter):
     CONTINUATION_PREFIX = " " * 88
 
     def format(self, record: logging.LogRecord) -> str:
-        # Get request ID from context
-        request_id = request_id_var.get()
+        # Get request ID from context (padded to 8 chars for alignment)
+        request_id = request_id_var.get()[:8].ljust(8)
 
         # Abbreviate and pad logger name
         abbreviated_name = abbreviate_logger_name(record.name)
