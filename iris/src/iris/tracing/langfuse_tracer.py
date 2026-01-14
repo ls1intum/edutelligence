@@ -409,8 +409,10 @@ class FilteringCallbackHandler:
         self._handler = handler
         self._filtered_run_ids: set[str] = set()
 
-    def _should_filter(self, serialized: dict, name: str) -> bool:
+    def _should_filter(self, serialized: Optional[dict], name: str) -> bool:
         """Check if this run should be filtered out."""
+        if serialized is None:
+            return name in FILTERED_RUN_NAMES if name else False
         run_name = name or serialized.get("name", "")
         # Also check the id field which sometimes contains the class name
         run_id = serialized.get("id", [])
