@@ -360,6 +360,7 @@ class ExerciseChatAgentPipeline(
             state.callback.error("Error in processing response")
             return state.result
 
+    @observe(name="Response Refinement")
     def _refine_response(
         self,
         state: AgentPipelineExecutionState[

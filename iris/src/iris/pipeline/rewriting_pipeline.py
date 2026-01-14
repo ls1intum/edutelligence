@@ -122,6 +122,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             suggestions=suggestions,
         )
 
+    @observe(name="FAQ Consistency Check")
     def check_faq_consistency(
         self, faqs: List[dict], final_result: str
     ) -> Dict[str, str]:
