@@ -117,13 +117,13 @@ def get_langfuse_client() -> Optional[Any]:
 
 
 def shutdown_langfuse():
-    """Flush and shutdown the LangFuse client. Thread-safe."""
+    """Shutdown the LangFuse client (flushes and waits for background threads). Thread-safe."""
     global _langfuse_client, _is_initialized
     with _init_lock:
         if _langfuse_client:
             try:
-                _langfuse_client.flush()
-                logger.info("LangFuse client flushed and shutdown")
+                _langfuse_client.shutdown()
+                logger.info("LangFuse client shutdown")
             except Exception as e:
                 logger.error("Error shutting down LangFuse: %s", e)
             _langfuse_client = None
@@ -294,7 +294,6 @@ def trace_generation(
 
         def __init__(self):
             self.generation = None
-            self.start_time = time.time()
 
         def end(
             self,
