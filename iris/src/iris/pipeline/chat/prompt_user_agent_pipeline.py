@@ -10,7 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
 
-from .ask_user_pipeline import AskUserPipeline
+from ...common.memiris_setup import get_tenant_for_user
 from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from ...domain.variant.prompt_user_variant import PromptUserVariant
@@ -59,7 +59,6 @@ class PromptUserAgentPipeline(
         super().__init__(implementation_id="prompt_user_chat_pipeline")
 
         # Create the pipelines
-        self.ask_user_pipeline = AskUserPipeline()
         # self.assess_user_answer_pipeline = AssessUserAnswerPipeline()
 
         # Setup Jinja2 template environment
@@ -101,6 +100,40 @@ class PromptUserAgentPipeline(
                 agent_model="gpt-4.1"
             ),
         ]
+
+
+    def is_memiris_memory_creation_enabled(
+                self,
+                state: AgentPipelineExecutionState[
+                    PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                ],
+        ) -> bool:
+            """
+            Return True if background memory creation should be enabled for this run.
+
+            Args:
+                state: The current pipeline execution state.
+
+            Returns:
+                True if memory creation should be enabled, False otherwise.
+            """
+            return False
+
+
+    def get_memiris_tenant(self, dto: PromptUserChatPipelineExecutionDTO) -> str:
+            """
+            Return the Memiris tenant identifier for the current user.
+
+            Args:
+                dto: The execution DTO containing user information.
+
+            Returns:
+                The tenant identifier string.
+            """
+            if not dto.user:
+                raise ValueError("User is required for memiris tenant")
+            return get_tenant_for_user(dto.user.id)
+
 
     def get_tools(
             self,

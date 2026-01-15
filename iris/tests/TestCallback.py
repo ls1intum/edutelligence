@@ -57,8 +57,6 @@ class TestExerciseChatCallback(ExerciseChatStatusCallback):
         self.in_progress_messages.append(message)
         super().in_progress(message)
 
-        print("\n\n\nHallo in progress\n\n\n")
-
 
     # ------------------------------------------------------------------
     # Capture final result

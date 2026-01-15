@@ -1,4 +1,4 @@
-import logging
+"""import logging
 import os
 from typing import Dict, List, Optional
 
@@ -13,8 +13,6 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from ..prompts.assess_user_answer_prompt import generate_user_question_prompt
 
 from ...common.pyris_message import PyrisMessage
-from ...domain.data.build_log_entry import BuildLogEntryDTO
-from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -38,7 +36,6 @@ class FileSelectionDTO(BaseModel):
 
 
 class AskUserPipeline(SubPipeline):
-    """Pipeline that produces assessment question from submitted code and task"""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -89,10 +86,10 @@ class AskUserPipeline(SubPipeline):
             chat_history: List[PyrisMessage],
             problem_statement: str,
     ) -> str:
-        """
+        
         Runs the pipeline
             :return: Selected file content
-        """
+        
         logger.info("Running ask user pipeline...")
 
         file_list = "\n------------\n".join(
@@ -120,3 +117,4 @@ class AskUserPipeline(SubPipeline):
         token_usage.pipeline = PipelineEnum.IRIS_ASK_USER
         self.tokens = token_usage
         return response.replace("{", "{{").replace("}", "}}")
+"""
