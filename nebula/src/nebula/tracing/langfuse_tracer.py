@@ -226,8 +226,6 @@ def trace_job(
             with trace_span("Heavy Pipeline"):
                 ...
     """
-    client = get_langfuse_client()
-
     ctx = TracingContext(
         job_id=job_id,
         video_url=video_url,
@@ -235,7 +233,9 @@ def trace_job(
         tags=tags or ["transcription"],
     )
 
+    client = get_langfuse_client()
     if not client or not _is_enabled():
+        logger.debug("LangFuse disabled, proceeding without tracing")
         set_current_context(ctx)
         try:
             yield ctx
@@ -243,10 +243,10 @@ def trace_job(
             clear_current_context()
         return
 
+    # Try to create trace, but don't fail the job if tracing fails
     try:
-        # Create the parent trace for this job
         trace = client.trace(
-            id=job_id,  # Use job_id as trace_id for consistency
+            id=job_id,
             name=name,
             session_id=job_id,
             tags=ctx.tags,
@@ -255,17 +255,20 @@ def trace_job(
         )
         ctx.trace = trace
         ctx.trace_id = job_id
+        logger.debug("Created trace for job %s", job_id)
+    except Exception as e:
+        logger.warning("Failed to create LangFuse trace, proceeding without: %s", e)
 
-        set_current_context(ctx)
+    set_current_context(ctx)
+    try:
         yield ctx
 
-        # Mark trace as successful
-        trace.update(output={"status": "completed"})
-
-    except Exception as e:
+        # Mark trace as successful if we have one
         if ctx.trace:
-            ctx.trace.update(output={"status": "error", "error": str(e)}, level="ERROR")
-        raise
+            try:
+                ctx.trace.update(output={"status": "completed"})
+            except Exception as e:
+                logger.debug("Failed to update trace: %s", e)
     finally:
         clear_current_context()
         flush()
@@ -291,7 +294,6 @@ def trace_span(
                 ...
             span.set_output({"segments": 100})
     """
-    ctx = get_current_context()
 
     class SpanTracer:
         """Helper class for managing span lifecycle."""
@@ -328,17 +330,17 @@ def trace_span(
                     logger.debug("Failed to end span: %s", e)
 
     tracer = SpanTracer()
+    ctx = get_current_context()
 
+    # Always yield - tracing failures should never break the job
     if not ctx or not ctx.trace or not _is_enabled():
-        yield tracer
+        try:
+            yield tracer
+        finally:
+            pass
         return
 
     try:
-        client = get_langfuse_client()
-        if not client:
-            yield tracer
-            return
-
         combined_metadata = {**(metadata or {}), **ctx.get_metadata()}
 
         # Determine parent: use current_span if set, otherwise use trace
@@ -354,6 +356,10 @@ def trace_span(
         tracer.previous_span = ctx.current_span
         ctx.current_span = tracer.span
 
+    except Exception as e:
+        logger.debug("Failed to create span '%s': %s", name, e)
+
+    try:
         yield tracer
 
         # Auto-end if not already ended
@@ -361,9 +367,6 @@ def trace_span(
             duration_ms = (time.time() - tracer.start_time) * 1000
             tracer.span.end(output={"duration_ms": round(duration_ms, 2)})
 
-    except Exception as e:
-        logger.debug("Failed to create span: %s", e)
-        yield tracer
     finally:
         # Restore previous span
         if ctx and tracer.previous_span is not None:
