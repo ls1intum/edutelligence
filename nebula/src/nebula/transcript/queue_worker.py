@@ -4,16 +4,9 @@ import logging
 import os
 import shutil
 import uuid
-from typing import Any, Optional, Tuple
+from typing import Tuple
 
-from nebula.tracing import (
-    TracingContext,
-    flush,
-    get_current_context,
-    set_current_context,
-    trace_job,
-    trace_span,
-)
+from nebula.tracing import get_current_context, trace_job, trace_span
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
 from nebula.transcript.jobs import cleanup_finished_jobs, fail_job, save_job_result
@@ -81,22 +74,15 @@ async def _light_phase(
     video_path: str,
     audio_path: str,
     uid: str,
-    parent_span: Optional[Any] = None,
 ):
     """
     Run the parallelizable part per job:
     frames -> GPT-Vision -> align -> save -> cleanup.
     """
-    # Re-establish trace context for this async task
-    ctx = TracingContext(
-        job_id=job_id,
-        video_url=req.videoUrl,
-        lecture_unit_id=req.lectureUnitId,
-        current_phase="light",
-        tags=["transcription"],
-        current_span=parent_span,
-    )
-    set_current_context(ctx)
+    # Update context phase (context is inherited from caller)
+    ctx = get_current_context()
+    if ctx:
+        ctx.current_phase = "light"
 
     try:
         with trace_span("Light Pipeline") as light_span:
@@ -158,8 +144,6 @@ async def _light_phase(
         except Exception as ce:
             logging.warning("[Job %s] Cleanup issue: %s", job_id, ce)
 
-        flush()
-
 
 async def _worker_loop():
     while True:
@@ -172,7 +156,7 @@ async def _worker_loop():
             name="Transcription Job",
             video_url=req.videoUrl,
             lecture_unit_id=req.lectureUnitId,
-        ) as ctx:
+        ):
             try:
                 # Heavy pipeline as a child span
                 with trace_span("Heavy Pipeline") as heavy_span:
@@ -181,17 +165,14 @@ async def _worker_loop():
                         {"segments": len(bundle["transcription"].get("segments", []))}
                     )
 
-                # Schedule light phase - pass span context for proper nesting
-                asyncio.create_task(
-                    _light_phase(
-                        job_id,
-                        req,
-                        bundle["transcription"],
-                        bundle["video_path"],
-                        bundle["audio_path"],
-                        bundle["uid"],
-                        parent_span=ctx.current_span,
-                    )
+                # Run light phase within trace context for proper nesting
+                await _light_phase(
+                    job_id,
+                    req,
+                    bundle["transcription"],
+                    bundle["video_path"],
+                    bundle["audio_path"],
+                    bundle["uid"],
                 )
 
             except Exception as e:
