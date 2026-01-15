@@ -81,8 +81,7 @@ async def _light_phase(
     video_path: str,
     audio_path: str,
     uid: str,
-    parent_trace: Optional[Any] = None,
-    parent_trace_id: Optional[str] = None,
+    parent_span: Optional[Any] = None,
 ):
     """
     Run the parallelizable part per job:
@@ -95,8 +94,7 @@ async def _light_phase(
         lecture_unit_id=req.lectureUnitId,
         current_phase="light",
         tags=["transcription"],
-        trace=parent_trace,
-        trace_id=parent_trace_id,
+        current_span=parent_span,
     )
     set_current_context(ctx)
 
@@ -183,7 +181,7 @@ async def _worker_loop():
                         {"segments": len(bundle["transcription"].get("segments", []))}
                     )
 
-                # Schedule light phase - pass trace context for proper nesting
+                # Schedule light phase - pass span context for proper nesting
                 asyncio.create_task(
                     _light_phase(
                         job_id,
@@ -192,8 +190,7 @@ async def _worker_loop():
                         bundle["video_path"],
                         bundle["audio_path"],
                         bundle["uid"],
-                        parent_trace=ctx.trace,
-                        parent_trace_id=ctx.trace_id,
+                        parent_span=ctx.current_span,
                     )
                 )
 

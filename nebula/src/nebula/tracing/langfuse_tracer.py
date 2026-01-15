@@ -142,7 +142,7 @@ class TracingContext:
     """
     Context object for propagating tracing metadata through the transcription pipeline.
 
-    Holds the parent trace and current span for proper nesting.
+    Holds the parent span for proper nesting.
     """
 
     # Core identifiers
@@ -153,10 +153,8 @@ class TracingContext:
     # Pipeline phase tracking
     current_phase: Optional[str] = None  # "heavy" or "light"
 
-    # LangFuse trace hierarchy - enables proper parent-child nesting
-    trace: Optional[Any] = None  # The root trace for this job
-    trace_id: Optional[str] = None  # The trace ID for linking observations
-    current_span: Optional[Any] = None  # Current parent span for nesting
+    # LangFuse span hierarchy - enables proper parent-child nesting
+    current_span: Optional[Any] = None  # Current span for nesting
 
     # Flexible fields
     tags: list[str] = field(default_factory=list)
@@ -214,17 +212,11 @@ def trace_job(
     will be nested under this trace.
 
     Args:
-        job_id: Unique job identifier (used as trace ID and session ID)
+        job_id: Unique job identifier (used as session ID)
         name: Name of the trace
         video_url: Optional video URL for metadata
         lecture_unit_id: Optional lecture unit ID for metadata
         tags: Optional tags for the trace
-
-    Example:
-        with trace_job(job_id, "Transcription Job") as ctx:
-            # All nested trace_span/trace_generation calls will be children
-            with trace_span("Heavy Pipeline"):
-                ...
     """
     ctx = TracingContext(
         job_id=job_id,
@@ -243,35 +235,38 @@ def trace_job(
             clear_current_context()
         return
 
-    # Try to create trace, but don't fail the job if tracing fails
+    # Use LangFuse v3 API: start_as_current_span creates a trace
     try:
-        trace = client.trace(
-            id=job_id,
+        with client.start_as_current_span(
             name=name,
-            session_id=job_id,
-            tags=ctx.tags,
-            metadata=ctx.get_metadata(),
             input={"video_url": video_url, "lecture_unit_id": lecture_unit_id},
-        )
-        ctx.trace = trace
-        ctx.trace_id = job_id
-        logger.debug("Created trace for job %s", job_id)
+            metadata=ctx.get_metadata(),
+        ) as span:
+            # Update trace metadata
+            span.update_trace(
+                session_id=job_id,
+                tags=ctx.tags,
+            )
+            ctx.current_span = span
+            set_current_context(ctx)
+
+            try:
+                yield ctx
+                span.update(output={"status": "completed"})
+            except Exception as e:
+                span.update(output={"status": "error", "error": str(e)}, level="ERROR")
+                raise
+            finally:
+                clear_current_context()
+
     except Exception as e:
         logger.warning("Failed to create LangFuse trace, proceeding without: %s", e)
-
-    set_current_context(ctx)
-    try:
-        yield ctx
-
-        # Mark trace as successful if we have one
-        if ctx.trace:
-            try:
-                ctx.trace.update(output={"status": "completed"})
-            except Exception as e:
-                logger.debug("Failed to update trace: %s", e)
-    finally:
-        clear_current_context()
-        flush()
+        set_current_context(ctx)
+        try:
+            yield ctx
+        finally:
+            clear_current_context()
+            flush()
 
 
 @contextmanager
@@ -287,12 +282,6 @@ def trace_span(
         name: Name of the span (e.g., "Heavy Pipeline", "Light Pipeline")
         input_data: Optional input data for the span
         metadata: Additional metadata to attach
-
-    Example:
-        with trace_span("Heavy Pipeline") as span:
-            with trace_span("Download Video"):
-                ...
-            span.set_output({"segments": 100})
     """
 
     class SpanTracer:
@@ -301,28 +290,30 @@ def trace_span(
         def __init__(self):
             self.span = None
             self.start_time = time.time()
-            self.previous_span = None  # To restore after exiting
 
         def set_output(self, output: dict[str, Any]):
             """Set the output for this span."""
             if self.span:
                 try:
                     duration_ms = (time.time() - self.start_time) * 1000
-                    self.span.end(
+                    self.span.update(
                         output={**output, "duration_ms": round(duration_ms, 2)}
                     )
                 except Exception as e:
                     logger.debug("Failed to set span output: %s", e)
 
         def end(self, success: bool = True, error: Optional[str] = None):
-            """End the span."""
+            """End the span (for manual control)."""
             if self.span:
                 try:
                     duration_ms = (time.time() - self.start_time) * 1000
-                    output = {"success": success, "duration_ms": round(duration_ms, 2)}
+                    output: dict[str, Any] = {
+                        "success": success,
+                        "duration_ms": round(duration_ms, 2),
+                    }
                     if error:
                         output["error"] = error
-                    self.span.end(
+                    self.span.update(
                         output=output,
                         level="ERROR" if not success else "DEFAULT",
                     )
@@ -333,7 +324,7 @@ def trace_span(
     ctx = get_current_context()
 
     # Always yield - tracing failures should never break the job
-    if not ctx or not ctx.trace or not _is_enabled():
+    if not ctx or not ctx.current_span or not _is_enabled():
         try:
             yield tracer
         finally:
@@ -342,37 +333,28 @@ def trace_span(
 
     try:
         combined_metadata = {**(metadata or {}), **ctx.get_metadata()}
+        parent_span = ctx.current_span
 
-        # Determine parent: use current_span if set, otherwise use trace
-        parent = ctx.current_span if ctx.current_span else ctx.trace
-
-        tracer.span = parent.span(
+        with parent_span.start_as_current_span(
             name=name,
             input=input_data,
             metadata=combined_metadata,
-        )
+        ) as span:
+            tracer.span = span
+            previous_span = ctx.current_span
+            ctx.current_span = span
 
-        # Set this span as current for nested calls
-        tracer.previous_span = ctx.current_span
-        ctx.current_span = tracer.span
+            try:
+                yield tracer
+                # Auto-update with duration if not already set
+                duration_ms = (time.time() - tracer.start_time) * 1000
+                span.update(output={"duration_ms": round(duration_ms, 2)})
+            finally:
+                ctx.current_span = previous_span
 
     except Exception as e:
         logger.debug("Failed to create span '%s': %s", name, e)
-
-    try:
         yield tracer
-
-        # Auto-end if not already ended
-        if tracer.span:
-            duration_ms = (time.time() - tracer.start_time) * 1000
-            tracer.span.end(output={"duration_ms": round(duration_ms, 2)})
-
-    finally:
-        # Restore previous span
-        if ctx and tracer.previous_span is not None:
-            ctx.current_span = tracer.previous_span
-        elif ctx:
-            ctx.current_span = None
 
 
 @contextmanager
@@ -385,20 +367,14 @@ def trace_generation(
     """
     Context manager for tracing direct LLM API calls (not via LangChain).
 
-    Creates a generation observation nested under the current trace/span.
+    Creates a generation observation nested under the current span.
 
     Args:
         name: Name of the generation (e.g., "Whisper Transcription", "GPT Vision")
         model: Model identifier (e.g., "whisper-1", "gpt-4.1-mini")
         input_data: Input to the model (prompt, audio info, etc.)
         metadata: Additional metadata to attach
-
-    Example:
-        with trace_generation("Whisper Chunk", "whisper-1", {"chunk": i}) as gen:
-            response = requests.post(...)
-            gen.end(output={"segments": len(segments)})
     """
-    ctx = get_current_context()
 
     class GenerationTracer:
         """Helper class for managing LLM generation trace lifecycle."""
@@ -411,49 +387,42 @@ def trace_generation(
             output: Optional[Any] = None,
             usage: Optional[dict[str, int]] = None,
             error: Optional[str] = None,
-            level: str = "DEFAULT",
         ):
             """End the generation trace with output and usage info."""
             if self.generation:
                 try:
-                    end_kwargs: dict[str, Any] = {
-                        "level": level,
-                    }
+                    update_kwargs: dict[str, Any] = {}
                     if output is not None:
-                        end_kwargs["output"] = output
+                        update_kwargs["output"] = output
                     if usage:
-                        end_kwargs["usage"] = usage
+                        update_kwargs["usage_details"] = usage
                     if error:
-                        end_kwargs["status_message"] = error
-                        end_kwargs["level"] = "ERROR"
-                    self.generation.end(**end_kwargs)
+                        update_kwargs["output"] = {"error": error}
+                        update_kwargs["level"] = "ERROR"
+                    if update_kwargs:
+                        self.generation.update(**update_kwargs)
                 except Exception as e:
                     logger.debug("Failed to end generation trace: %s", e)
 
     tracer = GenerationTracer()
+    ctx = get_current_context()
 
-    if not ctx or not ctx.trace or not _is_enabled():
+    if not ctx or not ctx.current_span or not _is_enabled():
         yield tracer
         return
 
     try:
-        client = get_langfuse_client()
-        if not client:
-            yield tracer
-            return
-
         combined_metadata = {**(metadata or {}), **ctx.get_metadata()}
+        parent_span = ctx.current_span
 
-        # Determine parent: use current_span if set, otherwise use trace
-        parent = ctx.current_span if ctx.current_span else ctx.trace
-
-        tracer.generation = parent.generation(
+        with parent_span.start_as_current_generation(
             name=name,
             model=model,
             input=input_data,
             metadata=combined_metadata,
-        )
-        yield tracer
+        ) as generation:
+            tracer.generation = generation
+            yield tracer
 
     except Exception as e:
         logger.debug("Failed to create generation trace: %s", e)
@@ -469,19 +438,13 @@ def trace_subprocess(
     """
     Context manager for tracing subprocess calls (e.g., ffmpeg).
 
-    Creates a span nested under the current trace/span.
+    Creates a span nested under the current span.
 
     Args:
         name: Name of the operation (e.g., "Download Video", "Extract Audio")
         command: The command list being executed
         metadata: Additional metadata (e.g., input/output paths)
-
-    Example:
-        with trace_subprocess("Extract Audio", cmd, {"video": path}) as span:
-            result = subprocess.run(cmd, ...)
-            span.end(success=result.returncode == 0)
     """
-    ctx = get_current_context()
 
     class SubprocessTracer:
         """Helper class for managing subprocess trace lifecycle."""
@@ -500,7 +463,7 @@ def trace_subprocess(
             if self.span:
                 try:
                     duration_ms = (time.time() - self.start_time) * 1000
-                    end_output = {
+                    end_output: dict[str, Any] = {
                         "success": success,
                         "duration_ms": round(duration_ms, 2),
                         **(output or {}),
@@ -508,7 +471,7 @@ def trace_subprocess(
                     if error:
                         end_output["error"] = error
 
-                    self.span.end(
+                    self.span.update(
                         output=end_output,
                         level="ERROR" if not success else "DEFAULT",
                     )
@@ -516,38 +479,33 @@ def trace_subprocess(
                     logger.debug("Failed to end subprocess trace: %s", e)
 
     tracer = SubprocessTracer()
+    ctx = get_current_context()
 
-    if not ctx or not ctx.trace or not _is_enabled():
+    if not ctx or not ctx.current_span or not _is_enabled():
         yield tracer
         return
 
     try:
-        client = get_langfuse_client()
-        if not client:
-            yield tracer
-            return
-
         combined_metadata = {
             "command_preview": " ".join(command[:5])
             + ("..." if len(command) > 5 else ""),
             **(metadata or {}),
             **ctx.get_metadata(),
         }
+        parent_span = ctx.current_span
 
-        # Determine parent: use current_span if set, otherwise use trace
-        parent = ctx.current_span if ctx.current_span else ctx.trace
-
-        tracer.span = parent.span(
+        with parent_span.start_as_current_span(
             name=name,
             input={"command": command},
             metadata=combined_metadata,
-        )
-        yield tracer
+        ) as span:
+            tracer.span = span
+            yield tracer
 
-        # Auto-end if not already ended
-        if tracer.span:
-            duration_ms = (time.time() - tracer.start_time) * 1000
-            tracer.span.end(output={"duration_ms": round(duration_ms, 2)})
+            # Auto-update with duration if not manually ended
+            if tracer.span:
+                duration_ms = (time.time() - tracer.start_time) * 1000
+                span.update(output={"duration_ms": round(duration_ms, 2)})
 
     except Exception as e:
         logger.debug("Failed to create subprocess trace: %s", e)

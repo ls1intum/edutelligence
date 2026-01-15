@@ -76,6 +76,6 @@ def ask_gpt_for_slide_number(image_b64: str, job_id: str | None = None) -> int |
             return result
 
         except Exception as e:
-            gen.end(error=str(e), level="ERROR")
+            gen.end(error=str(e))
             logging.warning("GPT Vision failed: %s", e)
             return None

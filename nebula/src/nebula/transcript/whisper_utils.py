@@ -149,7 +149,7 @@ def transcribe_audio_chunks(audio_path: str, config: Any) -> dict:
                         break
 
                     except requests.RequestException as e:
-                        gen.end(error=str(e), level="ERROR")
+                        gen.end(error=str(e))
                         logger.exception(
                             "%s Whisper failed on chunk %s: %s",
                             provider_name,
