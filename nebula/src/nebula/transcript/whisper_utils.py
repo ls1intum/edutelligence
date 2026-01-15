@@ -7,6 +7,7 @@ import ffmpeg  # type: ignore
 import requests
 
 from nebula.common.config import load_llm_config
+from nebula.tracing import trace_generation
 from nebula.transcript.audio_utils import split_audio_ffmpeg
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,9 @@ def transcribe_audio_chunks(audio_path: str, config: Any) -> dict:
 
     for i, chunk_path in enumerate(chunk_paths):
         success = False
+        chunk_size = os.path.getsize(chunk_path)
+        model_name = config.get("model", "whisper")
+
         for attempt in range(max_retries):
             with open(chunk_path, "rb") as f:
                 logger.info(
@@ -94,45 +98,64 @@ def transcribe_audio_chunks(audio_path: str, config: Any) -> dict:
                     len(chunk_paths),
                     chunk_path,
                 )
-                try:
-                    url, headers, data = _get_whisper_request_params(config)
 
-                    response = requests.post(
-                        url=url,
-                        headers=headers,
-                        files={"file": (os.path.basename(chunk_path), f, "audio/mp3")},
-                        data=data,
-                        timeout=60,
-                    )
+                with trace_generation(
+                    name=f"Whisper Transcription (chunk {i + 1}/{len(chunk_paths)})",
+                    model=model_name,
+                    input_data={
+                        "chunk_index": i,
+                        "chunk_path": chunk_path,
+                        "chunk_size_bytes": chunk_size,
+                        "attempt": attempt + 1,
+                    },
+                    metadata={"provider": provider_name},
+                ) as gen:
+                    try:
+                        url, headers, data = _get_whisper_request_params(config)
 
-                    if response.status_code == 429:
-                        wait = _get_retry_wait_time(config, attempt)
-                        logger.warning(
-                            "429 Too Many Requests. Retrying in %ss...", wait
+                        response = requests.post(
+                            url=url,
+                            headers=headers,
+                            files={
+                                "file": (os.path.basename(chunk_path), f, "audio/mp3")
+                            },
+                            data=data,
+                            timeout=60,
                         )
-                        time.sleep(wait)
-                        continue
 
-                    response.raise_for_status()
-                    segment_data = response.json().get("segments", [])
-                    for seg in segment_data:
-                        all_segments.append(
-                            {
-                                "start": offset + seg["start"],
-                                "end": offset + seg["end"],
-                                "text": seg["text"],
-                            }
+                        if response.status_code == 429:
+                            wait = _get_retry_wait_time(config, attempt)
+                            logger.warning(
+                                "429 Too Many Requests. Retrying in %ss...", wait
+                            )
+                            gen.end(error=f"Rate limited (429), retrying in {wait}s")
+                            time.sleep(wait)
+                            continue
+
+                        response.raise_for_status()
+                        segment_data = response.json().get("segments", [])
+
+                        gen.end(output={"segment_count": len(segment_data)})
+
+                        for seg in segment_data:
+                            all_segments.append(
+                                {
+                                    "start": offset + seg["start"],
+                                    "end": offset + seg["end"],
+                                    "text": seg["text"],
+                                }
+                            )
+                        success = True
+                        break
+
+                    except requests.RequestException as e:
+                        gen.end(error=str(e), level="ERROR")
+                        logger.exception(
+                            "%s Whisper failed on chunk %s: %s",
+                            provider_name,
+                            chunk_path,
+                            e,
                         )
-                    success = True
-                    break
-
-                except requests.RequestException as e:
-                    logger.exception(
-                        "%s Whisper failed on chunk %s: %s",
-                        provider_name,
-                        chunk_path,
-                        e,
-                    )
 
         if not success:
             raise RuntimeError(

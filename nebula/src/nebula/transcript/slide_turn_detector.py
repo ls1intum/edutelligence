@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 
+from nebula.tracing import observe
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
 
 
@@ -164,6 +165,7 @@ class SlideTurnDetector:
         if frame_cache is not None:
             frame_cache.close()
 
+    @observe(name="Slide Turn Detection")
     def detect(self) -> List[Tuple[float, int]]:
         """
         Run detection and return change points as ``(timestamp, slide_num)``.

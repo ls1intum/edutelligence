@@ -6,6 +6,14 @@ import shutil
 import uuid
 from typing import Tuple
 
+from nebula.tracing import (
+    TracingContext,
+    clear_current_context,
+    flush,
+    get_current_context,
+    observe,
+    set_current_context,
+)
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
 from nebula.transcript.jobs import cleanup_finished_jobs, fail_job, save_job_result
@@ -26,12 +34,18 @@ async def enqueue_job(job_id: str, req: TranscribeRequestDTO) -> None:
     logging.info("[Job %s] Enqueued for heavy pipeline", job_id)
 
 
+@observe(name="Heavy Pipeline")
 async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
     """
     Run the serialized/heavy part (download -> extract -> whisper) in strict FIFO order.
     Return the Whisper transcription dict on success.
     """
     logging.info("[Job %s] Starting heavy pipeline", job_id)
+
+    # Update context phase
+    ctx = get_current_context()
+    if ctx:
+        ctx.current_phase = "heavy"
 
     # Unique temp paths
     uid = str(uuid.uuid4())
@@ -64,6 +78,7 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
         raise
 
 
+@observe(name="Light Pipeline")
 async def _light_phase(
     job_id: str,
     req: TranscribeRequestDTO,
@@ -76,6 +91,16 @@ async def _light_phase(
     Run the parallelizable part per job:
     frames -> GPT-Vision -> align -> save -> cleanup.
     """
+    # Re-establish context (this runs as a separate asyncio task)
+    ctx = TracingContext(
+        job_id=job_id,
+        video_url=req.videoUrl,
+        lecture_unit_id=req.lectureUnitId,
+        current_phase="light",
+        tags=["transcription"],
+    )
+    set_current_context(ctx)
+
     try:
         logging.debug("[Job %s] Detecting slide change points...", job_id)
         # Offload GPT-backed slide detection so the event loop stays responsive.
@@ -130,19 +155,36 @@ async def _light_phase(
         except Exception as ce:
             logging.warning("[Job %s] Cleanup issue: %s", job_id, ce)
 
+        # Clear tracing context and flush traces
+        clear_current_context()
+        flush()
+
 
 async def _worker_loop():
     while True:
         job_id, req = await _job_queue.get()  # strict FIFO
-        logging.info("[Job %s] Dequeued — starting heavy pipeline", job_id)
+        logging.info("[Job %s] Dequeued - starting heavy pipeline", job_id)
+
+        # Create and set tracing context for this job
+        ctx = TracingContext(
+            job_id=job_id,
+            video_url=req.videoUrl,
+            lecture_unit_id=req.lectureUnitId,
+            tags=["transcription"],
+        )
+        set_current_context(ctx)
+
         try:
             bundle = await _heavy_pipeline(job_id, req)
         except Exception as e:
             await fail_job(job_id, str(e))
+            clear_current_context()
+            flush()
             _job_queue.task_done()
             continue
 
         # Schedule light phase in parallel (don't block the worker)
+        # Note: light phase will re-establish its own context
         asyncio.create_task(
             _light_phase(
                 job_id,
