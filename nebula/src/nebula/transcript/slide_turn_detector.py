@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 
-from nebula.tracing import observe
+from nebula.tracing import trace_span
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
 
 
@@ -165,7 +165,6 @@ class SlideTurnDetector:
         if frame_cache is not None:
             frame_cache.close()
 
-    @observe(name="Slide Turn Detection")
     def detect(self) -> List[Tuple[float, int]]:
         """
         Run detection and return change points as ``(timestamp, slide_num)``.
@@ -174,38 +173,53 @@ class SlideTurnDetector:
             if not self.segments:
                 return []
 
-            logging.info(
-                "[Job %s] SlideTurnDetector start: segments=%d, anchor_stride=%d, min_stride=%d",
-                self.job_id,
-                len(self.segments),
-                self.anchor_stride,
-                self.min_stride,
-            )
+            with trace_span(
+                "Slide Turn Detection",
+                input_data={
+                    "segments": len(self.segments),
+                    "anchor_stride": self.anchor_stride,
+                },
+            ) as span:
+                logging.info(
+                    "[Job %s] SlideTurnDetector start: segments=%d, anchor_stride=%d, min_stride=%d",
+                    self.job_id,
+                    len(self.segments),
+                    self.anchor_stride,
+                    self.min_stride,
+                )
 
-            anchor_indices = self._build_anchor_indices()
-            logging.info(
-                "[Job %s] SlideTurnDetector anchors=%s",
-                self.job_id,
-                anchor_indices,
-            )
-            for idx in anchor_indices:
-                if self.labels[idx] is None:
-                    self.labels[idx] = self._query_label(idx)
+                anchor_indices = self._build_anchor_indices()
+                logging.info(
+                    "[Job %s] SlideTurnDetector anchors=%s",
+                    self.job_id,
+                    anchor_indices,
+                )
+                for idx in anchor_indices:
+                    if self.labels[idx] is None:
+                        self.labels[idx] = self._query_label(idx)
 
-            for left, right in zip(anchor_indices, anchor_indices[1:]):
-                self._resolve_interval(left, right)
+                for left, right in zip(anchor_indices, anchor_indices[1:]):
+                    self._resolve_interval(left, right)
 
-            # Fill any remaining None labels by carrying last known (or -1 default).
-            self._backfill_unknowns()
+                # Fill any remaining None labels by carrying last known (or -1 default).
+                self._backfill_unknowns()
 
-            change_points = self._to_change_points()
-            logging.info(
-                "[Job %s] SlideTurnDetector done: change_points=%d, gpt_calls=%d",
-                self.job_id,
-                len(change_points),
-                self.gpt_calls,
-            )
-            return change_points
+                change_points = self._to_change_points()
+                logging.info(
+                    "[Job %s] SlideTurnDetector done: change_points=%d, gpt_calls=%d",
+                    self.job_id,
+                    len(change_points),
+                    self.gpt_calls,
+                )
+
+                span.set_output(
+                    {
+                        "change_points": len(change_points),
+                        "gpt_calls": self.gpt_calls,
+                    }
+                )
+
+                return change_points
         finally:
             self.frame_cache.close()
 

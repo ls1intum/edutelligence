@@ -2,11 +2,11 @@
 Central LangFuse tracing module for Nebula.
 
 Provides:
-- @observe decorator for automatic span tracing
-- TracingContext for job metadata propagation
+- trace_job() context manager for creating a parent trace per job
+- trace_span() context manager for creating nested spans
 - trace_generation() context manager for direct LLM API calls
 - trace_subprocess() context manager for ffmpeg operations
-- Proper nesting within job sessions
+- Proper parent-child nesting within job traces
 """
 
 import logging
@@ -16,10 +16,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from functools import wraps
-from typing import Any, Callable, Optional, TypeVar
-
-# Note: threading is still needed for _init_lock used in thread-safe initialization
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +142,7 @@ class TracingContext:
     """
     Context object for propagating tracing metadata through the transcription pipeline.
 
-    Simpler than Iris - focused on job-level context.
+    Holds the parent trace and current span for proper nesting.
     """
 
     # Core identifiers
@@ -156,41 +153,28 @@ class TracingContext:
     # Pipeline phase tracking
     current_phase: Optional[str] = None  # "heavy" or "light"
 
+    # LangFuse trace hierarchy - enables proper parent-child nesting
+    trace: Optional[Any] = None  # The root trace for this job
+    trace_id: Optional[str] = None  # The trace ID for linking observations
+    current_span: Optional[Any] = None  # Current parent span for nesting
+
     # Flexible fields
     tags: list[str] = field(default_factory=list)
     extra_metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_langfuse_params(self) -> dict[str, Any]:
-        """Convert to parameters for LangFuse trace/span creation."""
+    def get_metadata(self) -> dict[str, Any]:
+        """Build metadata dict for observations."""
         metadata: dict[str, Any] = {
             "pipeline": "transcription",
         }
-
         if self.video_url:
             metadata["video_url"] = self.video_url
         if self.lecture_unit_id:
             metadata["lecture_unit_id"] = self.lecture_unit_id
         if self.current_phase:
             metadata["phase"] = self.current_phase
-
         metadata.update(self.extra_metadata)
-
-        return {
-            "session_id": self.job_id,
-            "tags": self.tags,
-            "metadata": metadata,
-        }
-
-    def add_metadata(self, **kwargs) -> "TracingContext":
-        """Add extra metadata and return self for chaining."""
-        self.extra_metadata.update(kwargs)
-        return self
-
-    def add_tag(self, tag: str) -> "TracingContext":
-        """Add a tag and return self for chaining."""
-        if tag not in self.tags:
-            self.tags.append(tag)
-        return self
+        return metadata
 
 
 # Context variable for async-safe context propagation
@@ -215,49 +199,177 @@ def clear_current_context() -> None:
     _context_var.set(None)
 
 
-F = TypeVar("F", bound=Callable[..., Any])
-
-
-def observe(
-    name: Optional[str] = None,
-    as_type: Optional[str] = None,
-) -> Callable[[F], F]:
+@contextmanager
+def trace_job(
+    job_id: str,
+    name: str = "Transcription Job",
+    video_url: Optional[str] = None,
+    lecture_unit_id: Optional[int] = None,
+    tags: Optional[list[str]] = None,
+):
     """
-    Decorator to trace a function with LangFuse.
+    Context manager for creating a parent trace for an entire job.
 
-    If LangFuse is disabled, acts as a pass-through (no overhead).
-    Automatically inherits the current trace context for proper nesting.
+    All observations (spans, generations) created within this context
+    will be nested under this trace.
 
     Args:
-        name: Custom name for the span (defaults to function name)
-        as_type: Type of observation - "span", "generation", "tool", etc.
+        job_id: Unique job identifier (used as trace ID and session ID)
+        name: Name of the trace
+        video_url: Optional video URL for metadata
+        lecture_unit_id: Optional lecture unit ID for metadata
+        tags: Optional tags for the trace
 
     Example:
-        @observe(name="Download Video")
-        def download_video(url, path):
-            ...
+        with trace_job(job_id, "Transcription Job") as ctx:
+            # All nested trace_span/trace_generation calls will be children
+            with trace_span("Heavy Pipeline"):
+                ...
     """
+    client = get_langfuse_client()
 
-    def decorator(func: F) -> F:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            langfuse_mod = _get_langfuse_module()
-            if not langfuse_mod or not _is_enabled():
-                return func(*args, **kwargs)
+    ctx = TracingContext(
+        job_id=job_id,
+        video_url=video_url,
+        lecture_unit_id=lecture_unit_id,
+        tags=tags or ["transcription"],
+    )
 
-            try:
-                langfuse_observe = langfuse_mod.observe
-                observed_func = langfuse_observe(name=name, as_type=as_type)(func)
-                return observed_func(*args, **kwargs)
-            except Exception as e:
-                logger.debug(
-                    "LangFuse observe failed, executing without tracing: %s", e
-                )
-                return func(*args, **kwargs)
+    if not client or not _is_enabled():
+        set_current_context(ctx)
+        try:
+            yield ctx
+        finally:
+            clear_current_context()
+        return
 
-        return wrapper  # type: ignore
+    try:
+        # Create the parent trace for this job
+        trace = client.trace(
+            id=job_id,  # Use job_id as trace_id for consistency
+            name=name,
+            session_id=job_id,
+            tags=ctx.tags,
+            metadata=ctx.get_metadata(),
+            input={"video_url": video_url, "lecture_unit_id": lecture_unit_id},
+        )
+        ctx.trace = trace
+        ctx.trace_id = job_id
 
-    return decorator
+        set_current_context(ctx)
+        yield ctx
+
+        # Mark trace as successful
+        trace.update(output={"status": "completed"})
+
+    except Exception as e:
+        if ctx.trace:
+            ctx.trace.update(output={"status": "error", "error": str(e)}, level="ERROR")
+        raise
+    finally:
+        clear_current_context()
+        flush()
+
+
+@contextmanager
+def trace_span(
+    name: str,
+    input_data: Optional[dict[str, Any]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+):
+    """
+    Context manager for creating a span nested under the current trace/span.
+
+    Args:
+        name: Name of the span (e.g., "Heavy Pipeline", "Light Pipeline")
+        input_data: Optional input data for the span
+        metadata: Additional metadata to attach
+
+    Example:
+        with trace_span("Heavy Pipeline") as span:
+            with trace_span("Download Video"):
+                ...
+            span.set_output({"segments": 100})
+    """
+    ctx = get_current_context()
+
+    class SpanTracer:
+        """Helper class for managing span lifecycle."""
+
+        def __init__(self):
+            self.span = None
+            self.start_time = time.time()
+            self.previous_span = None  # To restore after exiting
+
+        def set_output(self, output: dict[str, Any]):
+            """Set the output for this span."""
+            if self.span:
+                try:
+                    duration_ms = (time.time() - self.start_time) * 1000
+                    self.span.end(
+                        output={**output, "duration_ms": round(duration_ms, 2)}
+                    )
+                except Exception as e:
+                    logger.debug("Failed to set span output: %s", e)
+
+        def end(self, success: bool = True, error: Optional[str] = None):
+            """End the span."""
+            if self.span:
+                try:
+                    duration_ms = (time.time() - self.start_time) * 1000
+                    output = {"success": success, "duration_ms": round(duration_ms, 2)}
+                    if error:
+                        output["error"] = error
+                    self.span.end(
+                        output=output,
+                        level="ERROR" if not success else "DEFAULT",
+                    )
+                except Exception as e:
+                    logger.debug("Failed to end span: %s", e)
+
+    tracer = SpanTracer()
+
+    if not ctx or not ctx.trace or not _is_enabled():
+        yield tracer
+        return
+
+    try:
+        client = get_langfuse_client()
+        if not client:
+            yield tracer
+            return
+
+        combined_metadata = {**(metadata or {}), **ctx.get_metadata()}
+
+        # Determine parent: use current_span if set, otherwise use trace
+        parent = ctx.current_span if ctx.current_span else ctx.trace
+
+        tracer.span = parent.span(
+            name=name,
+            input=input_data,
+            metadata=combined_metadata,
+        )
+
+        # Set this span as current for nested calls
+        tracer.previous_span = ctx.current_span
+        ctx.current_span = tracer.span
+
+        yield tracer
+
+        # Auto-end if not already ended
+        if tracer.span:
+            duration_ms = (time.time() - tracer.start_time) * 1000
+            tracer.span.end(output={"duration_ms": round(duration_ms, 2)})
+
+    except Exception as e:
+        logger.debug("Failed to create span: %s", e)
+        yield tracer
+    finally:
+        # Restore previous span
+        if ctx and tracer.previous_span is not None:
+            ctx.current_span = tracer.previous_span
+        elif ctx:
+            ctx.current_span = None
 
 
 @contextmanager
@@ -270,7 +382,7 @@ def trace_generation(
     """
     Context manager for tracing direct LLM API calls (not via LangChain).
 
-    Use this for Whisper API and GPT Vision calls.
+    Creates a generation observation nested under the current trace/span.
 
     Args:
         name: Name of the generation (e.g., "Whisper Transcription", "GPT Vision")
@@ -282,11 +394,7 @@ def trace_generation(
         with trace_generation("Whisper Chunk", "whisper-1", {"chunk": i}) as gen:
             response = requests.post(...)
             gen.end(output={"segments": len(segments)})
-
-    Yields:
-        GenerationTracer object with .end() method to finalize the trace
     """
-    client = get_langfuse_client()
     ctx = get_current_context()
 
     class GenerationTracer:
@@ -321,24 +429,29 @@ def trace_generation(
 
     tracer = GenerationTracer()
 
-    if not client or not _is_enabled():
+    if not ctx or not ctx.trace or not _is_enabled():
         yield tracer
         return
 
     try:
-        combined_metadata = {**(metadata or {})}
-        if ctx:
-            combined_metadata.update(ctx.to_langfuse_params().get("metadata", {}))
+        client = get_langfuse_client()
+        if not client:
+            yield tracer
+            return
 
-        tracer.generation = client.generation(
+        combined_metadata = {**(metadata or {}), **ctx.get_metadata()}
+
+        # Determine parent: use current_span if set, otherwise use trace
+        parent = ctx.current_span if ctx.current_span else ctx.trace
+
+        tracer.generation = parent.generation(
             name=name,
             model=model,
             input=input_data,
             metadata=combined_metadata,
-            session_id=ctx.job_id if ctx else None,
-            tags=ctx.tags if ctx else None,
         )
         yield tracer
+
     except Exception as e:
         logger.debug("Failed to create generation trace: %s", e)
         yield tracer
@@ -353,7 +466,7 @@ def trace_subprocess(
     """
     Context manager for tracing subprocess calls (e.g., ffmpeg).
 
-    Records the command, duration, and outcome.
+    Creates a span nested under the current trace/span.
 
     Args:
         name: Name of the operation (e.g., "Download Video", "Extract Audio")
@@ -364,11 +477,7 @@ def trace_subprocess(
         with trace_subprocess("Extract Audio", cmd, {"video": path}) as span:
             result = subprocess.run(cmd, ...)
             span.end(success=result.returncode == 0)
-
-    Yields:
-        SubprocessTracer object with .end() method to finalize the trace
     """
-    client = get_langfuse_client()
     ctx = get_current_context()
 
     class SubprocessTracer:
@@ -405,28 +514,38 @@ def trace_subprocess(
 
     tracer = SubprocessTracer()
 
-    if not client or not _is_enabled():
+    if not ctx or not ctx.trace or not _is_enabled():
         yield tracer
         return
 
     try:
+        client = get_langfuse_client()
+        if not client:
+            yield tracer
+            return
+
         combined_metadata = {
-            # Truncate command for readability
             "command_preview": " ".join(command[:5])
             + ("..." if len(command) > 5 else ""),
             **(metadata or {}),
+            **ctx.get_metadata(),
         }
-        if ctx:
-            combined_metadata.update(ctx.to_langfuse_params().get("metadata", {}))
 
-        tracer.span = client.span(
+        # Determine parent: use current_span if set, otherwise use trace
+        parent = ctx.current_span if ctx.current_span else ctx.trace
+
+        tracer.span = parent.span(
             name=name,
             input={"command": command},
             metadata=combined_metadata,
-            session_id=ctx.job_id if ctx else None,
-            tags=ctx.tags if ctx else None,
         )
         yield tracer
+
+        # Auto-end if not already ended
+        if tracer.span:
+            duration_ms = (time.time() - tracer.start_time) * 1000
+            tracer.span.end(output={"duration_ms": round(duration_ms, 2)})
+
     except Exception as e:
         logger.debug("Failed to create subprocess trace: %s", e)
         yield tracer

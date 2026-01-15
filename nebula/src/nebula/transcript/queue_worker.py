@@ -4,15 +4,15 @@ import logging
 import os
 import shutil
 import uuid
-from typing import Tuple
+from typing import Any, Optional, Tuple
 
 from nebula.tracing import (
     TracingContext,
-    clear_current_context,
     flush,
     get_current_context,
-    observe,
     set_current_context,
+    trace_job,
+    trace_span,
 )
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
@@ -34,7 +34,6 @@ async def enqueue_job(job_id: str, req: TranscribeRequestDTO) -> None:
     logging.info("[Job %s] Enqueued for heavy pipeline", job_id)
 
 
-@observe(name="Heavy Pipeline")
 async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
     """
     Run the serialized/heavy part (download -> extract -> whisper) in strict FIFO order.
@@ -55,15 +54,13 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
     try:
         # Run blocking work in threads so the event loop stays responsive
         logging.debug("[Job %s] Downloading video...", job_id)
-        await asyncio.to_thread(download_video, req.videoUrl, video_path)  #
+        await asyncio.to_thread(download_video, req.videoUrl, video_path)
 
         logging.debug("[Job %s] Extracting audio...", job_id)
-        await asyncio.to_thread(extract_audio, video_path, audio_path)  #
+        await asyncio.to_thread(extract_audio, video_path, audio_path)
 
-        logging.debug(" [Job %s] Transcribing with Whisper...", job_id)
-        transcription = await asyncio.to_thread(
-            transcribe_with_whisper, audio_path
-        )  # requests loop, blocking
+        logging.debug("[Job %s] Transcribing with Whisper...", job_id)
+        transcription = await asyncio.to_thread(transcribe_with_whisper, audio_path)
 
         return {
             "transcription": transcription,
@@ -74,11 +71,9 @@ async def _heavy_pipeline(job_id: str, req: TranscribeRequestDTO) -> dict:
 
     except Exception as e:
         logging.error("[Job %s] Heavy pipeline failed: %s", job_id, e, exc_info=True)
-        # Let caller clean up
         raise
 
 
-@observe(name="Light Pipeline")
 async def _light_phase(
     job_id: str,
     req: TranscribeRequestDTO,
@@ -86,60 +81,70 @@ async def _light_phase(
     video_path: str,
     audio_path: str,
     uid: str,
+    parent_trace: Optional[Any] = None,
+    parent_trace_id: Optional[str] = None,
 ):
     """
     Run the parallelizable part per job:
     frames -> GPT-Vision -> align -> save -> cleanup.
     """
-    # Re-establish context (this runs as a separate asyncio task)
+    # Re-establish trace context for this async task
     ctx = TracingContext(
         job_id=job_id,
         video_url=req.videoUrl,
         lecture_unit_id=req.lectureUnitId,
         current_phase="light",
         tags=["transcription"],
+        trace=parent_trace,
+        trace_id=parent_trace_id,
     )
     set_current_context(ctx)
 
     try:
-        logging.debug("[Job %s] Detecting slide change points...", job_id)
-        # Offload GPT-backed slide detection so the event loop stays responsive.
-        slide_timestamps = await asyncio.to_thread(
-            detect_slide_timestamps,
-            video_path,
-            transcription["segments"],
-            50,
-            1,
-            job_id,
-        )
-        logging.info(
-            "[Job %s] Slide detection complete: change_points=%d",
-            job_id,
-            len(slide_timestamps),
-        )
-        await asyncio.sleep(0)
+        with trace_span("Light Pipeline") as light_span:
+            logging.debug("[Job %s] Detecting slide change points...", job_id)
+            # Offload GPT-backed slide detection so the event loop stays responsive.
+            slide_timestamps = await asyncio.to_thread(
+                detect_slide_timestamps,
+                video_path,
+                transcription["segments"],
+                50,
+                1,
+                job_id,
+            )
+            logging.info(
+                "[Job %s] Slide detection complete: change_points=%d",
+                job_id,
+                len(slide_timestamps),
+            )
+            await asyncio.sleep(0)
 
-        logging.debug("[Job %s] Aligning slides with transcript...", job_id)
-        aligned_segments = align_slides_with_segments(
-            transcription["segments"], slide_timestamps
-        )
+            logging.debug("[Job %s] Aligning slides with transcript...", job_id)
+            aligned_segments = align_slides_with_segments(
+                transcription["segments"], slide_timestamps
+            )
 
-        segments = [TranscriptionSegmentDTO(**s).model_dump() for s in aligned_segments]
-        await save_job_result(
-            job_id,
-            {
-                "lectureUnitId": req.lectureUnitId,
-                "language": transcription.get("language", "en"),
-                "segments": segments,
-            },
-        )
-        logging.info("[Job %s] Finished (saved result)", job_id)
+            segments = [
+                TranscriptionSegmentDTO(**s).model_dump() for s in aligned_segments
+            ]
+            await save_job_result(
+                job_id,
+                {
+                    "lectureUnitId": req.lectureUnitId,
+                    "language": transcription.get("language", "en"),
+                    "segments": segments,
+                },
+            )
+            logging.info("[Job %s] Finished (saved result)", job_id)
+            light_span.set_output(
+                {"slide_changes": len(slide_timestamps), "segments": len(segments)}
+            )
 
     except Exception as e:
         logging.error("[Job %s] Light phase failed: %s", job_id, e, exc_info=True)
         await fail_job(job_id, str(e))
     finally:
-        # Cleanup temp files and chunk dirs (same logic as your current cleanup)
+        # Cleanup temp files and chunk dirs
         try:
             for path in (video_path, audio_path):
                 if path and os.path.exists(path):
@@ -155,46 +160,46 @@ async def _light_phase(
         except Exception as ce:
             logging.warning("[Job %s] Cleanup issue: %s", job_id, ce)
 
-        # Clear tracing context and flush traces
-        clear_current_context()
         flush()
 
 
 async def _worker_loop():
     while True:
         job_id, req = await _job_queue.get()  # strict FIFO
-        logging.info("[Job %s] Dequeued - starting heavy pipeline", job_id)
+        logging.info("[Job %s] Dequeued - starting processing", job_id)
 
-        # Create and set tracing context for this job
-        ctx = TracingContext(
-            job_id=job_id,
+        # Create parent trace for entire job
+        with trace_job(
+            job_id,
+            name="Transcription Job",
             video_url=req.videoUrl,
             lecture_unit_id=req.lectureUnitId,
-            tags=["transcription"],
-        )
-        set_current_context(ctx)
+        ) as ctx:
+            try:
+                # Heavy pipeline as a child span
+                with trace_span("Heavy Pipeline") as heavy_span:
+                    bundle = await _heavy_pipeline(job_id, req)
+                    heavy_span.set_output(
+                        {"segments": len(bundle["transcription"].get("segments", []))}
+                    )
 
-        try:
-            bundle = await _heavy_pipeline(job_id, req)
-        except Exception as e:
-            await fail_job(job_id, str(e))
-            clear_current_context()
-            flush()
-            _job_queue.task_done()
-            continue
+                # Schedule light phase - pass trace context for proper nesting
+                asyncio.create_task(
+                    _light_phase(
+                        job_id,
+                        req,
+                        bundle["transcription"],
+                        bundle["video_path"],
+                        bundle["audio_path"],
+                        bundle["uid"],
+                        parent_trace=ctx.trace,
+                        parent_trace_id=ctx.trace_id,
+                    )
+                )
 
-        # Schedule light phase in parallel (don't block the worker)
-        # Note: light phase will re-establish its own context
-        asyncio.create_task(
-            _light_phase(
-                job_id,
-                req,
-                bundle["transcription"],
-                bundle["video_path"],
-                bundle["audio_path"],
-                bundle["uid"],
-            )
-        )
+            except Exception as e:
+                await fail_job(job_id, str(e))
+
         _job_queue.task_done()
 
 
