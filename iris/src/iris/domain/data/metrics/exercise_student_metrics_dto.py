@@ -10,4 +10,4 @@ class ExerciseStudentMetricsDTO(BaseModel):
         {}, alias="averageLatestSubmission"
     )
     latest_submission: Dict[int, float] = Field({}, alias="latestSubmission")
-    completed: Set[int] = Field({})
+    completed: Set[int] = Field(default_factory=set)
