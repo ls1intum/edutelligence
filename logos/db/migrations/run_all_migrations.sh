@@ -31,10 +31,15 @@ echo ""
 
 # List of migrations in order
 MIGRATIONS=(
-    "003_drop_provider_ssh_columns.sql"
-    "003_create_model_provider_config.sql"
+    "001_add_jobs_table.sql"
+    "002_add_provider_sdi_columns.sql"
+    "003a_drop_provider_ssh_columns.sql"
+    "003b_create_model_provider_config.sql"
     "004_add_log_entry_sdi_columns.sql"
     "005_create_request_events_table.sql"
+    "006_update_model_endpoints_to_local_ollama.sql"
+    "007_rename_openwebui_to_ollama_no_auth.sql"
+    "008_create_ollama_provider_snapshots.sql"
 )
 
 FAILED=0
@@ -94,11 +99,15 @@ else
 
     # Verify key tables exist
     log "Checking for new tables..."
-    docker exec logos-db psql -U postgres -d logosdb -c "\dt" | grep -E "model_provider_config|request_events" || true
+    docker exec logos-db psql -U postgres -d logosdb -c "\dt" | grep -E "jobs|model_provider_config|request_events|ollama_provider_snapshots" || true
 
     echo ""
     log "Checking providers table columns..."
-    docker exec logos-db psql -U postgres -d logosdb -c "\d providers" | grep -E "provider_type|total_vram_mb|parallel_capacity" || true
+    docker exec logos-db psql -U postgres -d logosdb -c "\d providers" | grep -E "provider_type|total_vram_mb|parallel_capacity|ollama_admin_url" || true
+
+    echo ""
+    log "Checking log_entry table columns..."
+    docker exec logos-db psql -U postgres -d logosdb -c "\d log_entry" | grep -E "priority|queue_depth_at_arrival|was_cold_start" || true
 
     echo ""
     ok "Schema verification complete!"
