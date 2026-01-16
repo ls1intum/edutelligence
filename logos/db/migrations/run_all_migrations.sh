@@ -19,8 +19,10 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # Check if database container is running
-if ! docker ps | grep -q logos-db; then
+CONTAINER_RUNNING=$(docker ps --filter "name=logos-db" --format "{{.Names}}" 2>/dev/null)
+if [ -z "$CONTAINER_RUNNING" ]; then
     err "logos-db container is not running"
+    err "Start it with: docker compose up -d logos-db"
     exit 1
 fi
 
@@ -55,12 +57,12 @@ for migration in "${MIGRATIONS[@]}"; do
 
     log "Applying migration: $migration"
 
-    if docker exec -i logos-db psql -U postgres -d logosdb < "$migration" > /dev/null 2>&1; then
+    if docker exec -i logos-db psql -U postgres -d logosdb -v ON_ERROR_STOP=1 < "$migration" > /dev/null 2>&1; then
         ok "$migration applied successfully"
         SUCCESS=$((SUCCESS + 1))
     else
         # Try to get error details
-        ERROR=$(docker exec -i logos-db psql -U postgres -d logosdb < "$migration" 2>&1 || true)
+        ERROR=$(docker exec -i logos-db psql -U postgres -d logosdb -v ON_ERROR_STOP=1 < "$migration" 2>&1 || true)
 
         # Check if it's just a "already exists" warning (which is fine)
         if echo "$ERROR" | grep -iq "already exists"; then
