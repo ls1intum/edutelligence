@@ -3,13 +3,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from nebula.common.config import Config
 from nebula.health import router as health_router
-from nebula.transcript.config import Config
 from nebula.transcript.queue_worker import start_worker, stop_worker  # NEW
 from nebula.transcript.routes.transcribe_routes import router as transcribe_router
+from nebula.transcript.transcriber_config import ensure_dirs
 
-logging.basicConfig(level=getattr(logging, Config.get_log_level()))
-Config.ensure_dirs()
+logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL))
+ensure_dirs()
 
 
 @asynccontextmanager

@@ -1,7 +1,7 @@
 import logging
 
+from nebula.common.config import get_openai_client
 from nebula.faq.prompts.rewrite_faq_prompt import system_prompt_faq_rewriting
-from nebula.llm.openai_client import get_openai_client
 
 logger = logging.getLogger("nebula.faq.rewrite_service")
 
@@ -9,7 +9,7 @@ logger = logging.getLogger("nebula.faq.rewrite_service")
 def rewrite_faq_text(to_be_rewritten: str) -> str:
 
     try:
-        client, deployment = get_openai_client("azure-gpt-4-omni")
+        client, deployment = get_openai_client(model="gpt-4.1")
 
         response = client.chat.completions.create(
             model=deployment,

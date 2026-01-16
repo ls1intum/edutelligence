@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import logging
-
 from requests import RequestException, Timeout
 from weaviate.exceptions import (
     UnexpectedStatusCodeException,
     WeaviateConnectionError,
 )
 
+from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.vector_database.database import VectorDatabase
 from iris.web.routers.health.health_model import ModuleStatus, ServiceStatus
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def check_weaviate_status() -> tuple[str, ModuleStatus]:

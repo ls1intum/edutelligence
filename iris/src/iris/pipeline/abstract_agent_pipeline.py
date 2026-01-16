@@ -1,5 +1,4 @@
-import logging
-import traceback
+import time
 from abc import ABC, abstractmethod
 from threading import Thread
 from typing import Any, Callable, Generic, List, Optional, TypeVar
@@ -8,6 +7,7 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from memiris.domain.memory import Memory
 
+from iris.common.logging_config import get_logger
 from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
@@ -18,10 +18,17 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
+from iris.tracing import (
+    TracingContext,
+    clear_current_context,
+    get_langchain_config,
+    observe,
+    set_current_context,
+)
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import StatusCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DTO = TypeVar("DTO")
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
@@ -46,6 +53,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     llm: Any | None
     prompt: ChatPromptTemplate | None
     tokens: List[TokenUsageDTO]
+    tracing_context: Optional[TracingContext]
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -103,6 +111,38 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # ========================================
     # === CAN override (optional methods) ===
     # ========================================
+
+    def create_tracing_context(self, dto: DTO, variant: VARIANT) -> TracingContext:
+        """
+        Create a TracingContext for this pipeline execution.
+
+        Override this method to add pipeline-specific metadata like
+        exercise IDs, lecture IDs, course names, etc.
+
+        Default implementation extracts common fields from the DTO.
+        """
+        return TracingContext.from_dto(
+            dto,
+            pipeline_name=self.__class__.__name__,
+            variant=variant.id if hasattr(variant, "id") else str(variant),
+        )
+
+    def _update_langfuse_trace(self, ctx: TracingContext) -> None:
+        """
+        Update the current LangFuse trace with metadata from the tracing context.
+
+        This is called after setting up the tracing context to enrich the trace
+        with user_id, session_id, course/exercise info, and other metadata.
+        """
+        try:
+            # Use langfuse.get_client() which returns the decorator-aware global client
+            import langfuse  # pylint: disable=import-outside-toplevel
+
+            client = langfuse.get_client()
+            if client:
+                client.update_current_trace(**ctx.to_langfuse_params())
+        except Exception as e:
+            logger.debug("Failed to update LangFuse trace: %s", e)
 
     def _track_tokens(
         self,
@@ -277,9 +317,37 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Execute the agent in streaming iteration mode and return the last output string.
 
         Calls on_agent_step for each step to allow subclasses to track tokens or progress.
+        Integrates with LangFuse for tracing LangChain operations.
         """
+        # Get LangFuse callbacks (None if disabled)
+        config = get_langchain_config(state.tracing_context)
+        callbacks = config.get("callbacks") if config else None
+
         final_output: Optional[str] = None
-        for step in agent_executor.iter(params):
+        step_count = 0
+        for step in agent_executor.iter(params, callbacks=callbacks):
+            step_count += 1
+
+            # Log tool calls from intermediate steps
+            intermediate_steps = step.get("intermediate_steps", [])
+            for action, result in intermediate_steps:
+                tool_name = getattr(action, "tool", "unknown")
+                # Log tool call without the full input/output (just key info)
+                result_preview = (
+                    str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
+                )
+                logger.info(
+                    "Tool call | step=%d tool=%s | result_length=%d",
+                    step_count,
+                    tool_name,
+                    len(str(result)),
+                )
+                logger.debug(
+                    "Tool result preview | tool=%s | result=%s",
+                    tool_name,
+                    result_preview,
+                )
+
             # Track LLM tokens
             if hasattr(state, "llm") and state.llm and hasattr(state.llm, "tokens"):
                 state.tokens.append(state.llm.tokens)
@@ -291,6 +359,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 logger.exception("Exception in on_agent_step", exc_info=exc)
             if step.get("output") is not None:
                 final_output = step["output"]
+                logger.info(
+                    "Agent finished | steps=%d output_length=%d",
+                    step_count,
+                    len(final_output) if final_output else 0,
+                )
         return final_output
 
     def _create_session_title(
@@ -318,9 +391,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
+        # Extract user language (using getattr for DTOs that may not have user attr)
+        user_language = "en"
+        user = getattr(state.dto, "user", None)
+        if user and getattr(user, "lang_key", None):
+            user_language = user.lang_key
+
         try:
             if output:
-                session_title = self.session_title_pipeline(first_user_msg, output)
+                session_title = self.session_title_pipeline(
+                    first_user_msg, output, user_language=user_language
+                )
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)
                 if session_title is None:
@@ -332,13 +413,22 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 "An error occurred while running the session title generation pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return None
 
+    @observe(name="Abstract Agent Pipeline")
     def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback):
         """
         Call the agent pipeline with the provided arguments.
         """
+        start_time = time.perf_counter()
+        pipeline_name = self.__class__.__name__
+
+        logger.info(
+            "Pipeline started | pipeline=%s variant=%s",
+            pipeline_name,
+            variant.id if hasattr(variant, "id") else "default",
+        )
+
         # 0. Initialize the execution state
         state = AgentPipelineExecutionState[DTO, VARIANT]()
         state.dto = dto
@@ -353,55 +443,72 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.llm = None
         state.prompt = None
         state.tokens = []
+        state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
         )
 
-        # 1. Prepare message history, user query, LLM, prompt and tools
-        state.message_history = self.get_recent_history_from_dto(state)
-        user_query = self.get_text_of_latest_user_message(state)
+        # Set up LangFuse tracing context for this thread
+        set_current_context(state.tracing_context)
+        self._update_langfuse_trace(state.tracing_context)
 
-        # Create LLM from variant's agent_model
-        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-        state.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(
-                version=state.variant.agent_model
-            ),
-            completion_args=completion_args,
-        )
+        try:
+            # 1. Prepare message history, user query, LLM, prompt and tools
+            state.message_history = self.get_recent_history_from_dto(state)
+            user_query = self.get_text_of_latest_user_message(state)
 
-        system_message = self.build_system_message(state)
-        state.prompt = self.assemble_prompt_with_history(
-            state=state, system_prompt=system_message
-        )
-        state.tools = self.get_tools(state)
+            # Create LLM from variant's agent_model
+            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            state.llm = IrisLangchainChatModel(
+                request_handler=ModelVersionRequestHandler(
+                    version=state.variant.agent_model
+                ),
+                completion_args=completion_args,
+            )
 
-        # 4. Start memory creation if enabled
-        if self.is_memiris_memory_creation_enabled(state):
-            reference = self.get_memiris_reference(dto=state.dto)
-            state.memiris_memory_creation_thread = (
-                state.memiris_wrapper.create_memories_in_separate_thread(
-                    user_query, reference, state.memiris_memory_creation_storage
+            system_message = self.build_system_message(state)
+            state.prompt = self.assemble_prompt_with_history(
+                state=state, system_prompt=system_message
+            )
+            state.tools = self.get_tools(state)
+
+            # 4. Start memory creation if enabled
+            if self.is_memiris_memory_creation_enabled(state):
+                reference = self.get_memiris_reference(dto=state.dto)
+                state.memiris_memory_creation_thread = (
+                    state.memiris_wrapper.create_memories_in_separate_thread(
+                        user_query, reference, state.memiris_memory_creation_storage
+                    )
                 )
+
+            # 7.1. Run pre agent hook
+            self.pre_agent_hook(state)
+
+            # 7.2. Run the agent with the provided DTO
+            state.result = self.execute_agent(state)
+
+            # 7.3. Run post agent hook
+            self.post_agent_hook(state)
+
+            # 8. Wait for the memory creation to finish if enabled
+            if state.memiris_memory_creation_thread:
+                state.callback.in_progress("Waiting for memory creation to finish ...")
+                # noinspection PyUnboundLocalVariable
+                state.memiris_memory_creation_thread.join()
+                state.callback.done(
+                    "Memory creation finished.",
+                    created_memories=state.memiris_memory_creation_storage,
+                )
+            else:
+                state.callback.done("No memory creation thread started.")
+
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            logger.info(
+                "Pipeline completed | pipeline=%s | duration=%dms tools_used=%d",
+                pipeline_name,
+                duration_ms,
+                len(state.tools),
             )
-
-        # 7.1. Run pre agent hook
-        self.pre_agent_hook(state)
-
-        # 7.2. Run the agent with the provided DTO
-        state.result = self.execute_agent(state)
-
-        # 7.3. Run post agent hook
-        self.post_agent_hook(state)
-
-        # 8. Wait for the memory creation to finish if enabled
-        if state.memiris_memory_creation_thread:
-            state.callback.in_progress("Waiting for memory creation to finish ...")
-            # noinspection PyUnboundLocalVariable
-            state.memiris_memory_creation_thread.join()
-            state.callback.done(
-                "Memory creation finished.",
-                created_memories=state.memiris_memory_creation_storage,
-            )
-        else:
-            state.callback.done("No memory creation thread started.")
+        finally:
+            # Clean up tracing context to prevent memory leaks
+            clear_current_context()

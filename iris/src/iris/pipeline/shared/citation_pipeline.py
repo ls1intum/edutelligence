@@ -1,11 +1,11 @@
 import datetime
 import os
-from asyncio.log import logger
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -16,7 +16,10 @@ from iris.llm import (
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.faq_schema import FaqSchema
+
+logger = get_logger(__name__)
 
 
 class InformationType(str, Enum):
@@ -135,12 +138,14 @@ class CitationPipeline(SubPipeline):
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
+    @observe(name="Citation Pipeline")
     def __call__(
         self,
         information,  #: #Union[List[dict], List[str]],
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
         variant: str = "default",
+        user_language: str = "en",
         **kwargs,
     ) -> str:
         """
@@ -149,6 +154,7 @@ class CitationPipeline(SubPipeline):
             :param query: The query
             :param information_type: The type of information provided. can be either lectures or faqs
             :param variant: The variant of the model to use ("default" or "advanced")
+            :param user_language: The user's preferred language ("en" or "de")
             :return: Selected file content
         """
         paras = ""
@@ -172,9 +178,15 @@ class CitationPipeline(SubPipeline):
             )
             self.prompt_str = self.lecture_prompt_str
 
+        # Add language instruction to prompt
+        if user_language == "de":
+            language_instruction = "Format all citations and references in German.\n\n"
+        else:
+            language_instruction = "Format all citations and references in English.\n\n"
+
         try:
             self.default_prompt = PromptTemplate(
-                template=self.prompt_str,
+                template=language_instruction + self.prompt_str,
                 input_variables=["Answer", "Paragraphs"],
             )
             if information_type == InformationType.FAQS:

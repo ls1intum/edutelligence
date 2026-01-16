@@ -2,9 +2,9 @@ import json
 import logging
 from typing import Any
 
+from nebula.common.config import get_openai_client
 from nebula.faq.domains.data.faq_dto import FaqConsistencyResponse, FaqDTO
 from nebula.faq.prompts.faq_consistency_prompt import faq_consistency_prompt
-from nebula.llm.openai_client import get_openai_client
 
 logger = logging.getLogger("nebula.faq.consistency_service")
 
@@ -17,7 +17,7 @@ def check_faq_consistency(
     """
 
     try:
-        client, deployment = get_openai_client("azure-gpt-4-omni")
+        client, deployment = get_openai_client(model="gpt-4.1")
 
         consistency_prompt = faq_consistency_prompt.format(
             faqs=faqs, final_result=to_be_checked

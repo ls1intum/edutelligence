@@ -192,10 +192,10 @@ The service uses temporary storage with automatic cleanup:
 ```
 temp/
 ├── {uuid}.mp4         # Downloaded video
-├── {uuid}.wav         # Extracted audio
+├── {uuid}.mp3         # Extracted audio
 └── chunks_{uuid}/     # Audio chunks for Whisper
-    ├── chunk_0000.wav
-    ├── chunk_0001.wav
+    ├── chunk_0000.mp3
+    ├── chunk_0001.mp3
     └── ...
 ```
 
@@ -302,9 +302,9 @@ curl http://localhost:3870/transcribe/status/{job_id}
 
 ### Environment Variables
 
-- `NEBULA_TEMP_DIR`: Temporary storage path (default: `./temp`)
-- `NEBULA_LLM_CONFIG_FILE`: LLM configuration file path (default: `llm_config.local.yml`)
-- `NEBULA_LOG_LEVEL`: Logging level (default: `INFO`)
+- `NEBULA_TEMP_DIR`: Temporary storage path (required, no default)
+- `LLM_CONFIG_PATH`: LLM configuration file path (required, no default)
+- `LOG_LEVEL`: Logging level (optional, default: `INFO`)
 
 ## 📊 Performance Characteristics
 
