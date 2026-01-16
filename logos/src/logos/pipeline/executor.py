@@ -102,16 +102,19 @@ class Executor:
                     url,
                     headers=headers,
                     json=payload,
-                    timeout=30,
+                    timeout=120,  # Increased to 2 minutes for cold starts
                 )
+
+            logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
             try:
                 body = response.json()
             except json.JSONDecodeError:
+                logger.error(f"Failed to decode JSON from {url}, status={response.status_code}, text={response.text[:200]}")
                 return ExecutionResult(
                     success=False,
                     response=None,
-                    error=response.text,
+                    error=f"Invalid JSON response (status {response.status_code}): {response.text[:200]}",
                     usage={},
                     is_streaming=False,
                     headers=dict(response.headers),
@@ -119,20 +122,27 @@ class Executor:
 
             usage = self._extract_usage(body)
 
+            is_success = response.status_code < 400
+            error_msg = body.get("error") if not is_success else None
+
+            if not is_success:
+                logger.error(f"Request to {url} failed: status={response.status_code}, body={body}")
+
             return ExecutionResult(
-                success=response.status_code < 400,
+                success=is_success,
                 response=body,
-                error=body.get("error") if response.status_code >= 400 else None,
+                error=error_msg,
                 usage=usage,
                 is_streaming=False,
                 headers=dict(response.headers),
             )
 
         except Exception as e:
+            logger.error(f"Exception during request to {url}: {type(e).__name__}: {e}")
             return ExecutionResult(
                 success=False,
                 response=None,
-                error=str(e),
+                error=f"{type(e).__name__}: {str(e)}",
                 usage={},
                 is_streaming=False,
             )

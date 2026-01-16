@@ -84,7 +84,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         )
 
         try:
-            timeout = request.timeout_s if request.timeout_s else 60
+            timeout = request.timeout_s if request.timeout_s else 300  # Increased to 5 minutes for queue wait
             result = await asyncio.wait_for(future, timeout=timeout)
 
             if provider_type == 'ollama':

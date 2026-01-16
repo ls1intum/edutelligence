@@ -424,9 +424,13 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 pass
 
         response_payload = exec_result.response
-        if not exec_result.success and not response_payload and exec_result.error:
-            response_payload = {"error": exec_result.error}
-            logger.error(f"Request failed: {exec_result.error}")
+        if not exec_result.success:
+            if not response_payload and exec_result.error:
+                response_payload = {"error": exec_result.error}
+            logger.error(
+                f"Request failed (model_id={model_id}, provider_id={provider_id}): "
+                f"{exec_result.error}, response={response_payload}"
+            )
 
         if log_id:
             # Extract detailed token usage
@@ -749,20 +753,6 @@ async def _execute_resource_mode(
             return {"status_code": 500, "data": {"error": str(e)}}
         else:
             raise e
-    finally:
-        # Release scheduler resources
-        try:
-            if result.scheduling_stats and result.scheduling_stats.get("request_id"):
-                try:
-                    _pipeline.scheduler.release(
-                        result.model_id,
-                        result.scheduling_stats.get("request_id")
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to release scheduler resources: {e}")
-        except NameError:
-            # result not defined, nothing to release
-            pass
 
 
 async def route_and_execute(
