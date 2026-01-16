@@ -3,10 +3,25 @@ Shared test fixtures and helpers for SDI (Scheduling Data Interface) tests.
 """
 
 import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Tuple, Optional
 from unittest.mock import Mock
 
-from logos.scheduling.scheduler import Task
+
+class Task:
+    """Simple task object for testing queue operations."""
+
+    def __init__(self, data: dict, models: List[Tuple[int, float, int, int]], task_id: int) -> None:
+        self.data = data
+        self.models = models
+        self.__id = task_id
+
+    def get_id(self):
+        return self.__id
+
+    def get_best_model_id(self):
+        if len(self.models) == 0:
+            return None
+        return self.models[0][0]
 
 
 # Realistic model metadata used across SDI tests (inputs to facades)

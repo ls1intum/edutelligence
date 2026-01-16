@@ -11,7 +11,7 @@ Architecture:
 
 Usage (Ollama):
     from logos.sdi import OllamaSchedulingDataFacade
-    from logos.scheduling.priority_queue_manager import PriorityQueueManager
+    from logos.queue import PriorityQueueManager
 
     # Initialize
     queue_manager = PriorityQueueManager()

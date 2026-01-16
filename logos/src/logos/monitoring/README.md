@@ -20,12 +20,12 @@ is provided (and uses `scheduled_ts` as the start marker).
 Usage:
 ```python
 from logos.monitoring.recorder import MonitoringRecorder
-from logos.scheduling.scheduling_manager import SchedulingManager
-from logos.scheduling.simple_priority_scheduler import SimplePriorityScheduler
+from logos.pipeline.utilization_scheduler import UtilizationAwareScheduler
+from logos.pipeline.pipeline import RequestPipeline
 
 recorder = MonitoringRecorder()
-scheduler = SimplePriorityScheduler(queue_manager, sdi_facades)
-manager = SchedulingManager(scheduler, monitoring_recorder=recorder)
+scheduler = UtilizationAwareScheduler(queue_manager, ollama_facade, azure_facade, model_registry)
+pipeline = RequestPipeline(classifier, scheduler, executor, context_resolver, recorder)
 ```
 
 ## Notes
