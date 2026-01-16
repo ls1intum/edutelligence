@@ -9,6 +9,7 @@ from iris.pipeline.lecture_unit_summary_pipeline import (
     LectureUnitSummaryPipeline,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.database import VectorDatabase, batch_update_lock
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -28,6 +29,7 @@ class LectureUnitPipeline(SubPipeline):
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
+    @observe(name="Lecture Unit Pipeline")
     def __call__(self, lecture_unit: LectureUnitDTO):
         lecture_unit_segment_summaries, token_unit_segment_summary = (
             LectureUnitSegmentSummaryPipeline(self.weaviate_client, lecture_unit)()

@@ -1,5 +1,4 @@
 import json
-import logging
 from typing import Dict, List, Literal, Optional
 
 from langchain.output_parsers import PydanticOutputParser
@@ -7,6 +6,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
@@ -23,13 +23,14 @@ from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
     system_prompt_problem_statement,
 )
+from iris.tracing import observe
 from iris.web.status.status_update import RewritingCallback
 
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..vector_database.database import VectorDatabase
 from .prompts.faq_consistency_prompt import faq_consistency_prompt
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RewritingPipeline(Pipeline[RewritingVariant]):
@@ -58,6 +59,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         self.variant = variant
         self.faq_retriever = FaqRetrieval(self.db.client)
 
+    @observe(name="Rewriting Pipeline")
     def __call__(
         self,
         dto: RewritingPipelineExecutionDTO,
@@ -104,7 +106,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             consistency_result = self.check_faq_consistency(faqs, final_result)
             faq_type = consistency_result.get("type", "").lower()
             if "inconsistent" in faq_type:
-                logging.warning("Detected inconsistencies in FAQ retrieval.")
+                logger.warning("Detected inconsistencies in FAQ retrieval.")
                 inconsistencies = parse_faq_inconsistencies(
                     consistency_result.get("faqs", [])
                 )
@@ -120,6 +122,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             suggestions=suggestions,
         )
 
+    @observe(name="FAQ Consistency Check")
     def check_faq_consistency(
         self, faqs: List[dict], final_result: str
     ) -> Dict[str, str]:
