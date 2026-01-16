@@ -6,7 +6,7 @@ from typing import Any
 import ffmpeg  # type: ignore
 import requests
 
-from nebula.common.llm_config import load_llm_config
+from nebula.common.config import load_llm_config
 from nebula.transcript.audio_utils import split_audio_ffmpeg
 
 logger = logging.getLogger(__name__)

@@ -1,4 +1,3 @@
-import logging
 from abc import ABC
 from typing import List, Optional
 
@@ -7,6 +6,7 @@ from memiris import Memory
 from memiris.api.memory_dto import MemoryDTO
 from sentry_sdk import capture_exception, capture_message
 
+from iris.common.logging_config import get_logger
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.course_chat.course_chat_status_update_dto import (
     CourseChatStatusUpdateDTO,
@@ -36,7 +36,7 @@ from iris.domain.status.text_exercise_chat_status_update_dto import (
     TextExerciseChatStatusUpdateDTO,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class StatusCallback(ABC):
@@ -435,11 +435,18 @@ class LectureChatCallback(StatusCallback):
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Extracting memories",
+                internal=True,
+            ),
         ]
         super().__init__(
             url,
             run_id,
-            LectureChatStatusUpdateDTO(stages=stages, result=""),
+            # result should not be "" by default since empty done messages are sent but should not be shown as message
+            LectureChatStatusUpdateDTO(stages=stages),
             stages[stage],
             stage,
         )

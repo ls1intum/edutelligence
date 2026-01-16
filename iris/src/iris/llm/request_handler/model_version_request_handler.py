@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
+from iris.common.logging_config import get_logger
 from iris.common.pyris_message import PyrisMessage
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.external.model import (
@@ -13,6 +14,8 @@ from iris.llm.external.model import (
 )
 from iris.llm.llm_manager import LlmManager
 from iris.llm.request_handler.request_handler_interface import RequestHandler
+
+logger = get_logger(__name__)
 
 
 class ModelVersionRequestHandler(RequestHandler):
@@ -98,8 +101,7 @@ class ModelVersionRequestHandler(RequestHandler):
         # Select the first matching LLM
         llm = matching_llms[0]
 
-        # Print the selected model for the logs
-        print(f"Selected {llm.description}")
+        logger.debug("Selected model | model=%s", llm.description)
         return llm
 
     def bind_tools(

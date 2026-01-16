@@ -1,5 +1,9 @@
 from asyncio import Semaphore
 
+from iris.common.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class IngestionJobHandler:
     """
@@ -26,8 +30,12 @@ class IngestionJobHandler:
         else:
             old_process.terminate()
             old_process.join()
-            print("old process terminated")
-            print(old_process)
+            logger.debug(
+                "Terminated old ingestion process | course=%d lecture=%d unit=%d",
+                course_id,
+                lecture_id,
+                lecture_unit_id,
+            )
             self.job_list.setdefault(course_id, {}).setdefault(lecture_id, {})[
                 lecture_unit_id
             ] = process

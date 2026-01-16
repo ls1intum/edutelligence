@@ -1,12 +1,13 @@
-from asyncio.log import logger
 from typing import List
 
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from iris.domain.variant.lecture_unit_deletion_variant import LectureUnitDeletionVariant
 from iris.pipeline import Pipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -26,6 +27,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
 from iris.web.status.lecture_deletion_status_callback import (
     LecturesDeletionStatusCallback,
 )
+
+logger = get_logger(__name__)
 
 
 class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
@@ -50,6 +53,7 @@ class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
         self.artemis_base_url = artemis_base_url
         self.callback = callback
 
+    @observe(name="Lecture Unit Deletion Pipeline")
     def __call__(self) -> None:
         self.callback.in_progress("deleting lecture units...")
         self.delete_entries_for_lecture_units()

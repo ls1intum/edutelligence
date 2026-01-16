@@ -7,7 +7,7 @@ services:
       - ../llm_config.local.yml:/app/llm_config.nebula.yml:ro
       - ../temp:/app/temp
     environment:
-      LLM_LOG_LEVEL: DEBUG
+      LOG_LEVEL: DEBUG
 
   faq:
     extends:
@@ -16,7 +16,7 @@ services:
     volumes:
       - ../llm_config.local.yml:/app/llm_config.nebula.yml:ro
     environment:
-      LLM_LOG_LEVEL: DEBUG
+      LOG_LEVEL: DEBUG
 
   nginx:
     extends:
