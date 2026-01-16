@@ -30,7 +30,7 @@ from weaviate.classes.query import Filter
 from weaviate.classes.config import Property
 from weaviate.collections.classes.config import DataType
 from weaviate.exceptions import WeaviateConnectionError, WeaviateQueryError
-from weaviate.auth import AuthApiKey
+from weaviate.classes.init import Auth
 
 from atlasml.config import WeaviateSettings, get_settings
 
@@ -124,7 +124,7 @@ class WeaviateClient:
                 # Prepare authentication if API key is provided
                 auth_credentials = None
                 if weaviate_settings.api_key:
-                    auth_credentials = AuthApiKey(api_key=weaviate_settings.api_key)
+                    auth_credentials = Auth.api_key(weaviate_settings.api_key)
 
                 # For HTTPS connections, gRPC should also be secure
                 grpc_secure = weaviate_settings.scheme == "https"

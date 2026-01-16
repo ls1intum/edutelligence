@@ -318,9 +318,9 @@ curl http://localhost/api/v1/competency/suggest
 # 1. Check API keys configured
 docker exec atlasml printenv ATLAS_API_KEYS
 
-# 2. Verify format (must be JSON array)
+# 2. Verify format (must be comma-separated)
 echo $ATLAS_API_KEYS
-# Should be: ["key1","key2"]
+# Should be: key1,key2 (comma-separated, no brackets)
 ```
 
 **Solutions**:

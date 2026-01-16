@@ -37,13 +37,13 @@ ATLAS_API_KEYS=key1,key2,key3
 **Example**:
 ```bash
 # Single key
-ATLAS_API_KEYS=my-secure-api-key-2025
+ATLAS_API_KEYS=YOUR_ATLAS_API_KEY
 
 # Multiple keys (for key rotation)
-ATLAS_API_KEYS=current-key,backup-key
+ATLAS_API_KEYS=CURRENT_KEY,BACKUP_KEY
 
 # Production example
-ATLAS_API_KEYS=prod-key-artemis-1,prod-key-artemis-2
+ATLAS_API_KEYS=PROD_KEY_1,PROD_KEY_2
 ```
 
 **Security Notes**:
@@ -60,7 +60,7 @@ openssl rand -hex 32
 # Using Python
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
-# Example output: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+# Example output: (a 32+ character random string)
 ```
 
 ---
@@ -104,11 +104,17 @@ AtlasML requires the **centralized Weaviate setup** located in `/weaviate` direc
 **Production Configuration Example**:
 
 ```bash
-# Production (using centralized Weaviate with REST API only)
+# Production (using centralized Weaviate)
+# HTTPS/REST on port 443 with gRPC enabled (gRPC port 50051 must also be reachable)
 WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
-WEAVIATE_API_KEY=your-secure-weaviate-api-key-from-weaviate-env
+WEAVIATE_GRPC_PORT=50051
+WEAVIATE_API_KEY=YOUR_WEAVIATE_API_KEY
 ```
+
+:::note
+The Weaviate Python client v4 requires **both** REST and gRPC protocols. Ensure the gRPC port (default: 50051 for self-hosted) is accessible from AtlasML to the Weaviate server.
+:::
 
 ---
 
@@ -444,9 +450,9 @@ Use HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, etc.
 
 **Example with Vault**:
 ```bash
-# Store secret
+# Store secret (use comma-separated format for API keys)
 vault kv put secret/atlasml/prod \
-  api_keys='["key1","key2"]' \
+  api_keys='key1,key2' \
   openai_key='your-key'
 
 # Retrieve and export
@@ -504,9 +510,13 @@ curl -H "Authorization: your-key" http://localhost/api/v1/competency/suggest \
 ```bash
 # Check ATLAS_API_KEYS format
 echo $ATLAS_API_KEYS
-# Should be: ["key1","key2"]
-# NOT: ["key1", "key2"] (no spaces)
-# NOT: [key1,key2] (missing quotes)
+# Should be comma-separated: key1,key2
+# NOT: ["key1","key2"] (JSON array not supported)
+# NOT: key1, key2 (no spaces around commas)
+
+# Extract first key for testing
+KEY=$(echo $ATLAS_API_KEYS | cut -d',' -f1)
+echo "First key: $KEY"
 ```
 
 **Error**: `Weaviate connection failed`

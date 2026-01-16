@@ -376,7 +376,7 @@ docker system prune -a --volumes
 
 **Configure in .env**:
 ```bash
-SENTRY_DSN=https://examplekey@o123456.ingest.sentry.io/7891011
+SENTRY_DSN=https://YOUR_SENTRY_KEY@YOUR_ORG.ingest.sentry.io/YOUR_PROJECT_ID
 ENV=production
 ```
 
