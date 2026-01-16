@@ -1,9 +1,11 @@
 """Transcriber-specific configuration."""
 
-from nebula.common.config import Config
+from pathlib import Path
 
-# Video storage path for transcription service
-VIDEO_STORAGE_PATH = Config.BASE_DIR.parent / "temp"
+from nebula.common.config import get_required_env
+
+# Video/audio storage path - must be explicitly configured via environment
+VIDEO_STORAGE_PATH = Path(get_required_env("NEBULA_TEMP_DIR"))
 
 
 def ensure_dirs() -> None:

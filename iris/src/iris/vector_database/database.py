@@ -1,10 +1,10 @@
 import atexit
-import logging
 import threading
 
 import weaviate
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.config import settings
 
 from .faq_schema import init_faq_schema
@@ -13,7 +13,7 @@ from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
 from .lecture_unit_schema import init_lecture_unit_schema
 from .lecture_unit_segment_schema import init_lecture_unit_segment_schema
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 batch_update_lock = threading.Lock()
 
 

@@ -302,9 +302,9 @@ curl http://localhost:3870/transcribe/status/{job_id}
 
 ### Environment Variables
 
-- `NEBULA_TEMP_DIR`: Temporary storage path (default: `./temp`)
-- `NEBULA_LLM_CONFIG_FILE`: LLM configuration file path (default: `llm_config.local.yml`)
-- `NEBULA_LOG_LEVEL`: Logging level (default: `INFO`)
+- `NEBULA_TEMP_DIR`: Temporary storage path (required, no default)
+- `LLM_CONFIG_PATH`: LLM configuration file path (required, no default)
+- `LOG_LEVEL`: Logging level (optional, default: `INFO`)
 
 ## 📊 Performance Characteristics
 
