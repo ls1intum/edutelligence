@@ -66,12 +66,16 @@ Configured in `docker-compose.prod.yml`:
 
 ```yaml
 healthcheck:
-  test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1/health']
+  test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health').getcode() == 200 else 1)"]
   interval: 30s
   timeout: 10s
   retries: 3
-  start_period: 10s
+  start_period: 30s
 ```
+
+:::note
+The health check uses Python's `urllib` instead of `curl` because `curl` is not installed in the slim Python Docker image. This approach is more reliable and doesn't require additional dependencies.
+:::
 
 **Parameters**:
 - `interval`: Check every 30 seconds

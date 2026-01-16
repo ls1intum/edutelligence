@@ -235,50 +235,44 @@ docker logs atlasml
 ### 1. Configure Firewall
 
 ```bash
-# Allow HTTP/HTTPS
+# Allow HTTP/HTTPS (required for Traefik and Let's Encrypt)
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 
-# Allow only from Artemis server (recommended)
-sudo ufw allow from ARTEMIS_SERVER_IP to any port 80
+# Allow only from Artemis server (recommended for additional security)
+sudo ufw allow from ARTEMIS_SERVER_IP to any port 443
 ```
 
-### 2. Set Up Reverse Proxy (Nginx)
+### 2. Verify SSL/TLS Certificate
 
-For HTTPS support:
+The production setup uses **Traefik** as the reverse proxy with automatic Let's Encrypt SSL certificates. No additional reverse proxy (like Nginx) is needed.
+
+**Verify certificate issuance:**
 
 ```bash
-# Install Nginx
-sudo apt-get install nginx certbot python3-certbot-nginx
+# Wait a few minutes after first deployment for Let's Encrypt
+# Then verify HTTPS is working
+curl -v https://your-atlasml-domain.com/api/v1/health
 
-# Create configuration
-sudo cat > /etc/nginx/sites-available/atlasml << 'EOF'
-server {
-    listen 443 ssl http2;
-    server_name atlasml.yourdomain.com;
-
-    ssl_certificate /etc/letsencrypt/live/atlasml.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/atlasml.yourdomain.com/privkey.pem;
-
-    location / {
-        proxy_pass http://localhost:80;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-EOF
-
-# Enable site
-sudo ln -s /etc/nginx/sites-available/atlasml /etc/nginx/sites-enabled/
-
-# Get SSL certificate
-sudo certbot --nginx -d atlasml.yourdomain.com
-
-# Reload Nginx
-sudo systemctl reload nginx
+# Check Traefik logs for certificate issues
+docker logs atlasml-traefik 2>&1 | grep -i "certificate\|acme"
 ```
+
+**Troubleshooting SSL:**
+
+```bash
+# Check acme.json permissions (must be 600)
+ls -la /opt/atlasml/traefik/acme.json
+
+# If certificate fails, check:
+# 1. Domain DNS points to server IP
+# 2. Ports 80/443 are open
+# 3. ATLASML_DOMAIN and LETSENCRYPT_EMAIL are set correctly
+```
+
+:::tip
+Traefik automatically handles certificate renewal. No manual intervention needed.
+:::
 
 ### 3. Enable Auto-Start
 
