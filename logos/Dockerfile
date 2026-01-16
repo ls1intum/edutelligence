@@ -3,6 +3,7 @@ FROM python:3.13-slim
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
 
 # Install system packages needed for building wheels and compiling protos
 RUN apt-get update \
