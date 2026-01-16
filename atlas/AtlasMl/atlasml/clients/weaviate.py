@@ -7,7 +7,9 @@ This module provides:
 - High-level CRUD/search helpers that return simple Python structures
 
 Connection configuration is provided by `atlasml.config.WeaviateSettings`.
-The client defaults to `weaviate.connect_to_local` using host/ports from env.
+The client supports both local HTTP connections and remote HTTPS connections
+with API key authentication. gRPC is used for optimal performance as required
+by the Weaviate Python client v4.
 
 Typical usage within request handlers:
     from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
@@ -28,6 +30,7 @@ from weaviate.classes.query import Filter
 from weaviate.classes.config import Property
 from weaviate.collections.classes.config import DataType
 from weaviate.exceptions import WeaviateConnectionError, WeaviateQueryError
+from weaviate.classes.init import Auth
 
 from atlasml.config import WeaviateSettings, get_settings
 
@@ -110,13 +113,46 @@ class WeaviateClient:
             weaviate_settings = get_settings().weaviate
 
         try:
-            self.client = weaviate.connect_to_local(
-                host=weaviate_settings.host,
-                port=weaviate_settings.port,
-                grpc_port=weaviate_settings.grpc_port,
-            )
+            # Determine connection method based on scheme and API key
+            if weaviate_settings.scheme == "https" or weaviate_settings.api_key:
+                # Use custom connection for HTTPS or authenticated connections
+                logger.info(
+                    f"Connecting to Weaviate at {weaviate_settings.scheme}://{weaviate_settings.host}:{weaviate_settings.port} "
+                    f"(gRPC port: {weaviate_settings.grpc_port}, authenticated: {bool(weaviate_settings.api_key)})"
+                )
+
+                # Prepare authentication if API key is provided
+                auth_credentials = None
+                if weaviate_settings.api_key:
+                    auth_credentials = Auth.api_key(weaviate_settings.api_key)
+
+                # For HTTPS connections, gRPC should also be secure
+                grpc_secure = weaviate_settings.scheme == "https"
+
+                self.client = weaviate.connect_to_custom(
+                    http_host=weaviate_settings.host,
+                    http_port=weaviate_settings.port,
+                    http_secure=(weaviate_settings.scheme == "https"),
+                    grpc_host=weaviate_settings.host,
+                    grpc_port=weaviate_settings.grpc_port,
+                    grpc_secure=grpc_secure,
+                    auth_credentials=auth_credentials,
+                )
+            else:
+                # Use local connection for HTTP without authentication
+                logger.info(
+                    f"Connecting to local Weaviate at {weaviate_settings.host}:{weaviate_settings.port} "
+                    f"(gRPC port: {weaviate_settings.grpc_port})"
+                )
+                self.client = weaviate.connect_to_local(
+                    host=weaviate_settings.host,
+                    port=weaviate_settings.port,
+                    grpc_port=weaviate_settings.grpc_port,
+                )
+
             logger.info(
-                f"✅ Connected to Weaviate at {weaviate_settings.host}:{weaviate_settings.port}"
+                f"✅ Connected to Weaviate at {weaviate_settings.scheme}://{weaviate_settings.host}:{weaviate_settings.port} "
+                f"(gRPC: {weaviate_settings.grpc_port})"
             )
         except WeaviateConnectionError as e:
             logger.error(f"❌ Failed to connect to Weaviate: {e}")

@@ -5,7 +5,6 @@ from pathlib import Path
 os.environ["ATLAS_API_KEYS"] = "secret-token,test-token"
 os.environ["WEAVIATE_HOST"] = "localhost"
 os.environ["WEAVIATE_PORT"] = "8080"
-os.environ["WEAVIATE_GRPC_PORT"] = "50051"
 os.environ["TESTING"] = "true"
 
 import pytest
@@ -41,7 +40,6 @@ def test_env():
         "ATLAS_API_KEYS": "secret-token, test-token",
         "WEAVIATE_HOST": "localhost",
         "WEAVIATE_PORT": "8080",
-        "WEAVIATE_GRPC_PORT": "50051",
         "TESTING": "true",
     }
 
@@ -474,16 +472,17 @@ def mock_weaviate_client():
     """Fixture providing a mock Weaviate client with dependency injection support."""
     mock_client = MockWeaviateClient()
 
-    # Patch the weaviate.connect_to_local function
+    # Patch both weaviate.connect_to_local and weaviate.connect_to_custom functions
     with patch("weaviate.connect_to_local", return_value=mock_client):
-        # Also patch the singleton to ensure fresh instances in tests
-        with patch("atlasml.clients.weaviate.WeaviateClientSingleton._instance", None):
-            # Patch get_weaviate_client to return our mock
-            with patch(
-                "atlasml.ml.pipeline_workflows.get_weaviate_client",
-                return_value=mock_client,
-            ):
-                yield mock_client
+        with patch("weaviate.connect_to_custom", return_value=mock_client):
+            # Also patch the singleton to ensure fresh instances in tests
+            with patch("atlasml.clients.weaviate.WeaviateClientSingleton._instance", None):
+                # Patch get_weaviate_client to return our mock
+                with patch(
+                    "atlasml.ml.pipeline_workflows.get_weaviate_client",
+                    return_value=mock_client,
+                ):
+                    yield mock_client
 
 
 @pytest.fixture
@@ -570,4 +569,9 @@ def mock_weaviate_settings():
     """Fixture providing mock Weaviate settings."""
     from atlasml.config import WeaviateSettings
 
-    return WeaviateSettings(host="localhost", port=8080, grpc_port=50051)
+    return WeaviateSettings(
+        host="localhost",
+        port=8080,
+        api_key=None,
+        scheme="http"
+    )
