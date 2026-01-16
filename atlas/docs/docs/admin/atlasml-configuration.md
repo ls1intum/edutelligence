@@ -70,6 +70,7 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```bash
 WEAVIATE_HOST=https://your-weaviate-domain.com
 WEAVIATE_PORT=443
+WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=your-weaviate-api-key
 ```
 
@@ -87,7 +88,12 @@ AtlasML requires the **centralized Weaviate setup** located in `/weaviate` direc
 - **Description**: HTTPS port for Weaviate REST API
 - **Default**: `443`
 - **Required**: Must be `443` (centralized setup uses Traefik with HTTPS)
-- **Note**: AtlasML uses REST API only (no gRPC) for simplicity and better HTTPS compatibility
+
+**WEAVIATE_GRPC_PORT**:
+- **Description**: gRPC port for Weaviate (required by Weaviate Python client v4)
+- **Default**: `50051`
+- **Required**: Yes - the Weaviate Python client v4 requires gRPC for optimal performance
+- **Note**: This port must be accessible from AtlasML to the Weaviate server
 
 **WEAVIATE_API_KEY**:
 - **Description**: API key for authenticating with Weaviate

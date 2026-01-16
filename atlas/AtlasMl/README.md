@@ -41,7 +41,8 @@ docker compose -f docker-compose.dev.yml up -d
 ```
 
 This starts:
-- Weaviate on `http://localhost:8085` (no authentication required)
+- Weaviate on `http://localhost:8085` (REST API, no authentication required)
+- Weaviate gRPC on `localhost:50051` (required by Python client v4)
 - Multi2vec-CLIP on `http://localhost:8081` (for embeddings)
 
 **Verify Weaviate is running:**
@@ -72,6 +73,7 @@ ATLAS_API_KEYS=dev-test-key
 # Local Weaviate (no authentication needed)
 WEAVIATE_HOST=localhost
 WEAVIATE_PORT=8085
+WEAVIATE_GRPC_PORT=50051
 
 # Azure OpenAI (required for embeddings)
 OPENAI_API_KEY=your-azure-openai-key

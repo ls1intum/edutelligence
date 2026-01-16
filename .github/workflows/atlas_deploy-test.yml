@@ -40,6 +40,7 @@ jobs:
             # Weaviate Connection (Centralized Instance)
             WEAVIATE_HOST='${{ secrets.WEAVIATE_HOST }}'
             WEAVIATE_PORT='${{ secrets.WEAVIATE_PORT }}'
+            WEAVIATE_GRPC_PORT='${{ secrets.WEAVIATE_GRPC_PORT }}'
             WEAVIATE_API_KEY='${{ secrets.WEAVIATE_API_KEY }}'
 
             # Azure OpenAI Configuration

@@ -33,10 +33,12 @@ class APIKeyConfig(BaseModel):
 class WeaviateSettings(BaseModel):
     """Connection parameters for the Weaviate vector database.
 
-    Uses REST API only (no gRPC) for simplicity and better HTTPS compatibility.
+    Supports both REST and gRPC connections. gRPC is required by the Weaviate
+    Python client v4 for optimal performance.
     """
     host: str
     port: int
+    grpc_port: int = 50051
     api_key: str | None = None
     scheme: str = "http"  # "http" or "https"
 
@@ -120,6 +122,7 @@ class Settings(BaseModel):
         try:
             weaviate_host_raw = os.environ.get("WEAVIATE_HOST")
             weaviate_port = int(os.environ.get("WEAVIATE_PORT"))
+            weaviate_grpc_port = int(os.environ.get("WEAVIATE_GRPC_PORT", "50051"))
             weaviate_api_key = os.environ.get("WEAVIATE_API_KEY")
 
             # Parse scheme from URL if present (e.g., "https://weaviate.example.com" -> "https", "weaviate.example.com")
@@ -162,6 +165,7 @@ class Settings(BaseModel):
         weaviate_settings = WeaviateSettings(
             host=weaviate_host,
             port=weaviate_port,
+            grpc_port=weaviate_grpc_port,
             api_key=weaviate_api_key,
             scheme=weaviate_scheme
         )
@@ -170,7 +174,9 @@ class Settings(BaseModel):
         sentry_dsn = os.environ.get("SENTRY_DSN")
 
         logger.info(
-            f"Loaded settings - ENV: {env}, API keys count: {len(api_keys)}, Weaviate: {weaviate_scheme}://{weaviate_host}:{weaviate_port}, Sentry: {'configured' if sentry_dsn else 'not configured'}"
+            f"Loaded settings - ENV: {env}, API keys count: {len(api_keys)}, "
+            f"Weaviate: {weaviate_scheme}://{weaviate_host}:{weaviate_port} (gRPC: {weaviate_grpc_port}), "
+            f"Sentry: {'configured' if sentry_dsn else 'not configured'}"
         )
 
         return cls(api_keys=api_keys, weaviate=weaviate_settings, sentry_dsn=sentry_dsn, env=env)

@@ -8,7 +8,8 @@ This module provides:
 
 Connection configuration is provided by `atlasml.config.WeaviateSettings`.
 The client supports both local HTTP connections and remote HTTPS connections
-with API key authentication.
+with API key authentication. gRPC is used for optimal performance as required
+by the Weaviate Python client v4.
 
 Typical usage within request handlers:
     from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
@@ -117,7 +118,7 @@ class WeaviateClient:
                 # Use custom connection for HTTPS or authenticated connections
                 logger.info(
                     f"Connecting to Weaviate at {weaviate_settings.scheme}://{weaviate_settings.host}:{weaviate_settings.port} "
-                    f"(authenticated: {bool(weaviate_settings.api_key)}, REST only)"
+                    f"(gRPC port: {weaviate_settings.grpc_port}, authenticated: {bool(weaviate_settings.api_key)})"
                 )
 
                 # Prepare authentication if API key is provided
@@ -125,27 +126,33 @@ class WeaviateClient:
                 if weaviate_settings.api_key:
                     auth_credentials = AuthApiKey(api_key=weaviate_settings.api_key)
 
+                # For HTTPS connections, gRPC should also be secure
+                grpc_secure = weaviate_settings.scheme == "https"
+
                 self.client = weaviate.connect_to_custom(
                     http_host=weaviate_settings.host,
                     http_port=weaviate_settings.port,
                     http_secure=(weaviate_settings.scheme == "https"),
-                    grpc_host=None,  # Disable gRPC
-                    grpc_port=None,
-                    grpc_secure=False,
+                    grpc_host=weaviate_settings.host,
+                    grpc_port=weaviate_settings.grpc_port,
+                    grpc_secure=grpc_secure,
                     auth_credentials=auth_credentials,
                 )
             else:
                 # Use local connection for HTTP without authentication
                 logger.info(
-                    f"Connecting to local Weaviate at {weaviate_settings.host}:{weaviate_settings.port} (REST only)"
+                    f"Connecting to local Weaviate at {weaviate_settings.host}:{weaviate_settings.port} "
+                    f"(gRPC port: {weaviate_settings.grpc_port})"
                 )
                 self.client = weaviate.connect_to_local(
                     host=weaviate_settings.host,
                     port=weaviate_settings.port,
+                    grpc_port=weaviate_settings.grpc_port,
                 )
 
             logger.info(
-                f"✅ Connected to Weaviate at {weaviate_settings.scheme}://{weaviate_settings.host}:{weaviate_settings.port} (REST API)"
+                f"✅ Connected to Weaviate at {weaviate_settings.scheme}://{weaviate_settings.host}:{weaviate_settings.port} "
+                f"(gRPC: {weaviate_settings.grpc_port})"
             )
         except WeaviateConnectionError as e:
             logger.error(f"❌ Failed to connect to Weaviate: {e}")
