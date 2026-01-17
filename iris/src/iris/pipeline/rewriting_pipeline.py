@@ -23,6 +23,7 @@ from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
     system_prompt_problem_statement,
 )
+from iris.tracing import observe
 from iris.web.status.status_update import RewritingCallback
 
 from ..retrieval.faq_retrieval import FaqRetrieval
@@ -58,6 +59,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         self.variant = variant
         self.faq_retriever = FaqRetrieval(self.db.client)
 
+    @observe(name="Rewriting Pipeline")
     def __call__(
         self,
         dto: RewritingPipelineExecutionDTO,
@@ -120,6 +122,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             suggestions=suggestions,
         )
 
+    @observe(name="FAQ Consistency Check")
     def check_faq_consistency(
         self, faqs: List[dict], final_result: str
     ) -> Dict[str, str]:

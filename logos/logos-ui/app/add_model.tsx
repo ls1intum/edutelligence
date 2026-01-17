@@ -1,268 +1,348 @@
-import React, {useContext, useEffect, useState} from 'react';
-import {View, Text, StyleSheet, TextInput, Button, ScrollView, Pressable, Modal, TouchableOpacity} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {ThemeContext} from '@/components/theme';
-import Footer from '@/components/footer';
-import Header from '@/components/header';
-import Sidebar from '@/components/sidebar';
-import {useRouter} from "expo-router";
-import {Picker} from '@react-native-picker/picker';
-import {Ionicons} from '@expo/vector-icons';
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator } from "react-native";
+import { useRouter } from "expo-router";
+
+import { useAuth } from "@/components/auth-shell";
+import { Box } from "@/components/ui/box";
+import { Text } from "@/components/ui/text";
+import { VStack } from "@/components/ui/vstack";
+import { HStack } from "@/components/ui/hstack";
+import { Input, InputField } from "@/components/ui/input";
+import { Button, ButtonText } from "@/components/ui/button";
+import {
+  Select,
+  SelectBackdrop,
+  SelectContent,
+  SelectInput,
+  SelectItem,
+  SelectPortal,
+  SelectTrigger,
+} from "@/components/ui/select";
+import { Center } from "@/components/ui/center";
 
 const privacyOptions = [
-    'LOCAL',
-    'CLOUD_IN_EU_BY_US_PROVIDER',
-    'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
-    'CLOUD_IN_EU_BY_EU_PROVIDER'
+  "LOCAL",
+  "CLOUD_IN_EU_BY_US_PROVIDER",
+  "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+  "CLOUD_IN_EU_BY_EU_PROVIDER",
 ];
 
-export default function Models() {
-    const {theme} = useContext(ThemeContext);
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
-    const [apiKey, setApiKey] = useState('');
-    const router = useRouter();
+type WeightKeys = "latency" | "accuracy" | "cost" | "quality";
 
-    const [models, setModels] = useState<any[]>([]);
-    const [name, setName] = useState('');
-    const [endpoint, setEndpoint] = useState('');
-    const [tags, setTags] = useState('');
-    const [parallel, setParallel] = useState('1');
-    const [privacy, setPrivacy] = useState('LOCAL');
-    const [weights, setWeights] = useState({
-        latency: '',
-        accuracy: '',
-        cost: '',
-        quality: ''
-    });
+type ModelOption = { id: number; name: string };
 
-    const [tooltipText, setTooltipText] = useState('');
-    const [tooltipVisible, setTooltipVisible] = useState(false);
+export default function AddModel() {
+  const router = useRouter();
+  const { apiKey } = useAuth();
+  const [loadingModels, setLoadingModels] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-    const showTooltip = (text: string) => {
-        setTooltipText(text);
-        setTooltipVisible(true);
-    };
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [name, setName] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [tags, setTags] = useState("");
+  const [parallel, setParallel] = useState("1");
+  const [privacy, setPrivacy] = useState("LOCAL");
+  const [weights, setWeights] = useState<Record<WeightKeys, string>>({
+    latency: "",
+    accuracy: "",
+    cost: "",
+    quality: "",
+  });
 
-    useEffect(() => {
-        const checkLogin = async () => {
-            const key = await AsyncStorage.getItem('logos_api_key');
-            if (!key) {
-                requestAnimationFrame(() => {
-                    router.replace('/');
-                });
-            } else {
-                setIsLoggedIn(true);
-                setApiKey(key);
-            }
-        };
-        checkLogin();
-    }, []);
+  useEffect(() => {
+    if (!apiKey) return;
+    loadModels(apiKey);
+  }, [apiKey]);
 
-    const handleSubmit = async () => {
-        const payload = {
-            name, endpoint, tags, parallel: parseInt(parallel),
-            weight_privacy: privacy,
-            weight_latency: 0,
-            weight_accuracy: 0,
-            weight_cost: 0,
-            weight_quality: 0,
-            compare_latency: weights.latency,
-            compare_accuracy: weights.accuracy,
-            compare_cost: weights.cost,
-            compare_quality: weights.quality
-        };
-        try {
-            const res = await fetch('/add_model', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': apiKey
-                },
-                body: JSON.stringify(payload)
-            });
-            if (res.ok) {
-                setName('');
-                setEndpoint('');
-                setTags('');
-                setParallel('1');
-                setPrivacy('LOCAL');
-                setWeights({latency: '', accuracy: '', cost: '', quality: ''});
-            }
-        } catch (e) {
-            console.error(e);
+  const loadModels = async (key: string) => {
+    try {
+      setLoadingModels(true);
+      const response = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/get_models",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+            logos_key: key,
+          },
+          body: JSON.stringify({
+            logos_key: key,
+          }),
         }
+      );
+
+      const [data, code] = JSON.parse(await response.text());
+      if (code === 200) {
+        const formattedModels = data.map((model: any[][]) => ({
+          id: model[0],
+          name: model[1],
+        }));
+        setModels(formattedModels);
+      } else {
+        setModels([]);
+      }
+    } catch (e) {
+      setModels([]);
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!name || !endpoint) {
+      setStatusMessage("Please fill in the required fields.");
+      return;
+    }
+
+    const payload = {
+      name,
+      endpoint,
+      tags,
+      parallel: parseInt(parallel, 10) || 1,
+      weight_privacy: privacy,
+      weight_latency: 0,
+      weight_accuracy: 0,
+      weight_cost: 0,
+      weight_quality: 0,
+      compare_latency: weights.latency,
+      compare_accuracy: weights.accuracy,
+      compare_cost: weights.cost,
+      compare_quality: weights.quality,
+      logos_key: apiKey,
     };
 
-    if (!isLoggedIn) return null;
+    try {
+      setSubmitting(true);
+      setStatusMessage(null);
+      const res = await fetch(
+        "https://logos.ase.cit.tum.de:8080/logosdb/add_model",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+            logos_key: apiKey,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
 
-    const Tooltip = ({ text }: { text: string }) => (
-        <View style={styles.tooltip}>
-            <Text style={styles.tooltipText}>{text}</Text>
-        </View>
-    );
+      if (res.ok) {
+        setStatusMessage("Model added successfully.");
+        setName("");
+        setEndpoint("");
+        setTags("");
+        setParallel("1");
+        setPrivacy("LOCAL");
+        setWeights({ latency: "", accuracy: "", cost: "", quality: "" });
+        loadModels(apiKey);
+      } else {
+        setStatusMessage("Could not add the model. Please try again.");
+      }
+    } catch (e) {
+      setStatusMessage("Unexpected error while adding the model.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
-    // @ts-ignore
-    return (
-        <View style={styles.outer_container}>
-            <Header/>
-            <View style={[styles.page, theme === 'light' ? styles.light : styles.dark]}>
-                <Sidebar/>
-                <ScrollView style={styles.content}>
-                    <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>
-                        Add Model
-                    </Text>
-                    <Text style={[theme === 'light' ? styles.textLight : styles.textDark]}>
-                        Add a new Model to Logos
-                    </Text>
+  return (
+    <VStack className="w-full space-y-6">
+      <VStack className="space-y-1">
+        <Text
+          size="2xl"
+          className="text-center font-bold text-black dark:text-white"
+        >
+          Add Model
+        </Text>
+        <Text className="text-center text-gray-500 dark:text-gray-300">
+          Add a new model to Logos
+        </Text>
+      </VStack>
 
-                    <View style={styles.formRowContainer}>
-                        <View style={styles.leftColumn}>
-                            {[{
-                                label: 'Name', value: name, setter: setName,
-                                tooltip: 'Unique Model Name'
-                            }, {
-                                label: 'Endpoint', value: endpoint, setter: setEndpoint,
-                                tooltip: 'Model-Endpoint'
-                            }, {
-                                label: 'Tags', value: tags, setter: setTags,
-                                tooltip: 'Keywords separated by ";"'
-                            }, {
-                                label: 'Parallelism', value: parallel, setter: setParallel,
-                                tooltip: 'Maximum number of parallel requests to this model (1–256)', keyboard: 'numeric'
-                            }].map(({label, value, setter, tooltip, keyboard}) => (
-                                <View key={label} style={styles.formRow}>
-                                    <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>{label}:
-                                        <View onMouseEnter={() => showTooltip(tooltip)} onMouseLeave={() => setTooltipVisible(false)}>
-                                            <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                            {tooltipVisible && tooltipText === tooltip && <Tooltip text={tooltip} />}
-                                        </View>
-                                    </Text>
-                                    <TextInput value={value} onChangeText={setter} style={[styles.input, theme === 'light' ? styles.textLight : styles.textDark]}/>
-                                </View>
-                            ))}
+      <Box className="space-y-6 rounded-2xl border border-outline-200 bg-secondary-200 p-6">
+        <HStack className="flex-col gap-6 md:flex-row">
+          <VStack className="flex-1 space-y-4">
+            <Field
+              label="Name"
+              helper="Unique model name"
+              value={name}
+              onChangeText={setName}
+              placeholder="LLM-1"
+            />
+            <Field
+              label="Endpoint"
+              helper="Model endpoint URL"
+              value={endpoint}
+              onChangeText={setEndpoint}
+              placeholder="https://example.com/invoke"
+            />
+            <Field
+              label="Tags"
+              helper='Keywords separated by ";"'
+              value={tags}
+              onChangeText={setTags}
+              placeholder="fast;creative;gpt"
+            />
+            <Field
+              label="Parallelism"
+              helper="Maximum parallel requests"
+              value={parallel}
+              onChangeText={setParallel}
+              keyboardType="numeric"
+              placeholder="1"
+            />
 
-                            <View style={styles.formRow}>
-                                <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>Privacy-Weight:
-                                    <View onMouseEnter={() => showTooltip('Privacy of the Model')} onMouseLeave={() => setTooltipVisible(false)}>
-                                        <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                        {tooltipVisible && tooltipText === 'Privacy of the Model' && <Tooltip text={'Privacy of the Model'} />}
-                                    </View>
-                                </Text>
-                                <Picker selectedValue={privacy} onValueChange={setPrivacy} style={styles.input}>
-                                    {privacyOptions.map(opt => (
-                                        <Picker.Item label={opt} value={opt} key={opt}/>
-                                    ))}
-                                </Picker>
-                            </View>
-                        </View>
+            <Box className="space-y-2">
+              <Text className="text-sm font-semibold text-black dark:text-white">
+                Privacy Weight
+              </Text>
+              <Select
+                selectedValue={privacy}
+                onValueChange={(val) => setPrivacy(val || "LOCAL")}
+              >
+                <SelectTrigger className="rounded-md border border-outline-200 bg-white px-3 py-2 dark:border-outline-700 dark:bg-[#1b1b1b]">
+                  <SelectInput
+                    placeholder="Select privacy"
+                    value={privacy}
+                    className="text-black dark:text-white"
+                  />
+                </SelectTrigger>
+                <SelectPortal>
+                  <SelectBackdrop />
+                  <SelectContent className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#111]">
+                    {privacyOptions.map((opt) => (
+                      <SelectItem key={opt} label={opt} value={opt} />
+                    ))}
+                  </SelectContent>
+                </SelectPortal>
+              </Select>
+            </Box>
+          </VStack>
 
-                        <View style={styles.rightColumn}>
-                            {['Latency', 'Accuracy', 'Cost', 'Quality'].map((key) => (
-                                <View key={key} style={styles.formRow}>
-                                    <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>{key}-Weight:
-                                        <View onMouseEnter={() => showTooltip(`Which is the best model that is worse than this one in terms of ${key}?`)} onMouseLeave={() => setTooltipVisible(false)}>
-                                            <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                            {tooltipVisible && tooltipText === `Which is the best model that is worse than this one in terms of ${key}?` && <Tooltip text={`Which is the best model that is worse than this one in terms of ${key}?`} />}
-                                        </View>
-                                    </Text>
-                                    <Picker
-                                        selectedValue={weights[key as keyof typeof weights]}
-                                        onValueChange={(v) => setWeights(prev => ({...prev, [key]: v}))}
-                                        style={styles.input}
-                                    >
-                                        <Picker.Item label="None" value=""/>
-                                        {models.map(m => (
-                                            <Picker.Item label={m.name} value={m.id.toString()} key={m.id}/>
-                                        ))}
-                                    </Picker>
-                                </View>
-                            ))}
-                        </View>
-                    </View>
-                    <View style={styles.buttons}>
-                        <TouchableOpacity style={styles.addButton} onPress={() => router.push('/models')}>
-                            <Text style={styles.addButtonText}>+ Add</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.abortButton} onPress={() => router.push('/models')}>
-                            <Text style={styles.addButtonText}>- Abort</Text>
-                        </TouchableOpacity>
-                    </View>
-                </ScrollView>
-            </View>
-            <Footer/>
-        </View>
-    );
+          <VStack className="flex-1 space-y-4">
+            <Text className="text-base font-semibold text-black dark:text-white">
+              Compare weights
+            </Text>
+            {(["latency", "accuracy", "cost", "quality"] as WeightKeys[]).map(
+              (key) => (
+                <Box key={key} className="space-y-2">
+                  <Text className="text-sm font-semibold capitalize text-black dark:text-white">
+                    {key} weight
+                  </Text>
+                  {loadingModels ? (
+                    <Center className="h-10">
+                      <ActivityIndicator size="small" color="#666" />
+                    </Center>
+                  ) : (
+                    <Select
+                      selectedValue={weights[key]}
+                      onValueChange={(val) =>
+                        setWeights((prev) => ({ ...prev, [key]: val || "" }))
+                      }
+                    >
+                      <SelectTrigger className="rounded-md border border-outline-200 bg-white px-3 py-2 dark:border-outline-700 dark:bg-[#1b1b1b]">
+                        <SelectInput
+                          placeholder="No model selected"
+                          value={
+                            models.find((m) => m.id.toString() === weights[key])
+                              ?.name || ""
+                          }
+                          className="text-black dark:text-white"
+                        />
+                      </SelectTrigger>
+                      <SelectPortal>
+                        <SelectBackdrop />
+                        <SelectContent className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#111]">
+                          <SelectItem label="None" value="" />
+                          {models.map((m) => (
+                            <SelectItem
+                              key={m.id}
+                              label={m.name}
+                              value={m.id.toString()}
+                            />
+                          ))}
+                        </SelectContent>
+                      </SelectPortal>
+                    </Select>
+                  )}
+                </Box>
+              )
+            )}
+          </VStack>
+        </HStack>
+
+        <HStack className="flex-wrap items-center justify-between gap-3">
+          {statusMessage && (
+            <Text className="text-sm text-gray-700 dark:text-gray-300">
+              {statusMessage}
+            </Text>
+          )}
+          <HStack className="gap-3">
+            <Button
+              onPress={handleSubmit}
+              isDisabled={submitting}
+              action="primary"
+            >
+              {submitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <ButtonText>Add Model</ButtonText>
+              )}
+            </Button>
+            <Button
+              variant="solid"
+              action="negative"
+              onPress={() => router.push("/models")}
+            >
+              <ButtonText>Cancel</ButtonText>
+            </Button>
+          </HStack>
+        </HStack>
+      </Box>
+    </VStack>
+  );
 }
 
-const styles = StyleSheet.create({
-    page: {flex: 1, flexDirection: 'row'},
-    outer_container: {flex: 1},
-    content: {flex: 1, padding: 32, width: '100%'},
-    title: {fontSize: 28, fontWeight: 'bold', marginBottom: 24, alignSelf: 'center'},
-    subheading: {fontSize: 20, fontWeight: '600', marginTop: 40, marginBottom: 16},
-    formRowContainer: {flexDirection: 'row', justifyContent: 'space-between', gap: 32, marginBottom: 40},
-    leftColumn: {flex: 1},
-    rightColumn: {flex: 1},
-    formRow: {marginBottom: 20},
-    input: {borderWidth: 1, borderColor: '#888', borderRadius: 10, padding: 12},
-    label: {fontWeight: 'bold', marginBottom: 6, flexDirection: 'row', alignItems: 'center'},
-    modelBox: {padding: 14, backgroundColor: '#4444', borderRadius: 12, marginBottom: 12},
-    icon: {marginLeft: 4},
-    light: {backgroundColor: '#fff'},
-    dark: {backgroundColor: '#1e1e1e'},
-    textLight: {color: '#000'},
-    textDark: {color: '#fff'},
-    buttons: {
-      justifyContent: 'flex-end',
-      flexDirection: 'row',
-    },
-    tooltip: {
-        position: 'absolute',
-        top: 20,
-        left: 20,
-        backgroundColor: '#333',
-        padding: 8,
-        borderRadius: 6,
-        zIndex: 9999,
-        width: "auto",
-        maxWidth: 500,
-        minWidth: 300,
-    },
-    tooltipText: {
-        color: '#fff',
-        fontSize: 12
-    },
-    addButton: {
-        backgroundColor: '#007bff',
-        paddingVertical: 12,
-        paddingHorizontal: 24,
-        borderRadius: 12,
-        alignItems: 'center',
-        marginVertical: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 3,
-        maxWidth: 300
-    },
-    abortButton: {
-        backgroundColor: '#ff0000',
-        paddingVertical: 12,
-        paddingHorizontal: 24,
-        borderRadius: 12,
-        alignItems: 'center',
-        marginVertical: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 3,
-        maxWidth: 300
-    },
-    addButtonText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-    }
-});
+type FieldProps = {
+  label: string;
+  helper?: string;
+  value: string;
+  onChangeText: (val: string) => void;
+  placeholder?: string;
+  keyboardType?: "default" | "numeric";
+};
+
+const Field = ({
+  label,
+  helper,
+  value,
+  onChangeText,
+  placeholder,
+  keyboardType = "default",
+}: FieldProps) => {
+  return (
+    <Box className="space-y-2">
+      <Text className="text-sm font-semibold text-black dark:text-white">
+        {label}
+      </Text>
+      <Input className="border border-outline-200 bg-white dark:border-outline-700 dark:bg-[#1b1b1b]">
+        <InputField
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          keyboardType={keyboardType}
+          className="text-black placeholder:text-gray-500 dark:text-white dark:placeholder:text-gray-400"
+        />
+      </Input>
+      {helper && (
+        <Text className="text-xs text-gray-500 dark:text-gray-400">
+          {helper}
+        </Text>
+      )}
+    </Box>
+  );
+};

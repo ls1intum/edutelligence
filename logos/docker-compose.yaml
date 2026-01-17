@@ -35,7 +35,8 @@ services:
         condition: service_healthy
     volumes:
       - data_volume:/src/logos
-      - ./tests/results/scheduling:/app/logos/tests/results/scheduling
+      - ./tests/performance/results:/app/tests/performance/results
+      - ./tests/integration:/app/tests/integration
     environment:
       PROVIDER_NAME: azure
       BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/

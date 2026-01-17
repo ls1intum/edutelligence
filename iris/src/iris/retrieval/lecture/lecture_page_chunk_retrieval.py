@@ -1,7 +1,6 @@
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -24,6 +23,7 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
@@ -82,7 +82,7 @@ class LecturePageChunkRetrieval(SubPipeline):
 
         self.tokens = []
 
-    @traceable(name="Full Lecture Retrieval")
+    @observe(name="Full Lecture Retrieval")
     def __call__(
         self,
         student_query: str,
@@ -131,7 +131,7 @@ class LecturePageChunkRetrieval(SubPipeline):
         )
         return reranked_page_chunks
 
-    @traceable(name="Retrieval: Search in DB")
+    @observe(name="Retrieval: Search in DB")
     def search_in_db(
         self,
         query: str,

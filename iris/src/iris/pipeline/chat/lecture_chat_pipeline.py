@@ -4,12 +4,12 @@ from typing import Any, Callable, List, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langsmith import traceable
 
 from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
+from iris.tracing import observe
 
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
@@ -374,7 +374,7 @@ class LectureChatPipeline(
         """
         return self.update_session_title(state, output, dto.session_title)
 
-    @traceable(name="Lecture Chat Pipeline")
+    @observe(name="Lecture Chat Pipeline")
     def __call__(
         self,
         dto: LectureChatPipelineExecutionDTO,
