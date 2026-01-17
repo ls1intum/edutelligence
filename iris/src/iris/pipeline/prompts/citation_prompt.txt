@@ -21,7 +21,7 @@ Output JSON schema:
   "citations": [
     {{
       "index": 1,
-      "type": "video" | "slides",
+      "type": "video" | "slide",
       "link": "https://...",
       "lecture_name": "...",
       "unit_name": "...",
@@ -37,7 +37,7 @@ Output JSON schema:
 }}
 
 Field rules:
-- "type" must be "video" for transcription sources and "slides" for lecture slide sources.
+- "type" must be "video" for transcription sources and "slide" for lecture slide sources.
 - "index" must match the citation marker number in [cite:n].
 - "keyword" must be exactly one word with no spaces or punctuation.
 - "summary" must be 1-2 sentences.

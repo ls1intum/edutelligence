@@ -9,7 +9,7 @@ class CitationDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     index: int
-    type: Literal["video", "slides", "faq"]
+    type: Literal["video", "slide", "faq"]
     link: Optional[str] = None
     lecture_name: Optional[str] = Field(alias="lectureName", default=None)
     unit_name: Optional[str] = Field(alias="unitName", default=None)
