@@ -559,7 +559,7 @@ class CourseChatPipeline(
         dto: CourseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the conversation history.
 
         Args:
             state: The current pipeline execution state
@@ -567,17 +567,9 @@ class CourseChatPipeline(
             dto: The pipeline execution DTO
 
         Returns:
-            The generated session title or None if not applicable
+            The generated session title or None if not applicable.
         """
-        # Generate only the 'first time'
-        # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
-        # - or directly with the user's first message (len == 1)
-        if len(dto.chat_history) in (1, 2):
-            first_user_msg = (
-                dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
-            )
-            return super()._create_session_title(state, output, first_user_msg)
-        return None
+        return self.update_session_title(state, output, dto.session_title)
 
     @observe(name="Course Chat Pipeline")
     def __call__(

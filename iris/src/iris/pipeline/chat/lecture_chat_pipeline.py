@@ -362,14 +362,17 @@ class LectureChatPipeline(
         dto: LectureChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate a session title for the first learner interaction.
-        """
+        Generate a session title from the latest user prompt and the model output.
 
-        chat_history = dto.chat_history or []
-        if len(chat_history) == 1 and chat_history[0].contents:
-            first_user_msg = chat_history[0].contents[0].text_content
-            return super()._create_session_title(state, output, first_user_msg)
-        return None
+        Args:
+            state: The current pipeline execution state
+            output: The agent's output
+            dto: The pipeline execution DTO
+
+        Returns:
+            The generated session title or None if not applicable
+        """
+        return self.update_session_title(state, output, dto.session_title)
 
     @observe(name="Lecture Chat Pipeline")
     def __call__(
