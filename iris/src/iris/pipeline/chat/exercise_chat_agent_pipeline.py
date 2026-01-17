@@ -351,6 +351,7 @@ class ExerciseChatAgentPipeline(
                 final_result=result,
                 tokens=state.tokens,
                 session_title=session_title,
+                citations=getattr(state, "citations", []),
             )
 
             return result
@@ -439,6 +440,9 @@ class ExerciseChatAgentPipeline(
             user_language = state.dto.user.lang_key
 
         try:
+            if not hasattr(state, "citations"):
+                state.citations = []
+
             # Add FAQ citations
             faq_storage = getattr(state, "faq_storage", {})
             if faq_storage.get("faqs"):
@@ -446,7 +450,7 @@ class ExerciseChatAgentPipeline(
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
-                result = self.citation_pipeline(
+                citation_result = self.citation_pipeline(
                     faq_storage["faqs"],
                     result,
                     InformationType.FAQS,
@@ -454,6 +458,8 @@ class ExerciseChatAgentPipeline(
                     user_language=user_language,
                     base_url=base_url,
                 )
+                result = citation_result.answer
+                state.citations.extend(citation_result.citations)
 
             # Add lecture content citations
             lecture_content_storage = getattr(state, "lecture_content_storage", {})
@@ -462,7 +468,7 @@ class ExerciseChatAgentPipeline(
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
-                result = self.citation_pipeline(
+                citation_result = self.citation_pipeline(
                     lecture_content_storage["content"],
                     result,
                     InformationType.PARAGRAPHS,
@@ -470,6 +476,8 @@ class ExerciseChatAgentPipeline(
                     user_language=user_language,
                     base_url=base_url,
                 )
+                result = citation_result.answer
+                state.citations.extend(citation_result.citations)
 
             if (
                 hasattr(self.citation_pipeline, "tokens")

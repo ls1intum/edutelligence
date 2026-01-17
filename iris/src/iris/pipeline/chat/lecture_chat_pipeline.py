@@ -292,6 +292,7 @@ class LectureChatPipeline(
             tokens=state.tokens,
             session_title=session_title,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
+            citations=getattr(state, "citations", []),
         )
 
         return state.result
@@ -326,9 +327,12 @@ class LectureChatPipeline(
         if state.dto.user and state.dto.user.lang_key:
             user_language = state.dto.user.lang_key
 
+        if not hasattr(state, "citations"):
+            state.citations = []
+
         if lecture_content_storage.get("content"):
             base_url = dto.settings.artemis_base_url if dto.settings else ""
-            output = self.citation_pipeline(
+            citation_result = self.citation_pipeline(
                 lecture_content_storage["content"],
                 output,
                 InformationType.PARAGRAPHS,
@@ -336,13 +340,15 @@ class LectureChatPipeline(
                 user_language=user_language,
                 base_url=base_url,
             )
+            output = citation_result.answer
+            state.citations.extend(citation_result.citations)
         if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
             for token in self.citation_pipeline.tokens:
                 self._track_tokens(state, token)
 
         if faq_storage.get("faqs"):
             base_url = dto.settings.artemis_base_url if dto.settings else ""
-            output = self.citation_pipeline(
+            citation_result = self.citation_pipeline(
                 faq_storage["faqs"],
                 output,
                 InformationType.FAQS,
@@ -350,6 +356,8 @@ class LectureChatPipeline(
                 user_language=user_language,
                 base_url=base_url,
             )
+            output = citation_result.answer
+            state.citations.extend(citation_result.citations)
 
         return output
 

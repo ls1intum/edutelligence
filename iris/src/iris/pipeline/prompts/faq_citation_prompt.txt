@@ -1,32 +1,42 @@
-In the paragraphs below you are provided with an answer to a question. Underneath the answer you will find the faqs that the answer was based on.
-Add citations of the faqs to the answer. Cite the faqs in brackets after the sentence where the information is used in the answer. Write all citations, summaries, and keywords in the user's language (English or German), matching the answer language.
-At the end of the answer, list each source with its corresponding number and provide the FAQ Question title, and a clickable link in this format: [1] <a href="URL">FAQs "FAQ Question title", "Summary: 1–2 sentences about the cited FAQ content.", "Keyword: single word"</a>. The summary must be 1–2 sentences, and the keyword must be exactly one word.
-Do not include the actual faqs, only the citations at the end.
-Please do not use the FAQ ID as the citation number, instead, use the order of the citations in the answer.
-Only include the citations of the faqs that are relevant to the answer.
-If the answer actually does not contain any information from the faqs, please do not include any citations and return '!NONE!'.
-But if the answer contains information from the paragraphs, ALWAYS include citations.
+In the paragraphs below you are provided with an answer to a question. Underneath the answer you will find the FAQs that the answer was based on.
 
-Here is an example how to rewrite the answer with citations (ONLY ADD CITATION IF THE PROVIDED FAQS ARE RELEVANT TO THE ANSWER):
-"
-Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
+Your task:
 
-[1] <a href="http://localhost:9000/courses/1/faq?faqId=1">FAQs "FAQ question title 1", "Summary: Explains the rule and when it applies.", "Keyword: Rule"</a>.
-[2] <a href="http://localhost:9000/courses/1/faq?faqId=2">FAQs "FAQ question title 2", "Summary: Describes the process and required steps.", "Keyword: Process"</a>.
-"
+- Step 0: Write all summaries and keywords in the user's language (English or German), matching the answer language.
+- Step 1: Read the answer and identify sentences that use information from the FAQs.
+- Step 2: After each sentence that contains used information, add a citation marker in the format [cite:n].
+- Step 3: If the same FAQ is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [cite:1]) instead of assigning a new marker each time.
+- Step 4: Existing citation markers already in the answer must remain unchanged. Existing markers: {ExistingCitationMarkers}. When you add NEW markers, start numbering at {StartIndex} and continue sequentially, always using [cite:n].
+- Step 5: Return ONLY a JSON object (no markdown, no extra text) with the schema below.
+- Step 6: Only include citations for FAQs that are actually relevant to the answer. If no provided FAQs were used, return the answer unchanged with an empty citations list.
+- Step 7: Always include citations if the answer contains any information from the provided FAQs.
 
-Note: If there is no link available, please do not include the link in the citation. For example, if citation 1 does not have a link, it should look like this:
-[1] FAQs "FAQ question title", "Summary: Briefly states the main point of the FAQ.", "Keyword: Topic".
-but if citation 2 has a link, it should look like this:
-[2] <a href="URL">FAQs "FAQ question title", "Summary: Briefly states the main point of the FAQ.", "Keyword: Topic"</a>.
+Output JSON schema:
+{
+  "answer": "<answer text with citation markers in [cite:n] format>",
+  "citations": [
+    {
+      "index": 1,
+      "type": "faq",
+      "link": "https://...",
+      "faq_question_title": "...",
+      "summary": "1-2 sentences about the cited FAQ content.",
+      "keyword": "OneWord"
+    }
+  ]
+}
 
-Here are the answer and the faqs:
+Field rules:
+- "type" must be "faq".
+- "index" must match the citation marker number in [cite:n].
+- "keyword" must be exactly one word with no spaces or punctuation.
+- "summary" must be 1-2 sentences.
+- If no link is available, omit "link" or set it to null.
+
+Here are the answer and the FAQs:
 
 Answer without citations:
 {Answer}
 
-Faqs with their FAQ ID, CourseId, FAQ Question title and FAQ Question Answer and the Link to the FAQ:
+FAQs with their FAQ ID, CourseId, FAQ Question title and FAQ Question Answer and the Link to the FAQ:
 {Paragraphs}
-
-Answer with citations (ensure empty line between the message and the citations):
-If the answer actually does not contain any information from the paragraphs, please do not include any citations and return '!NONE!'.

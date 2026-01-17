@@ -1,12 +1,17 @@
 import datetime
+import json
 import os
+import re
+from dataclasses import dataclass
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from pydantic import ValidationError
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.domain.citation import CitationDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
@@ -20,6 +25,12 @@ from iris.tracing import observe
 from iris.vector_database.faq_schema import FaqSchema
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class CitationResult:
+    answer: str
+    citations: list[CitationDTO]
 
 
 class InformationType(str, Enum):
@@ -111,7 +122,8 @@ class CitationPipeline(SubPipeline):
             lct = (
                 f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
                 f"Page: {paragraph.page_number}, Link: {paragraph.video_link or "No link available"}, "
-                f"Start Time: {start_time_str}, End Time: {end_time_str},\n"
+                f"Start Time: {start_time_str}, Start Time Seconds: {int(start_time_sec)}, "
+                f"End Time: {end_time_str}, End Time Seconds: {int(end_time_sec)},\n"
                 f"Content:\n"
                 f"---{paragraph.segment_text}---\n\n"
             )
@@ -138,6 +150,43 @@ class CitationPipeline(SubPipeline):
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
+    def _parse_citation_response(self, response: str, fallback_answer: str):
+        if "!NONE!" in str(response):
+            return CitationResult(answer=fallback_answer, citations=[])
+
+        response_text = str(response).strip()
+        try:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", response_text, re.DOTALL)
+            if not match:
+                return CitationResult(answer=fallback_answer, citations=[])
+            try:
+                payload = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return CitationResult(answer=fallback_answer, citations=[])
+
+        answer = payload.get("answer", fallback_answer)
+        citations = payload.get("citations") or []
+        if not isinstance(citations, list):
+            citations = []
+
+        parsed_citations = []
+        for entry in citations:
+            if isinstance(entry, CitationDTO):
+                parsed_citations.append(entry)
+                continue
+            if isinstance(entry, dict):
+                parsed = None
+                try:
+                    parsed = CitationDTO.model_validate(entry)
+                except (ValidationError, TypeError, ValueError) as exc:
+                    logger.debug("Failed to parse citation entry: %s", exc)
+                if parsed:
+                    parsed_citations.append(parsed)
+
+        return CitationResult(answer=answer, citations=parsed_citations)
+
     @observe(name="Citation Pipeline")
     def __call__(
         self,
@@ -147,7 +196,7 @@ class CitationPipeline(SubPipeline):
         variant: str = "default",
         user_language: str = "en",
         **kwargs,
-    ) -> str:
+    ) -> CitationResult:
         """
         Runs the pipeline
             :param information: List of info as list of dicts or strings to augment response
@@ -155,7 +204,7 @@ class CitationPipeline(SubPipeline):
             :param information_type: The type of information provided. can be either lectures or faqs
             :param variant: The variant of the model to use ("default" or "advanced")
             :param user_language: The user's preferred language ("en" or "de")
-            :return: Selected file content
+            :return: CitationResult with answer and citations
         """
         paras = ""
         paragraphs_page_chunks = ""
@@ -184,27 +233,57 @@ class CitationPipeline(SubPipeline):
         else:
             language_instruction = "Format all citations and references in English.\n\n"
 
+        existing_indices = sorted(
+            {int(match) for match in re.findall(r"\[cite:(\d+)\]", answer)}
+        )
+        existing_marker_text = (
+            ", ".join(f"[cite:{index}]" for index in existing_indices)
+            if existing_indices
+            else "none"
+        )
+        start_index = max(existing_indices) + 1 if existing_indices else 1
+
         try:
-            self.default_prompt = PromptTemplate(
-                template=language_instruction + self.prompt_str,
-                input_variables=["Answer", "Paragraphs"],
-            )
             if information_type == InformationType.FAQS:
+                self.default_prompt = PromptTemplate(
+                    template=language_instruction + self.prompt_str,
+                    input_variables=[
+                        "Answer",
+                        "Paragraphs",
+                        "ExistingCitationMarkers",
+                        "StartIndex",
+                    ],
+                )
                 response = (self.default_prompt | pipeline).invoke(
-                    {"Answer": answer, "Paragraphs": paras}
+                    {
+                        "Answer": answer,
+                        "Paragraphs": paras,
+                        "ExistingCitationMarkers": existing_marker_text,
+                        "StartIndex": start_index,
+                    }
                 )
             else:
+                self.default_prompt = PromptTemplate(
+                    template=language_instruction + self.prompt_str,
+                    input_variables=[
+                        "Answer",
+                        "Paragraphs",
+                        "TranscriptionParagraphs",
+                        "ExistingCitationMarkers",
+                        "StartIndex",
+                    ],
+                )
                 response = (self.default_prompt | pipeline).invoke(
                     {
                         "Answer": answer,
                         "Paragraphs": paragraphs_page_chunks,
                         "TranscriptionParagraphs": paragraphs_transcriptions,
+                        "ExistingCitationMarkers": existing_marker_text,
+                        "StartIndex": start_index,
                     }
                 )
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            if "!NONE!" in str(response):
-                return answer
-            return response
+            return self._parse_citation_response(response, answer)
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
             raise e
