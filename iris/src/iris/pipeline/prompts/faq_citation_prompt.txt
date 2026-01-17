@@ -12,19 +12,19 @@ Your task:
 - Step 7: Always include citations if the answer contains any information from the provided FAQs.
 
 Output JSON schema:
-{
+{{
   "answer": "<answer text with citation markers in [cite:n] format>",
   "citations": [
-    {
+    {{
       "index": 1,
       "type": "faq",
       "link": "https://...",
       "faq_question_title": "...",
       "summary": "1-2 sentences about the cited FAQ content.",
       "keyword": "OneWord"
-    }
+    }}
   ]
-}
+}}
 
 Field rules:
 - "type" must be "faq".

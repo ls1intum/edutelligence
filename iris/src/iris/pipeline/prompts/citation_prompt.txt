@@ -16,10 +16,10 @@ Your task:
 - Step 8: If both lecture transcription and lecture slide sources are relevant, include citations for both types of sources.
 
 Output JSON schema:
-{
+{{
   "answer": "<answer text with citation markers in [cite:n] format>",
   "citations": [
-    {
+    {{
       "index": 1,
       "type": "video" | "slides",
       "link": "https://...",
@@ -32,9 +32,9 @@ Output JSON schema:
       "end_time": "HH:MM:SS",
       "start_time_seconds": 123,
       "end_time_seconds": 234
-    }
+    }}
   ]
-}
+}}
 
 Field rules:
 - "type" must be "video" for transcription sources and "slides" for lecture slide sources.
