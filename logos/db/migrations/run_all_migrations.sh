@@ -42,6 +42,7 @@ MIGRATIONS=(
     "006_update_model_endpoints_to_local_ollama.sql"
     "007_rename_openwebui_to_ollama_no_auth.sql"
     "008_create_ollama_provider_snapshots.sql"
+    "009_add_profile_id_to_jobs.sql"
 )
 
 FAILED=0
