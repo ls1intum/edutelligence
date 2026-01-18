@@ -154,10 +154,20 @@ class DBManager:
         self,
         request_payload: Dict[str, Any],
         process_id: int,
+        profile_id: int,
         status: str = JobStatus.PENDING.value,
     ) -> int:
         """
-        Persist a new async job.
+        Persist a new async job with profile isolation.
+
+        Args:
+            request_payload: Job request data
+            process_id: Process owning this job (for billing)
+            profile_id: Profile executing this job (for authorization)
+            status: Initial job status
+
+        Returns:
+            Job ID
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         return self.insert(
@@ -165,6 +175,7 @@ class DBManager:
             {
                 "status": status,
                 "process_id": process_id,
+                "profile_id": profile_id,
                 "request_payload": request_payload,
                 "created_at": now,
                 "updated_at": now,
@@ -301,6 +312,43 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("profiles", {"name": profile_name, "process_id": process_id})
         return {"result": f"Added profile", "profile-id": pk}, 200
+
+    def get_profile(self, profile_id: int):
+        """
+        Get profile by ID.
+
+        Returns:
+            Dict with {id, name, process_id} or None if not found
+        """
+        sql = text("""
+            SELECT id, name, process_id
+            FROM profiles
+            WHERE id = :profile_id
+        """)
+        result = self.session.execute(sql, {"profile_id": profile_id}).fetchone()
+        if not result:
+            return None
+        return {
+            "id": result.id,
+            "name": result.name,
+            "process_id": result.process_id
+        }
+
+    def get_profiles_for_process(self, process_id: int):
+        """
+        Get all profiles for a process.
+
+        Returns:
+            List of dicts with {id, name}
+        """
+        sql = text("""
+            SELECT id, name
+            FROM profiles
+            WHERE process_id = :process_id
+            ORDER BY id
+        """)
+        results = self.session.execute(sql, {"process_id": process_id}).fetchall()
+        return [{"id": r.id, "name": r.name} for r in results]
 
     def add_model(self, logos_key: str, name: str, endpoint: str):
         if not self.check_authorization(logos_key):

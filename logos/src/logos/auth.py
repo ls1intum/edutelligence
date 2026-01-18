@@ -1,4 +1,5 @@
 from typing import Dict, Optional, Tuple
+from dataclasses import dataclass
 
 from fastapi import HTTPException
 
@@ -45,6 +46,9 @@ def _resolve_logos_key(headers: Optional[Dict[str, str]], required: bool = True)
 def authenticate_logos_key(headers: Optional[Dict[str, str]]) -> Tuple[str, int]:
     """
     Validate the logos key from request headers and return `(key, process_id)`.
+
+    Use this for admin/stats endpoints that don't need profile authorization.
+    For model execution endpoints, use `authenticate_with_profile()` instead.
 
     Params:
         headers: Request headers containing the logos key (case-insensitive lookup).
