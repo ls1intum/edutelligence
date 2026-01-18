@@ -856,7 +856,7 @@ async def handle_sync_request(path: str, request: Request):
     return await route_and_execute(models, body, headers, logos_key, path, log_id)
 
 
-async def auth_parse_log(request: Request) -> Tuple[Dict[str, str], str, int, Dict[str, Any], str, Optional[int]]:
+async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     """
     Authenticate, parse, and log incoming requests.
 
@@ -865,16 +865,13 @@ async def auth_parse_log(request: Request) -> Tuple[Dict[str, str], str, int, Di
 
     Args:
         request: FastAPI request object
+        use_profile_auth: If True, use profile-based auth and return AuthContext
 
     Returns:
-        (headers, logos_key, process_id, body, client_ip, log_id)
-
-        - headers: Request headers dict
-        - logos_key: Resolved logos key
-        - process_id: Process ID from DB
-        - body: Parsed JSON body
-        - client_ip: Client IP address
-        - log_id: Usage log ID (None if logging failed)
+        If use_profile_auth=False (default):
+            (headers, logos_key, process_id, body, client_ip, log_id)
+        If use_profile_auth=True:
+            (headers, auth_context, body, client_ip, log_id)
 
     Raises:
         HTTPException(400): Invalid JSON body
@@ -895,17 +892,32 @@ async def auth_parse_log(request: Request) -> Tuple[Dict[str, str], str, int, Di
     headers = dict(request.headers)
     client_ip = get_client_ip(request)
 
-    # Authenticate (REQUIRED - raises HTTPException if missing)
-    logos_key, process_id = authenticate_logos_key(headers)
+    # Authenticate
+    if use_profile_auth:
+        from logos.auth import authenticate_with_profile
+        auth = authenticate_with_profile(headers)
+        process_id = auth.process_id
 
-    # Log request
-    log_id = None
-    with DBManager() as db:
-        r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
-        if c_log == 200:
-            log_id = int(r_log["log-id"])
+        # Log request (still at process level for billing)
+        log_id = None
+        with DBManager() as db:
+            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
+            if c_log == 200:
+                log_id = int(r_log["log-id"])
 
-    return headers, logos_key, process_id, body, client_ip, log_id
+        return headers, auth, body, client_ip, log_id
+    else:
+        # Old behavior for backward compatibility
+        logos_key, process_id = authenticate_logos_key(headers)
+
+        # Log request
+        log_id = None
+        with DBManager() as db:
+            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
+            if c_log == 200:
+                log_id = int(r_log["log-id"])
+
+        return headers, logos_key, process_id, body, client_ip, log_id
 
 
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
@@ -922,7 +934,9 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     Raises:
         HTTPException(400/401) on invalid payload or auth.
     """
-    headers, logos_key, process_id, json_data, client_ip, log_id = await auth_parse_log(request)
+    # Auth with profile + logging
+    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
         path=path,
@@ -930,26 +944,34 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         headers=headers,
         body=json_data,
         client_ip=client_ip,
-        process_id=process_id,
+        process_id=auth.process_id,
+        profile_id=auth.profile_id,
     )
     job_id = JobService.create_job(job_payload)
     status_url = str(request.url_for("get_job_status", job_id=job_id))
+
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, logos_key, process_id))
+    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, auth))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url})
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url, "profile_id": auth.profile_id})
 
 
-async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
-                      logos_key: str, process_id: int):
+async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth):
     """
     Execute a job and persist success or failure.
+
+    Args:
+        job_id: Job ID
+        path: API path
+        headers: Request headers
+        json_data: Request body
+        client_ip: Client IP address
+        auth: AuthContext with profile information
     """
     try:
         JobService.mark_running(job_id)
-        result = await execute_proxy_job(path, headers, json_data, client_ip, logos_key=logos_key,
-                                         process_id=process_id)
+        result = await execute_proxy_job(path, headers, json_data, client_ip, auth)
         JobService.mark_success(job_id, result)
     # Exception while processing the job is caught and persisted in the database
     except Exception as e:
@@ -959,11 +981,17 @@ async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data
     return result
 
 
-async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
-                            logos_key: str, process_id: int) -> Dict[str, Any]:
+async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth) -> Dict[str, Any]:
     """
     Execute the proxy workflow using either PROXY MODE or RESOURCE MODE pipeline.
     Force non-streaming for async job execution.
+
+    Args:
+        path: API path
+        headers: Request headers
+        json_data: Request body
+        client_ip: Client IP
+        auth: AuthContext with profile information
 
     Returns:
         Serializable dict result with status_code and data.
@@ -971,18 +999,18 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     headers = headers or dict()
     json_data = json_data or dict()
 
-    # Log usage
+    # Log usage (at process level for billing)
     usage_id = None
     with DBManager() as db:
-        r, c = db.log_usage(process_id, client_ip, json_data, headers)
+        r, c = db.log_usage(auth.process_id, client_ip, json_data, headers)
         if c != 200:
             logging.info("Error while logging a request: %s", r)
         else:
             usage_id = int(r["log-id"])
 
-    # Get available models for this user
+    # Get available models for this profile
     try:
-        models = request_setup(headers, logos_key)
+        models = request_setup(headers, auth.logos_key)
     except PermissionError as e:
         return {"status_code": 401, "data": {"error": str(e)}}
     except ValueError as e:
@@ -992,7 +1020,7 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     json_data["stream"] = False
 
     # Route and execute request (async job mode)
-    return await route_and_execute(models, json_data, headers, logos_key, path, usage_id, is_async_job=True)
+    return await route_and_execute(models, json_data, headers, auth.logos_key, path, usage_id, is_async_job=True)
 
 
 # ============================================================================
@@ -1431,6 +1459,8 @@ async def get_job_status(job_id: int, request: Request):
     """
     Return current state of a submitted job, including result or error when finished.
 
+    Uses profile-based authorization - you can only view jobs created by your current profile.
+
     Params:
         job_id: Identifier of the async job.
         request: Incoming request
@@ -1441,13 +1471,29 @@ async def get_job_status(job_id: int, request: Request):
     Raises:
         HTTPException(401/403/404) on auth or missing job.
     """
-    _, process_id = authenticate_logos_key(dict(request.headers))
+    # Profile-based auth
+    from logos.auth import authenticate_with_profile
+    auth = authenticate_with_profile(dict(request.headers))
+
     job = JobService.fetch(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Authorization checks
     job_process_id = job.get("process_id")
-    if job_process_id != process_id:
+    job_profile_id = job.get("profile_id")
+
+    # 1. Job must belong to this process
+    if job_process_id != auth.process_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this job")
+
+    # 2. Job must belong to this profile
+    if job_profile_id != auth.profile_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Job belongs to a different profile. Use the correct use_profile header."
+        )
+
     return {
         "job_id": job_id,
         "status": job["status"],
@@ -1455,6 +1501,7 @@ async def get_job_status(job_id: int, request: Request):
         "error": job["error_message"] if job["status"] == JobStatus.FAILED.value else None,
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
+        "profile_id": job_profile_id,
     }
 
 
