@@ -40,22 +40,39 @@ class ContextResolver:
     - Making HTTP calls (that's the Executor's job)
     """
 
-    def resolve_context(self, model_id: int) -> Optional[ExecutionContext]:
+    def resolve_context(
+        self,
+        model_id: int,
+        logos_key: Optional[str] = None,
+        profile_id: Optional[int] = None
+    ) -> Optional[ExecutionContext]:
         """
-        Resolve all DB information needed to execute a request.
+        Resolve all DB information needed to execute a request with authorization verification.
 
         This includes:
         - Model endpoint and configuration
         - Provider base URL and type
         - API key for the specific model/provider pair
+        - Authorization check (if logos_key and profile_id provided)
 
         Args:
             model_id: The ID of the model to execute.
+            logos_key: User's logos key (for authorization check)
+            profile_id: Profile ID (for authorization check)
 
         Returns:
-            `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key).
+            `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
         """
         with DBManager() as db:
+            # AUTHORIZATION CHECK: Verify user has access to this model (defense in depth)
+            if logos_key is not None and profile_id is not None:
+                authorized_models = db.get_models_by_profile(logos_key, profile_id)
+                if model_id not in authorized_models:
+                    logger.warning(
+                        f"Authorization denied: profile_id={profile_id} cannot access model_id={model_id}"
+                    )
+                    return None
+
             model = db.get_model(model_id)
             if not model:
                 logger.error(f"Model {model_id} not found in DB")
@@ -69,7 +86,7 @@ class ContextResolver:
             auth_name = (provider.get("auth_name") or "").strip()
             auth_format = provider.get("auth_format") or ""
 
-            api_key = db.get_key_to_model_provider(model_id, provider["id"])
+            api_key = db.get_key_to_model_provider(profile_id, provider["id"])
             if not api_key and (auth_name or auth_format):
                 logger.error(f"No API key for model {model_id} / provider {provider['id']}")
                 return None

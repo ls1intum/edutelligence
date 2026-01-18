@@ -2,14 +2,13 @@ import asyncio
 import json
 import logging
 import os
-import traceback
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Set, Tuple, Optional, List
+from typing import Any, Dict, Set, Tuple, Optional
 import grpc
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from logos.auth import authenticate_logos_key, _resolve_logos_key
+from logos.auth import authenticate_logos_key
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
@@ -145,14 +144,22 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
 
     if "policy" in headers:
         try:
+            policy_id = int(headers["policy"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="policy header must be an integer")
+        try:
             with DBManager() as db:
-                policy = db.get_policy(logos_key, int(headers["policy"]))
+                policy = db.get_policy(logos_key, policy_id)
                 if isinstance(policy, dict) and "error" in policy:
-                    logger.warning(f"Failed to load policy {headers['policy']}: {policy['error']}")
-                    policy = None
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Policy not found for this process",
+                    )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"Failed to load policy from header: {e}")
-            policy = None
+            raise HTTPException(status_code=500, detail="Failed to load policy")
 
     if policy is None:
         policy = {}
@@ -584,7 +591,8 @@ async def _execute_proxy_mode(
     logos_key: str,
     path: str,
     log_id: Optional[int],
-    is_async_job: bool
+    is_async_job: bool,
+    profile_id: Optional[int] = None
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -622,6 +630,7 @@ async def _execute_proxy_mode(
         log_id=log_id,
         is_async_job=is_async_job,
         allowed_models_override=[model_id],
+        profile_id=profile_id
     )
 
 
@@ -633,7 +642,8 @@ async def _execute_resource_mode(
     path: str,
     log_id: Optional[int],
     is_async_job: bool,
-    allowed_models_override: Optional[list] = None
+    allowed_models_override: Optional[list] = None,
+    profile_id: Optional[int] = None
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -674,8 +684,8 @@ async def _execute_resource_mode(
     Raises:
         HTTPException: Only when is_async_job=False and an error occurs
     """
-    # Use all available models for classification unless overridden
-    allowed_models = allowed_models_override  # None means "use all models from DB"
+    # Use filtered models list from request_setup(), or override if specified (proxy mode)
+    allowed_models = allowed_models_override if allowed_models_override is not None else models
 
     # Extract policy
     policy = _extract_policy(headers, logos_key, body)
@@ -686,7 +696,8 @@ async def _execute_resource_mode(
         payload=body,
         headers=headers,
         policy=policy,
-        allowed_models=allowed_models
+        allowed_models=allowed_models,
+        profile_id=profile_id
     )
 
     # Process through classification and scheduling
@@ -762,7 +773,8 @@ async def route_and_execute(
     logos_key: str,
     path: str,
     log_id: Optional[int],
-    is_async_job: bool = False
+    is_async_job: bool = False,
+    profile_id: Optional[int] = None
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -794,6 +806,7 @@ async def route_and_execute(
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - client waits, raises HTTPException for errors
             - True: Background job - client gets job_id, returns error dict for errors
+        profile_id: Profile ID for authorization (enforces profile-based model access)
 
     Returns:
         - For direct endpoints (is_async_job=False):
@@ -809,7 +822,7 @@ async def route_and_execute(
         _execute_proxy_mode(): PROXY mode implementation
         _execute_resource_mode(): RESOURCE mode implementation
     """
-    # Case 1: No models available → ERROR
+    # No models available → ERROR
     if not models:
         if is_async_job:
             return {"status_code": 404, "data": {"error": "No models available for this user."}}
@@ -819,13 +832,17 @@ async def route_and_execute(
                 detail="No models available for this user."
             )
 
-    # Case 2: PROXY mode (body["model"] specified → direct forwarding)
-    if body.get("model"):
-        return await _execute_proxy_mode(body, headers, logos_key, path, log_id, is_async_job)
+    try:
+        # PROXY mode (body["model"] specified → direct forwarding)
+        if body.get("model"):
+            return await _execute_proxy_mode(body, headers, logos_key, path, log_id, is_async_job, profile_id=profile_id)
 
-    # Case 3: RESOURCE mode (no body["model"] → classification + scheduling)
-    else:
-        return await _execute_resource_mode(models, body, headers, logos_key, path, log_id, is_async_job)
+        # RESOURCE mode (no body["model"] → classification + scheduling)
+        return await _execute_resource_mode(models, body, headers, logos_key, path, log_id, is_async_job, profile_id=profile_id)
+    except HTTPException as exc:
+        if is_async_job:
+            return {"status_code": exc.status_code, "data": {"error": exc.detail}}
+        raise
 
 
 async def handle_sync_request(path: str, request: Request):
@@ -841,19 +858,25 @@ async def handle_sync_request(path: str, request: Request):
     Returns:
         Response (StreamingResponse or JSONResponse)
     """
-    # Authenticate, parse, and log
-    headers, logos_key, process_id, body, client_ip, log_id = await auth_parse_log(request)
+    # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
+    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
-    # Get available models for this user
+    # Get available models for THIS profile - profile_id EXPLICITLY passed
     try:
-        models = request_setup(headers, logos_key)
+        models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
     except PermissionError as e:
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Route and execute request
-    return await route_and_execute(models, body, headers, logos_key, path, log_id)
+    if not models:
+        raise HTTPException(status_code=404, detail="No models available for this profile")
+
+    # Route and execute request with profile context
+    return await route_and_execute(
+        models, body, headers, auth.logos_key, path, log_id,
+        profile_id=auth.profile_id
+    )
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):
@@ -907,7 +930,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
 
         return headers, auth, body, client_ip, log_id
     else:
-        # Old behavior for backward compatibility
+        # For endpoints not requiring the profile-based authorization
         logos_key, process_id = authenticate_logos_key(headers)
 
         # Log request
@@ -1008,9 +1031,9 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
         else:
             usage_id = int(r["log-id"])
 
-    # Get available models for this profile
+    # Get available models for this profile - profile_id EXPLICITLY passed
     try:
-        models = request_setup(headers, auth.logos_key)
+        models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
     except PermissionError as e:
         return {"status_code": 401, "data": {"error": str(e)}}
     except ValueError as e:
@@ -1019,8 +1042,12 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     # Force non-streaming for jobs
     json_data["stream"] = False
 
-    # Route and execute request (async job mode)
-    return await route_and_execute(models, json_data, headers, auth.logos_key, path, usage_id, is_async_job=True)
+    # Route and execute request (async job mode) with profile context
+    return await route_and_execute(
+        models, json_data, headers, auth.logos_key, path, usage_id,
+        is_async_job=True,
+        profile_id=auth.profile_id
+    )
 
 
 # ============================================================================

@@ -1442,17 +1442,20 @@ class DBManager:
                         profiles,
                         profile_model_permissions,
                         model_provider,
-                        model_api_keys,
                         providers
                    WHERE process.logos_key = :logos_key
                         and process.id = profiles.process_id
                         and profiles.id = profile_model_permissions.profile_id
-                        and profile_model_permissions.model_id = model_provider.model_id
-                        and model_api_keys.id = models.api_id
-                        and model_api_keys.profile_id = profiles.id
-                        and model_api_keys.provider_id = providers.id
+                        and profile_model_permissions.model_id = models.id
+                        and model_provider.model_id = models.id
                         and providers.id = model_provider.provider_id
                         and profiles.id = :profile_id
+                        and EXISTS (
+                            SELECT 1
+                            FROM model_api_keys
+                            WHERE model_api_keys.profile_id = profiles.id
+                              and model_api_keys.provider_id = providers.id
+                        )
                    """)
         result = self.session.execute(sql, {"logos_key": logos_key, "profile_id": profile_id}).fetchall()
         return [i.id for i in result]
@@ -1463,15 +1466,19 @@ class DBManager:
         """
         sql = text("""
             SELECT models.id
-            FROM models, process, profiles, profile_model_permissions, model_provider, model_api_keys, providers
+            FROM models, process, profiles, profile_model_permissions, model_provider, providers
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
                 and profiles.id = profile_model_permissions.profile_id
                 and profile_model_permissions.model_id = models.id
-                and model_api_keys.id = models.api_id
-                and model_api_keys.profile_id = profiles.id
-                and model_api_keys.provider_id = providers.id
+                and model_provider.model_id = models.id
                 and providers.id = model_provider.provider_id
+                and EXISTS (
+                    SELECT 1
+                    FROM model_api_keys
+                    WHERE model_api_keys.profile_id = profiles.id
+                      and model_api_keys.provider_id = providers.id
+                )
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [i.id for i in result]
@@ -1628,18 +1635,19 @@ class DBManager:
             return None
         return self.get_provider(result.provider_id)
 
-    def get_key_to_model_provider(self, model_id: int, provider_id: int):
+    def get_key_to_model_provider(self, profile_id: Optional[int], provider_id: int):
+        if profile_id is None:
+            return None
         sql = text("""
                    SELECT api_key
-                   FROM model_api_keys, models, model_provider, providers
-                   WHERE models.api_id = model_api_keys.id
-                       and providers.id = model_provider.provider_id
-                       and model_provider.model_id = models.id
-                       and model_api_keys.provider_id = providers.id
-                       and models.id = :model_id
-                       and providers.id = :provider_id
+                   FROM model_api_keys
+                   WHERE model_api_keys.profile_id = :profile_id
+                       and model_api_keys.provider_id = :provider_id
                    """)
-        result = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
+        result = self.session.execute(
+            sql,
+            {"profile_id": int(profile_id), "provider_id": int(provider_id)}
+        ).fetchone()
         if result is None:
             return None
         return result.api_key

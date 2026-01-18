@@ -78,7 +78,6 @@ class AuthContext:
 
 def select_profile(
     headers: Dict[str, str],
-    logos_key: str,
     process_id: int
 ) -> Tuple[int, str]:
     """
@@ -90,7 +89,6 @@ def select_profile(
 
     Args:
         headers: Request headers
-        logos_key: Authenticated logos key (for logging)
         process_id: Authenticated process ID
 
     Returns:
@@ -170,7 +168,7 @@ def authenticate_with_profile(headers: Dict[str, str]) -> AuthContext:
     logos_key, process_id = authenticate_logos_key(headers)
 
     # Step 2: Select profile
-    profile_id, profile_name = select_profile(headers, logos_key, process_id)
+    profile_id, profile_name = select_profile(headers, process_id)
 
     return AuthContext(
         logos_key=logos_key,

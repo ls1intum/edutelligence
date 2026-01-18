@@ -117,9 +117,14 @@ def parse_provider_config(name: str) -> dict:
     }
 
 
-def request_setup(headers: dict, logos_key: str):
+def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = None):
     """
     Get available models for the user.
+
+    Args:
+        headers: Request headers
+        logos_key: User's authentication key
+        profile_id: If provided, filter to this profile only (REQUIRED for v1/openai/jobs endpoints)
 
     Returns:
         List of model IDs (may be empty if no models available)
@@ -130,9 +135,11 @@ def request_setup(headers: dict, logos_key: str):
     """
     with DBManager() as db:
         # Get available models for this key
-        if "use_profile" in headers:
-            models = db.get_models_by_profile(logos_key, int(headers["use_profile"]))
+        if profile_id is not None:
+            # Explicit profile-based filtering (new preferred path)
+            models = db.get_models_by_profile(logos_key, profile_id)
         else:
+            # Fallback: all models for key (for admin endpoints that don't need profile isolation)
             models = db.get_models_with_key(logos_key)
 
     if not models:

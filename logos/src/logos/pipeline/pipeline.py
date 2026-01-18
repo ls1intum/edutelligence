@@ -31,6 +31,7 @@ class PipelineRequest:
     headers: Dict[str, str]
     policy: Optional[Dict[str, Any]] = None
     allowed_models: Optional[List[int]] = None
+    profile_id: Optional[int] = None  # NEW: Profile ID for authorization
 
 
 @dataclass
@@ -160,8 +161,12 @@ class RequestPipeline:
             provider_metrics=sched_result.provider_metrics
         )
         
-        # 3. Resolve execution context
-        exec_context = self._context_resolver.resolve_context(sched_result.model_id)
+        # 3. Resolve execution context (with authorization check)
+        exec_context = self._context_resolver.resolve_context(
+            sched_result.model_id,
+            logos_key=request.logos_key,
+            profile_id=request.profile_id
+        )
         if not exec_context:
             return PipelineResult(
                 success=False,
