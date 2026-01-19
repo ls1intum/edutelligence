@@ -7,7 +7,7 @@ class WeaviateTest:
     @pytest.fixture(scope="session")
     def weaviate_client(self, request):
         weaviate_container = WeaviateContainer(
-            image="cr.weaviate.io/semitechnologies/weaviate:1.30.3",
+            image="cr.weaviate.io/semitechnologies/weaviate:1.34.10",
             env_vars={
                 "AUTOSCHEMA_ENABLED": "false",
                 "DISABLE_TELEMETRY": "true",
