@@ -4,5 +4,5 @@ from iris.domain.status.status_update_dto import StatusUpdateDTO
 
 
 class PromptUserChatStatusUpdateDTO(StatusUpdateDTO):
-    verdict: Optional[str] = None
+    result: Optional[str] = None
     reasoning: Optional[str] = None

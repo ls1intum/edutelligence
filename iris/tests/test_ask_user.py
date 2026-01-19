@@ -2,17 +2,17 @@ import unittest
 import re
 from collections import Counter
 
+from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from iris.domain.data.user_dto import UserDTO
+from iris.domain.variant.prompt_user_variant import PromptUserVariant
 from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
 from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 
-from iris.domain import ExerciseChatPipelineExecutionDTO
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
-from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
-from .TestCallback import TestExerciseChatCallback
+from .TestCallback import TestPromptUserStatusCallback
 
 
 # Helper function to extract keywords from code input, that are less often used in exercise template
@@ -63,20 +63,19 @@ class TestAskUser(unittest.TestCase):
         cls.code = CODE_SORTING
         cls.keywords = extract_keywords("\n".join(cls.template.values()), "\n".join(cls.code.values()))
 
-        cls.dto = ExerciseChatPipelineExecutionDTO(
+        cls.dto = PromptUserChatPipelineExecutionDTO(
             submission=ProgrammingSubmissionDTO(id=1, repository=cls.code, isPractice=False, buildFailed=False),
             exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
             course=CourseDTO(id=1,name="Intro to Programming", description=None),
-            eventPayload=PyrisEventDTO(eventType="", event=""),
-            customInstructions=None, settings=None,
+            eventPayload=PyrisEventDTO(eventType="", event=""), settings=None,
             user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False))
 
-        cls.variant = ExerciseChatVariant(
-            variant_id="exercise_chat_v1", name="Exercise Chat",
-            description="Variant for exercise explanations",
-            agent_model="gpt-4o-mini",citation_model="gpt-4o")
+        cls.variant = PromptUserVariant(
+            variant_id="prompt_user_v1", name="Prompt User",
+            description="Variant for assessing user understanding",
+            agent_model="gpt-4o-mini")
 
-        cls.callback = TestExerciseChatCallback()
+        cls.callback = TestPromptUserStatusCallback()
 
         cls.pipeline = PromptUserAgentPipeline()
         cls.pipeline(cls.dto, cls.variant, cls.callback, None)

@@ -1,30 +1,18 @@
 import logging
 import os
 from datetime import datetime
-from typing import Any, Callable, List, cast
+from typing import Any, Callable, List
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
 
 from ...common.memiris_setup import get_tenant_for_user
-from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from ...domain.variant.prompt_user_variant import PromptUserVariant
-from ...llm import (
-    CompletionArguments,
-    ModelVersionRequestHandler,
-)
-from ...llm.langchain import IrisLangchainChatModel
-from ...retrieval.faq_retrieval import FaqRetrieval
-from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...tools import (
-    create_tool_faq_content_retrieval,
     create_tool_file_lookup,
     create_tool_get_additional_exercise_details,
     create_tool_get_build_logs_analysis,
@@ -33,9 +21,9 @@ from ...tools import (
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
 )
-from ...web.status.status_update import ExerciseChatStatusCallback
+from ...web.status.status_update import PromptUserStatusCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
-from ..shared.utils import datetime_to_string, format_custom_instructions
+from ..shared.utils import datetime_to_string
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -151,7 +139,7 @@ class PromptUserAgentPipeline(
             List of tool functions for the agent.
         """
         query_text = self.get_text_of_latest_user_message(state)
-        callback = cast(ExerciseChatStatusCallback, state.callback)
+        callback = state.callback
         dto = state.dto
 
         # Initialize storage for shared data between tools
@@ -277,6 +265,27 @@ class PromptUserAgentPipeline(
         pass
 
 
+    def post_agent_hook(
+            self,
+            state: AgentPipelineExecutionState[
+                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+            ],
+    ) -> str:
+        """
+        Process results after agent execution.
+        Args:
+            state: The current pipeline execution state.
+
+        Returns:
+            The processed result string.
+        """
+
+        state.callback.done("Done!", final_result=state.result, tokens=state.tokens)
+
+        return state.result
+
+
+
     def _assess_answer( # TODO: check if previous answer exists, if so, assess answer and return verdict by using already existing prompt
             self,
             state: AgentPipelineExecutionState[
@@ -321,7 +330,7 @@ class PromptUserAgentPipeline(
             self,
             dto: PromptUserChatPipelineExecutionDTO,
             variant: PromptUserVariant,
-            callback: ExerciseChatStatusCallback,
+            callback: PromptUserStatusCallback,
             event: str | None,
     ):
         """
@@ -341,6 +350,8 @@ class PromptUserAgentPipeline(
             super().__call__(dto, variant, callback)
 
             # TODO: if event says prompting is finished -> trigger assessment sub-pipeline one last time -> check if here is the right place or in post-hook
+
+
 
         except Exception as e:
             logger.error("Error in prompt user pipeline", exc_info=e)

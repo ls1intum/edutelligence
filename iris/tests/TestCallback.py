@@ -3,31 +3,23 @@ from typing import List, Optional
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.web.status.status_update import ExerciseChatStatusCallback
+from iris.web.status.status_update import ExerciseChatStatusCallback, PromptUserStatusCallback
 
 
-class TestExerciseChatCallback(ExerciseChatStatusCallback):
+class TestPromptUserStatusCallback(PromptUserStatusCallback):
     """
-    Test callback for ExerciseChatAgentPipeline.
+    Test callback for PromptUserAgentPipeline.
 
     - Prevents HTTP calls
     - Captures final result, suggestions and token usage
     """
 
     def __init__(self):
-        # Minimal stage setup required by StatusCallback logic
-        stages = [
-            StageDTO(
-                weight=100,
-                state=StageStateEnum.NOT_STARTED,
-                name="Test Stage",
-            )
-        ]
 
         super().__init__(
             run_id="test-run-id",
             base_url="http://localhost",  # not used
-            initial_stages=stages,
+            initial_stages=None,
         )
 
         # Captured outputs
