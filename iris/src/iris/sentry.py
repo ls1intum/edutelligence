@@ -13,16 +13,19 @@ def init():
     )
     failed_status_codes = {403, *range(500, 599)}
 
+    sentry_environment = os.environ.get("SENTRY_ENVIRONMENT", "development")
+    sample_rate=0.1 if sentry_environment == "staging" else 1.0
+
     sentry_sdk.init(
         dsn="https://17806b3674c44a10ac10345ba7201cc6@sentry.aet.cit.tum.de/8",
-        environment=os.environ.get("SENTRY_ENVIRONMENT", "development"),
+        environment=sentry_environment,
         server_name=os.environ.get("SENTRY_SERVER_NAME", "localhost"),
         release=os.environ.get("SENTRY_RELEASE", None),
         attach_stacktrace=os.environ.get("SENTRY_ATTACH_STACKTRACE", "False").lower()
         in ("true", "1"),
         max_request_body_size="always",
-        traces_sample_rate=1.0 if tracing_enabled else 0.0,
-        profiles_sample_rate=1.0 if tracing_enabled else 0.0,
+        traces_sample_rate=sample_rate if tracing_enabled else 0.0,
+        profiles_sample_rate=sample_rate if tracing_enabled else 0.0,
         send_default_pii=True,
         integrations=[
             StarletteIntegration(
