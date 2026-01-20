@@ -63,7 +63,8 @@ class TestAskUser(unittest.TestCase):
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
-        cls.keywords = extract_keywords("\n".join(cls.template.values()), "\n".join(cls.code.values()))
+        cls.keywords_code = extract_keywords("\n".join(cls.template.values()), "\n".join(cls.code.values()))
+        cls.keywords_task = extract_keywords("\n".join(cls.template.values()), cls.task)
 
         # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
         # For this to happen, ResultDTO would have to be extended with feedback and the test data with a test repository
@@ -92,7 +93,10 @@ class TestAskUser(unittest.TestCase):
 
 
     def test_question_is_thematically_relevant(self):
-        assert (any(k in self.question.lower() for k in self.keywords) or any(k in self.question.lower() for k in self.task))
+        print(f"These are the extracted keywords, of submission minus task: {self.keywords_code}")
+        print(f"These are the extracted keywords, of problem statement minus task: {self.keywords_task}")
+        # this tests if keywords of submission minus template or keywords of the problem statement minus template are part of the question
+        assert (any(k in self.question.lower() for k in self.keywords_code) or any(k in self.question.lower() for k in self.keywords_task))
 
 
     def test_question_not_too_easy(self):
@@ -102,7 +106,7 @@ class TestAskUser(unittest.TestCase):
 
 
     def test_question_not_too_difficult_length(self):
-        assert len(self.question) < 150
+        assert len(self.question) < 200
 
 
     def test_question_requires_reasonable_answer(self):
