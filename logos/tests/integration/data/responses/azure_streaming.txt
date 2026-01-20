@@ -1,0 +1,23 @@
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":" How"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":" can"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":" I"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":" help"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":" you"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{"content":"?"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test123","object":"chat.completion.chunk","created":1734268190,"model":"{{MODEL}}","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":10,"total_tokens":25}}
+
+data: [DONE]

@@ -59,8 +59,8 @@ class ClassificationManager:
         """
         # logging.debug(f"System1: {self.models}")
         if allowed is None:
-            allowed = list()
-            current_models = list()
+            allowed = [model["id"] for model in self.models]
+            current_models = [model for model in self.models]
         else:
             current_models = [model for model in self.models if model["id"] in allowed]
         if system is None:

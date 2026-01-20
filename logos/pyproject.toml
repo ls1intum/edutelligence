@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Logos is an LLM Engineering Platform that includes usage logging, billing, central resouce management, policy-based model selection, scheduling, and monitoring."
 authors = [
     {name = "Tobias Wasner",email = "tobias.wasner@tum.de"},
-    {name = "Florian Briksa",email = "florian.briksa@tum.de"}
+    {name = "Florian Briksa",email = "florian.briksa@tum.de"},
+    {name = "Jakub Jakubczyk", email = "jakub.jakubczyk@tum.de"}
 ]
 readme = "./logos/README.md"
 requires-python = ">=3.13,<4.0.0"
@@ -12,6 +13,7 @@ requires-python = ">=3.13,<4.0.0"
 [tool.poetry.dependencies]
 python = ">=3.13,<4.0.0"
 fastapi = {extras = ["standard"], version = "0.115.9"}
+httpx = "^0.27.0"
 shared = { path = "./shared", develop = true }
 requests = "^2.32.3"
 langchain = ">=0.3.23"
@@ -28,6 +30,7 @@ tiktoken = "^0.9.0"
 python-dateutil = "^2.9.0"
 sentence-transformers = "^5.0.0"
 matplotlib = "^3.9.2"
+aiohttp = "^3.9.0"
 
 [tool.poetry]
 packages = [{ include = "logos", from = "src" }]
