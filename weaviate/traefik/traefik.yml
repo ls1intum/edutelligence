@@ -24,6 +24,8 @@ entryPoints:
           scheme: https
   https:
     address: ":443"
+  grpc:
+    address: ":50051"
 
 serversTransport:
   insecureSkipVerify: false
