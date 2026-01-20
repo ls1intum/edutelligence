@@ -14,7 +14,7 @@ def init():
     failed_status_codes = {403, *range(500, 599)}
 
     sentry_environment = os.environ.get("SENTRY_ENVIRONMENT", "development")
-    sample_rate = 0.1 if sentry_environment == "staging" else 1.0
+    sample_rate = 0.01 if sentry_environment == "staging" else 1.0
 
     sentry_sdk.init(
         dsn="https://17806b3674c44a10ac10345ba7201cc6@sentry.aet.cit.tum.de/8",
