@@ -537,7 +537,7 @@ class ExerciseChatAgentPipeline(
         dto: ExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the latest user prompt and the model output.
 
         Args:
             state: The current pipeline execution state
@@ -547,10 +547,7 @@ class ExerciseChatAgentPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if len(dto.chat_history) == 1:
-            first_user_msg = dto.chat_history[0].contents[0].text_content
-            return super()._create_session_title(state, output, first_user_msg)
-        return None
+        return self.update_session_title(state, output, dto.session_title)
 
     @observe(name="Exercise Chat Agent Pipeline")
     def __call__(
