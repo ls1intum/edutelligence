@@ -1,41 +1,45 @@
+# Logging configuration for Iris
+#
+# Note: Primary logging configuration is done programmatically in
+# iris.common.logging_config.setup_logging() which provides:
+# - Request ID correlation
+# - Abbreviated logger names
+# - Aligned output format
+#
+# This file serves as documentation and fallback.
+
 version: 1
-disable_existing_loggers: False
+disable_existing_loggers: false
+
 formatters:
   default:
-    "use_colors": null,
-    "()": uvicorn.logging.DefaultFormatter
-    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  access:
-    "use_colors": null,
-    "()": uvicorn.logging.AccessFormatter
-    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format: "%(asctime)s | %(levelname)-5s | %(name)-40s | %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
 handlers:
-  default:
+  console:
+    class: logging.StreamHandler
     formatter: default
-    class: logging.StreamHandler
-    stream: ext://sys.stderr
-  access:
-    formatter: access
-    class: logging.StreamHandler
     stream: ext://sys.stdout
+
 loggers:
-  uvicorn:
-    level: INFO
-    handlers:
-      - default
-    propagate: no
-  uvicorn.error:
-    level: INFO
-    handlers:
-      - default
-    propagate: no
-  uvicorn.access:
-    level: INFO
-    handlers:
-      - access
-    propagate: no
+  # Suppress noisy third-party loggers
+  langfuse:
+    level: WARNING
+  httpcore:
+    level: WARNING
+  httpx:
+    level: WARNING
+  openai:
+    level: WARNING
+  urllib3:
+    level: WARNING
+  asyncio:
+    level: WARNING
+  apscheduler:
+    level: WARNING
+
 root:
-  level: DEBUG
+  level: INFO
   handlers:
-    - default
-  propagate: no
+    - console

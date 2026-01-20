@@ -13,14 +13,6 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
  Create as many sidebars as you want.
  */
 const sidebars: SidebarsConfig = {
-  userSidebar: [
-    {
-      type: 'doc',
-      id: 'user/index',
-      label: 'User Guide',
-    },
-  ],
-
   devSidebar: [
     {
       type: 'doc',
@@ -52,6 +44,17 @@ const sidebars: SidebarsConfig = {
         'dev/code-reference/middleware',
         'dev/code-reference/weaviate',
         'dev/code-reference/ml-pipelines',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'AtlasML Internals',
+      items: [
+        'dev/atlasml/overview',
+        'dev/atlasml/api',
+        'dev/atlasml/models',
+        'dev/atlasml/settings_auth',
+        'dev/atlasml/weaviate',
       ],
     },
   ],

@@ -1,6 +1,6 @@
 """Tool for retrieving lecture content using RAG."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
@@ -14,6 +14,8 @@ def create_tool_lecture_content_retrieval(
     query_text: str,
     history: List[Any],
     lecture_content_storage: Dict[str, Any],
+    lecture_id: Optional[int] = None,
+    lecture_unit_id: Optional[int] = None,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves lecture content using RAG.
@@ -50,8 +52,8 @@ def create_tool_lecture_content_retrieval(
             query=query_text,
             course_id=course_id,
             chat_history=history,
-            lecture_id=None,
-            lecture_unit_id=None,
+            lecture_id=lecture_id,
+            lecture_unit_id=lecture_unit_id,
             base_url=base_url,
         )
 

@@ -17,6 +17,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -70,6 +71,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+    @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
         slide_number_start, slide_number_end = self._get_slide_range()
 

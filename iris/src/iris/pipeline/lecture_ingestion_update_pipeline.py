@@ -1,9 +1,8 @@
-import traceback
-from asyncio.log import logger
 from typing import List
 
 from sentry_sdk import capture_exception
 
+from iris.common.logging_config import get_logger
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -17,8 +16,11 @@ from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
+from iris.tracing import observe
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
+
+logger = get_logger(__name__)
 
 
 class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
@@ -28,6 +30,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         super().__init__()
         self.dto = dto
 
+    @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
         try:
             callback = IngestionStatusCallback(
@@ -56,7 +59,10 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 callback.done()
                 callback.in_progress("skipping slide ingestion")
                 callback.done()
-            if self.dto.lecture_unit.transcription is not None:
+            if (
+                self.dto.lecture_unit.transcription is not None
+                and self.dto.lecture_unit.transcription.segments is not None
+            ):
                 transcription_pipeline = TranscriptionIngestionPipeline(
                     client=client, dto=self.dto, callback=callback
                 )
@@ -94,8 +100,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             )
 
         except Exception as e:
-            logger.error("Error Ingestion pipeline: %s", e)
-            logger.error(traceback.format_exc())
+            logger.error("Error in ingestion pipeline", exc_info=e)
             capture_exception(e)
 
     @classmethod

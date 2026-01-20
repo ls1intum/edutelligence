@@ -6,5 +6,15 @@ weaviate:
   port: "8001"
   grpc_port: "50051"
 
+memiris:
+  enabled: true
+  sleep_enabled: true
+
+langfuse:
+  enabled: false # Set to true to enable LangFuse tracing
+  public_key: "pk-lf-..." # Your LangFuse public key
+  secret_key: "sk-lf-..." # Your LangFuse secret key  # pragma: allowlist secret
+  host: "https://cloud.langfuse.com" # Or your self-hosted instance URL
+
 env_vars:
   SOME: "value"

@@ -1,5 +1,6 @@
+import datetime
 from sqlalchemy import Column, Integer, String, Enum, Text, ForeignKey, JSON, TIMESTAMP, \
-    Numeric, CheckConstraint
+    Numeric, CheckConstraint, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 import enum
@@ -18,6 +19,12 @@ class ThresholdLevel(enum.Enum):
 class LoggingLevel(enum.Enum):
     BILLING = 'BILLING'
     FULL = 'FULL'
+
+
+class ResultStatus(enum.Enum):
+    SUCCESS = 'success'
+    ERROR = 'error'
+    TIMEOUT = 'timeout'
 
 
 class User(Base):
@@ -157,6 +164,40 @@ class LogEntry(Base):
     usage_tokens = relationship("UsageTokens")
 
 
+class RequestEvent(Base):
+    """
+    One row per request_id capturing scheduling and completion timestamps plus
+    provider-specific snapshots.
+    """
+
+    __tablename__ = "request_events"
+
+    request_id = Column(Text, primary_key=True)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="SET NULL"))
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="SET NULL"))
+
+    initial_priority = Column(Text)  # Start priority (e.g. 'normal')
+    priority_when_scheduled = Column(Text)  # Final priority (may be escalated, e.g. 'high')
+
+    queue_depth_at_enqueue = Column(Integer)  # Total system load when request arrived
+    queue_depth_at_schedule = Column(Integer)  # Total system load when scheduled (after waiting)
+
+    timeout_s = Column(Integer)  # Max wait time requested (or null)
+
+    enqueue_ts = Column(TIMESTAMP(timezone=True))
+    scheduled_ts = Column(TIMESTAMP(timezone=True))
+    request_complete_ts = Column(TIMESTAMP(timezone=True))
+
+    # Provider specific snapshots (NULL if not applicable)
+    available_vram_mb = Column(Integer)  # Ollama only: VRAM free at schedule time
+    azure_rate_remaining_requests = Column(Integer)  # Azure only: requests remaining in window
+    azure_rate_remaining_tokens = Column(Integer)  # Azure only: tokens remaining in window
+
+    cold_start = Column(Boolean)  # True if model had to be loaded (Ollama)
+    result_status = Column(Enum(ResultStatus, name="result_status_enum"))
+    error_message = Column(Text)
+
+
 class TokenTypes(Base):
     __tablename__ = "token_types"
 
@@ -183,3 +224,26 @@ class TokenPrice(Base):
     price_per_k_token = Column(Numeric(10, 6), nullable=False)
 
     token_type = relationship("TokenTypes")
+
+
+class JobStatus(enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+class Job(Base):
+    __tablename__ = 'jobs'
+
+    id = Column(Integer, primary_key=True)
+    status = Column(Enum(JobStatus), nullable=False, default=JobStatus.PENDING)
+    process_id = Column(Integer, ForeignKey("process.id", ondelete="CASCADE"), nullable=False)
+    request_payload = Column(JSON, nullable=False)
+    result_payload = Column(JSON)
+    error_message = Column(Text)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False,
+                        default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False,
+                        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
