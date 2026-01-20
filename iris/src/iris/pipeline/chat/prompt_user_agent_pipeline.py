@@ -212,7 +212,7 @@ class PromptUserAgentPipeline(
             "programming_language": programming_language,
             "event": self.event,
             "has_chat_history": len(state.message_history) > 0,
-            "insufficient_answer": False, # TODO: make this dependent on result of assessment subpipeline
+            "insufficient_answer": False
         }
 
         return self.system_prompt_template.render(template_context)
