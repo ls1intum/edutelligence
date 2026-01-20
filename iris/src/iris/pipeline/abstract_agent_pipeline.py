@@ -25,7 +25,6 @@ logger = get_logger(__name__)
 
 DTO = TypeVar("DTO")
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
-DEFAULT_SESSION_TITLE_ALIASES: set[str] = {"new chat", "neuer chat"}
 
 
 class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
