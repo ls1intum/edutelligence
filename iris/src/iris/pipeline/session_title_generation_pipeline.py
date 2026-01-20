@@ -5,7 +5,6 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
@@ -13,6 +12,7 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 
 logger = get_logger(__name__)
 
@@ -55,7 +55,7 @@ class SessionTitleGenerationPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    @traceable(name="Session Title Generation Pipeline")
+    @observe(name="Session Title Generation Pipeline")
     def __call__(
         self,
         current_session_title: str,

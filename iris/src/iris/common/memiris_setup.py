@@ -32,6 +32,7 @@ from iris.config import settings
 from iris.llm import AzureOpenAIChatModel, OllamaModel
 from iris.llm.external.openai_chat import OpenAIChatModel
 from iris.llm.llm_manager import LlmManager
+from iris.tracing import get_current_context, observe, set_current_context
 from iris.vector_database.database import VectorDatabase
 
 _memiris_user_focus_personal_details = """
@@ -354,6 +355,7 @@ class MemirisWrapper:
         self.memory_connection_service = MemoryConnectionService(weaviate_client)
         self.tenant = tenant
 
+    @observe(name="Memiris: Create Memories")
     def create_memories(
         self, text: str, reference: str, use_cloud_models: bool = False
     ) -> Sequence[Memory]:
@@ -370,6 +372,8 @@ class MemirisWrapper:
         if not self.enabled:
             logging.warning("MemirisWrapper is disabled, returning empty sequence.")
             return []
+        # TODO: Memiris maintainer - add LangFuse tracing inside Memiris library
+        # for internal LLM calls (memory creation, consolidation, etc.)
         if use_cloud_models:
             return self.memory_creation_pipeline_openai.create_memories(
                 self.tenant, text
@@ -379,6 +383,7 @@ class MemirisWrapper:
                 self.tenant, text, reference
             )
 
+    @observe(name="Memiris: Create Memories (Async)")
     def create_memories_in_separate_thread(
         self,
         text: str,
@@ -397,8 +402,13 @@ class MemirisWrapper:
         Returns:
             Thread: The thread that is running the memory creation.
         """
+        # Capture parent tracing context before spawning thread
+        parent_ctx = get_current_context()
 
         def _create_memories():
+            # Restore parent tracing context in child thread
+            if parent_ctx:
+                set_current_context(parent_ctx)
             try:
                 memories = self.create_memories(text, reference, use_cloud_models)
                 result_storage.extend(memories)
@@ -411,6 +421,7 @@ class MemirisWrapper:
         thread.start()
         return thread
 
+    @observe(name="Memiris: Sleep Memories")
     def sleep_memories(self, use_cloud_models: bool = False) -> None:
         """
         Sleeps memories for the tenant using the memory sleep pipeline.
@@ -423,6 +434,8 @@ class MemirisWrapper:
             return
         # Track time for the sleep operation and log which pipeline is used
         start_time = time.perf_counter()
+        # TODO: Memiris maintainer - add LangFuse tracing inside Memiris library
+        # for internal LLM calls (memory creation, consolidation, etc.)
         if use_cloud_models:
             logging.info(
                 "Starting memory sleep for tenant %s using OpenAI", self.tenant

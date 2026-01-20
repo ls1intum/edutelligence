@@ -4,7 +4,6 @@ from typing import Any, Callable, List, Optional
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langsmith import traceable
 
 from iris.common.logging_config import get_logger
 from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
@@ -13,6 +12,7 @@ from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_d
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
+from iris.tracing import observe
 
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
@@ -478,7 +478,7 @@ class TextExerciseChatPipeline(
         """
         return self.update_session_title(state, output, dto.session_title)
 
-    @traceable(name="Text Exercise Chat Pipeline")
+    @observe(name="Text Exercise Chat Pipeline")
     def __call__(
         self,
         dto: TextExerciseChatPipelineExecutionDTO,

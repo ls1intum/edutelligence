@@ -16,6 +16,7 @@ from iris.llm import (
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.faq_schema import FaqSchema
 
 logger = get_logger(__name__)
@@ -137,6 +138,7 @@ class CitationPipeline(SubPipeline):
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
+    @observe(name="Citation Pipeline")
     def __call__(
         self,
         information,  #: #Union[List[dict], List[str]],
