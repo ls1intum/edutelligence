@@ -1,8 +1,10 @@
+import datetime
 import unittest
 import re
 from collections import Counter
 
 from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
+from iris.domain.data.result_dto import ResultDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.variant.prompt_user_variant import PromptUserVariant
 from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
@@ -63,8 +65,12 @@ class TestAskUser(unittest.TestCase):
         cls.code = CODE_SORTING
         cls.keywords = extract_keywords("\n".join(cls.template.values()), "\n".join(cls.code.values()))
 
+        # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
+        # For this to happen, ResultDTO would have to be extended with feedback and the test data with a test repository
+
         cls.dto = PromptUserChatPipelineExecutionDTO(
-            submission=ProgrammingSubmissionDTO(id=1, repository=cls.code, isPractice=False, buildFailed=False),
+            submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=cls.code, isPractice=False, buildFailed=False,
+                                                latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
             exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
             course=CourseDTO(id=1,name="Intro to Programming", description=None),
             eventPayload=PyrisEventDTO(eventType="", event=""), settings=None,

@@ -95,7 +95,7 @@ hide empty methods
 """
 
 CODE_SORTING: dict[str, str] = {
-    "BubbleSort.java": """package net.java;
+    "src/net/java/BubbleSort.java": """package net.java;
 
 import java.util.*;
 
@@ -122,7 +122,7 @@ public class BubbleSort implements SortStrategy {
 }
 """,
 
-    "Client.java": """package net.java;
+    "src/net/java/Client.java": """package net.java;
 
 import java.text.*;
 import java.util.*;
@@ -210,7 +210,7 @@ public final class Client {
 }
 """,
 
-    "Context.java": """package net.java;
+    "src/net/java/Context.java": """package net.java;
 
 import java.util.*;
 
@@ -243,7 +243,7 @@ public class Context {
 }
 """,
 
-    "MergeSort.java": """package net.java;
+    "src/net/java/MergeSort.java": """package net.java;
 
 import java.util.*;
 
@@ -295,7 +295,7 @@ public class MergeSort implements SortStrategy {
 }
 """,
 
-    "Policy.java": """package net.java;
+    "src/net/java/Policy.java": """package net.java;
 
 public class Policy {
 
@@ -321,7 +321,7 @@ public class Policy {
 }
 """,
 
-    "SortStrategy.java": """package net.java;
+    "src/net/java/SortStrategy.java": """package net.java;
 
 import java.util.Date;
 import java.util.List;
@@ -335,7 +335,7 @@ public interface SortStrategy {
 
 
 TEMPLATE_SORTING : dict[str, str] = {
-    "BubbleSort.java": """package net.java;
+    "src/net/java/BubbleSort.java": """package net.java;
 
 import java.util.*;
 
@@ -353,7 +353,7 @@ public class BubbleSort {
 }
 """,
 
-    "Client.java": """package net.java;
+    "src/net/java/Client.java": """package net.java;
 
 import java.text.*;
 import java.util.*;
@@ -439,7 +439,7 @@ public final class Client {
 }
 """,
 
-    "MergeSort.java": """package net.java;
+    "src/net/java/MergeSort.java": """package net.java;
 
 import java.util.*;
 

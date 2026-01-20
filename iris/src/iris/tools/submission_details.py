@@ -58,6 +58,8 @@ def create_tool_get_submission_details(
             "latest_result",
         ]
 
+        print(f"\n\n\nreceived values: {values}\n\n")
+
         return {
             key: (
                 str(value)
