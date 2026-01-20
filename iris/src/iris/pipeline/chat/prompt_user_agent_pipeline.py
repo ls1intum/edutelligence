@@ -211,7 +211,8 @@ class PromptUserAgentPipeline(
             "problem_statement": problem_statement,
             "programming_language": programming_language,
             "event": self.event,
-            "has_chat_history": len(state.message_history) > 0
+            "has_chat_history": len(state.message_history) > 0,
+            "insufficient_answer": False, # TODO: make this dependent on result of assessment subpipeline
         }
 
         return self.system_prompt_template.render(template_context)
@@ -249,7 +250,7 @@ class PromptUserAgentPipeline(
         Returns:
             The processed result string.
         """
-        # TODO: somehow run assess_answer subpipeline (if previous answer exists) in pre-hook and give verdict as input for agent pipeline (maybe find a way to set bool values in build_system_message(...) corresponding to assessment result even after abstract_agent_pipeline already set it)
+        # TODO: run assess_answer subpipeline (only if previous answer exists) in pre-hook and give verdict as input for agent pipeline (set 'insufficient_answer' value like in build_system_message(...) corresponding to assessment result in state.prompt)
         """try:
             # Assess previous answer of user if existing
             self._assess_answer(state, result)
@@ -349,7 +350,7 @@ class PromptUserAgentPipeline(
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
 
-            # TODO: if event says prompting is finished -> trigger assessment sub-pipeline one last time -> check if here is the right place or in post-hook
+            # TODO: if event says prompting is finished -> trigger assessment sub-pipeline one last time
 
 
 

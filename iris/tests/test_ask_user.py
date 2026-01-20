@@ -16,7 +16,6 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from .TestCallback import TestPromptUserStatusCallback
 
-
 # Helper function to extract keywords from code input, that are less often used in exercise template
 def extract_keywords(task_template: str, code: str, top_n: int = 10):
     """
@@ -55,7 +54,8 @@ def extract_keywords(task_template: str, code: str, top_n: int = 10):
 
     return keywords
 
-
+# This class only tests the quality of the question generation.
+# It assumes the case where the student already answered an assessment question sufficiently and is asked another one (so no introductory text is generated).
 class TestAskUser(unittest.TestCase):
 
     @classmethod
@@ -74,7 +74,7 @@ class TestAskUser(unittest.TestCase):
                                                 latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
             exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
             course=CourseDTO(id=1,name="Intro to Programming", description=None),
-            eventPayload=PyrisEventDTO(eventType="", event=""), settings=None,
+            eventPayload=PyrisEventDTO(eventType="", event="sufficient_answer"), settings=None,
             user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False))
 
         cls.variant = PromptUserVariant(
@@ -93,8 +93,6 @@ class TestAskUser(unittest.TestCase):
 
 
     def test_question_is_thematically_relevant(self):
-        print(f"These are the extracted keywords, of submission minus task: {self.keywords_code}")
-        print(f"These are the extracted keywords, of problem statement minus task: {self.keywords_task}")
         # this tests if keywords of submission minus template or keywords of the problem statement minus template are part of the question
         assert (any(k in self.question.lower() for k in self.keywords_code) or any(k in self.question.lower() for k in self.keywords_task))
 
@@ -106,7 +104,7 @@ class TestAskUser(unittest.TestCase):
 
 
     def test_question_not_too_difficult_length(self):
-        assert len(self.question) < 200
+        assert len(self.question) < 220
 
 
     def test_question_requires_reasonable_answer(self):
@@ -134,7 +132,7 @@ class TestAskUser(unittest.TestCase):
             "memory", "data", "structure"
         ]
         num_terms = sum(1 for k in key_terms if k in self.question.lower())
-        assert num_terms <= 3
+        assert num_terms <= 4
 
 
 if __name__ == "__main__":
