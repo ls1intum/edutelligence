@@ -149,6 +149,11 @@ async def generate_suggestions_by_file(
 
         template_to_submission_diff = "\n".join(diff_without_deletions)
 
+        added_lines = sum(
+            1 for line in diff_lines_list
+            if line.startswith("+") and not line.startswith("+++")
+        )
+
         prompt_inputs.append(
             {
                 "submission_file": file_content,
@@ -156,6 +161,7 @@ async def generate_suggestions_by_file(
                 "problem_statement": problem_statement,
                 "file_path": file_path,
                 "summary": summary_string,
+                "priority": added_lines,
             }
         )
 
@@ -188,7 +194,7 @@ async def generate_suggestions_by_file(
         )
 
         # Prioritize files that have a diff between solution and submission
-        prompt_inputs = sorted(prompt_inputs, key=lambda x: x["priority"], reverse=True)
+        prompt_inputs = sorted(prompt_inputs, key=lambda x: x.get("priority", 0), reverse=True)
 
         filtered_prompt_inputs = []
         if programming_language_extension is not None:
