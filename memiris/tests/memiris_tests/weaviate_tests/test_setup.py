@@ -2,9 +2,6 @@ import pytest
 from testcontainers.core.config import testcontainers_config
 from testcontainers.weaviate import WeaviateContainer  # type: ignore
 
-# Increase timeout for CI environments where Weaviate may take longer to start
-testcontainers_config.timeout = 120
-
 
 class WeaviateTest:
 
@@ -17,7 +14,8 @@ class WeaviateTest:
             environ={
                 "DISABLE_TELEMETRY": "true",
             },
-        )
+        ).with_startup_timeout(120)
+        
         max_retries = 5
         for attempt in range(0, max_retries):
             try:
