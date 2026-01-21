@@ -393,7 +393,8 @@ class LectureChatPipeline(
         try:
             logger.info("Running lecture chat pipeline...")
             # Call the parent __call__ method which handles the complete execution
-            super().__call__(dto, variant, callback)
+            local = dto.settings is not None and dto.settings.is_local()
+            super().__call__(dto, variant, callback, local=local)
         except Exception as e:
             logger.error(
                 "An error occurred while running the lecture chat pipeline",

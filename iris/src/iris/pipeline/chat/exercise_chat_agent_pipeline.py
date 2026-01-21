@@ -225,9 +225,8 @@ class ExerciseChatAgentPipeline(
 
         # Add lecture content retrieval if available
         if should_allow_lecture_tool(state.db, dto.course.id):
-            lecture_retriever = LectureRetrieval(
-                state.db.client, local=state.dto.settings.is_local()
-            )
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     lecture_retriever,
@@ -242,9 +241,8 @@ class ExerciseChatAgentPipeline(
 
         # Add FAQ retrieval if available
         if should_allow_faq_tool(state.db, dto.course.id):
-            faq_retriever = FaqRetrieval(
-                state.db.client, local=state.dto.settings.is_local()
-            )
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            faq_retriever = FaqRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     faq_retriever,
@@ -398,13 +396,10 @@ class ExerciseChatAgentPipeline(
 
             # Create small LLM for refinement
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
             llm_small = IrisLangchainChatModel(
                 request_handler=ModelVersionRequestHandler(
-                    version=(
-                        "llama3.3:latest"
-                        if state.dto.settings.is_local()
-                        else "gpt-4.1-mini"
-                    )
+                    version=("llama3.3:latest" if is_local else "gpt-4.1-mini")
                 ),
                 completion_args=completion_args,
             )
@@ -587,7 +582,8 @@ class ExerciseChatAgentPipeline(
             self.event = event
 
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback, local=dto.settings.is_local())
+            local = dto.settings is not None and dto.settings.is_local()
+            super().__call__(dto, variant, callback, local=local)
 
         except Exception as e:
             logger.error("Error in exercise chat pipeline", exc_info=e)

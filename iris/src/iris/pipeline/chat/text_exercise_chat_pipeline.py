@@ -193,9 +193,10 @@ class TextExerciseChatPipeline(
         # Add lecture content retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_lecture_tool(state.db, dto.exercise.course.id):
-                lecture_retriever = LectureRetrieval(
-                    state.db.client, local=state.dto.settings.is_local()
+                is_local = (
+                    state.dto.settings is not None and state.dto.settings.is_local()
                 )
+                lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_lecture_content_retrieval(
@@ -212,9 +213,10 @@ class TextExerciseChatPipeline(
         # Add FAQ retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
             if should_allow_faq_tool(state.db, dto.exercise.course.id):
-                faq_retriever = FaqRetrieval(
-                    state.db.client, local=state.dto.settings.is_local()
+                is_local = (
+                    state.dto.settings is not None and state.dto.settings.is_local()
                 )
+                faq_retriever = FaqRetrieval(state.db.client, local=is_local)
                 query_text = self.get_text_of_latest_user_message(state)
                 tool_list.append(
                     create_tool_faq_content_retrieval(
@@ -504,7 +506,9 @@ class TextExerciseChatPipeline(
         try:
             logger.info("Running text exercise chat pipeline...")
 
-            local = dto is not None and dto.settings.is_local()
+            local = (
+                dto is not None and dto.settings is not None and dto.settings.is_local()
+            )
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback, local=local)
