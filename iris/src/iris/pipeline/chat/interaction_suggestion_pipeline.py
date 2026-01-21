@@ -62,6 +62,7 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         self.variant = variant
         self.local = local
+        self.tokens = None
 
         # Set the langchain chat model
         # Use larger model for better quality suggestions
