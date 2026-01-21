@@ -1,25 +1,18 @@
-import os
-
 import pytest
-from testcontainers.core.config import testcontainers_config
 from testcontainers.weaviate import WeaviateContainer  # type: ignore
 
-# Set startup timeout for testcontainers before it's used
-os.environ['TC_START_TIMEOUT'] = '120'
 
 class WeaviateTest:
 
-    @pytest.fixture(scope="session", autouse=True)
-    def weaviate_container(self, request):
-        # Ensure this Weaviate version is the one you intend to use.
-        # I've updated it to 1.34.10 based on your earlier statement.
+    @pytest.fixture(scope="session")
+    def weaviate_client(self, request):
         weaviate_container = WeaviateContainer(
-            "cr.weaviate.io/semitechnologies/weaviate:1.34.10",
-            environ={
+            image="cr.weaviate.io/semitechnologies/weaviate:1.30.3",
+            env_vars={
+                "AUTOSCHEMA_ENABLED": "false",
                 "DISABLE_TELEMETRY": "true",
             },
-        ).with_startup_timeout(120)
-
+        )
         max_retries = 5
         for attempt in range(0, max_retries):
             try:
@@ -42,4 +35,7 @@ class WeaviateTest:
                 print(f"Failed to stop Weaviate container: {e}")
 
         request.addfinalizer(remove_container)
-        return weaviate_container
+
+        print("Weaviate container started successfully")
+
+        return weaviate_container.get_client()

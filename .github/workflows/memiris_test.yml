@@ -76,8 +76,6 @@ jobs:
       - name: Run Tests
         run: poetry run coverage run -m pytest
         working-directory: memiris
-        env:
-          TESTCONTAINERS_RYUK_DISABLED: "true"
 
       - name: Generate Coverage Report
         run: poetry run coverage xml
