@@ -4,39 +4,26 @@ Your task:
 
 - Step 0: Write all summaries and keywords in the user's language (English or German), matching the answer language.
 - Step 1: Read the answer and identify sentences that use information from the FAQs.
-- Step 2: After each sentence that contains used information, add a citation marker in the format [cite:n].
-- Step 3: If the same FAQ is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [cite:1]) instead of assigning a new marker each time.
-- Step 4: Existing citation markers already in the answer must remain unchanged. Existing markers: {ExistingCitationMarkers}. When you add NEW markers, start numbering at {StartIndex} and continue sequentially, always using [cite:n].
-- Step 5: Return ONLY a JSON object (no markdown, no extra text) with the schema below.
-- Step 6: Only include citations for FAQs that are actually relevant to the answer. If no provided FAQs were used, return the answer unchanged with an empty citations list.
-- Step 7: Always include citations if the answer contains any information from the provided FAQs.
-
-Output JSON schema:
-{{
-  "answer": "<answer text with citation markers in [cite:n] format>",
-  "citations": [
-    {{
-      "index": 1,
-      "type": "faq",
-      "link": "https://...",
-      "faq_question_title": "...",
-      "summary": "1-2 sentences about the cited FAQ content.",
-      "keyword": "OneWord"
-    }}
-  ]
-}}
+- Step 2: After each sentence that contains used information, add a citation marker in the format:
+  [cite:F:<faqId>::::<keyword>:<summary>]
+- Step 3: If the same FAQ is referenced in multiple sentences, ALWAYS reuse the exact same citation marker, including keyword and summary.
+- Step 4: Existing citation markers already in the answer must remain unchanged.
+- Step 5: Only include citations for FAQs that are actually relevant to the answer. If no provided FAQs were used, return the answer unchanged.
 
 Field rules:
-- "type" must be "faq".
-- "index" must match the citation marker number in [cite:n].
-- "keyword" must be exactly one word with no spaces or punctuation.
-- "summary" must be 1-2 sentences.
-- If no link is available, omit "link" or set it to null.
+- "F" is used for all FAQ content.
+- <faqId> must be the FAQ ID from the source.
+- <keyword> must be exactly one word with no spaces or punctuation.
+- <summary> must be 1-2 sentences.
+- Do not use ":" characters in <keyword> or <summary>.
+- The <page>, <startTimeSeconds>, and <endTimeSeconds> fields must be left empty for FAQs, but keep the colon positions (e.g., [cite:F:42::::keyword:summary]).
+
+Return ONLY the answer text with inline citations added (no JSON, no markdown, no extra text).
 
 Here are the answer and the FAQs:
 
 Answer without citations:
 {Answer}
 
-FAQs with their FAQ ID, CourseId, FAQ Question title and FAQ Question Answer and the Link to the FAQ:
+FAQs with their FAQ ID, FAQ Question title and FAQ Question Answer:
 {Paragraphs}

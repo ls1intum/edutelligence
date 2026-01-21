@@ -1,17 +1,11 @@
-import datetime
-import json
 import os
-import re
-from dataclasses import dataclass
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-from pydantic import ValidationError
+from langchain_core.prompts import PromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain.citation import CitationDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
@@ -27,12 +21,6 @@ from iris.vector_database.faq_schema import FaqSchema
 logger = get_logger(__name__)
 
 
-@dataclass
-class CitationResult:
-    answer: str
-    citations: list[CitationDTO]
-
-
 class InformationType(str, Enum):
     PARAGRAPHS = "PARAGRAPHS"
     FAQS = "FAQS"
@@ -44,7 +32,6 @@ class CitationPipeline(SubPipeline):
     llms: dict
     pipelines: dict
     prompt_str: str
-    prompt: ChatPromptTemplate
 
     def __init__(self):
         super().__init__(implementation_id="citation_pipeline")
@@ -98,16 +85,9 @@ class CitationPipeline(SubPipeline):
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
                 continue
-            # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
-            if ".deattachment" in paragraph.lecture_unit_link:
-                paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
-                    ".deattachment", ".de/api/core/files/attachment"
-                )
             lct = (
-                f"Lecture: {paragraph.lecture_name},"
-                f" Unit: {paragraph.lecture_unit_name},"
+                f"Lecture Unit ID: {paragraph.lecture_unit_id},"
                 f" Page: {paragraph.page_number},"
-                f" Link: {paragraph.lecture_unit_link or "No link available"},"
                 f"\nContent:\n---{paragraph.page_text_content}---\n\n"
             )
             formatted_string_lecture_page_chunks += lct
@@ -117,13 +97,11 @@ class CitationPipeline(SubPipeline):
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
             start_time_sec = paragraph.segment_start_time
             end_time_sec = paragraph.segment_end_time
-            start_time_str = str(datetime.timedelta(seconds=int(start_time_sec)))
-            end_time_str = str(datetime.timedelta(seconds=int(end_time_sec)))
             lct = (
-                f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}, Link: {paragraph.video_link or "No link available"}, "
-                f"Start Time: {start_time_str}, Start Time Seconds: {int(start_time_sec)}, "
-                f"End Time: {end_time_str}, End Time Seconds: {int(end_time_sec)},\n"
+                f"Lecture Unit ID: {paragraph.lecture_unit_id}, "
+                f"Page: {paragraph.page_number}, "
+                f"Start Time Seconds: {int(start_time_sec)}, "
+                f"End Time Seconds: {int(end_time_sec)},\n"
                 f"Content:\n"
                 f"---{paragraph.segment_text}---\n\n"
             )
@@ -132,60 +110,20 @@ class CitationPipeline(SubPipeline):
             "}", "}}"
         ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
 
-    def create_formatted_faq_string(self, faqs, base_url):
+    def create_formatted_faq_string(self, faqs):
         """
         Create a formatted string from the data
         """
         formatted_string = ""
         for faq in faqs:
             faq = (
-                f"FAQ ID {faq.get(FaqSchema.FAQ_ID.value)},"
-                f" CourseId {faq.get(FaqSchema.COURSE_ID.value)} ,"
-                f" FAQ Question title {faq.get(FaqSchema.QUESTION_TITLE.value)} and"
-                f" FAQ Question Answer {faq.get(FaqSchema.QUESTION_ANSWER.value)} and"
-                f" FAQ link {base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId="
-                f"{faq.get(FaqSchema.FAQ_ID.value)}"
+                f"FAQ ID: {faq.get(FaqSchema.FAQ_ID.value)}, "
+                f"FAQ Question Title: {faq.get(FaqSchema.QUESTION_TITLE.value)}, "
+                f"FAQ Answer: {faq.get(FaqSchema.QUESTION_ANSWER.value)}"
             )
             formatted_string += faq
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
-
-    def _parse_citation_response(self, response: str, fallback_answer: str):
-        if "!NONE!" in str(response):
-            return CitationResult(answer=fallback_answer, citations=[])
-
-        response_text = str(response).strip()
-        try:
-            payload = json.loads(response_text)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", response_text, re.DOTALL)
-            if not match:
-                return CitationResult(answer=fallback_answer, citations=[])
-            try:
-                payload = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                return CitationResult(answer=fallback_answer, citations=[])
-
-        answer = payload.get("answer", fallback_answer)
-        citations = payload.get("citations") or []
-        if not isinstance(citations, list):
-            citations = []
-
-        parsed_citations = []
-        for entry in citations:
-            if isinstance(entry, CitationDTO):
-                parsed_citations.append(entry)
-                continue
-            if isinstance(entry, dict):
-                parsed = None
-                try:
-                    parsed = CitationDTO.model_validate(entry)
-                except (ValidationError, TypeError, ValueError) as exc:
-                    logger.debug("Failed to parse citation entry: %s", exc)
-                if parsed:
-                    parsed_citations.append(parsed)
-
-        return CitationResult(answer=answer, citations=parsed_citations)
 
     @observe(name="Citation Pipeline")
     def __call__(
@@ -196,7 +134,7 @@ class CitationPipeline(SubPipeline):
         variant: str = "default",
         user_language: str = "en",
         **kwargs,
-    ) -> CitationResult:
+    ) -> str:
         """
         Runs the pipeline
             :param information: List of info as list of dicts or strings to augment response
@@ -204,7 +142,7 @@ class CitationPipeline(SubPipeline):
             :param information_type: The type of information provided. can be either lectures or faqs
             :param variant: The variant of the model to use ("default" or "advanced")
             :param user_language: The user's preferred language ("en" or "de")
-            :return: CitationResult with answer and citations
+            :return: Answer text with inline citations added
         """
         paras = ""
         paragraphs_page_chunks = ""
@@ -217,14 +155,14 @@ class CitationPipeline(SubPipeline):
         pipeline = self.pipelines[variant]
 
         if information_type == InformationType.FAQS:
-            paras = self.create_formatted_faq_string(
-                information, kwargs.get("base_url")
-            )
+            paras = self.create_formatted_faq_string(information) or ""
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
             paragraphs_page_chunks, paragraphs_transcriptions = (
                 self.create_formatted_lecture_string(information)
             )
+            paragraphs_page_chunks = paragraphs_page_chunks or ""
+            paragraphs_transcriptions = paragraphs_transcriptions or ""
             self.prompt_str = self.lecture_prompt_str
 
         # Add language instruction to prompt
@@ -233,16 +171,6 @@ class CitationPipeline(SubPipeline):
         else:
             language_instruction = "Format all citations and references in English.\n\n"
 
-        existing_indices = sorted(
-            {int(match) for match in re.findall(r"\[cite:(\d+)\]", answer)}
-        )
-        existing_marker_text = (
-            ", ".join(f"[cite:{index}]" for index in existing_indices)
-            if existing_indices
-            else "none"
-        )
-        start_index = max(existing_indices) + 1 if existing_indices else 1
-
         try:
             if information_type == InformationType.FAQS:
                 self.default_prompt = PromptTemplate(
@@ -250,16 +178,12 @@ class CitationPipeline(SubPipeline):
                     input_variables=[
                         "Answer",
                         "Paragraphs",
-                        "ExistingCitationMarkers",
-                        "StartIndex",
                     ],
                 )
                 response = (self.default_prompt | pipeline).invoke(
                     {
                         "Answer": answer,
                         "Paragraphs": paras,
-                        "ExistingCitationMarkers": existing_marker_text,
-                        "StartIndex": start_index,
                     }
                 )
             else:
@@ -269,8 +193,6 @@ class CitationPipeline(SubPipeline):
                         "Answer",
                         "Paragraphs",
                         "TranscriptionParagraphs",
-                        "ExistingCitationMarkers",
-                        "StartIndex",
                     ],
                 )
                 response = (self.default_prompt | pipeline).invoke(
@@ -278,12 +200,11 @@ class CitationPipeline(SubPipeline):
                         "Answer": answer,
                         "Paragraphs": paragraphs_page_chunks,
                         "TranscriptionParagraphs": paragraphs_transcriptions,
-                        "ExistingCitationMarkers": existing_marker_text,
-                        "StartIndex": start_index,
                     }
                 )
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            return self._parse_citation_response(response, answer)
+            response_text = str(response).strip()
+            return response_text or answer
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
             raise e

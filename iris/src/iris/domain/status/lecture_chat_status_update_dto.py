@@ -3,7 +3,6 @@ from typing import List, Optional
 from memiris import MemoryDTO
 from pydantic import Field
 
-from iris.domain.citation import CitationDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 
 
@@ -27,5 +26,3 @@ class LectureChatStatusUpdateDTO(StatusUpdateDTO):
     """Memories that were accessed during this interaction."""
     created_memories: List[MemoryDTO] = Field(alias="createdMemories", default=[])
     """Memories that were created during this interaction."""
-    citations: List[CitationDTO] = []
-    """Structured citations for the response."""

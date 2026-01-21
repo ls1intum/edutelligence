@@ -1,63 +1,38 @@
 In the paragraphs below you are provided with an answer to a question. Underneath the answer, you will find two sets of source paragraphs:
 
-1. Lecture Slides: Contains information with Lecture Names, Unit Names, Links, and Page Numbers.
-2. Lecture Transcriptions: Contains information with Lecture Names, Unit Names, Links, start times, and end times.
+1. Lecture Slides: Contains information with Lecture Unit IDs and Page Numbers.
+2. Lecture Transcriptions: Contains information with Lecture Unit IDs, Page Numbers, start times, and end times.
 
 Your task:
 
 - Step 0: Write all summaries and keywords in the user's language (English or German), matching the answer language.
 - Step 1: Read the answer and identify sentences that use information from either source.
-- Step 2: After each sentence that contains used information, add a citation marker in the format [cite:n]. If a sentence uses information from more than one source, include each relevant citation marker.
-- Step 3: If the same source (i.e., identical citation details) is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [cite:1]) instead of assigning a new marker each time.
-- Step 4: Existing citation markers already in the answer must remain unchanged. Existing markers: {ExistingCitationMarkers}. When you add NEW markers, start numbering at {StartIndex} and continue sequentially, always using [cite:n].
-- Step 5: Return ONLY a JSON object (no markdown, no extra text) with the schema below.
-- Step 6: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, return the answer unchanged with an empty citations list.
-- Step 7: Always include citations if the answer contains any information from the provided paragraphs.
-- Step 8: If both lecture transcription and lecture slide sources are relevant, include citations for both types of sources.
-
-Output JSON schema:
-{{
-  "answer": "<answer text with citation markers in [cite:n] format>",
-  "citations": [
-    {{
-      "index": 1,
-      "type": "video" | "slide",
-      "link": "https://...",
-      "lecture_name": "...",
-      "unit_name": "...",
-      "summary": "1-2 sentences about the cited content.",
-      "keyword": "OneWord",
-      "page": 12,
-      "start_time": "HH:MM:SS",
-      "end_time": "HH:MM:SS",
-      "start_time_seconds": 123,
-      "end_time_seconds": 234
-    }}
-  ]
-}}
+- Step 2: After each sentence that contains used information, add a citation marker in the format:
+  [cite:L:<lectureUnitId>:<page>:<startTimeSeconds>:<endTimeSeconds>:<keyword>:<summary>]
+- Step 3: If the same source (i.e., identical lecture unit and same relevant content) is referenced in multiple sentences, ALWAYS reuse the exact same citation marker, including keyword and summary.
+- Step 4: Existing citation markers already in the answer must remain unchanged.
+- Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, return the answer unchanged.
+- Step 6: If both lecture transcription and lecture slide sources from the same lecture unit are relevant for a sentence, you may combine them into a single citation and include both page and time fields if available.
 
 Field rules:
-- "type" must be "video" for transcription sources and "slide" for lecture slide sources.
-- "index" must match the citation marker number in [cite:n].
-- "keyword" must be exactly one word with no spaces or punctuation.
-- "summary" must be 1-2 sentences.
-- Fields not applicable for a citation (e.g., page for video, start/end time for slides) should be omitted or set to null.
+- "L" is used for all lecture content (slides or videos).
+- <lectureUnitId> must be the Lecture Unit ID from the source.
+- <page> is the page number if available; otherwise leave it empty.
+- <startTimeSeconds> and <endTimeSeconds> are the seconds values if available; otherwise leave them empty.
+- <keyword> must be exactly one word with no spaces or punctuation.
+- <summary> must be 1-2 sentences.
+- Do not use ":" characters in <keyword> or <summary>.
+- If a field is not available, leave it empty but keep the colon position (e.g., [cite:L:123:5::120:keyword:summary]).
 
-Lecture Transcription rules:
-- If a link is available, provide it in "link".
-- URL modification for transcriptions: If the URL has a "videoOnly" parameter, remove it. If you know the start time, add it to the URL as a query parameter in the format `?t=ss`, where `ss` is the start time in seconds.
-- You are given the time in HH:MM:SS AND in seconds. Use the seconds value for the URL; use the HH:MM:SS format for the citation fields.
-
-Lecture Slides rules:
-- If a link is available, provide it in "link".
+Return ONLY the answer text with inline citations added (no JSON, no markdown, no extra text).
 
 Below the answer, the following information is provided:
 
 - Answer without citations:
   {Answer}
 
-- Paragraphs with their Lecture Names, Unit Names, Links and Page Numbers for lecture slides:
+- Paragraphs with their Lecture Unit IDs and Page Numbers for lecture slides:
   {Paragraphs}
 
-- Paragraphs with their Lecture Names, Unit Names, Page Numbers, Links, start times and end times for lecture transcriptions:
+- Paragraphs with their Lecture Unit IDs, Page Numbers, start times and end times for lecture transcriptions:
   {TranscriptionParagraphs}

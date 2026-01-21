@@ -123,7 +123,6 @@ class StatusCallback(ABC):
         accessed_memories: Optional[List[Memory]] = None,
         created_memories: Optional[List[Memory]] = None,
         artifact: Optional[str] = None,
-        citations: Optional[List[dict]] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -156,8 +155,6 @@ class StatusCallback(ABC):
             )
         if hasattr(self.status, "artifact"):
             self.status.artifact = artifact
-        if hasattr(self.status, "citations"):
-            self.status.citations = citations or []
         next_stage = self.get_next_stage()
 
         if next_stage is not None:
