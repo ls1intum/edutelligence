@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from testcontainers.core.config import testcontainers_config
 from testcontainers.weaviate import WeaviateContainer  # type: ignore
