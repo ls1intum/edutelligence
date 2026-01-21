@@ -11,6 +11,10 @@ class WeaviateTest:
             env_vars={
                 "AUTOSCHEMA_ENABLED": "false",
                 "DISABLE_TELEMETRY": "true",
+
+                "ENABLE_MODULES": "",
+                "DEFAULT_VECTORIZER_MODULE": "none",
+                "CLUSTER_HOSTNAME": "node1",
             },
         )
         max_retries = 5
