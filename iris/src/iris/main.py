@@ -14,6 +14,7 @@ from iris.common.logging_config import (
     setup_logging,
 )
 from iris.config import settings
+from iris.tracing import init_langfuse, shutdown_langfuse
 from iris.web.routers.health.health_endpoint import router as health_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
 from iris.web.routers.memiris import router as memiris_router
@@ -28,6 +29,7 @@ logger = get_logger(__name__)
 settings.set_env_vars()
 
 sentry.init()
+init_langfuse()
 
 scheduler = BackgroundScheduler()
 
@@ -45,6 +47,7 @@ async def lifespan(_: FastAPI):
 
     yield
 
+    shutdown_langfuse()
     scheduler.shutdown()
     logger.info("Scheduler stopped")
 

@@ -7,7 +7,6 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -18,6 +17,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.tracing import observe
 
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -97,7 +97,7 @@ class BaseRetrieval(SubPipeline, ABC):
         self.collection = schema_init_func(client)
         self.tokens = []
 
-    @traceable(name="Retrieval: Question Assessment")
+    @observe(name="Retrieval: Question Assessment")
     def assess_question(
         self,
         chat_history: list[PyrisMessage],
@@ -131,7 +131,7 @@ class BaseRetrieval(SubPipeline, ABC):
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Student Query")
+    @observe(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
         chat_history: list[PyrisMessage],
@@ -167,7 +167,7 @@ class BaseRetrieval(SubPipeline, ABC):
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Search in DB")
+    @observe(name="Retrieval: Search in DB")
     def search_in_db(
         self,
         query: str,
@@ -200,7 +200,7 @@ class BaseRetrieval(SubPipeline, ABC):
             filters=filter_weaviate,
         )
 
-    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
+    @observe(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(
         self,
         chat_history: list[PyrisMessage],

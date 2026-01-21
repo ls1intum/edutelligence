@@ -4,12 +4,12 @@ from typing import Dict, List, Optional
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 from pydantic import BaseModel
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.tracing import observe
 
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
@@ -97,7 +97,7 @@ class CodeFeedbackPipeline(SubPipeline):
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
-    @traceable(name="Code Feedback Pipeline")
+    @observe(name="Code Feedback Pipeline")
     def __call__(
         self,
         repository: Dict[str, str],

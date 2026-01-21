@@ -18,6 +18,13 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
+from iris.tracing import (
+    TracingContext,
+    clear_current_context,
+    get_langchain_config,
+    observe,
+    set_current_context,
+)
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import StatusCallback
 
@@ -47,6 +54,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     prompt: ChatPromptTemplate | None
     tokens: List[TokenUsageDTO]
     local: bool
+    tracing_context: Optional[TracingContext]
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -104,6 +112,38 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # ========================================
     # === CAN override (optional methods) ===
     # ========================================
+
+    def create_tracing_context(self, dto: DTO, variant: VARIANT) -> TracingContext:
+        """
+        Create a TracingContext for this pipeline execution.
+
+        Override this method to add pipeline-specific metadata like
+        exercise IDs, lecture IDs, course names, etc.
+
+        Default implementation extracts common fields from the DTO.
+        """
+        return TracingContext.from_dto(
+            dto,
+            pipeline_name=self.__class__.__name__,
+            variant=variant.id if hasattr(variant, "id") else str(variant),
+        )
+
+    def _update_langfuse_trace(self, ctx: TracingContext) -> None:
+        """
+        Update the current LangFuse trace with metadata from the tracing context.
+
+        This is called after setting up the tracing context to enrich the trace
+        with user_id, session_id, course/exercise info, and other metadata.
+        """
+        try:
+            # Use langfuse.get_client() which returns the decorator-aware global client
+            import langfuse  # pylint: disable=import-outside-toplevel
+
+            client = langfuse.get_client()
+            if client:
+                client.update_current_trace(**ctx.to_langfuse_params())
+        except Exception as e:
+            logger.debug("Failed to update LangFuse trace: %s", e)
 
     def _track_tokens(
         self,
@@ -278,10 +318,15 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Execute the agent in streaming iteration mode and return the last output string.
 
         Calls on_agent_step for each step to allow subclasses to track tokens or progress.
+        Integrates with LangFuse for tracing LangChain operations.
         """
+        # Get LangFuse callbacks (None if disabled)
+        config = get_langchain_config(state.tracing_context)
+        callbacks = config.get("callbacks") if config else None
+
         final_output: Optional[str] = None
         step_count = 0
-        for step in agent_executor.iter(params):
+        for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
 
             # Log tool calls from intermediate steps
@@ -322,21 +367,77 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 )
         return final_output
 
-    def _create_session_title(
+    def _collect_recent_messages(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
         output: str,
-        first_user_msg: str,
+    ) -> list[str]:
+        """
+        Collect the most recent messages from the chat history.
+
+        Args:
+            state: The current pipeline execution state
+        Returns:
+            list[str]: The most recent messages
+        """
+        recent_messages: list[str] = []
+        for msg in state.message_history[
+            -self.get_history_limit(state) :  # noqa: E203
+        ]:
+            if msg.contents and isinstance(msg.contents[0], TextMessageContentDTO):
+                prefix = "User" if msg.sender == IrisMessageRole.USER else "Assistant"
+                recent_messages.append(f"{prefix}: {msg.contents[0].text_content}")
+        recent_messages.append(f"Assistant: {output}")
+        return recent_messages
+
+    def update_session_title(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+        output: str,
+        current_session_title: Optional[str],
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Updates session title if needed.
+
+        Args:
+            state: The current pipeline execution state
+            output: The agent's output
+            current_session_title: The current session title
+        Returns:
+            Optional[str]: Updated session title or None if not applicable
+        """
+        session_title = (current_session_title or "").strip()
+        recent_messages = self._collect_recent_messages(state, output)
+        llm_out = self._create_session_title(
+            state, session_title, recent_messages, output
+        )
+
+        text = str(llm_out).strip()
+
+        if text == "KEEP":
+            return None
+        if text.startswith("UPDATE: "):
+            new_title = text[len("UPDATE: ") :].strip()  # noqa: E203
+            return new_title
+        return None
+
+    def _create_session_title(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+        current_session_title: str,
+        recent_messages: list[str],
+        output: str,
+    ) -> Optional[str]:
+        """
+        Generate a session title from the conversation history.
 
         This is a common implementation used across different chat pipelines.
 
         Args:
             state: The current pipeline execution state
+            current_session_title: The current session title (might be empty)
+            recent_messages: The most recent messages from the chat history
             output: The agent's output
-            first_user_msg: The first user message text
 
         Returns:
             The generated session title or None if not applicable
@@ -356,7 +457,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         try:
             if output:
                 session_title = self.session_title_pipeline(
-                    first_user_msg, output, user_language=user_language
+                    current_session_title, recent_messages, user_language=user_language
                 )
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)
@@ -371,6 +472,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
+    @observe(name="Abstract Agent Pipeline")
     def __call__(
         self, dto: DTO, variant: VARIANT, callback: StatusCallback, local: bool = False
     ):
@@ -407,75 +509,84 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.prompt = None
         state.tokens = []
         state.local = local  # Store local flag in state
+        state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
         )
 
-        # 1. Prepare message history, user query, LLM, prompt and tools
-        state.message_history = self.get_recent_history_from_dto(state)
+        # Set up LangFuse tracing context for this thread
+        set_current_context(state.tracing_context)
+        self._update_langfuse_trace(state.tracing_context)
 
-        user_query = self.get_text_of_latest_user_message(state)
+        try:
+            # 1. Prepare message history, user query, LLM, prompt and tools
+            state.message_history = self.get_recent_history_from_dto(state)
+            user_query = self.get_text_of_latest_user_message(state)
 
-        # Create LLM from variant's agent_model
-        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-        state.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(
-                version=(
-                    state.variant.local_agent_model
-                    if local
-                    else state.variant.cloud_agent_model
-                )
-            ),
-            completion_args=completion_args,
-        )
+            # Create LLM from variant's model selection (local/cloud), fallback to agent_model
+            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
 
-        system_message = self.build_system_message(state)
-        state.prompt = self.assemble_prompt_with_history(
-            state=state, system_prompt=system_message
-        )
+            if local and hasattr(state.variant, "local_agent_model"):
+                selected_version = state.variant.local_agent_model
+            elif (not local) and hasattr(state.variant, "cloud_agent_model"):
+                selected_version = state.variant.cloud_agent_model
+            else:
+                selected_version = state.variant.agent_model
 
-        # Load tools for both local and cloud models
-        state.tools = self.get_tools(state)
-
-        if local:
-            logger.info("Using local model with tool calling support")
-        else:
-            logger.info("Using cloud model with tool calling support")
-
-        # 4. Start memory creation if enabled
-        if self.is_memiris_memory_creation_enabled(state):
-            reference = self.get_memiris_reference(dto=state.dto)
-            state.memiris_memory_creation_thread = (
-                state.memiris_wrapper.create_memories_in_separate_thread(
-                    user_query, reference, state.memiris_memory_creation_storage
-                )
+            state.llm = IrisLangchainChatModel(
+                request_handler=ModelVersionRequestHandler(version=selected_version),
+                completion_args=completion_args,
             )
 
-        # 7.1. Run pre agent hook
-        self.pre_agent_hook(state)
-
-        # 7.2. Run the agent with the provided DTO
-        state.result = self.execute_agent(state)
-
-        # 7.3. Run post agent hook
-        self.post_agent_hook(state)
-
-        # 8. Wait for the memory creation to finish if enabled
-        if state.memiris_memory_creation_thread:
-            state.callback.in_progress("Waiting for memory creation to finish ...")
-            # noinspection PyUnboundLocalVariable
-            state.memiris_memory_creation_thread.join()
-            state.callback.done(
-                "Memory creation finished.",
-                created_memories=state.memiris_memory_creation_storage,
+            system_message = self.build_system_message(state)
+            state.prompt = self.assemble_prompt_with_history(
+                state=state, system_prompt=system_message
             )
-        else:
-            state.callback.done("No memory creation thread started.")
 
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        logger.info(
-            "Pipeline completed | pipeline=%s | duration=%dms tools_used=%d",
-            pipeline_name,
-            duration_ms,
-            len(state.tools),
-        )
+            # Load tools for both local and cloud models
+            state.tools = self.get_tools(state)
+
+            if local:
+                logger.info("Using local model with tool calling support")
+            else:
+                logger.info("Using cloud model with tool calling support")
+
+            # 4. Start memory creation if enabled
+            if self.is_memiris_memory_creation_enabled(state):
+                reference = self.get_memiris_reference(dto=state.dto)
+                state.memiris_memory_creation_thread = (
+                    state.memiris_wrapper.create_memories_in_separate_thread(
+                        user_query, reference, state.memiris_memory_creation_storage
+                    )
+                )
+
+            # 7.1. Run pre agent hook
+            self.pre_agent_hook(state)
+
+            # 7.2. Run the agent with the provided DTO
+            state.result = self.execute_agent(state)
+
+            # 7.3. Run post agent hook
+            self.post_agent_hook(state)
+
+            # 8. Wait for the memory creation to finish if enabled
+            if state.memiris_memory_creation_thread:
+                state.callback.in_progress("Waiting for memory creation to finish ...")
+                state.memiris_memory_creation_thread.join()
+                state.callback.done(
+                    "Memory creation finished.",
+                    created_memories=state.memiris_memory_creation_storage,
+                )
+            else:
+                state.callback.done("No memory creation thread started.")
+
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            logger.info(
+                "Pipeline completed | pipeline=%s | duration=%dms tools_used=%d",
+                pipeline_name,
+                duration_ms,
+                len(state.tools),
+            )
+        finally:
+            # Clean up tracing context to prevent memory leaks
+            clear_current_context()

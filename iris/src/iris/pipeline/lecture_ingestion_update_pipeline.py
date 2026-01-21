@@ -16,6 +16,7 @@ from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
+from iris.tracing import observe
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
@@ -29,6 +30,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         super().__init__()
         self.dto = dto
 
+    @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
         try:
             callback = IngestionStatusCallback(

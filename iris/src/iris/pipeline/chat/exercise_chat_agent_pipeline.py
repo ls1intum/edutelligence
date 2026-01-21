@@ -7,12 +7,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langsmith import traceable
 
 from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
+from iris.tracing import observe
 
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
@@ -370,6 +370,7 @@ class ExerciseChatAgentPipeline(
             state.callback.error("Error in processing response")
             return state.result
 
+    @observe(name="Response Refinement")
     def _refine_response(
         self,
         state: AgentPipelineExecutionState[
@@ -552,7 +553,7 @@ class ExerciseChatAgentPipeline(
         dto: ExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the latest user prompt and the model output.
 
         Args:
             state: The current pipeline execution state
@@ -562,12 +563,9 @@ class ExerciseChatAgentPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if len(dto.chat_history) == 1:
-            first_user_msg = dto.chat_history[0].contents[0].text_content
-            return super()._create_session_title(state, output, first_user_msg)
-        return None
+        return self.update_session_title(state, output, dto.session_title)
 
-    @traceable(name="Exercise Chat Agent Pipeline")
+    @observe(name="Exercise Chat Agent Pipeline")
     def __call__(
         self,
         dto: ExerciseChatPipelineExecutionDTO,

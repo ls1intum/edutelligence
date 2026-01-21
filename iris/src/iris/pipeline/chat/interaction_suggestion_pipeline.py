@@ -6,7 +6,6 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 from pydantic.v1 import BaseModel, Field
 
 from iris.common.logging_config import get_logger
@@ -15,6 +14,7 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from iris.tracing import observe
 
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -91,7 +91,7 @@ class InteractionSuggestionPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm}, local={self.local})"
 
-    @traceable(name="Interaction Suggestion Pipeline")
+    @observe(name="Interaction Suggestion Pipeline")
     def __call__(
         self,
         dto: InteractionSuggestionPipelineExecutionDTO,

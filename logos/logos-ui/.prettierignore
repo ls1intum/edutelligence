@@ -1,0 +1,10 @@
+node_modules
+.expo
+dist
+build
+.next
+coverage
+*.config.js
+.eslintrc.js
+babel.config.js
+metro.config.js
