@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from testcontainers.weaviate import WeaviateContainer  # type: ignore
 
@@ -13,7 +15,7 @@ class WeaviateTest:
                 "DISABLE_TELEMETRY": "true",
             },
         )
-        max_retries = 5
+        max_retries = 10
         for attempt in range(0, max_retries):
             try:
                 weaviate_container.start()
@@ -23,6 +25,7 @@ class WeaviateTest:
                     raise RuntimeError(
                         f"Failed to start Weaviate container after {max_retries} attempts."
                     ) from e
+                time.sleep(10)
                 print(
                     f"Attempt {attempt + 1}/{max_retries} failed to start Weaviate container: {e}"
                 )
