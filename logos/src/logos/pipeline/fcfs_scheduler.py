@@ -25,18 +25,31 @@ class FcfScheduler(BaseScheduler):
     """
 
     async def schedule(self, request: SchedulingRequest) -> Optional[SchedulingResult]:
-        if not request.candidates:
+        if not request.classified_models:
             return None
 
-        sorted_candidates = sorted(request.candidates, key=lambda x: x[1], reverse=True)
+        sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
         target_model_id, weight, priority_int, _ = sorted_candidates[0]
-        provider_type = self._model_registry.get(target_model_id)
+        
+        # Find the first deployment matching target_model_id
+        deployment = next(
+            (d for d in request.deployments if d["model_id"] == target_model_id),
+            None
+        )
+        
+        if not deployment:
+            logger.warning("No deployment found for model_id=%s", target_model_id)
+            return None
 
+        provider_type = deployment["type"]
+        provider_id = deployment["provider_id"]
+        
         if not provider_type:
+            logger.warning("No provider type found for provider_id=%s", provider_id)
             return None
 
         if provider_type == 'ollama':
-            if self._ollama.try_reserve_capacity(target_model_id):
+            if self._ollama.try_reserve_capacity(target_model_id, provider_id):
                 logger.info(
                     "Reserved capacity on Ollama model %s (weight=%.2f)",
                     target_model_id,
@@ -68,7 +81,7 @@ class FcfScheduler(BaseScheduler):
             request.request_id,
             target_model_id,
             weight,
-            self._queue_mgr.get_total_depth(target_model_id),
+            self._queue_mgr.get_total_depth_by_deployment(target_model_id),
         )
 
         try:

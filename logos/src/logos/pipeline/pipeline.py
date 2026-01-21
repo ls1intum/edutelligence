@@ -5,12 +5,12 @@ Main request pipeline orchestrating classification → scheduling → execution.
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Tuple
 
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.types import Deployment
 from logos.monitoring.recorder import MonitoringRecorder
 
 from logos.queue.models import Priority
@@ -29,8 +29,9 @@ class PipelineRequest:
     logos_key: str
     payload: Dict[str, Any]
     headers: Dict[str, str]
+    allowed_models: List[int]
+    deployments: list[Deployment]
     policy: Optional[Dict[str, Any]] = None
-    allowed_models: Optional[List[int]] = None
     profile_id: Optional[int] = None  # NEW: Profile ID for authorization
 
 
@@ -122,9 +123,10 @@ class RequestPipeline:
             )
         
         # 2. Scheduling
-        sched_request = SchedulingRequest(
+        scheduling_request = SchedulingRequest(
             request_id=request_id,
-            candidates=classification_result.candidates,
+            classified_models=classification_result.candidates,
+            deployments=request.deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
         )
@@ -139,8 +141,8 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
         )
         
-        sched_result = await self._scheduler.schedule(sched_request)
-        if not sched_result:
+        scheduling_result = await self._scheduler.schedule(scheduling_request)
+        if not scheduling_result:
             logger.warning(f"Request {request_id} failed scheduling: All models unavailable")
             return PipelineResult(
                 success=False,
@@ -155,27 +157,27 @@ class RequestPipeline:
         # Record scheduled
         self._monitoring.record_scheduled(
             request_id=request_id,
-            model_id=sched_result.model_id,
-            priority_when_scheduled=sched_result.priority_when_scheduled,
-            queue_depth_at_schedule=sched_result.queue_depth_at_schedule,
-            provider_metrics=sched_result.provider_metrics
+            model_id=scheduling_result.model_id,
+            priority_when_scheduled=scheduling_result.priority_when_scheduled,
+            queue_depth_at_schedule=scheduling_result.queue_depth_at_schedule,
+            provider_metrics=scheduling_result.provider_metrics
         )
         
         # 3. Resolve execution context (with authorization check)
         exec_context = self._context_resolver.resolve_context(
-            sched_result.model_id,
+            scheduling_result.model_id,
             logos_key=request.logos_key,
             profile_id=request.profile_id
         )
         if not exec_context:
             return PipelineResult(
                 success=False,
-                model_id=sched_result.model_id,
+                model_id=scheduling_result.model_id,
                 provider_id=None,
                 execution_context=None,
                 classification_stats=classification_result.stats,
-                scheduling_stats={"model_id": sched_result.model_id},
-                error=f"Failed to resolve execution context for model {sched_result.model_id}",
+                scheduling_stats={"model_id": scheduling_result.model_id},
+                error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
             )
         
         # Record provider ID now that it's resolved
@@ -184,18 +186,18 @@ class RequestPipeline:
         
         return PipelineResult(
             success=True,
-            model_id=sched_result.model_id,
+            model_id=scheduling_result.model_id,
             provider_id=exec_context.provider_id,
             execution_context=exec_context,
             classification_stats=classification_result.stats,
             scheduling_stats={
                 "request_id": request_id,
-                "model_id": sched_result.model_id,
-                "provider_type": sched_result.provider_type,
-                "queue_depth": sched_result.queue_depth_at_schedule,
-                "queue_depth_at_arrival": sched_result.queue_depth_at_arrival,
-                "utilization_at_arrival": sched_result.utilization_at_arrival,
-                "is_cold_start": sched_result.is_cold_start,
+                "model_id": scheduling_result.model_id,
+                "provider_type": scheduling_result.provider_type,
+                "queue_depth": scheduling_result.queue_depth_at_schedule,
+                "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
+                "utilization_at_arrival": scheduling_result.utilization_at_arrival,
+                "is_cold_start": scheduling_result.is_cold_start,
             },
         )
     

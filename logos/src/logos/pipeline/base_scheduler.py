@@ -28,17 +28,16 @@ class BaseScheduler(SchedulerInterface):
         queue_manager: PriorityQueueManager,
         ollama_facade: OllamaSchedulingDataFacade,
         azure_facade: AzureSchedulingDataFacade,
-        model_registry: Dict[int, str],  # model_id -> provider_type
     ):
         self._queue_mgr = queue_manager
         self._ollama = ollama_facade
         self._azure = azure_facade
-        self._model_registry = model_registry
         self._logger = logging.getLogger(__name__)
 
     def _create_result(
         self,
         model_id: int,
+        provider_id: int,
         provider_type: str,
         priority_int: int,
         request_id: str,
@@ -74,6 +73,7 @@ class BaseScheduler(SchedulerInterface):
                 try:
                     self._ollama.on_request_begin_processing(
                         request_id,
+
                         increment_active=False,
                     )
                 except KeyError:
@@ -83,9 +83,7 @@ class BaseScheduler(SchedulerInterface):
 
         if provider_type == 'ollama':
             try:
-                cap = self._ollama.get_capacity_info(
-                    self._ollama._model_to_provider.get(model_id)
-                )
+                cap = self._ollama.get_capacity_info(provider_id)
                 provider_metrics['available_vram_mb'] = cap.available_vram_mb
             except Exception:
                 pass
@@ -115,18 +113,17 @@ class BaseScheduler(SchedulerInterface):
             is_cold_start=is_cold_start,
         )
 
-    def release(self, model_id: int, request_id: str) -> None:
+    def release(self, model_id: int, provider_id: int, provider_type: str, request_id: str) -> None:
         """
         Called when a request completes.
         1. Notify SDI facade.
         2. Check starvation (priority aging).
         3. Wake up next queued request if any.
         """
-        provider_type = self._model_registry.get(model_id)
 
         self._check_starvation(model_id)
 
-        depth_before = self._queue_mgr.get_total_depth(model_id)
+        depth_before = self._queue_mgr.get_total_depth_by_deployment(model_id)
         has_waiters = depth_before > 0
 
         if provider_type == 'ollama':
@@ -163,9 +160,7 @@ class BaseScheduler(SchedulerInterface):
                         is_cold_start = None
 
                     try:
-                        cap = self._ollama.get_capacity_info(
-                            self._ollama._model_to_provider.get(model_id)
-                        )
+                        cap = self._ollama.get_capacity_info(provider_id)
                         provider_metrics['available_vram_mb'] = cap.available_vram_mb
                     except Exception:
                         pass
@@ -212,17 +207,15 @@ class BaseScheduler(SchedulerInterface):
             if (now - entry.enqueue_time).total_seconds() > 30:
                 self._queue_mgr.move_priority(entry.entry_id, Priority.HIGH)
 
-    def get_total_queue_depth(self) -> int:
+    def get_total_queue_depth(self, provider_id: int) -> int:
         """Get total queued requests."""
-        total = 0
-        for model_id in self._model_registry.keys():
-            total += self._queue_mgr.get_total_depth(model_id)
-        return total
+        return self._queue_mgr.get_total_depth_by_provider(provider_id)
 
-    def update_provider_stats(self, model_id: int, headers: Dict[str, str]) -> None:
-        """
-        Update provider statistics (e.g. rate limits) from response headers.
-        """
-        provider_type = self._model_registry.get(model_id)
-        if provider_type == 'azure':
-            self._azure.update_model_rate_limits(model_id, headers)
+# TODO: fix that
+    # def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
+    #     """
+    #     Update provider statistics (e.g. rate limits) from response headers.
+    #     """
+    #     provider_type = self._model_registry.get(model_id)
+    #     if provider_type == 'azure':
+    #         self._azure.update_model_rate_limits(model_id, headers)

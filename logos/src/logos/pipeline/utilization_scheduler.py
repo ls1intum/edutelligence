@@ -47,7 +47,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         3.  **Async Wait**: The method `await`s until the request is dequeued by a `release()`
             call from another request.
         """
-        best_candidate = self._select_best_candidate(request.candidates)
+        best_candidate = self._select_best_candidate(request.classified_models)
 
         if best_candidate:
             model_id, provider_type, _, priority_int = best_candidate
@@ -59,10 +59,10 @@ class UtilizationAwareScheduler(BaseScheduler):
                 was_queued=False,
             )
 
-        if not request.candidates:
+        if not request.classified_models:
             return None
 
-        sorted_candidates = sorted(request.candidates, key=lambda x: x[1], reverse=True)
+        sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
         target_model_id, _, priority_int, _ = sorted_candidates[0]
         provider_type = self._model_registry.get(target_model_id)
 
@@ -80,7 +80,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             request.request_id,
             target_model_id,
             sorted_candidates[0][1],
-            self._queue_mgr.get_total_depth(target_model_id),
+            self._queue_mgr.get_total_depth_by_deployment(target_model_id),
         )
 
         try:

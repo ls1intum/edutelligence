@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
 
+from logos.dbutils.types import Deployment
+
 
 @dataclass
 class SchedulingResult:
@@ -34,8 +36,9 @@ class SchedulingResult:
 class SchedulingRequest:
     """Input for the scheduler."""
     request_id: str
-    candidates: List[Tuple[int, float, int, int]]  # (model_id, weight, priority, parallel)
     payload: Dict[str, Any]
+    deployments: list[Deployment]
+    classified_models: Optional[List[Tuple[int, float, int, int]]] = None  # (model_id, weight, priority, parallel)
     timeout_s: Optional[float] = None
 
 
@@ -53,7 +56,7 @@ class SchedulerInterface(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def release(self, model_id: int, request_id: str) -> None:
+    def release(self, model_id: int, provider_id: int, provider_type: str, request_id: str) -> None:
         """Called when a request completes to free capacity."""
         raise NotImplementedError
 

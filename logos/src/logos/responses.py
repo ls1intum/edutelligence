@@ -137,17 +137,19 @@ def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = Non
         # Get available models for this key
         if profile_id is not None:
             # Explicit profile-based filtering (new preferred path)
-            models = db.get_models_by_profile(logos_key, profile_id)
+            # TODO: change for the get_deployments_by_profile once available
+            deployments = db.get_deployments_by_profile(logos_key, profile_id)
         else:
             # Fallback: all models for key (for admin endpoints that don't need profile isolation)
-            models = db.get_models_with_key(logos_key)
+            # TODO: change for the get_deployments_by_key once available
+            deployments = db.get_all_deployments()
 
-    if not models:
+    if not deployments:
         return list()
     else:
         # Return ids of all available models
-        logging.info(f"Found models {models} for classification")
-        return models
+        logging.info(f"Found deployments {deployments} for classification")
+        return deployments
 
 
 def proxy_behaviour(headers: dict, providers: list, path: str):

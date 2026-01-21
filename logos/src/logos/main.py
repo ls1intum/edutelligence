@@ -14,6 +14,7 @@ from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.jobs.job_service import JobService, JobSubmission
@@ -635,11 +636,10 @@ async def _execute_proxy_mode(
 
 
 async def _execute_resource_mode(
-    models: list,
+    deployments: list[Deployment],
     body: Dict[str, Any],
     headers: Dict[str, str],
     logos_key: str,
-    path: str,
     log_id: Optional[int],
     is_async_job: bool,
     allowed_models_override: Optional[list] = None,
@@ -664,11 +664,10 @@ async def _execute_resource_mode(
     - Model utilization levels
 
     Args:
-        models: List of available model IDs to choose from
+        deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload (should NOT contain "model" field)
         headers: Request headers
         logos_key: User's logos authentication key
-        path: API endpoint path (e.g., "chat/completions")
         log_id: Usage log ID for tracking (None for requests without logging)
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - raises HTTPException for errors
@@ -684,9 +683,7 @@ async def _execute_resource_mode(
     Raises:
         HTTPException: Only when is_async_job=False and an error occurs
     """
-    # Use filtered models list from request_setup(), or override if specified (proxy mode)
-    allowed_models = allowed_models_override if allowed_models_override is not None else models
-
+    allowed_models = get_unique_models_from_deployments(deployments)
     # Extract policy
     policy = _extract_policy(headers, logos_key, body)
 
@@ -697,6 +694,7 @@ async def _execute_resource_mode(
         headers=headers,
         policy=policy,
         allowed_models=allowed_models,
+        deployments=deployments,
         profile_id=profile_id
     )
 
@@ -767,7 +765,7 @@ async def _execute_resource_mode(
 
 
 async def route_and_execute(
-    models: list,
+    deployments: list[dict[str, int]],
     body: Dict[str, Any],
     headers: Dict[str, str],
     logos_key: str,
@@ -792,12 +790,12 @@ async def route_and_execute(
     - Scheduler considers utilization, queue depth, and cold starts
 
     Routing logic:
-    - Case 1: No models available → 404 error
+    - Case 1: No deployments available → 404 error
     - Case 2: body["model"] specified → PROXY mode (direct forwarding)
     - Case 3: no body["model"] → RESOURCE mode (classification + scheduling)
 
     Args:
-        models: List of available model IDs from request_setup()
+        deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload
         headers: Request headers
         logos_key: User's logos authentication key
@@ -823,7 +821,7 @@ async def route_and_execute(
         _execute_resource_mode(): RESOURCE mode implementation
     """
     # No models available → ERROR
-    if not models:
+    if not deployments:
         if is_async_job:
             return {"status_code": 404, "data": {"error": "No models available for this user."}}
         else:
@@ -838,7 +836,7 @@ async def route_and_execute(
             return await _execute_proxy_mode(body, headers, logos_key, path, log_id, is_async_job, profile_id=profile_id)
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
-        return await _execute_resource_mode(models, body, headers, logos_key, path, log_id, is_async_job, profile_id=profile_id)
+        return await _execute_resource_mode(deployments, body, headers, logos_key, path, log_id, is_async_job, profile_id=profile_id)
     except HTTPException as exc:
         if is_async_job:
             return {"status_code": exc.status_code, "data": {"error": exc.detail}}
@@ -861,20 +859,20 @@ async def handle_sync_request(path: str, request: Request):
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
-    # Get available models for THIS profile - profile_id EXPLICITLY passed
+    # Get available deployments (model, provider tuple) for THIS profile - profile_id EXPLICITLY passed
     try:
-        models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
+        deployments = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
     except PermissionError as e:
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not models:
-        raise HTTPException(status_code=404, detail="No models available for this profile")
+    if not deployments:
+        raise HTTPException(status_code=404, detail="No available model deployments for this profile")
 
     # Route and execute request with profile context
     return await route_and_execute(
-        models, body, headers, auth.logos_key, path, log_id,
+        deployments, body, headers, auth.logos_key, path, log_id,
         profile_id=auth.profile_id
     )
 

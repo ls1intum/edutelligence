@@ -4,8 +4,7 @@ Central Manager for all Database-related actions for Logos
 import datetime
 import os
 import secrets
-from typing import Dict, Any, Optional, Tuple, Union, List
-from dateutil.parser import isoparse
+from typing import Dict, Any, Optional, Tuple, Union, List, cast
 
 import sqlalchemy.exc
 import yaml
@@ -18,6 +17,14 @@ from sqlalchemy.orm import sessionmaker
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.types import Deployment, get_unique_models_from_deployments
+
+# Backwards-compatible re-export (temporary; remove once all imports are migrated)
+__all__ = [
+    "DBManager",
+    "Deployment",
+    "get_unique_models_from_deployments",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -1132,6 +1139,38 @@ class DBManager:
             }
         return None
 
+    # TODO: Currently we support keys per provider/model pair , we dont have specific keys per provider, this is a workaround
+    def get_provider_auth(self, provider_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve provider auth header formatting and any available API key.
+
+        Returns:
+            Dict with auth_name, auth_format, api_key (may be None) or None if provider not found.
+        """
+        sql = text("""
+            SELECT providers.id,
+                   providers.auth_name,
+                   providers.auth_format,
+                   model_api_keys.api_key
+            FROM providers
+            LEFT JOIN model_api_keys
+                   ON model_api_keys.provider_id = providers.id
+            WHERE providers.id = :provider_id
+            ORDER BY model_api_keys.id
+            LIMIT 1
+        """)
+
+        result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
+        if not result:
+            return None
+
+        return {
+            "provider_id": result[0],
+            "auth_name": result[1],
+            "auth_format": result[2],
+            "api_key": result[3],
+        }
+
     def update_provider_sdi_config(
         self,
         logos_key: str,
@@ -1206,23 +1245,24 @@ class DBManager:
             "provider_id": row[0]
         }, 200
 
-    def get_distinct_ollama_urls(self) -> List[str]:
+    def get_ollama_providers(self) -> List[Dict[int, str]]:
         """
-        Get all distinct ollama_admin_urls from providers table.
+        Get all ollama providers IDs from providers table.
 
         Returns:
-            List of unique Ollama admin URLs (e.g., ["http://host.docker.internal:11435"])
+            List of:
+            - provider ID
+            - ollama_admin_url
         """
         sql = text("""
-            SELECT DISTINCT ollama_admin_url
+            SELECT id, ollama_admin_url
             FROM providers
-            WHERE ollama_admin_url IS NOT NULL
-              AND ollama_admin_url != ''
-            ORDER BY ollama_admin_url
+            WHERE provider_type = 'ollama'
+            ORDER BY id
         """)
 
         result = self.session.execute(sql).fetchall()
-        return [row[0] for row in result]
+        return [row for rows in result]
 
     def insert_provider_snapshot(
         self,
@@ -1431,57 +1471,113 @@ class DBManager:
             return {"error": "Key not found"}
         return {"result": f"API-ID: {exc[0]}"}, 200
 
-    def get_models_by_profile(self, logos_key: str, profile_id: int):
+    def get_deployments_by_profile(self, logos_key: str, profile_id: int) -> list[Deployment]:
         """
-        Get a list of models accessible by a given profile-ID.
-        """
-        sql = text("""
-                   SELECT models.id
-                   FROM models,
-                        process,
-                        profiles,
-                        profile_model_permissions,
-                        model_provider,
-                        providers
-                   WHERE process.logos_key = :logos_key
-                        and process.id = profiles.process_id
-                        and profiles.id = profile_model_permissions.profile_id
-                        and profile_model_permissions.model_id = models.id
-                        and model_provider.model_id = models.id
-                        and providers.id = model_provider.provider_id
-                        and profiles.id = :profile_id
-                        and EXISTS (
-                            SELECT 1
-                            FROM model_api_keys
-                            WHERE model_api_keys.profile_id = profiles.id
-                              and model_api_keys.provider_id = providers.id
-                        )
-                   """)
-        result = self.session.execute(sql, {"logos_key": logos_key, "profile_id": profile_id}).fetchall()
-        return [i.id for i in result]
+        Get a list of all authorized model deployments for a profile.
 
-    def get_models_with_key(self, logos_key: str):
-        """
-        Get a list of models accessible by a given key.
+        Returns: List of complete deployment dicts with:
+            - model_id
+            - provider_id
+            - type
         """
         sql = text("""
-            SELECT models.id
-            FROM models, process, profiles, profile_model_permissions, model_provider, providers
-            WHERE process.logos_key = :logos_key
-                and process.id = profiles.process_id
-                and profiles.id = profile_model_permissions.profile_id
-                and profile_model_permissions.model_id = models.id
-                and model_provider.model_id = models.id
-                and providers.id = model_provider.provider_id
-                and EXISTS (
-                    SELECT 1
-                    FROM model_api_keys
-                    WHERE model_api_keys.profile_id = profiles.id
-                      and model_api_keys.provider_id = providers.id
-                )
-        """)
-        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [i.id for i in result]
+                   SELECT m.id               as model_id,
+                          p.id               as provider_id,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
+                            JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+                            JOIN profiles pr ON pmp.profile_id = pr.id
+                            JOIN process proc ON pr.process_id = proc.id
+                   WHERE proc.logos_key = :logos_key
+                     AND pr.id = :profile_id
+                   ORDER BY m.id, p.id
+                   """)
+        rows = self.session.execute(sql, {
+            "logos_key": logos_key,
+            "profile_id": profile_id
+        }).mappings().all()
+        return [cast(Deployment, dict(row)) for row in rows]
+
+
+    # ADMIN ONLY
+    def get_all_deployments(self) -> list[Deployment]:
+        """
+        Get a list of ALL model deployments.
+
+        Returns: List of complete deployment dicts with:
+            - model_id
+            - provider_id
+            - type
+        """
+        sql = text("""
+                   SELECT m.id               as model_id,
+                          p.id               as provider_id
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
+                            JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+                   ORDER BY m.id, p.id
+                   """)
+        rows = self.session.execute(sql, {}).mappings().all()
+        return [cast(Deployment, dict(row)) for row in rows]
+
+    # TODO: Remove these methods if not needed anymore
+    # def get_models_by_profile(self, logos_key: str, profile_id: int):
+    #     """
+    #     Get a list of models accessible by a given profile-ID.
+    #     """
+    #     sql = text("""
+    #                SELECT models.id
+    #                FROM models,
+    #                     process,
+    #                     profiles,
+    #                     profile_model_permissions,
+    #                     model_provider,
+    #                     providers
+    #                WHERE process.logos_key = :logos_key
+    #                     and process.id = profiles.process_id
+    #                     and profiles.id = profile_model_permissions.profile_id
+    #                     and profile_model_permissions.model_id = models.id
+    #                     and model_provider.model_id = models.id
+    #                     and providers.id = model_provider.provider_id
+    #                     and profiles.id = :profile_id
+    #                     and EXISTS (
+    #                         SELECT 1
+    #                         FROM model_api_keys
+    #                         WHERE model_api_keys.profile_id = profiles.id
+    #                           and model_api_keys.provider_id = providers.id
+    #                     )
+    #                """)
+    #     result = self.session.execute(sql, {"logos_key": logos_key, "profile_id": profile_id}).fetchall()
+    #     return [i.id for i in result]
+    #
+    # def get_models_with_key(self, logos_key: str):
+    #     """
+    #     Get a list of models accessible by a given key.
+    #     """
+    #     sql = text("""
+    #         SELECT models.id
+    #         FROM models, process, profiles, profile_model_permissions, model_provider, providers
+    #         WHERE process.logos_key = :logos_key
+    #             and process.id = profiles.process_id
+    #             and profiles.id = profile_model_permissions.profile_id
+    #             and profile_model_permissions.model_id = models.id
+    #             and model_provider.model_id = models.id
+    #             and providers.id = model_provider.provider_id
+    #             and EXISTS (
+    #                 SELECT 1
+    #                 FROM model_api_keys
+    #                 WHERE model_api_keys.profile_id = profiles.id
+    #                   and model_api_keys.provider_id = providers.id
+    #             )
+    #     """)
+    #     result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
+    #     return [i.id for i in result]
 
     def get_all_models(self):
         """

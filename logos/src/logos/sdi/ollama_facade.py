@@ -27,7 +27,7 @@ class OllamaSchedulingDataFacade:
         self._db = db_manager
 
         # Provider management (Ollama providers only)
-        self._providers: Dict[str, OllamaDataProvider] = {}  # provider_name → provider
+        self._providers: Dict[int, OllamaDataProvider] = {}  # provider__id → OllamaDataProvider
         self._model_to_provider: Dict[int, str] = {}  # model_id → provider_name
 
         # Request tracking
@@ -91,14 +91,14 @@ class OllamaSchedulingDataFacade:
         provider = self._get_provider_for_model(model_id)
         return provider.get_model_status(model_id)
 
-    def get_capacity_info(self, provider_name: str) -> OllamaCapacity:
+    def get_capacity_info(self, provider_id: int) -> OllamaCapacity:
         """
         Get VRAM capacity information for an Ollama provider.
         """
-        if provider_name not in self._providers:
-            raise KeyError(f"Provider '{provider_name}' not found")
+        if provider_id not in self._providers.keys():
+            raise KeyError(f"Provider '{provider_id}' not found")
 
-        provider = self._providers[provider_name]
+        provider = self._providers[provider_id]
         return provider.get_capacity_info()
 
     def on_request_start(self, request_id: str, model_id: int, priority: str = 'normal') -> None:
@@ -186,14 +186,7 @@ class OllamaSchedulingDataFacade:
 
             return metrics
 
-    def _get_provider_for_model(self, model_id: int) -> OllamaDataProvider:
-        if model_id not in self._model_to_provider:
-            raise ValueError(f"Model {model_id} not registered with any provider")
-
-        provider_name = self._model_to_provider[model_id]
-        return self._providers[provider_name]
-
-    def try_reserve_capacity(self, model_id: int) -> bool:
+    def try_reserve_capacity(self, model_id: int, provider_id: int) -> bool:
         """
         Attempt to reserve execution capacity for a model.
         Atomic check-and-increment.
@@ -202,7 +195,8 @@ class OllamaSchedulingDataFacade:
             True if reserved, False if full (queue needed).
         """
         try:
-            provider = self._get_provider_for_model(model_id)
-            return provider.try_reserve_capacity(model_id)
+            ollama_data_provider = self._providers[provider_id]
+
+            return ollama_data_provider.try_reserve_capacity(model_id)
         except ValueError:
             return False

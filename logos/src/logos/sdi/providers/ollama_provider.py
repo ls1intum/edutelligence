@@ -57,12 +57,12 @@ class OllamaDataProvider:
 
     def __init__(
         self,
+        provider_id: int,
         name: str,
         base_url: Optional[str],
         total_vram_mb: int,
         queue_manager: "PriorityQueueManager",  # REQUIRED
         refresh_interval: float = 5.0,
-        provider_id: Optional[int] = None,
         db_manager = None
     ):
         """
@@ -78,6 +78,7 @@ class OllamaDataProvider:
             provider_id: Database provider ID (for config lookups)
             db_manager: Database manager instance (for config lookups)
         """
+        self.provider_id = provider_id
         self.name = name
         self.base_url = base_url.rstrip('/') if base_url else None
         
@@ -87,7 +88,6 @@ class OllamaDataProvider:
         self.total_vram_mb = total_vram_mb
         self.queue_manager = queue_manager  # Store queue manager reference
         self.refresh_interval = refresh_interval
-        self.provider_id = provider_id
         self._db = db_manager
 
         # Model registration
@@ -247,11 +247,11 @@ class OllamaDataProvider:
         """
         if not self.base_url:
             return None
-
-
         try:
+            headers = self._get_auth_headers_for_ps()
             response = requests.get(
                 f"{self.base_url}/api/ps",
+                headers=headers if headers else None,
                 timeout=5.0
             )
 
@@ -267,6 +267,39 @@ class OllamaDataProvider:
             logger.error(f"[{self.name}] Unexpected error querying /api/ps: {e}")
 
         return None
+
+    def _get_auth_headers_for_ps(self, provider_id: int) -> Dict[str, str] | None:
+        """
+        Build auth headers for /api/ps based on provider config in DB.
+        """
+        try:
+            if self._db:
+                auth = self._db.get_provider_auth(self.provider_id)
+            else:
+                from logos.dbutils.dbmanager import DBManager
+                with DBManager() as db:
+                    auth = db.get_provider_auth(provider_id)
+
+            if not auth:
+                return {}
+
+            auth_name = (auth.get("auth_name") or "").strip()
+            auth_format = auth.get("auth_format") or ""
+            api_key = auth.get("api_key")
+
+            if not auth_name or not auth_format:
+                return {}
+            if not api_key:
+                logger.warning(
+                    "Missing API key for provider=%s - /api/ps auth skipped",
+                    provider_id
+                )
+                return {}
+
+            return {auth_name: auth_format.format(api_key)}
+        except Exception as e:
+            logger.warning(f"Failed to resolve /api/ps auth for {provider_id}: {e}")
+            return {}
 
 
 
@@ -311,6 +344,7 @@ class OllamaDataProvider:
 
                 return ModelStatus(
                     model_id=model_id,
+                    provider_id=self.provider_id,
                     is_loaded=not is_expired,
                     vram_mb=loaded_info['size_vram'] // (1024 * 1024),
                     expires_at=loaded_info['expires_at'],
@@ -322,6 +356,7 @@ class OllamaDataProvider:
                 # Model not loaded
                 return ModelStatus(
                     model_id=model_id,
+                    provider_id=self.provider_id,
                     is_loaded=False,
                     vram_mb=0,
                     expires_at=None,
