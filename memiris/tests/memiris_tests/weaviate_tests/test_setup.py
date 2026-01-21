@@ -1,5 +1,9 @@
 import pytest
+from testcontainers.core.config import testcontainers_config
 from testcontainers.weaviate import WeaviateContainer  # type: ignore
+
+# Increase timeout for CI environments where Weaviate may take longer to start
+testcontainers_config.timeout = 120
 
 
 class WeaviateTest:
@@ -12,7 +16,7 @@ class WeaviateTest:
                 "AUTOSCHEMA_ENABLED": "false",
                 "DISABLE_TELEMETRY": "true",
             },
-        ).with_startup_timeout(120)
+        )
         weaviate_container.start()
 
         def remove_container():
