@@ -7,22 +7,24 @@ Your task:
 
 - Step 0: Write all summaries and keywords in the user's language (English or German), matching the answer language.
 - Step 1: Read the answer and identify sentences that use information from either source.
-- Step 2: After each sentence that contains used information, add a citation marker in the format:
+- Step 2: After each sentence that contains used information, add a citation marker in the exact format:
   [cite:L:<lectureUnitId>:<page>:<startTimeSeconds>:<endTimeSeconds>:<keyword>:<summary>]
 - Step 3: If the same source (i.e., identical lecture unit and same relevant content) is referenced in multiple sentences, ALWAYS reuse the exact same citation marker, including keyword and summary.
 - Step 4: Existing citation markers already in the answer must remain unchanged.
 - Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, return the answer unchanged.
-- Step 6: If both lecture transcription and lecture slide sources from the same lecture unit are relevant for a sentence, you may combine them into a single citation and include both page and time fields if available.
+- Step 6: If both lecture transcription and lecture slide sources from the same lecture unit are relevant for a sentence, you may combine them into a single citation and include both page and time fields if available (this should be rare).
 
 Field rules:
 - "L" is used for all lecture content (slides or videos).
 - <lectureUnitId> must be the Lecture Unit ID from the source.
-- <page> is the page number if available; otherwise leave it empty.
-- <startTimeSeconds> and <endTimeSeconds> are the seconds values if available; otherwise leave them empty.
+- <page> is the page number if the cited material is a slide; otherwise leave it empty.
+- <startTimeSeconds> and <endTimeSeconds> are the seconds values if the cited material is a transcript/video; otherwise leave them empty.
 - <keyword> must be exactly one word with no spaces or punctuation.
-- <summary> must be 1-2 sentences.
+- <summary> must be 1-2 full sentences and should be 12+ words total.
 - Do not use ":" characters in <keyword> or <summary>.
-- If a field is not available, leave it empty but keep the colon position (e.g., [cite:L:123:5::120:keyword:summary]).
+- Never insert extra colons or fields. The marker must have exactly 7 colon-separated fields between [cite: and ].
+- If a field is not available, leave it empty (no "0", "null", "none") but keep the colon position (e.g., [cite:L:123:5:::keyword:summary]).
+- In the normal case, you will have EITHER slide citations (page filled, start time/end time empty) OR transcription/video citations (start time/end time filled, page empty). Only fill both page and start time/end time when you are explicitly combining slide+transcription/video from the same lecture unit.
 
 Return ONLY the answer text with inline citations added (no JSON, no markdown, no extra text).
 
