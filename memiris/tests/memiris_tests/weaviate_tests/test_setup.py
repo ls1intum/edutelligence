@@ -2,6 +2,8 @@ import pytest
 from testcontainers.core.config import testcontainers_config
 from testcontainers.weaviate import WeaviateContainer  # type: ignore
 
+# Set startup timeout for testcontainers before it's used
+os.environ['TC_START_TIMEOUT'] = '120'
 
 class WeaviateTest:
 
@@ -15,7 +17,7 @@ class WeaviateTest:
                 "DISABLE_TELEMETRY": "true",
             },
         ).with_startup_timeout(120)
-        
+
         max_retries = 5
         for attempt in range(0, max_retries):
             try:
