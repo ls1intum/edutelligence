@@ -43,6 +43,9 @@ MIGRATIONS=(
     "007_rename_openwebui_to_ollama_no_auth.sql"
     "008_create_ollama_provider_snapshots.sql"
     "009_add_profile_id_to_jobs.sql"
+    "010_remove_api_id_from_models.sql"
+    "010b_revert_profile_constraint.sql"
+    "011_restructure_model_api_keys_to_model_based.sql"
 )
 
 FAILED=0
