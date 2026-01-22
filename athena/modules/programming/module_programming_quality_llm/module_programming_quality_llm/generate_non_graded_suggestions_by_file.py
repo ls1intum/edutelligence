@@ -74,11 +74,18 @@ async def generate_suggestions_by_file(
         for file_path in changed_files_from_template_to_submission
     ]
 
-    # Changed text files
+    # Changed files but filtered for programming language
+    programming_language_extension = get_programming_language_file_extension(
+        programming_language=exercise.programming_language
+    )
+
     changed_files = load_files_from_repo(
         submission_repo,
-        file_filter=lambda file_path: file_path
-        in changed_files_from_template_to_submission,
+        file_filter=lambda file_path: (
+                file_path in changed_files_from_template_to_submission
+                and (programming_language_extension is None
+                     or file_path.endswith(programming_language_extension))
+        ),
     )
 
     # Get solution summary by file (if necessary)
@@ -189,9 +196,6 @@ async def generate_suggestions_by_file(
 
     # If we have many files we need to filter and prioritize them
     if len(prompt_inputs) > config.max_number_of_files:
-        programming_language_extension = get_programming_language_file_extension(
-            programming_language=exercise.programming_language
-        )
 
         # Prioritize files that have a diff between solution and submission
         prompt_inputs = sorted(prompt_inputs, key=lambda x: x.get("priority", 0), reverse=True)

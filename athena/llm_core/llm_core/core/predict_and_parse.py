@@ -9,6 +9,8 @@ from llm_core.utils.append_format_instructions import append_format_instructions
 from llm_core.utils.llm_utils import remove_system_message
 from llm_core.models.model_config import ModelConfig
 from langchain_core.messages import AIMessage, BaseMessage
+from typing import Optional, Type, TypeVar, List, Union
+import json
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -106,10 +108,21 @@ async def predict_and_parse(
                 # Fallback: return from start to end if balancing failed
                 return text[start:].strip()
 
+            def _parse_with_null_check(x: Union[str, BaseMessage]) -> Optional[T]:
+                json_text = _extract_json_text(x)
+                if not json_text or json_text.lower() == "null":
+                    return None
+                try:
+                    parsed = json.loads(json_text)
+                    if parsed is None:
+                        return None
+                    return pydantic_object.model_validate(parsed)
+                except (json.JSONDecodeError, ValidationError):
+                    return None
+
             structured_output_llm = RunnableSequence(
                 llm_model,
-                RunnableLambda(_extract_json_text),
-                PydanticOutputParser(pydantic_object=pydantic_object),
+                RunnableLambda(_parse_with_null_check),
             )
         else:
             # Non-LM Studio: keep original behavior to avoid unintended changes
