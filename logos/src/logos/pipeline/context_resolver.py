@@ -43,6 +43,7 @@ class ContextResolver:
     def resolve_context(
         self,
         model_id: int,
+        provider_id: int,
         logos_key: Optional[str] = None,
         profile_id: Optional[int] = None
     ) -> Optional[ExecutionContext]:
@@ -57,6 +58,7 @@ class ContextResolver:
 
         Args:
             model_id: The ID of the model to execute.
+            provider_id: The ID of the provider (currently unused, for future extension)
             logos_key: User's logos key (for authorization check)
             profile_id: Profile ID (for authorization check)
 
@@ -64,43 +66,34 @@ class ContextResolver:
             `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
         """
         with DBManager() as db:
-            # AUTHORIZATION CHECK: Verify user has access to this model (defense in depth)
-            if logos_key is not None and profile_id is not None:
-                authorized_models = db.get_models_by_profile(logos_key, profile_id)
-                if model_id not in authorized_models:
-                    logger.warning(
-                        f"Authorization denied: profile_id={profile_id} cannot access model_id={model_id}"
-                    )
-                    return None
-
-            model = db.get_model(model_id)
-            if not model:
-                logger.error(f"Model {model_id} not found in DB")
+            # AUTHORIZATION CHECK: Verify user has access to this deployment (defense in depth)
+            auth_info = db.get_auth_info_to_deployment(model_id, provider_id, profile_id)
+            if not auth_info:
+                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}, profile={profile_id}")
                 return None
 
-            provider = db.get_provider_to_model(model_id)
-            if not provider:
-                logger.error(f"No provider linked to model {model_id}")
-                return None
+            auth_name = (auth_info.get("auth_name") or "").strip()
+            auth_format = auth_info.get("auth_format") or ""
+            api_key = auth_info.get("api_key")
 
-            auth_name = (provider.get("auth_name") or "").strip()
-            auth_format = provider.get("auth_format") or ""
-
-            api_key = db.get_key_to_model_provider(profile_id, provider["id"])
             if not api_key and (auth_name or auth_format):
-                logger.error(f"No API key for model {model_id} / provider {provider['id']}")
+                logger.error(f"No API key for model {model_id} / provider {provider_id}")
                 return None
 
-        forward_url = self._merge_url(provider["base_url"], model["endpoint"])
+        provider_name = auth_info["provider_name"]
+        model_name = auth_info["model_name"]
+        endpoint = auth_info["endpoint"]
+        base_url = auth_info["base_url"]
+        forward_url = self._merge_url(base_url, endpoint)
 
         return ExecutionContext(
             model_id=model_id,
-            provider_id=provider["id"],
-            provider_name=provider["name"],
+            provider_id=provider_id,
+            provider_name=provider_name,
             forward_url=forward_url,
             auth_header=auth_name,
             auth_value=auth_format.format(api_key or ""),
-            model_name=model["name"],
+            model_name=model_name,
         )
 
 

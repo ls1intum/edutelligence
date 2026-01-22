@@ -81,18 +81,10 @@ CREATE TABLE providers (
 
 CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
 
-CREATE TABLE model_api_keys (
-    id SERIAL PRIMARY KEY,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
-    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    api_key TEXT NOT NULL
-);
-
 CREATE TABLE models (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     endpoint TEXT NOT NULL,
-    api_id INTEGER REFERENCES model_api_keys(id) ON DELETE SET NULL,
     weight_privacy threshold_enum DEFAULT('LOCAL'),
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
@@ -107,6 +99,14 @@ CREATE TABLE model_provider (
     id SERIAL PRIMARY KEY,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
+);
+
+CREATE TABLE model_api_keys (
+    id SERIAL PRIMARY KEY,
+    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    api_key TEXT NOT NULL,
+    UNIQUE(model_id, provider_id)
 );
 
 -- SDI: Per-model per-provider configuration for scheduling

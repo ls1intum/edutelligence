@@ -28,10 +28,12 @@ class BaseScheduler(SchedulerInterface):
         queue_manager: PriorityQueueManager,
         ollama_facade: OllamaSchedulingDataFacade,
         azure_facade: AzureSchedulingDataFacade,
+        model_registry: Dict[int, str] | None = None,
     ):
         self._queue_mgr = queue_manager
         self._ollama = ollama_facade
         self._azure = azure_facade
+        self._model_registry = model_registry or {}
         self._logger = logging.getLogger(__name__)
 
     def _create_result(
@@ -52,11 +54,11 @@ class BaseScheduler(SchedulerInterface):
 
         if provider_type == 'ollama':
             priority = Priority.from_int(priority_int)
-            queue_state = self._queue_mgr.get_state(model_id)
+            queue_state = self._queue_mgr.get_state(model_id, provider_id)
             queue_depth = queue_state.total
 
             try:
-                status = self._ollama.get_model_status(model_id)
+                status = self._ollama.get_model_status(model_id, provider_id)
                 utilization = float(status.active_requests)
                 is_cold_start = not status.is_loaded
             except ValueError:
@@ -66,6 +68,7 @@ class BaseScheduler(SchedulerInterface):
             self._ollama.on_request_start(
                 request_id,
                 model_id=model_id,
+                provider_id=provider_id,
                 priority=priority.name.lower(),
             )
 
@@ -73,8 +76,8 @@ class BaseScheduler(SchedulerInterface):
                 try:
                     self._ollama.on_request_begin_processing(
                         request_id,
-
                         increment_active=False,
+                        provider_id=provider_id,
                     )
                 except KeyError:
                     pass
@@ -99,6 +102,7 @@ class BaseScheduler(SchedulerInterface):
 
         return SchedulingResult(
             model_id=model_id,
+            provider_id=provider_id,
             provider_type=provider_type,
             queue_entry_id=None,
             was_queued=was_queued,
@@ -121,9 +125,9 @@ class BaseScheduler(SchedulerInterface):
         3. Wake up next queued request if any.
         """
 
-        self._check_starvation(model_id)
+        self._check_starvation(model_id, provider_id)
 
-        depth_before = self._queue_mgr.get_total_depth_by_deployment(model_id)
+        depth_before = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         has_waiters = depth_before > 0
 
         if provider_type == 'ollama':
@@ -133,6 +137,7 @@ class BaseScheduler(SchedulerInterface):
                     was_cold_start=False,
                     duration_ms=0,
                     reuse_slot=has_waiters,
+                    provider_id=provider_id,
                 )
                 logger.info(
                     "Request %s released model %s. Reusing slot? %s",
@@ -143,7 +148,7 @@ class BaseScheduler(SchedulerInterface):
             except KeyError:
                 pass
 
-        next_task, entry = self._queue_mgr.dequeue_with_entry(model_id)
+        next_task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
         if next_task and isinstance(next_task, asyncio.Future):
             if not next_task.done():
                 priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
@@ -154,7 +159,7 @@ class BaseScheduler(SchedulerInterface):
 
                 if provider_type == 'ollama':
                     try:
-                        status = self._ollama.get_model_status(model_id)
+                        status = self._ollama.get_model_status(model_id, provider_id)
                         is_cold_start = not status.is_loaded
                     except ValueError:
                         is_cold_start = None
@@ -175,6 +180,7 @@ class BaseScheduler(SchedulerInterface):
 
                 result = SchedulingResult(
                     model_id=model_id,
+                    provider_id=provider_id,
                     provider_type=provider_type,
                     queue_entry_id=None,
                     was_queued=True,
@@ -191,7 +197,7 @@ class BaseScheduler(SchedulerInterface):
                 logger.info("Waking up queued request for model %s", model_id)
                 next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
 
-    def _check_starvation(self, model_id: int) -> None:
+    def _check_starvation(self, model_id: int, provider_id: int) -> None:
         """
         Check for starved requests and bump their priority.
         Rule: If waiting > 10s in LOW, move to NORMAL.
@@ -199,7 +205,7 @@ class BaseScheduler(SchedulerInterface):
         """
         now = datetime.now()
 
-        low_entries = self._queue_mgr.get_entries_for_priority(model_id, Priority.LOW)
+        low_entries = self._queue_mgr.get_entries_for_priority(model_id, provider_id, Priority.LOW)
         for entry in low_entries:
             if (now - entry.enqueue_time).total_seconds() > 10:
                 self._queue_mgr.move_priority(entry.entry_id, Priority.NORMAL)
@@ -207,9 +213,24 @@ class BaseScheduler(SchedulerInterface):
             if (now - entry.enqueue_time).total_seconds() > 30:
                 self._queue_mgr.move_priority(entry.entry_id, Priority.HIGH)
 
-    def get_total_queue_depth(self, provider_id: int) -> int:
+    def get_total_queue_depth(self) -> int:
         """Get total queued requests."""
-        return self._queue_mgr.get_total_depth_by_provider(provider_id)
+        return self._queue_mgr.get_total_depth_all()
+
+    def update_provider_stats(self, model_id: int, headers: Dict[str, str]) -> None:
+        """
+        Update provider-specific statistics (e.g., rate limits) from response headers.
+        Currently only Azure uses response headers for rate-limits; Ollama is no-op.
+        """
+        provider_type = self._model_registry.get(model_id)
+        if not provider_type:
+            return
+
+        if provider_type == "azure":
+            try:
+                self._azure.update_model_rate_limits(model_id, headers)
+            except Exception:
+                logger.debug("Failed to update Azure rate limits for model %s", model_id, exc_info=False)
 
 # TODO: fix that
     # def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:

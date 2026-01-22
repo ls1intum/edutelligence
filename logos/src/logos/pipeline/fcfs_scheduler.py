@@ -57,6 +57,7 @@ class FcfScheduler(BaseScheduler):
                 )
                 return self._create_result(
                     target_model_id,
+                    provider_id,
                     provider_type,
                     priority_int,
                     request.request_id,
@@ -65,6 +66,7 @@ class FcfScheduler(BaseScheduler):
         else:
             return self._create_result(
                 target_model_id,
+                provider_id,
                 provider_type,
                 priority_int,
                 request.request_id,
@@ -75,13 +77,13 @@ class FcfScheduler(BaseScheduler):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(future, target_model_id, priority)
+        entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
         logger.info(
             "Request %s queued for model %s (weight=%.2f, depth=%s)",
             request.request_id,
             target_model_id,
             weight,
-            self._queue_mgr.get_total_depth_by_deployment(target_model_id),
+            self._queue_mgr.get_total_depth_by_deployment(target_model_id, provider_id),
         )
 
         try:
@@ -93,6 +95,7 @@ class FcfScheduler(BaseScheduler):
                     self._ollama.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
+                        provider_id=provider_id,
                     )
                 except KeyError:
                     pass

@@ -27,11 +27,11 @@ def endpoint_add_profile(logos_key: str, profile_name: str, process_id: int):
         return man.add_profile(**data)
 
 
-def endpoint_connect_process_provider(logos_key: str, profile_id: int, api_id: int):
+def endpoint_connect_process_provider(logos_key: str, profile_id: int, provider_id: int):
     data = {
         "logos_key": f"{logos_key}",
         "profile_id": profile_id,
-        "api_id": api_id,
+        "provider_id": provider_id,
     }
 
     with DBManager() as man:

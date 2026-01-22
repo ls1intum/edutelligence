@@ -30,7 +30,7 @@ def setup(base_url: str, provider_name: str) -> Union[tuple, dict]:
         data = {
             "logos_key": f"{logos_key}",
             "profile_id": 1,
-            "api_id": 1,
+            "provider_id": 1,
         }
         print(man.connect_process_provider(**data), flush=True)
     print("Logos-Root-Key: ", logos_key, flush=True)

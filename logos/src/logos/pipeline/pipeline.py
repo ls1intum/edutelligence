@@ -153,6 +153,17 @@ class RequestPipeline:
                 scheduling_stats={"error": "No available model"},
                 error="All candidate models unavailable (rate-limited or no capacity)",
             )
+
+        if not scheduling_result:
+            return PipelineResult(
+                success=False,
+                model_id=None,
+                provider_id=None,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={},
+                error="Scheduling failed",
+            )
         
         # Record scheduled
         self._monitoring.record_scheduled(
@@ -165,10 +176,13 @@ class RequestPipeline:
         
         # 3. Resolve execution context (with authorization check)
         exec_context = self._context_resolver.resolve_context(
-            scheduling_result.model_id,
-            logos_key=request.logos_key,
-            profile_id=request.profile_id
+                model_id=scheduling_result.model_id,
+                provider_id=scheduling_result.provider_id,
+                logos_key=request.logos_key,
+                profile_id=request.profile_id,
+
         )
+
         if not exec_context:
             return PipelineResult(
                 success=False,
@@ -193,6 +207,7 @@ class RequestPipeline:
             scheduling_stats={
                 "request_id": request_id,
                 "model_id": scheduling_result.model_id,
+                "provider_id": scheduling_result.provider_id,
                 "provider_type": scheduling_result.provider_type,
                 "queue_depth": scheduling_result.queue_depth_at_schedule,
                 "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,

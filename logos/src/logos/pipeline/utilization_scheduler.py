@@ -47,12 +47,13 @@ class UtilizationAwareScheduler(BaseScheduler):
         3.  **Async Wait**: The method `await`s until the request is dequeued by a `release()`
             call from another request.
         """
-        best_candidate = self._select_best_candidate(request.classified_models)
+        best_candidate = self._select_best_candidate(request.classified_models, request.deployments)
 
         if best_candidate:
-            model_id, provider_type, _, priority_int = best_candidate
+            model_id, provider_id, provider_type, _, priority_int = best_candidate
             return self._create_result(
                 model_id,
+                provider_id,
                 provider_type,
                 priority_int,
                 request.request_id,
@@ -64,23 +65,25 @@ class UtilizationAwareScheduler(BaseScheduler):
 
         sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
         target_model_id, _, priority_int, _ = sorted_candidates[0]
-        provider_type = self._model_registry.get(target_model_id)
-
-        if not provider_type:
+        deployment = next((d for d in request.deployments if d["model_id"] == target_model_id), None)
+        if not deployment:
             return None
+
+        provider_type = deployment["type"]
+        provider_id = deployment["provider_id"]
 
         priority = Priority.from_int(priority_int)
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(future, target_model_id, priority)
+        entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
         logger.info(
             "Request %s queued for model %s (weight=%.2f, depth=%s)",
             request.request_id,
             target_model_id,
             sorted_candidates[0][1],
-            self._queue_mgr.get_total_depth_by_deployment(target_model_id),
+            self._queue_mgr.get_total_depth_by_deployment(target_model_id, provider_id),
         )
 
         try:
@@ -92,6 +95,7 @@ class UtilizationAwareScheduler(BaseScheduler):
                     self._ollama.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
+                        provider_id=provider_id,
                     )
                 except KeyError:
                     pass
@@ -103,47 +107,51 @@ class UtilizationAwareScheduler(BaseScheduler):
 
     def _select_best_candidate(
         self,
-        candidates: List[Tuple[int, float, int, int]]
-    ) -> Optional[Tuple[int, str, float, int]]:
+        candidates: List[Tuple[int, float, int, int]],
+        deployments: list
+    ) -> Optional[Tuple[int, int, str, float, int]]:
         """Find the best immediately available model."""
         scored_candidates = []
 
         for model_id, weight, priority_int, parallel in candidates:
-            provider_type = self._model_registry.get(model_id)
-            if not provider_type:
+            deployment = next((d for d in deployments if d["model_id"] == model_id), None)
+            if not deployment:
                 continue
 
-            availability_score = self._get_availability_score(model_id, provider_type)
+            provider_type = deployment["type"]
+            provider_id = deployment["provider_id"]
+
+            availability_score = self._get_availability_score(model_id, provider_id, provider_type)
             if availability_score is None:
                 continue
 
             total_score = weight + availability_score
-            scored_candidates.append((model_id, provider_type, total_score, priority_int))
+            scored_candidates.append((model_id, provider_id, provider_type, total_score, priority_int))
 
         if not scored_candidates:
             return None
 
-        scored_candidates.sort(key=lambda x: x[2], reverse=True)
+        scored_candidates.sort(key=lambda x: x[3], reverse=True)
 
-        for model_id, provider_type, score, priority_int in scored_candidates:
+        for model_id, provider_id, provider_type, score, priority_int in scored_candidates:
             if provider_type == 'ollama':
-                if self._ollama.try_reserve_capacity(model_id):
+                if self._ollama.try_reserve_capacity(model_id, provider_id):
                     logger.info(
                         "Reserved capacity on Ollama model %s (score=%.2f)",
                         model_id,
                         score,
                     )
-                    return (model_id, provider_type, score, priority_int)
+                    return (model_id, provider_id, provider_type, score, priority_int)
                 logger.debug(
                     "Failed to reserve capacity on Ollama model %s, skipping",
                     model_id,
                 )
             elif provider_type == 'azure':
-                return (model_id, provider_type, score, priority_int)
+                return (model_id, provider_id, provider_type, score, priority_int)
 
         return None
 
-    def _get_availability_score(self, model_id: int, provider_type: str) -> Optional[float]:
+    def _get_availability_score(self, model_id: int, provider_id: int, provider_type: str) -> Optional[float]:
         """
         Returns availability bonus score, or None if model is unavailable.
 
@@ -153,7 +161,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         """
         if provider_type == 'ollama':
             try:
-                status = self._ollama.get_model_status(model_id)
+                status = self._ollama.get_model_status(model_id, provider_id)
             except ValueError:
                 return None
 

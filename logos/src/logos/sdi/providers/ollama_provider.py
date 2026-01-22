@@ -332,7 +332,7 @@ class OllamaDataProvider:
             loaded_info = self._loaded_models.get(model_name)
 
             # Query queue state from queue_manager (real 3-level breakdown)
-            queue_state = self.queue_manager.get_state(model_id)
+            queue_state = self.queue_manager.get_state(model_id, self.provider_id)
 
             # Track active requests separately
             active_requests = self._model_active.get(model_id, 0)

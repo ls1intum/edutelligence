@@ -134,9 +134,14 @@ class OllamaProviderMonitor:
 
         # Launch one polling task per URL
         for provider in providers:
+            provider_id = provider.get("id")
+            provider_url = provider.get("ollama_admin_url")
+            if not provider_id or not provider_url:
+                logger.warning("Skipping provider with missing id/url: %s", provider)
+                continue
             task = asyncio.create_task(
-                self._poll_provider_loop(provider),
-                name=f"ollama-monitor-{provider}"
+                self._poll_provider_loop(provider_id, provider_url),
+                name=f"ollama-monitor-{provider_id}"
             )
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
@@ -215,7 +220,7 @@ class OllamaProviderMonitor:
 
         try:
             # HTTP GET /api/ps
-            headers = _get_auth_headers_for_ps()
+            headers = _get_auth_headers_for_ps(provider_id)
             async with self._http_session.get(
                 f"{provider_ollama_url}/api/ps",
                 headers=headers if headers else None

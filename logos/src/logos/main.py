@@ -227,24 +227,37 @@ async def start_pipeline():
 async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacade, azure_facade: AzureSchedulingDataFacade):
     """Register all models with their respective SDI facades."""
     with DBManager() as db:
-        # Get all models and their providers
-        models_data = db.get_all_models_data()
-        
-        for model_data in models_data:
-            model_id = model_data[0]
-            model_name = model_data[1]
-            
-            provider = db.get_provider_to_model(model_id)
-            if not provider:
-                continue
-            
-            provider_name = provider["name"].lower()
-            provider_id = provider["id"]
-            
-            # Get SDI config
+        deployments = db.get_all_deployments()
+        if not deployments:
+            logger.warning("No deployments found to register with SDI facades")
+            return
+
+        model_cache: Dict[int, Dict[str, Any]] = {}
+        provider_cache: Dict[int, Dict[str, Any]] = {}
+
+        for deployment in deployments:
+            model_id = deployment["model_id"]
+            provider_id = deployment["provider_id"]
+            provider_type = (deployment.get("type") or "").lower()
+
+            if model_id not in model_cache:
+                model_info = db.get_model(model_id)
+                if not model_info:
+                    logger.warning("Model %s not found when registering providers", model_id)
+                    continue
+                model_cache[model_id] = model_info
+            model_info = model_cache[model_id]
+            model_name = model_info["name"]
+
+            if provider_id not in provider_cache:
+                provider_cache[provider_id] = db.get_provider(provider_id) or {}
+            provider_info = provider_cache[provider_id]
+            provider_name = provider_info.get("name", f"provider-{provider_id}")
+
+            # Provider-level SDI config (VRAM, admin URL, etc.)
             provider_config = db.get_provider_config(provider_id) or {}
-            
-            if "ollama" in provider_name or "openwebui" in provider_name:
+
+            if provider_type == "ollama" or "ollama" in provider_name.lower() or "openwebui" in provider_name.lower():
                 _ollama_facade.register_model(
                     model_id=model_id,
                     provider_name=provider_name,
@@ -253,32 +266,33 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
                     total_vram_mb=provider_config.get("total_vram_mb", 65536),
                     provider_id=provider_id,
                 )
-            elif "azure" in provider_name:
-                model_info = db.get_model(model_id)
-                if model_info:
-                    _azure_facade.register_model(
-                        model_id=model_id,
-                        provider_name=provider_name,
-                        model_name=model_name,
-                        model_endpoint=model_info["endpoint"],
-                        provider_id=provider_id,
-                    )
+            elif provider_type == "azure" or "azure" in provider_name.lower():
+                _azure_facade.register_model(
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    model_name=model_name,
+                    model_endpoint=model_info["endpoint"],
+                    provider_id=provider_id,
+                )
+            else:
+                logger.debug(
+                    "Skipping provider %s (%s) for model %s: unsupported type '%s'",
+                    provider_id,
+                    provider_name,
+                    model_id,
+                    provider_type,
+                )
 
 
 def _build_model_registry() -> Dict[int, str]:
     """Build mapping of model_id -> provider_type."""
     registry = {}
     with DBManager() as db:
-        for model_id in db.get_all_models():
-            provider = db.get_provider_to_model(model_id)
-            if provider:
-                name = provider["name"].lower()
-                if "ollama" in name or "openwebui" in name:
-                    registry[model_id] = "ollama"
-                elif "azure" in name:
-                    registry[model_id] = "azure"
-                else:
-                    registry[model_id] = "cloud"  # Generic cloud
+        for deployment in db.get_all_deployments():
+            model_id = deployment["model_id"]
+            provider_type = deployment.get("type")
+            if model_id not in registry and provider_type:
+                registry[model_id] = provider_type
     return registry
 
 
@@ -293,7 +307,6 @@ def classifier() -> ClassificationManager:
                     "id": tpl["id"],
                     "name": tpl["name"],
                     "endpoint": tpl["endpoint"],
-                    "api_id": tpl["api_id"],
                     "weight_privacy": tpl["weight_privacy"],
                     "weight_latency": tpl["weight_latency"],
                     "weight_accuracy": tpl["weight_accuracy"],
@@ -406,6 +419,8 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                 try:
                     _pipeline.scheduler.release(
                         model_id,
+                        provider_id,
+                        scheduling_stats.get("provider_type"),
                         scheduling_stats.get("request_id")
                     )
                 except Exception as e:
@@ -478,6 +493,8 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
             try:
                 _pipeline.scheduler.release(
                     model_id,
+                    provider_id,
+                    scheduling_stats.get("provider_type"),
                     scheduling_stats.get("request_id")
                 )
             except Exception as e:
@@ -590,7 +607,7 @@ async def _execute_proxy_mode(
     body: Dict[str, Any],
     headers: Dict[str, str],
     logos_key: str,
-    path: str,
+    deployments: list[Deployment],
     log_id: Optional[int],
     is_async_job: bool,
     profile_id: Optional[int] = None
@@ -621,13 +638,17 @@ async def _execute_proxy_mode(
     # Ensure payload model matches DB name (avoid user-supplied mismatch)
     body = {**body, "model": model_name}
 
+    # Narrow deployments to the requested model to preserve provider metadata
+    model_deployments = [d for d in deployments if d["model_id"] == model_id]
+    if not model_deployments:
+        raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
+
     # Proxy mode reuses the execution from RESOURCE mode with single allowed model -> effectively skipping the classification
     return await _execute_resource_mode(
-        models=[model_id],
+        deployments=model_deployments,
         body=body,
         headers=headers,
         logos_key=logos_key,
-        path=path,
         log_id=log_id,
         is_async_job=is_async_job,
         allowed_models_override=[model_id],
@@ -833,10 +854,10 @@ async def route_and_execute(
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
-            return await _execute_proxy_mode(body, headers, logos_key, path, log_id, is_async_job, profile_id=profile_id)
+            return await _execute_proxy_mode(body, headers, logos_key, deployments, log_id, is_async_job, profile_id=profile_id)
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
-        return await _execute_resource_mode(deployments, body, headers, logos_key, path, log_id, is_async_job, profile_id=profile_id)
+        return await _execute_resource_mode(deployments, body, headers, logos_key, log_id, is_async_job, profile_id=profile_id)
     except HTTPException as exc:
         if is_async_job:
             return {"status_code": exc.status_code, "data": {"error": exc.detail}}

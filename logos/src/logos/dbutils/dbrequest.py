@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional, Union
 
 from pydantic import BaseModel
 
@@ -41,7 +41,7 @@ class GetRole(LogosKeyModel):
 
 class ConnectProcessProviderRequest(LogosKeyModel):
     profile_id: int
-    api_id: int
+    provider_id: int
 
 
 class ConnectProcessModelRequest(LogosKeyModel):
@@ -66,7 +66,8 @@ class ConnectModelProviderRequest(LogosKeyModel):
 
 class ConnectModelApiRequest(LogosKeyModel):
     model_id: int
-    api_id: int
+    provider_id: int
+    api_key: str
 
 
 class AddModelRequest(LogosKeyModel):
@@ -77,7 +78,6 @@ class AddModelRequest(LogosKeyModel):
 class AddFullModelRequest(LogosKeyModel):
     name: str
     endpoint: str
-    api_id: int
     weight_privacy: str
     worse_accuracy: Union[int, None]
     worse_quality: Union[int, None]

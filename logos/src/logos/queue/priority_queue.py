@@ -424,3 +424,10 @@ class PriorityQueueManager:
                 result += self.get_total_depth_by_deployment(model_id, provider_id)
 
         return result
+
+    def get_total_depth_all(self) -> int:
+        """
+        Get total queued tasks across all models/providers.
+        """
+        with self._lock:
+            return len(self._entry_lookup)

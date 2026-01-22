@@ -14,6 +14,7 @@ from logos.dbutils.types import Deployment
 class SchedulingResult:
     """Output from the scheduler."""
     model_id: int
+    provider_id: int
     provider_type: str  # 'ollama' | 'azure'
     queue_entry_id: Optional[str]  # For local models with queue tracking
     was_queued: bool

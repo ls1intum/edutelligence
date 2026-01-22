@@ -10,6 +10,7 @@ import sqlalchemy.exc
 import yaml
 import json
 import logging
+from dateutil.parser import isoparse
 from sqlalchemy import Table, MetaData, create_engine
 from sqlalchemy import text, func, bindparam
 from sqlalchemy.orm import sessionmaker
@@ -217,19 +218,23 @@ class DBManager:
 
     def fetch_llm_key(self, logos_key: str):
         sql = text("""
-                SELECT api_key, 
-                    providers.name as name, 
-                    base_url, 
-                    model_api_keys.id as api_id, 
-                    providers.id as provider_id,
-                    providers.auth_name as auth_name,
-                    providers.auth_format as auth_format,
-                    process.id as process_id
-                FROM providers, model_api_keys, profiles, process
+                SELECT mak.api_key,
+                       providers.name  as name,
+                       providers.base_url as base_url,
+                       mak.id          as api_id,
+                       providers.id    as provider_id,
+                       providers.auth_name as auth_name,
+                       providers.auth_format as auth_format,
+                       process.id      as process_id
+                FROM process
+                    JOIN profiles ON profiles.process_id = process.id
+                    JOIN profile_model_permissions pmp ON pmp.profile_id = profiles.id
+                    JOIN models m ON m.id = pmp.model_id
+                    JOIN model_provider mp ON mp.model_id = m.id
+                    JOIN providers ON providers.id = mp.provider_id
+                    LEFT JOIN model_api_keys mak ON mak.model_id = m.id AND mak.provider_id = providers.id
                 WHERE process.logos_key = :logos_key
-                    and profiles.process_id = process.id 
-                    and profiles.id = model_api_keys.profile_id 
-                    and model_api_keys.provider_id = providers.id
+                LIMIT 1
             """)
 
         result = self.session.execute(sql, {
@@ -311,8 +316,7 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
                                        "auth_name": auth_name, "auth_format": auth_format})
-        pk_api = self.insert("model_api_keys", {"api_key": api_key, "provider_id": pk})
-        return {"result": f"Created Provider.", "provider-id": pk, "api-id": pk_api}, 200
+        return {"result": f"Created Provider.", "provider-id": pk}, 200
 
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
         if not self.check_authorization(logos_key):
@@ -363,12 +367,12 @@ class DBManager:
         pk = self.insert("models", {"name": name, "endpoint": endpoint})
         return {"result": f"Created Model", "model_id": pk}, 200
 
-    def add_full_model(self, logos_key: str, name: str, endpoint: str, api_id: int = None,
+    def add_full_model(self, logos_key: str, name: str, endpoint: str,
                        weight_privacy: str = "LOCAL", worse_accuracy: int = None, worse_quality: int = None, worse_latency: int = None, worse_cost: int = None, tags: str = "", parallel: int = 1,
                        description: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name, "endpoint": endpoint, "api_id": api_id, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
+        pk = self.insert("models", {"name": name, "endpoint": endpoint, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
         return self.rebalance_added_model(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
 
     def update_model_weights(self, logos_key: str, id: int, category: str, value: int):
@@ -424,7 +428,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
+            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
             if mid == updated_model_id and category == "privacy":
                 privacy_data.append((feedback, mid))
             else:
@@ -467,7 +471,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
+            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
             if mid != deleted_model_id:
                 privacy_data.append((p, mid))
             accuracy_data.append((a, mid))
@@ -505,7 +509,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
+            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
             # Add privacy data (we don't add it later as it's not handled via the model handler)
             privacy_data.append((p, mid))
             if mid == new_model_id:
@@ -936,20 +940,42 @@ class DBManager:
             return {"role": "entity"}, 200
         return {"error": "unknown key"}, 500
 
-    def connect_process_provider(self, logos_key: str, profile_id: int, api_id: int):
+    def connect_process_provider(self, logos_key: str, profile_id: int, provider_id: int):
+        """
+        Grant a profile access to all models served by a provider by creating
+        profile_model_permissions entries for each model tied to that provider.
+        """
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        sql = text("""
-                    UPDATE model_api_keys
-                    SET profile_id = :profile_id
-                    WHERE id = :api_id
-                """)
-        self.session.execute(sql, {
-            "profile_id": int(profile_id),
-            "api_id": int(api_id)
-        })
-        self.session.commit()
-        return {"result": f"Added connection to api."}, 200
+
+        if self.get_profile(profile_id) is None:
+            return {"error": f"Profile {profile_id} not found."}, 404
+        if self.get_provider(provider_id) is None:
+            return {"error": f"Provider {provider_id} not found."}, 404
+
+        model_rows = self.session.execute(
+            text("SELECT model_id FROM model_provider WHERE provider_id = :provider_id"),
+            {"provider_id": int(provider_id)}
+        ).fetchall()
+
+        created = 0
+        for row in model_rows:
+            exists = self.session.execute(
+                text("""
+                    SELECT 1 FROM profile_model_permissions
+                    WHERE profile_id = :profile_id AND model_id = :model_id
+                """),
+                {"profile_id": int(profile_id), "model_id": int(row.model_id)}
+            ).fetchone()
+            if exists:
+                continue
+            self.insert("profile_model_permissions", {
+                "profile_id": int(profile_id),
+                "model_id": int(row.model_id)
+            })
+            created += 1
+
+        return {"result": f"Granted access to {created} model(s) for provider {provider_id}."}, 200
 
     def connect_process_model(self, logos_key: str, profile_id: int, model_id: int):
         if not self.check_authorization(logos_key):
@@ -975,7 +1001,19 @@ class DBManager:
     def connect_model_provider(self, logos_key: str, model_id: int, provider_id: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
+        # Link model to provider
         pk = self.insert("model_provider", {"provider_id": int(provider_id), "model_id": int(model_id)})
+
+        # Ensure a model_api_keys entry exists (empty key placeholder) for this pair
+        upsert_sql = text("""
+            INSERT INTO model_api_keys (model_id, provider_id, api_key)
+            VALUES (:model_id, :provider_id, '')
+            ON CONFLICT (model_id, provider_id) DO NOTHING
+            RETURNING id
+        """)
+        self.session.execute(upsert_sql, {"model_id": int(model_id), "provider_id": int(provider_id)})
+        self.session.commit()
+
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
 
     def add_model_provider_config(
@@ -1262,7 +1300,13 @@ class DBManager:
         """)
 
         result = self.session.execute(sql).fetchall()
-        return [row for rows in result]
+        providers: List[Dict[int, str]] = []
+        for row in result:
+            providers.append({
+                "id": row.id,
+                "ollama_admin_url": row.ollama_admin_url,
+            })
+        return providers
 
     def insert_provider_snapshot(
         self,
@@ -1398,22 +1442,35 @@ class DBManager:
             logger.error(f"Failed to query ollama_vram_stats: {e}")
             return {"error": str(e)}, 500
 
-    def connect_model_api(self, logos_key: str, model_id: int, api_id: int):
+    def connect_model_api(self, logos_key: str, model_id: int, provider_id: int, api_key: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        sql = text("""
-                    UPDATE models
-                    SET api_id = :api_id
-                    WHERE id = :model_id
-                """)
-        self.session.execute(sql, {
-            "model_id": int(model_id),
-            "api_id": int(api_id)
-        })
-        self.session.commit()
-        return {"result": f"Added api-connection to model."}, 200
 
-    def add_model_provider_profile(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, profile_id: int, api_id: int):
+        mapping_exists = self.session.execute(text("""
+            SELECT 1 FROM model_provider
+            WHERE model_id = :model_id AND provider_id = :provider_id
+            LIMIT 1
+        """), {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
+
+        if mapping_exists is None:
+            return {"error": "Model is not connected to the specified provider."}, 400
+
+        sql = text("""
+                    INSERT INTO model_api_keys (model_id, provider_id, api_key)
+                    VALUES (:model_id, :provider_id, :api_key)
+                    ON CONFLICT (model_id, provider_id)
+                    DO UPDATE SET api_key = EXCLUDED.api_key
+                    RETURNING id
+                """)
+        result = self.session.execute(sql, {
+            "model_id": int(model_id),
+            "provider_id": int(provider_id),
+            "api_key": api_key
+        }).fetchone()
+        self.session.commit()
+        return {"result": f"Added api-connection to model.", "api_key_id": result.id if result else None}, 200
+
+    def add_model_provider_profile(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, profile_id: int, api_key: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         r, c = self.add_model(logos_key, model_name, model_endpoint)
@@ -1426,7 +1483,7 @@ class DBManager:
         r, c = self.connect_profile_model(logos_key, model_id, profile_id)
         if c != 200:
             return r, c
-        r, c = self.connect_model_api(logos_key, model_id, api_id)
+        r, c = self.connect_model_api(logos_key, model_id, provider_id, api_key)
         if c != 200:
             return r, c
         return {"result": f"Successfully added model and connected to profile {profile_id}"}, 200
@@ -1471,6 +1528,47 @@ class DBManager:
             return {"error": "Key not found"}
         return {"result": f"API-ID: {exc[0]}"}, 200
 
+    def get_auth_info_to_deployment(self, model_id: int, provider_id: int, profile_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Resolve auth + routing info for a model/provider pair, optionally scoped to a profile.
+        """
+        profile_join = ""
+        filters = "WHERE m.id = :model_id AND p.id = :provider_id"
+        params: Dict[str, Any] = {
+            "model_id": int(model_id),
+            "provider_id": int(provider_id),
+        }
+
+        if profile_id is not None:
+            profile_join = """
+                JOIN profile_model_permissions pmp ON pmp.model_id = m.id
+            """
+            filters += " AND pmp.profile_id = :profile_id"
+            params["profile_id"] = int(profile_id)
+
+        sql = text(f"""
+            SELECT m.id          AS model_id,
+                   m.name        AS model_name,
+                   m.endpoint    AS endpoint,
+                   p.id          AS provider_id,
+                   p.name        AS provider_name,
+                   p.base_url    AS base_url,
+                   p.auth_name   AS auth_name,
+                   p.auth_format AS auth_format,
+                   mak.api_key   AS api_key
+            FROM models m
+            JOIN model_provider mp ON m.id = mp.model_id
+            JOIN providers p ON mp.provider_id = p.id
+            LEFT JOIN model_api_keys mak
+                ON mak.model_id = m.id AND mak.provider_id = p.id
+            {profile_join}
+            {filters}
+            LIMIT 1
+        """)
+
+        row = self.session.execute(sql, params).mappings().first()
+        return dict(row) if row else None
+
     def get_deployments_by_profile(self, logos_key: str, profile_id: int) -> list[Deployment]:
         """
         Get a list of all authorized model deployments for a profile.
@@ -1514,7 +1612,7 @@ class DBManager:
         """
         sql = text("""
                    SELECT m.id               as model_id,
-                          p.id               as provider_id
+                          p.id               as provider_id,
                           p.provider_type    as type
                    FROM models m
                             JOIN model_provider mp ON m.id = mp.model_id
@@ -1596,11 +1694,13 @@ class DBManager:
         """
         sql = text("""
             SELECT DISTINCT providers.id
-            FROM providers, model_api_keys, profiles, process
-            WHERE process.logos_key = :logos_key
-                and process.id = profiles.process_id
-                and profiles.id = model_api_keys.profile_id
-                and model_api_keys.provider_id = providers.id
+            FROM providers
+                JOIN model_provider mp ON providers.id = mp.provider_id
+                JOIN models m ON mp.model_id = m.id
+                JOIN profile_model_permissions pmp ON pmp.model_id = m.id
+                JOIN profiles pr ON pr.id = pmp.profile_id
+                JOIN process proc ON proc.id = pr.process_id
+            WHERE proc.logos_key = :logos_key
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [i.id for i in result]
@@ -1611,11 +1711,13 @@ class DBManager:
         """
         sql = text("""
             SELECT DISTINCT providers.id, providers.name, providers.base_url, providers.auth_name, providers.auth_format
-            FROM providers, model_api_keys, profiles, process
-            WHERE process.logos_key = :logos_key
-                and process.id = profiles.process_id
-                and profiles.id = model_api_keys.profile_id
-                and model_api_keys.provider_id = providers.id
+            FROM providers
+                JOIN model_provider mp ON providers.id = mp.provider_id
+                JOIN models m ON mp.model_id = m.id
+                JOIN profile_model_permissions pmp ON pmp.model_id = m.id
+                JOIN profiles pr ON pr.id = pmp.profile_id
+                JOIN process proc ON proc.id = pr.process_id
+            WHERE proc.logos_key = :logos_key
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [(i.id, i.name, i.base_url, i.auth_name, i.auth_format) for i in result]
@@ -1633,7 +1735,7 @@ class DBManager:
         Get a list of models accessible by a given key.
         """
         sql = text("""
-            SELECT DISTINCT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT DISTINCT models.id, models.name, models.endpoint, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models, profile_model_permissions, profiles, process
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
@@ -1641,18 +1743,18 @@ class DBManager:
                 and profile_model_permissions.model_id = models.id
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.name, i.endpoint, i.api_id, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [(i.id, i.name, i.endpoint, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
     def get_all_models_data(self):
         """
         Get a list of models and their data in the database. Used for rebalancing.
         """
         sql = text("""
-            SELECT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT models.id, models.name, models.endpoint, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models
         """)
         result = self.session.execute(sql).fetchall()
-        return [(i.id, i.name, i.endpoint, i.api_id, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [(i.id, i.name, i.endpoint, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
     def get_policy_info(self, logos_key: str):
         """
@@ -1692,7 +1794,6 @@ class DBManager:
             "id": result.id,
             "name": result.name,
             "endpoint": result.endpoint,
-            "api_id": result.api_id,
             "weight_privacy": result.weight_privacy,
             "weight_latency": result.weight_latency,
             "weight_accuracy": result.weight_accuracy,
@@ -1731,18 +1832,18 @@ class DBManager:
             return None
         return self.get_provider(result.provider_id)
 
-    def get_key_to_model_provider(self, profile_id: Optional[int], provider_id: int):
-        if profile_id is None:
+    def get_key_to_model_provider(self, model_id: Optional[int], provider_id: int):
+        if model_id is None:
             return None
         sql = text("""
                    SELECT api_key
                    FROM model_api_keys
-                   WHERE model_api_keys.profile_id = :profile_id
+                   WHERE model_api_keys.model_id = :model_id
                        and model_api_keys.provider_id = :provider_id
                    """)
         result = self.session.execute(
             sql,
-            {"profile_id": int(profile_id), "provider_id": int(provider_id)}
+            {"model_id": int(model_id), "provider_id": int(provider_id)}
         ).fetchone()
         if result is None:
             return None
@@ -1836,6 +1937,8 @@ class DBManager:
             classified = dict()
         if usage is None:
             usage = dict()
+        if not isinstance(log_id, int):
+            return {"error": "Invalid log_id"}, 400
         result = self.session.execute(
             text("SELECT privacy_level FROM log_entry WHERE id = :log_id"),
             {"log_id": log_id}
@@ -2040,8 +2143,8 @@ if __name__ == "__main__":
         to certain models or providers, as explained later. If you don't know the ID of a process, you can find it
         out via the get_process_id-Endpoint by supplying a corresponding key.
     5. Connect Profiles with Providers. Now you define which profiles can interact with which providers. Therefore
-        call the connect_process_provider-Endpoint with the profile ID and the corresponding api-ID. This api-ID
-        is obtained by calling the get_api_id-Endpoint for a given api-key. 
+        call the connect_process_provider-Endpoint with the profile ID and provider ID. This validates the connection
+        but provider access is ultimately controlled by model permissions.
     If you just want to use Logos as a proxy, you're done here with the basics. Else proceed with the following steps:
     6. Connect Profiles with Models. Now you define which Profiles can interact with which Models. Therefore
         call the connect_process_model-Endpoint analogous as in step 5.
@@ -2049,7 +2152,7 @@ if __name__ == "__main__":
         call the connect_model_provider-Endpoint analogous as in step 6. 
     8. Connect api-key and model. If a model requires its own api-key under a certain provider, you can now
         connect a stored api-key to that model. Otherwise this is not necessary. Therefore call the 
-        connect_model_api-Endpoint as in step 7.
+        connect_model_api-Endpoint with model_id, provider_id and api_key.
     Congratulations! You have successfully set up Logos and can now call Logos to obtain results from your
     stored models. Keep in mind that you now provide the logos-key in the request header, not the data.
     """

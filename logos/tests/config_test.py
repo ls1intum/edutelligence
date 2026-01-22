@@ -104,7 +104,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "profile_id": 1,
-            "api_id": 1,
+            "provider_id": 1,
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_provider", json=data,
@@ -160,7 +160,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
-            "api_id": 1,
+            "provider_id": 1,
+            "api_key": f"{API_KEY}",
             "model_id": 1,
         }
 
@@ -255,7 +256,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
-            "api_id": 2,
+            "provider_id": 2,
             "profile_id": 2,
         }
 
