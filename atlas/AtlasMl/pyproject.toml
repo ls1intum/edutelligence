@@ -15,7 +15,7 @@ sentence-transformers = "^4.0.2"
 pydantic-settings = "^2.8.1"
 matplotlib = "^3.10.1"
 scipy = "^1.15.2"
-apscheduler = "^3.10.4"
+apscheduler = "^3.11.2"
 openai = "==1.93.0"
 sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
 markdown = "^3.8.2"
