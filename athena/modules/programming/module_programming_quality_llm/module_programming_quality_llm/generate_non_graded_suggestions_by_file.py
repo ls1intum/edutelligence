@@ -215,22 +215,45 @@ async def generate_suggestions_by_file(
         prompt_inputs = filtered_prompt_inputs
 
     # noinspection PyTypeChecker
-    results: List[Optional[ImprovementModel]] = await asyncio.gather(
-        *[
-            predict_and_parse(
-                model=config.model,
-                chat_prompt=chat_prompt,
-                prompt_input=prompt_input,
-                pydantic_object=ImprovementModel,
-                tags=[
-                    f"exercise-{exercise.id}",
-                    f"submission-{submission.id}",
-                    f"file-{prompt_input['file_path']}",
-                    "generate-suggestions-by-file",
-                ],
+    BATCH_SIZE = 15  # Process files in batches
+
+    async def process_in_batches(
+            prompt_inputs: List[dict],
+            model,
+            chat_prompt,
+            exercise,
+            submission,
+    ) -> List[Optional[ImprovementModel]]:
+        results = []
+        for i in range(0, len(prompt_inputs), BATCH_SIZE):
+            batch = prompt_inputs[i:i + BATCH_SIZE]
+            batch_results = await asyncio.gather(
+                *[
+                    predict_and_parse(
+                        model=model,
+                        chat_prompt=chat_prompt,
+                        prompt_input=prompt_input,
+                        pydantic_object=ImprovementModel,
+                        tags=[
+                            f"exercise-{exercise.id}",
+                            f"submission-{submission.id}",
+                            f"file-{prompt_input['file_path']}",
+                            "generate-suggestions-by-file",
+                        ],
+                    )
+                    for prompt_input in batch
+                ]
             )
-            for prompt_input in prompt_inputs
-        ]
+            results.extend(batch_results)
+        return results
+
+    # noinspection PyTypeChecker
+    results: List[Optional[ImprovementModel]] = await process_in_batches(
+        prompt_inputs=prompt_inputs,
+        model=config.model,
+        chat_prompt=chat_prompt,
+        exercise=exercise,
+        submission=submission,
     )
 
     if debug:
