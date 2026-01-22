@@ -186,6 +186,7 @@ async def generate_suggestions_by_file(
         )
 
     omittable_features = [
+        "template_to_submission_diff",
         "summary",
         "problem_statement",
         # In the future we might indicate the changed lines in the submission_file additionally
