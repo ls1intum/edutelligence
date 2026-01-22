@@ -88,6 +88,19 @@ async def generate_suggestions_by_file(
         ),
     )
 
+    # Dynamische Token-Berechnung
+    total_content_size = sum(len(content) for content in changed_files.values())
+
+    if total_content_size < 40000:  # Kleine Submission
+        effective_max_tokens = 5000
+    elif total_content_size < 100000:  # Mittlere Submission
+        effective_max_tokens = 3000
+    else:  # Große Submission
+        effective_max_tokens = config.max_input_tokens
+
+    # Config-Objekt temporär überschreiben (Kopie erstellen um Original nicht zu verändern)
+    config = config.model_copy(update={"max_input_tokens": effective_max_tokens})
+
     # Get solution summary by file (if necessary)
     solution_summary = await generate_summary_by_file(
         exercise=exercise,
@@ -184,7 +197,7 @@ async def generate_suggestions_by_file(
             check_prompt_length_and_omit_features_if_necessary(
                 prompt=chat_prompt,
                 prompt_input=prompt_input,
-                max_input_tokens=config.max_input_tokens,
+                max_input_tokens=effective_max_tokens,
                 omittable_features=omittable_features,
                 debug=debug,
             )
@@ -214,45 +227,22 @@ async def generate_suggestions_by_file(
         prompt_inputs = filtered_prompt_inputs
 
     # noinspection PyTypeChecker
-    BATCH_SIZE = 15  # Process files in batches
-
-    async def process_in_batches(
-            prompt_inputs: List[dict],
-            model,
-            chat_prompt,
-            exercise,
-            submission,
-    ) -> List[Optional[ImprovementModel]]:
-        results = []
-        for i in range(0, len(prompt_inputs), BATCH_SIZE):
-            batch = prompt_inputs[i:i + BATCH_SIZE]
-            batch_results = await asyncio.gather(
-                *[
-                    predict_and_parse(
-                        model=model,
-                        chat_prompt=chat_prompt,
-                        prompt_input=prompt_input,
-                        pydantic_object=ImprovementModel,
-                        tags=[
-                            f"exercise-{exercise.id}",
-                            f"submission-{submission.id}",
-                            f"file-{prompt_input['file_path']}",
-                            "generate-suggestions-by-file",
-                        ],
-                    )
-                    for prompt_input in batch
-                ]
+    results: List[Optional[ImprovementModel]] = await asyncio.gather(
+        *[
+            predict_and_parse(
+                model=config.model,
+                chat_prompt=chat_prompt,
+                prompt_input=prompt_input,
+                pydantic_object=ImprovementModel,
+                tags=[
+                    f"exercise-{exercise.id}",
+                    f"submission-{submission.id}",
+                    f"file-{prompt_input['file_path']}",
+                    "generate-suggestions-by-file",
+                ],
             )
-            results.extend(batch_results)
-        return results
-
-    # noinspection PyTypeChecker
-    results: List[Optional[ImprovementModel]] = await process_in_batches(
-        prompt_inputs=prompt_inputs,
-        model=config.model,
-        chat_prompt=chat_prompt,
-        exercise=exercise,
-        submission=submission,
+            for prompt_input in prompt_inputs
+        ]
     )
 
     if debug:

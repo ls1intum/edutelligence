@@ -138,7 +138,7 @@ class BasicApproachConfig(BaseModel):
     """Defines a basic configuration for processing submissions, incorporating problem statement splitting, feedback generation, and file summarization."""
 
     max_input_tokens: int = Field(
-        default=3000, description="Maximum number of tokens in the input prompt."
+        default=1500, description="Maximum number of tokens in the input prompt."
     )
     model: ModelConfigType = Field(
         title="Model",
@@ -146,7 +146,7 @@ class BasicApproachConfig(BaseModel):
         default=llm_config.models.base_model_config,
     )
     max_number_of_files: int = Field(
-        default=20,
+        default=15,
         description="Maximum number of files. If exceeded, it will prioritize the most important ones.",
     )
     split_problem_statement_by_file_prompt: SplitProblemStatementsBasePrompt = Field(
