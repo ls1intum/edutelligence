@@ -5,12 +5,10 @@ assess_user_answer_prompt = """
 
 ## Inputs
 
-* **`question`**: The verification question that was asked: {question}
-* **`student_answer`**: The answer provided by the student: {answer}
 * **`task_template`**: The original exercise template: {template}
 * **`task_description`**: Full exercise text, including optional tasks: {task}
 * **`student_submission`**: The student’s submitted code: {files}
-* **`conversation_history`**: All previously asked questions and answers: {chat_history}
+* **`conversation_history`**: All previously asked questions and answers, including the last one for you to assess: {chat_history}
 * **`min_questions`**: Minimum number of questions to be asked per submission: {min_questions}
 * **`max_questions`**: Maximum number of questions to be asked per submission: {max_questions}
 
@@ -50,7 +48,7 @@ Return a JSON object with the following structure:
 ```json
 {
   "verdict": "suspicious" | "unsuspicious" | "follow_up_question",
-  "reasoning": "<optional string, max 1-2 sentences>"
+  "reasoning": "<max 1-2 sentences>"
 }
 ```
 """

@@ -34,8 +34,8 @@ class FileSelectionDTO(BaseModel):
         )
 
 
-class AskUserPipeline(SubPipeline):
-    """Pipeline that produces assessment question from submitted code and task"""
+class AssessUserAnswerPipeline(SubPipeline):
+    """Pipeline that assesses a given answer by the student to decide whether it is convincing or not"""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -48,7 +48,7 @@ class AskUserPipeline(SubPipeline):
     def __init__(
             self, callback: Optional[StatusCallback] = None, variant: str = "default"
     ):
-        super().__init__(implementation_id="ask_user_pipeline_reference_impl")
+        super().__init__(implementation_id="assess_user_answer_pipeline_reference_impl")
         self.callback = callback
         self.variant = variant
 
@@ -74,27 +74,34 @@ class AskUserPipeline(SubPipeline):
         # Create the prompt
         self.default_prompt = PromptTemplate(
             template=prompt_str,
-            input_variables=["template", "files", "chat_history"],
+            input_variables=["template", "task", "files", "chat_history", "min_questions", "max_questions"]
         )
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
-    @traceable(name="Ask User Pipeline")
+    @traceable(name="Assess User Answer Pipeline")
     def __call__(
             self,
-            repository: Dict[str, str],
+            template_repository: Dict[str, str],
+            submission_repository: Dict[str, str],
             chat_history: List[PyrisMessage],
             problem_statement: str,
+            min_questions: int,
+            max_questions: int
     ) -> str:
         """
         Runs the pipeline
             :return: Selected file content
         """
-        logger.info("Running ask user pipeline...")
+        logger.info("Running assess user answer pipeline...")
 
-        file_list = "\n------------\n".join(
-            [f"{file_name}:\n{code}" for file_name, code in repository.items()]
+        submission_file_list = "\n------------\n".join(
+            [f"{file_name}:\n{code}" for file_name, code in submission_repository.items()]
         )
+        template_file_list = "\n------------\n".join(
+            [f"{file_name}:\n{code}" for file_name, code in template_repository.items()]
+        )
+
         chat_history_list = "\n".join(
             f"{message.sender}: {message.contents[0].text_content}"
             for message in chat_history
@@ -102,18 +109,22 @@ class AskUserPipeline(SubPipeline):
             and len(message.contents) > 0
             and message.contents[0].text_content
         )
+
         response = (
             (self.default_prompt | self.pipeline)
-            .with_config({"run_name": "Ask User Pipeline"})
+            .with_config({"run_name": "Assess User Answer Pipeline"})
             .invoke(
                 {
-                    "files": file_list,
+                    "template": template_file_list,
+                    "task": problem_statement,
+                    "files": submission_file_list,
                     "chat_history": chat_history_list,
-                    "problem_statement": problem_statement,
+                    "min_questions": min_questions,
+                    "max_questions": max_questions
                 }
             )
         )
         token_usage = self.llm.tokens
-        token_usage.pipeline = PipelineEnum.IRIS_ASK_USER
+        token_usage.pipeline = PipelineEnum.IRIS_ASSESS_USER_ANSWER
         self.tokens = token_usage
         return response.replace("{", "{{").replace("}", "}}")
