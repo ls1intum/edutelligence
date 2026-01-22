@@ -138,7 +138,7 @@ class BasicApproachConfig(BaseModel):
     """Defines a basic configuration for processing submissions, incorporating problem statement splitting, feedback generation, and file summarization."""
 
     max_input_tokens: int = Field(
-        default=10000, description="Maximum number of tokens in the input prompt."
+        default=16000, description="Maximum number of tokens in the input prompt."
     )
     model: ModelConfigType = Field(
         title="Model",
