@@ -41,4 +41,11 @@ Code (with line numbers <number>: <line>):
 \"\"\"
 {submission_file}
 \"\"\"
+
+Lines changed by the student (ignore template code):
+\"\"\"
+{template_to_submission_diff}
+\"\"\"
+
+**Important**: Only provide feedback for code written by the student, not for template code.
 """
