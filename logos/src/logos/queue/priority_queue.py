@@ -34,10 +34,10 @@ class PriorityQueueManager:
 
     def __init__(self):
         """Initialize the priority queue manager."""
-        # queues[model_id][priority] = heap of entries
+        # queues[model_id, provider_id][priority] = heap of entries
         # Heap entries: (negative_priority, timestamp, entry_id, QueueEntry)
         # Using negative priority for max-heap behavior
-        self._queues: Dict[int, Dict[Priority, List[Tuple[int, float, str, QueueEntry]]]] = defaultdict(
+        self._queues: Dict[Tuple[int, int], Dict[Priority, List[Tuple[int, float, str, QueueEntry]]]] = defaultdict(
             lambda: {
                 Priority.LOW: [],
                 Priority.NORMAL: [],
@@ -45,8 +45,8 @@ class PriorityQueueManager:
             }
         )
 
-        # Fast lookup: entry_id → (model_id, priority)
-        self._entry_lookup: Dict[str, Tuple[int, Priority]] = {}
+        # Fast lookup: entry_id → (model_id, provider_id, priority)
+        self._entry_lookup: Dict[str, Tuple[int, int, Priority]] = {}
 
         # Lock for thread safety
         self._lock = RLock()
@@ -56,13 +56,14 @@ class PriorityQueueManager:
 
         logging.info("PriorityQueueManager initialized")
 
-    def enqueue(self, task: any, model_id: int, priority: Priority) -> str:
+    def enqueue(self, task: any, model_id: int, provider_id: int, priority: Priority) -> str:
         """
         Add a task to the appropriate priority queue.
 
         Args:
             task: The Task object to enqueue
             model_id: Which model this task is for
+            provider_id: Which provider this task is for
             priority: Priority level (LOW, NORMAL, HIGH)
 
         Returns:
@@ -95,10 +96,10 @@ class PriorityQueueManager:
                 entry,  # The actual QueueEntry
             )
 
-            heapq.heappush(self._queues[model_id][priority], heap_entry)
+            heapq.heappush(self._queues[(model_id, provider_id)][priority], heap_entry)
 
             # Update lookup table
-            self._entry_lookup[entry_id] = (model_id, priority)
+            self._entry_lookup[entry_id] = (model_id, provider_id, priority)
 
             logging.debug(
                 f"Enqueued task {task.get_id() if hasattr(task, 'get_id') else 'unknown'} "
@@ -107,12 +108,13 @@ class PriorityQueueManager:
 
             return entry_id
 
-    def dequeue(self, model_id: int, priority: Optional[Priority] = None) -> Optional[any]:
+    def dequeue(self, model_id: int, provider_id: int, priority: Optional[Priority] = None) -> Optional[any]:
         """
         Remove and return the highest priority task for a model.
 
         Args:
             model_id: Which model to dequeue from
+            provider_id: Which provider to dequeue from
             priority: If specified, only dequeue from this priority level.
                      If None, dequeue from highest available priority.
 
@@ -124,23 +126,24 @@ class PriorityQueueManager:
         with self._lock:
             if priority is not None:
                 # Dequeue from specific priority
-                task, _ = self._dequeue_from_priority(model_id, priority)
+                task, _ = self._dequeue_from_priority(model_id, provider_id, priority)
                 return task
             else:
                 # Dequeue from highest available priority
                 # Check HIGH → NORMAL → LOW
                 for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                    task, _ = self._dequeue_from_priority(model_id, p)
+                    task, _ = self._dequeue_from_priority(model_id, provider_id, p)
                     if task is not None:
                         return task
                 return None
 
-    def dequeue_with_entry(self, model_id: int, priority: Optional[Priority] = None) -> Tuple[Optional[any], Optional[QueueEntry]]:
+    def dequeue_with_entry(self, model_id: int, provider_id: int, priority: Optional[Priority] = None) -> Tuple[Optional[any], Optional[QueueEntry]]:
         """
         Dequeue and return both the task and its QueueEntry metadata.
 
         Args:
             model_id: Which model to dequeue from
+            provider_id: Which provider to dequeue from
             priority: If specified, only dequeue from this priority level.
                      If None, dequeue from highest available priority.
 
@@ -151,21 +154,21 @@ class PriorityQueueManager:
         """
         with self._lock:
             if priority is not None:
-                return self._dequeue_from_priority(model_id, priority)
+                return self._dequeue_from_priority(model_id, provider_id, priority)
             # Highest available priority: HIGH → NORMAL → LOW
             for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                task, entry = self._dequeue_from_priority(model_id, p)
+                task, entry = self._dequeue_from_priority(model_id, provider_id, p)
                 if task is not None:
                     return task, entry
             return None, None
 
-    def _dequeue_from_priority(self, model_id: int, priority: Priority) -> Tuple[Optional[any], Optional[QueueEntry]]:
+    def _dequeue_from_priority(self, model_id: int, provider_id: int, priority: Priority) -> Tuple[Optional[any], Optional[QueueEntry]]:
         """
         Internal helper to dequeue from a specific priority queue.
 
         Assumes lock is already held.
         """
-        queue = self._queues[model_id][priority]
+        queue = self._queues[(model_id, provider_id)][priority]
 
         if not queue:
             return None, None
@@ -183,7 +186,7 @@ class PriorityQueueManager:
 
         return entry.task, entry
 
-    def peek(self, model_id: int) -> Optional[Tuple[any, Priority]]:
+    def peek(self, model_id: int, provider_id: int) -> Optional[Tuple[any, Priority]]:
         """
         Look at the highest priority task without removing it.
 
@@ -198,10 +201,10 @@ class PriorityQueueManager:
         with self._lock:
             # Check HIGH → NORMAL → LOW
             for priority in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                queue = self._queues[model_id][priority]
+                queue = self._queues[(model_id, provider_id)][priority]
                 if queue:
                     _, _, _, entry = queue[0]  # Peek at heap top (don't pop)
-                    return (entry.task, priority)
+                    return entry.task, priority
 
             return None
 
@@ -226,14 +229,14 @@ class PriorityQueueManager:
                 logging.warning(f"Cannot move entry {entry_id}: not found in queue")
                 return False
 
-            model_id, current_priority = self._entry_lookup[entry_id]
+            model_id, provider_id, current_priority = self._entry_lookup[entry_id]
 
             # If already at this priority, nothing to do
             if current_priority == new_priority:
                 return True
 
             # Find and remove from current queue
-            current_queue = self._queues[model_id][current_priority]
+            current_queue = self._queues[(model_id, provider_id)][current_priority]
             entry_to_move = None
 
             for i, (_, _, eid, entry) in enumerate(current_queue):
@@ -259,10 +262,10 @@ class PriorityQueueManager:
                 entry_id,
                 entry_to_move,
             )
-            heapq.heappush(self._queues[model_id][new_priority], heap_entry)
+            heapq.heappush(self._queues[(model_id, provider_id)][new_priority], heap_entry)
 
             # Update lookup
-            self._entry_lookup[entry_id] = (model_id, new_priority)
+            self._entry_lookup[entry_id] = (model_id, provider_id, new_priority)
 
             logging.info(
                 f"Moved entry {entry_id} from {current_priority.name} to {new_priority.name} "
@@ -271,12 +274,13 @@ class PriorityQueueManager:
 
             return True
 
-    def get_state(self, model_id: int) -> QueueStatePerPriority:
+    def get_state(self, model_id: int, provider_id: int) -> QueueStatePerPriority:
         """
         Get queue depth breakdown by priority for a model.
 
         Args:
             model_id: Which model to query
+            provider_id: Which provider to query
 
         Returns:
             QueueStatePerPriority with counts per priority level
@@ -285,12 +289,12 @@ class PriorityQueueManager:
         """
         with self._lock:
             return QueueStatePerPriority(
-                low=len(self._queues[model_id][Priority.LOW]),
-                normal=len(self._queues[model_id][Priority.NORMAL]),
-                high=len(self._queues[model_id][Priority.HIGH]),
+                low=len(self._queues[(model_id, provider_id)][Priority.LOW]),
+                normal=len(self._queues[(model_id, provider_id)][Priority.NORMAL]),
+                high=len(self._queues[(model_id, provider_id)][Priority.HIGH]),
             )
 
-    def get_entries_for_priority(self, model_id: int, priority: Priority) -> List[QueueEntry]:
+    def get_entries_for_priority(self, model_id: int, provider_id: int, priority: Priority) -> List[QueueEntry]:
         """
         Get all queue entries for a specific model and priority.
 
@@ -298,6 +302,7 @@ class PriorityQueueManager:
 
         Args:
             model_id: Which model to query
+            provider_id: Which provider to query
             priority: Which priority level to query
 
         Returns:
@@ -306,7 +311,7 @@ class PriorityQueueManager:
         Thread-safe.
         """
         with self._lock:
-            queue = self._queues[model_id][priority]
+            queue = self._queues[(model_id, provider_id)][priority]
 
             # Extract QueueEntry objects and sort by enqueue time
             entries = [entry for (_, _, _, entry) in queue]
@@ -330,8 +335,8 @@ class PriorityQueueManager:
             if entry_id not in self._entry_lookup:
                 return None
 
-            model_id, priority = self._entry_lookup[entry_id]
-            queue = self._queues[model_id][priority]
+            model_id, provider_id, priority = self._entry_lookup[entry_id]
+            queue = self._queues[(model_id, provider_id)][priority]
 
             # Find the entry in the queue
             for _, _, eid, entry in queue:
@@ -356,8 +361,8 @@ class PriorityQueueManager:
             if entry_id not in self._entry_lookup:
                 return False
 
-            model_id, priority = self._entry_lookup[entry_id]
-            queue = self._queues[model_id][priority]
+            model_id, provider_id, priority = self._entry_lookup[entry_id]
+            queue = self._queues[(model_id, provider_id)][priority]
 
             # Find and remove
             for i, (_, _, eid, _) in enumerate(queue):
@@ -369,23 +374,6 @@ class PriorityQueueManager:
                     return True
 
             return False
-
-    def get_all_models(self) -> List[int]:
-        """
-        Get list of all model IDs that have queued tasks.
-
-        Returns:
-            List of model IDs
-
-        Thread-safe.
-        """
-        with self._lock:
-            # Return models that have at least one task in any priority
-            return [
-                model_id
-                for model_id in self._queues.keys()
-                if any(len(self._queues[model_id][p]) > 0 for p in Priority)
-            ]
 
     def is_empty(self) -> bool:
         """
@@ -403,17 +391,43 @@ class PriorityQueueManager:
                 for queue in model_queues.values()
             )
 
-    def get_total_depth(self, model_id: int) -> int:
+    def get_total_depth_by_deployment(self, model_id: int, provider_id: int) -> int:
         """
         Get total queue depth for a model (all priorities combined).
 
         Args:
             model_id: Which model to query
+            provider_id: Which provider to query
 
         Returns:
             Total number of queued tasks
 
         Thread-safe.
         """
-        state = self.get_state(model_id)
+        state = self.get_state(model_id, provider_id)
         return state.total
+
+    def get_total_depth_by_provider(self, provider_id: int) -> int:
+        """
+        Get total queue depth for a provider (all models and priorities combined).
+
+        Args:
+            provider_id: Which provider to query
+
+        Returns:
+            Total number of queued tasks
+        """
+        result = 0
+
+        for (model_id, pid), deployment_queues in self._queues.keys():
+            if pid == provider_id:
+                result += self.get_total_depth_by_deployment(model_id, provider_id)
+
+        return result
+
+    def get_total_depth_all(self) -> int:
+        """
+        Get total queued tasks across all models/providers.
+        """
+        with self._lock:
+            return len(self._entry_lookup)

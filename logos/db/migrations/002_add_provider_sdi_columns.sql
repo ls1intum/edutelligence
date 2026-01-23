@@ -1,9 +1,13 @@
 -- Migration: Add SDI (Scheduling Data Interface) columns to providers table
 -- Safe to run multiple times; uses IF NOT EXISTS where supported.
 
--- Add provider type distinction
+-- Add provider type distinction (required)
 ALTER TABLE providers
     ADD COLUMN IF NOT EXISTS provider_type VARCHAR(20) DEFAULT 'cloud';
+
+-- Ensure provider_type is populated before enforcing NOT NULL
+ALTER TABLE providers
+    ALTER COLUMN provider_type SET NOT NULL;
 
 -- Add Ollama-specific monitoring fields
 ALTER TABLE providers
@@ -20,7 +24,4 @@ ALTER TABLE providers
 ALTER TABLE providers
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 
--- Update existing Ollama providers to have correct provider_type
-UPDATE providers
-SET provider_type = 'ollama'
-WHERE LOWER(name) LIKE '%ollama%' OR LOWER(name) LIKE '%openwebui%';
+-- NOTE: populate provider_type explicitly for existing providers before running this migration.

@@ -47,7 +47,7 @@ entries = queue_mgr.get_entries_for_priority(model_id, priority)
 
 # State Queries
 state = queue_mgr.get_state(model_id)  # QueueStatePerPriority
-total = queue_mgr.get_total_depth(model_id)
+total = queue_mgr.get_total_depth_by_deployment(model_id)
 is_empty = queue_mgr.is_empty()
 ```
 

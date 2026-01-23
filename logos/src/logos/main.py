@@ -1,20 +1,19 @@
 import asyncio
 import json
 import logging
-import os
-import traceback
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Set, Tuple, Optional, List
+from typing import Any, Dict, Set, Tuple, Optional
 import grpc
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from logos.auth import authenticate_logos_key, _resolve_logos_key
+from logos.auth import authenticate_logos_key
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.jobs.job_service import JobService, JobSubmission
@@ -26,7 +25,7 @@ from logos.responses import (
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
 from logos.pipeline.fcfs_scheduler import FcfScheduler
-from logos.pipeline.executor import Executor
+from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
@@ -38,6 +37,44 @@ logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _ollama_monitor: Optional[OllamaProviderMonitor] = None
+
+OLLAMA_PROCESSING_TIMEOUT_S = 60
+
+
+def _get_processing_timeout_s(scheduling_stats: Optional[Dict[str, Any]]) -> Optional[int]:
+    if scheduling_stats and scheduling_stats.get("provider_type") == "ollama":
+        return OLLAMA_PROCESSING_TIMEOUT_S
+    return None
+
+
+def _record_azure_rate_limits(
+    scheduling_stats: Optional[Dict[str, Any]],
+    headers: Dict[str, str],
+) -> None:
+    if not scheduling_stats or not headers:
+        return
+    request_id = scheduling_stats.get("request_id")
+    if not request_id:
+        return
+
+    headers_lower = {k.lower(): v for k, v in headers.items()}
+    remaining_requests = headers_lower.get("x-ratelimit-remaining-requests")
+    remaining_tokens = headers_lower.get("x-ratelimit-remaining-tokens")
+
+    provider_metrics = {}
+    if remaining_requests is not None:
+        try:
+            provider_metrics["azure_rate_remaining_requests"] = int(remaining_requests)
+        except (TypeError, ValueError):
+            pass
+    if remaining_tokens is not None:
+        try:
+            provider_metrics["azure_rate_remaining_tokens"] = int(remaining_tokens)
+        except (TypeError, ValueError):
+            pass
+
+    if provider_metrics:
+        _pipeline.record_provider_metrics(request_id, provider_metrics)
 
 
 @asynccontextmanager
@@ -71,23 +108,6 @@ async def lifespan(app: FastAPI):
     model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(_pipeline), _grpc_server)
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
-
-    # Initial provider setup from environment variables
-    DEFAULT_PROVIDER = os.getenv("PROVIDER_NAME")
-    DEFAULT_BASE_URL = os.getenv("BASE_URL")
-    FORMAT = '%(levelname)-8s: %(asctime)s at module %(module)-15s %(message)s'
-    logging.basicConfig(format=FORMAT, level=logging.DEBUG)
-    if DEFAULT_PROVIDER and len(DEFAULT_BASE_URL) > 5:
-        logging.info("Creating Proxy Configuration...")
-        with DBManager() as db:
-            db.is_root_initialized()
-        logging.info("Processing setup. Initialized: %s", str(DBManager.is_initialized()))
-        if not DBManager.is_initialized():
-            lk = setup_proxy.setup(DEFAULT_BASE_URL, DEFAULT_PROVIDER)
-            if "error" in lk:
-                logging.error("Error during proxy setup: %s", lk)
-            else:
-                logging.info("Created proxy configuration: %s", lk)
 
     yield
 
@@ -145,14 +165,22 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
 
     if "policy" in headers:
         try:
+            policy_id = int(headers["policy"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="policy header must be an integer")
+        try:
             with DBManager() as db:
-                policy = db.get_policy(logos_key, int(headers["policy"]))
+                policy = db.get_policy(logos_key, policy_id)
                 if isinstance(policy, dict) and "error" in policy:
-                    logger.warning(f"Failed to load policy {headers['policy']}: {policy['error']}")
-                    policy = None
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Policy not found for this process",
+                    )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"Failed to load policy from header: {e}")
-            policy = None
+            raise HTTPException(status_code=500, detail="Failed to load policy")
 
     if policy is None:
         policy = {}
@@ -219,24 +247,48 @@ async def start_pipeline():
 async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacade, azure_facade: AzureSchedulingDataFacade):
     """Register all models with their respective SDI facades."""
     with DBManager() as db:
-        # Get all models and their providers
-        models_data = db.get_all_models_data()
-        
-        for model_data in models_data:
-            model_id = model_data[0]
-            model_name = model_data[1]
-            
-            provider = db.get_provider_to_model(model_id)
-            if not provider:
-                continue
-            
-            provider_name = provider["name"].lower()
-            provider_id = provider["id"]
-            
-            # Get SDI config
+        deployments = db.get_all_deployments()
+        if not deployments:
+            logger.warning("No deployments found to register with SDI facades")
+            return
+
+        model_cache: Dict[int, Dict[str, Any]] = {}
+        provider_cache: Dict[int, Dict[str, Any]] = {}
+
+        for deployment in deployments:
+            model_id = deployment["model_id"]
+            provider_id = deployment["provider_id"]
+            provider_type = (deployment.get("type") or "").lower()
+
+            if model_id not in model_cache:
+                model_info = db.get_model(model_id)
+                if not model_info:
+                    logger.warning("Model %s not found when registering providers", model_id)
+                    continue
+                model_cache[model_id] = model_info
+            model_info = model_cache[model_id]
+            model_name = model_info["name"]
+
+            if provider_id not in provider_cache:
+                provider_cache[provider_id] = db.get_provider(provider_id) or {}
+            provider_info = provider_cache[provider_id]
+            provider_name = provider_info.get("name", f"provider-{provider_id}")
+
+            # Provider-level SDI config (VRAM, admin URL, etc.)
             provider_config = db.get_provider_config(provider_id) or {}
-            
-            if "ollama" in provider_name or "openwebui" in provider_name:
+
+            if not provider_type:
+                logger.warning(
+                    "Skipping provider %s (%s) for model %s: missing provider_type",
+                    provider_id,
+                    provider_name,
+                    model_id,
+                )
+                continue
+
+            provider_type = provider_type.lower()
+
+            if provider_type == "ollama":
                 _ollama_facade.register_model(
                     model_id=model_id,
                     provider_name=provider_name,
@@ -245,32 +297,34 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
                     total_vram_mb=provider_config.get("total_vram_mb", 65536),
                     provider_id=provider_id,
                 )
-            elif "azure" in provider_name:
-                model_info = db.get_model(model_id)
-                if model_info:
-                    _azure_facade.register_model(
-                        model_id=model_id,
-                        provider_name=provider_name,
-                        model_name=model_name,
-                        model_endpoint=model_info["endpoint"],
-                        provider_id=provider_id,
-                    )
+            elif provider_type == "azure":
+                _azure_facade.register_model(
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    model_name=model_name,
+                    model_endpoint=model_info["endpoint"],
+                    provider_id=provider_id,
+                )
+            else:
+                logger.debug(
+                    "Skipping provider %s (%s) for model %s: unsupported type '%s'",
+                    provider_id,
+                    provider_name,
+                    model_id,
+                    provider_type,
+                )
 
 
-def _build_model_registry() -> Dict[int, str]:
-    """Build mapping of model_id -> provider_type."""
-    registry = {}
+def _build_model_registry() -> Dict[tuple[int, int], str]:
+    """Build mapping of (model_id, provider_id) -> provider_type."""
+    registry: Dict[tuple[int, int], str] = {}
     with DBManager() as db:
-        for model_id in db.get_all_models():
-            provider = db.get_provider_to_model(model_id)
-            if provider:
-                name = provider["name"].lower()
-                if "ollama" in name or "openwebui" in name:
-                    registry[model_id] = "ollama"
-                elif "azure" in name:
-                    registry[model_id] = "azure"
-                else:
-                    registry[model_id] = "cloud"  # Generic cloud
+        for deployment in db.get_all_deployments():
+            model_id = deployment["model_id"]
+            provider_id = deployment["provider_id"]
+            provider_type = deployment.get("type")
+            if provider_type:
+                registry[(model_id, provider_id)] = provider_type
     return registry
 
 
@@ -285,7 +339,6 @@ def classifier() -> ClassificationManager:
                     "id": tpl["id"],
                     "name": tpl["name"],
                     "endpoint": tpl["endpoint"],
-                    "api_id": tpl["api_id"],
                     "weight_privacy": tpl["weight_privacy"],
                     "weight_latency": tpl["weight_latency"],
                     "weight_accuracy": tpl["weight_accuracy"],
@@ -322,35 +375,76 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
         first_chunk = None
         last_chunk = None
         error_message = None
+        timed_out = False
+        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
 
         try:
             def process_headers(headers: dict):
                 try:
-                    _pipeline.update_provider_stats(model_id, headers)
+                    _pipeline.update_provider_stats(model_id, provider_id, headers)
+                except Exception:
+                    pass
+                try:
+                    _record_azure_rate_limits(scheduling_stats, headers)
                 except Exception:
                     pass
 
             # Prepare headers and payload using context resolver
             headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-            async for chunk in _pipeline.executor.execute_streaming(context.forward_url, headers, prepared_payload, on_headers=process_headers):
-                yield chunk
+            if processing_timeout_s:
+                async with asyncio.timeout(processing_timeout_s):
+                    async for chunk in _pipeline.executor.execute_streaming(
+                        context.forward_url,
+                        headers,
+                        prepared_payload,
+                        on_headers=process_headers,
+                    ):
+                        yield chunk
 
-                # Parse chunk for logging
-                line = chunk.decode().strip()
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        blob = json.loads(line[6:])
-                        last_chunk = blob  # Keep track of last chunk (may have usage)
-                        if first_chunk is None:
-                            first_chunk = blob
-                        if "choices" in blob and blob["choices"]:
-                            delta = blob["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                full_text += content
-                    except json.JSONDecodeError:
-                        pass
+                        # Parse chunk for logging
+                        line = chunk.decode().strip()
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                blob = json.loads(line[6:])
+                                last_chunk = blob  # Keep track of last chunk (may have usage)
+                                if first_chunk is None:
+                                    first_chunk = blob
+                                if "choices" in blob and blob["choices"]:
+                                    delta = blob["choices"][0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        full_text += content
+                            except json.JSONDecodeError:
+                                pass
+            else:
+                async for chunk in _pipeline.executor.execute_streaming(
+                    context.forward_url,
+                    headers,
+                    prepared_payload,
+                    on_headers=process_headers,
+                ):
+                    yield chunk
+
+                    # Parse chunk for logging
+                    line = chunk.decode().strip()
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            blob = json.loads(line[6:])
+                            last_chunk = blob  # Keep track of last chunk (may have usage)
+                            if first_chunk is None:
+                                first_chunk = blob
+                            if "choices" in blob and blob["choices"]:
+                                delta = blob["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    full_text += content
+                        except json.JSONDecodeError:
+                            pass
+        except asyncio.TimeoutError:
+            timed_out = True
+            error_message = f"Processing timeout after {processing_timeout_s}s"
+            logger.warning("Streaming request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
         except Exception as e:
             error_message = str(e)
             raise e
@@ -384,7 +478,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                     )
 
             if scheduling_stats:
-                status = "error" if error_message else "success"
+                status = "timeout" if timed_out else ("error" if error_message else "success")
                 
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
@@ -398,6 +492,8 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                 try:
                     _pipeline.scheduler.release(
                         model_id,
+                        provider_id,
+                        scheduling_stats.get("provider_type"),
                         scheduling_stats.get("request_id")
                     )
                 except Exception as e:
@@ -414,12 +510,38 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-        exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
+        timed_out = False
+        error_message = None
+
+        try:
+            if processing_timeout_s:
+                exec_result = await asyncio.wait_for(
+                    _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload),
+                    timeout=processing_timeout_s,
+                )
+            else:
+                exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        except asyncio.TimeoutError:
+            timed_out = True
+            error_message = f"Processing timeout after {processing_timeout_s}s"
+            logger.warning("Sync request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
+            exec_result = ExecutionResult(
+                success=False,
+                response={"error": error_message},
+                error=error_message,
+                usage={},
+                is_streaming=False,
+            )
 
         # Update rate limits from response headers
         if exec_result.headers:
             try:
-                _pipeline.update_provider_stats(model_id, exec_result.headers)
+                _pipeline.update_provider_stats(model_id, provider_id, exec_result.headers)
+            except Exception:
+                pass
+            try:
+                _record_azure_rate_limits(scheduling_stats, exec_result.headers)
             except Exception:
                 pass
 
@@ -451,25 +573,29 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 )
 
         if scheduling_stats:
-            status = "success" if exec_result.success else "error"
+            status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _pipeline.record_completion(
                 request_id=scheduling_stats.get("request_id"),
                 result_status=status,
-                error_message=exec_result.error if not exec_result.success else None,
+                error_message=error_message if timed_out else (exec_result.error if not exec_result.success else None),
                 cold_start=scheduling_stats.get("is_cold_start")
             )
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
-            return {"status_code": 200 if exec_result.success else 500, "data": response_payload}
+            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+            return {"status_code": status_code, "data": response_payload}
         else:
-            return JSONResponse(content=exec_result.response, status_code=200 if exec_result.success else 500)
+            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+            return JSONResponse(content=exec_result.response, status_code=status_code)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
             try:
                 _pipeline.scheduler.release(
                     model_id,
+                    provider_id,
+                    scheduling_stats.get("provider_type"),
                     scheduling_stats.get("request_id")
                 )
             except Exception as e:
@@ -582,9 +708,10 @@ async def _execute_proxy_mode(
     body: Dict[str, Any],
     headers: Dict[str, str],
     logos_key: str,
-    path: str,
+    deployments: list[Deployment],
     log_id: Optional[int],
-    is_async_job: bool
+    is_async_job: bool,
+    profile_id: Optional[int] = None
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -612,28 +739,33 @@ async def _execute_proxy_mode(
     # Ensure payload model matches DB name (avoid user-supplied mismatch)
     body = {**body, "model": model_name}
 
+    # Narrow deployments to the requested model to preserve provider metadata
+    model_deployments = [d for d in deployments if d["model_id"] == model_id]
+    if not model_deployments:
+        raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
+
     # Proxy mode reuses the execution from RESOURCE mode with single allowed model -> effectively skipping the classification
     return await _execute_resource_mode(
-        models=[model_id],
+        deployments=model_deployments,
         body=body,
         headers=headers,
         logos_key=logos_key,
-        path=path,
         log_id=log_id,
         is_async_job=is_async_job,
         allowed_models_override=[model_id],
+        profile_id=profile_id
     )
 
 
 async def _execute_resource_mode(
-    models: list,
+    deployments: list[Deployment],
     body: Dict[str, Any],
     headers: Dict[str, str],
     logos_key: str,
-    path: str,
     log_id: Optional[int],
     is_async_job: bool,
-    allowed_models_override: Optional[list] = None
+    allowed_models_override: Optional[list] = None,
+    profile_id: Optional[int] = None
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -654,11 +786,10 @@ async def _execute_resource_mode(
     - Model utilization levels
 
     Args:
-        models: List of available model IDs to choose from
+        deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload (should NOT contain "model" field)
         headers: Request headers
         logos_key: User's logos authentication key
-        path: API endpoint path (e.g., "chat/completions")
         log_id: Usage log ID for tracking (None for requests without logging)
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - raises HTTPException for errors
@@ -674,9 +805,7 @@ async def _execute_resource_mode(
     Raises:
         HTTPException: Only when is_async_job=False and an error occurs
     """
-    # Use all available models for classification unless overridden
-    allowed_models = allowed_models_override  # None means "use all models from DB"
-
+    allowed_models = get_unique_models_from_deployments(deployments)
     # Extract policy
     policy = _extract_policy(headers, logos_key, body)
 
@@ -686,7 +815,9 @@ async def _execute_resource_mode(
         payload=body,
         headers=headers,
         policy=policy,
-        allowed_models=allowed_models
+        allowed_models=allowed_models,
+        deployments=deployments,
+        profile_id=profile_id
     )
 
     # Process through classification and scheduling
@@ -756,13 +887,14 @@ async def _execute_resource_mode(
 
 
 async def route_and_execute(
-    models: list,
+    deployments: list[dict[str, int]],
     body: Dict[str, Any],
     headers: Dict[str, str],
     logos_key: str,
     path: str,
     log_id: Optional[int],
-    is_async_job: bool = False
+    is_async_job: bool = False,
+    profile_id: Optional[int] = None
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -780,12 +912,12 @@ async def route_and_execute(
     - Scheduler considers utilization, queue depth, and cold starts
 
     Routing logic:
-    - Case 1: No models available → 404 error
+    - Case 1: No deployments available → 404 error
     - Case 2: body["model"] specified → PROXY mode (direct forwarding)
     - Case 3: no body["model"] → RESOURCE mode (classification + scheduling)
 
     Args:
-        models: List of available model IDs from request_setup()
+        deployments: List of available deployments(model_id, provider_id) from request_setup()
         body: Request payload
         headers: Request headers
         logos_key: User's logos authentication key
@@ -794,6 +926,7 @@ async def route_and_execute(
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - client waits, raises HTTPException for errors
             - True: Background job - client gets job_id, returns error dict for errors
+        profile_id: Profile ID for authorization (enforces profile-based model access)
 
     Returns:
         - For direct endpoints (is_async_job=False):
@@ -809,8 +942,8 @@ async def route_and_execute(
         _execute_proxy_mode(): PROXY mode implementation
         _execute_resource_mode(): RESOURCE mode implementation
     """
-    # Case 1: No models available → ERROR
-    if not models:
+    # No models available → ERROR
+    if not deployments:
         if is_async_job:
             return {"status_code": 404, "data": {"error": "No models available for this user."}}
         else:
@@ -819,13 +952,17 @@ async def route_and_execute(
                 detail="No models available for this user."
             )
 
-    # Case 2: PROXY mode (body["model"] specified → direct forwarding)
-    if body.get("model"):
-        return await _execute_proxy_mode(body, headers, logos_key, path, log_id, is_async_job)
+    try:
+        # PROXY mode (body["model"] specified → direct forwarding)
+        if body.get("model"):
+            return await _execute_proxy_mode(body, headers, logos_key, deployments, log_id, is_async_job, profile_id=profile_id)
 
-    # Case 3: RESOURCE mode (no body["model"] → classification + scheduling)
-    else:
-        return await _execute_resource_mode(models, body, headers, logos_key, path, log_id, is_async_job)
+        # RESOURCE mode (no body["model"] → classification + scheduling)
+        return await _execute_resource_mode(deployments, body, headers, logos_key, log_id, is_async_job, profile_id=profile_id)
+    except HTTPException as exc:
+        if is_async_job:
+            return {"status_code": exc.status_code, "data": {"error": exc.detail}}
+        raise
 
 
 async def handle_sync_request(path: str, request: Request):
@@ -841,22 +978,28 @@ async def handle_sync_request(path: str, request: Request):
     Returns:
         Response (StreamingResponse or JSONResponse)
     """
-    # Authenticate, parse, and log
-    headers, logos_key, process_id, body, client_ip, log_id = await auth_parse_log(request)
+    # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
+    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
-    # Get available models for this user
+    # Get available deployments (model, provider tuple) for THIS profile - profile_id EXPLICITLY passed
     try:
-        models = request_setup(headers, logos_key)
+        deployments = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
     except PermissionError as e:
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Route and execute request
-    return await route_and_execute(models, body, headers, logos_key, path, log_id)
+    if not deployments:
+        raise HTTPException(status_code=404, detail="No available model deployments for this profile")
+
+    # Route and execute request with profile context
+    return await route_and_execute(
+        deployments, body, headers, auth.logos_key, path, log_id,
+        profile_id=auth.profile_id
+    )
 
 
-async def auth_parse_log(request: Request) -> Tuple[Dict[str, str], str, int, Dict[str, Any], str, Optional[int]]:
+async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     """
     Authenticate, parse, and log incoming requests.
 
@@ -865,16 +1008,13 @@ async def auth_parse_log(request: Request) -> Tuple[Dict[str, str], str, int, Di
 
     Args:
         request: FastAPI request object
+        use_profile_auth: If True, use profile-based auth and return AuthContext
 
     Returns:
-        (headers, logos_key, process_id, body, client_ip, log_id)
-
-        - headers: Request headers dict
-        - logos_key: Resolved logos key
-        - process_id: Process ID from DB
-        - body: Parsed JSON body
-        - client_ip: Client IP address
-        - log_id: Usage log ID (None if logging failed)
+        If use_profile_auth=False (default):
+            (headers, logos_key, process_id, body, client_ip, log_id)
+        If use_profile_auth=True:
+            (headers, auth_context, body, client_ip, log_id)
 
     Raises:
         HTTPException(400): Invalid JSON body
@@ -895,17 +1035,32 @@ async def auth_parse_log(request: Request) -> Tuple[Dict[str, str], str, int, Di
     headers = dict(request.headers)
     client_ip = get_client_ip(request)
 
-    # Authenticate (REQUIRED - raises HTTPException if missing)
-    logos_key, process_id = authenticate_logos_key(headers)
+    # Authenticate
+    if use_profile_auth:
+        from logos.auth import authenticate_with_profile
+        auth = authenticate_with_profile(headers)
+        process_id = auth.process_id
 
-    # Log request
-    log_id = None
-    with DBManager() as db:
-        r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
-        if c_log == 200:
-            log_id = int(r_log["log-id"])
+        # Log request (still at process level for billing)
+        log_id = None
+        with DBManager() as db:
+            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
+            if c_log == 200:
+                log_id = int(r_log["log-id"])
 
-    return headers, logos_key, process_id, body, client_ip, log_id
+        return headers, auth, body, client_ip, log_id
+    else:
+        # For endpoints not requiring the profile-based authorization
+        logos_key, process_id = authenticate_logos_key(headers)
+
+        # Log request
+        log_id = None
+        with DBManager() as db:
+            r_log, c_log = db.log_usage(process_id, client_ip, body, headers)
+            if c_log == 200:
+                log_id = int(r_log["log-id"])
+
+        return headers, logos_key, process_id, body, client_ip, log_id
 
 
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
@@ -922,7 +1077,9 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     Raises:
         HTTPException(400/401) on invalid payload or auth.
     """
-    headers, logos_key, process_id, json_data, client_ip, log_id = await auth_parse_log(request)
+    # Auth with profile + logging
+    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
         path=path,
@@ -930,26 +1087,34 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         headers=headers,
         body=json_data,
         client_ip=client_ip,
-        process_id=process_id,
+        process_id=auth.process_id,
+        profile_id=auth.profile_id,
     )
     job_id = JobService.create_job(job_payload)
     status_url = str(request.url_for("get_job_status", job_id=job_id))
+
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, logos_key, process_id))
+    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, auth))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url})
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url, "profile_id": auth.profile_id})
 
 
-async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
-                      logos_key: str, process_id: int):
+async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth):
     """
     Execute a job and persist success or failure.
+
+    Args:
+        job_id: Job ID
+        path: API path
+        headers: Request headers
+        json_data: Request body
+        client_ip: Client IP address
+        auth: AuthContext with profile information
     """
     try:
         JobService.mark_running(job_id)
-        result = await execute_proxy_job(path, headers, json_data, client_ip, logos_key=logos_key,
-                                         process_id=process_id)
+        result = await execute_proxy_job(path, headers, json_data, client_ip, auth)
         JobService.mark_success(job_id, result)
     # Exception while processing the job is caught and persisted in the database
     except Exception as e:
@@ -959,11 +1124,17 @@ async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data
     return result
 
 
-async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str,
-                            logos_key: str, process_id: int) -> Dict[str, Any]:
+async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth) -> Dict[str, Any]:
     """
     Execute the proxy workflow using either PROXY MODE or RESOURCE MODE pipeline.
     Force non-streaming for async job execution.
+
+    Args:
+        path: API path
+        headers: Request headers
+        json_data: Request body
+        client_ip: Client IP
+        auth: AuthContext with profile information
 
     Returns:
         Serializable dict result with status_code and data.
@@ -971,18 +1142,18 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     headers = headers or dict()
     json_data = json_data or dict()
 
-    # Log usage
+    # Log usage (at process level for billing)
     usage_id = None
     with DBManager() as db:
-        r, c = db.log_usage(process_id, client_ip, json_data, headers)
+        r, c = db.log_usage(auth.process_id, client_ip, json_data, headers)
         if c != 200:
             logging.info("Error while logging a request: %s", r)
         else:
             usage_id = int(r["log-id"])
 
-    # Get available models for this user
+    # Get available models for this profile - profile_id EXPLICITLY passed
     try:
-        models = request_setup(headers, logos_key)
+        models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
     except PermissionError as e:
         return {"status_code": 401, "data": {"error": str(e)}}
     except ValueError as e:
@@ -991,8 +1162,12 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     # Force non-streaming for jobs
     json_data["stream"] = False
 
-    # Route and execute request (async job mode)
-    return await route_and_execute(models, json_data, headers, logos_key, path, usage_id, is_async_job=True)
+    # Route and execute request (async job mode) with profile context
+    return await route_and_execute(
+        models, json_data, headers, auth.logos_key, path, usage_id,
+        is_async_job=True,
+        profile_id=auth.profile_id
+    )
 
 
 # ============================================================================
@@ -1165,12 +1340,6 @@ async def get_process_id(data: GetProcessIdRequest):
         return db.get_process_id(data.logos_key)
 
 
-@app.post("/logosdb/get_api_id")
-async def get_api_id(data: GetAPIIdRequest):
-    with DBManager() as db:
-        return db.get_api_id(data.logos_key, data.api_key)
-
-
 @app.post("/logosdb/get_role")
 async def get_role(data: GetRole):
     with DBManager() as db:
@@ -1302,6 +1471,24 @@ async def request_event_stats_options():
     )
 
 
+@app.get("/logosdb/scheduler_state")
+async def scheduler_state(request: Request):
+    """
+    Debug endpoint to inspect in-memory scheduler and Ollama capacity state.
+    """
+    headers = dict(request.headers)
+    authenticate_logos_key(headers)
+
+    if not _pipeline or not _ollama_facade:
+        return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
+
+    payload = {
+        "queue_total": _pipeline.scheduler.get_total_queue_depth(),
+        "ollama": _ollama_facade.debug_state(),
+    }
+    return JSONResponse(content=payload, status_code=200)
+
+
 @app.post("/logosdb/get_ollama_vram_stats")
 async def get_ollama_vram_stats(request: Request):
     """
@@ -1431,6 +1618,8 @@ async def get_job_status(job_id: int, request: Request):
     """
     Return current state of a submitted job, including result or error when finished.
 
+    Uses profile-based authorization - you can only view jobs created by your current profile.
+
     Params:
         job_id: Identifier of the async job.
         request: Incoming request
@@ -1441,13 +1630,29 @@ async def get_job_status(job_id: int, request: Request):
     Raises:
         HTTPException(401/403/404) on auth or missing job.
     """
-    _, process_id = authenticate_logos_key(dict(request.headers))
+    # Profile-based auth
+    from logos.auth import authenticate_with_profile
+    auth = authenticate_with_profile(dict(request.headers))
+
     job = JobService.fetch(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Authorization checks
     job_process_id = job.get("process_id")
-    if job_process_id != process_id:
+    job_profile_id = job.get("profile_id")
+
+    # 1. Job must belong to this process
+    if job_process_id != auth.process_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this job")
+
+    # 2. Job must belong to this profile
+    if job_profile_id != auth.profile_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Job belongs to a different profile. Use the correct use_profile header."
+        )
+
     return {
         "job_id": job_id,
         "status": job["status"],
@@ -1455,6 +1660,7 @@ async def get_job_status(job_id: int, request: Request):
         "error": job["error_message"] if job["status"] == JobStatus.FAILED.value else None,
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
+        "profile_id": job_profile_id,
     }
 
 
