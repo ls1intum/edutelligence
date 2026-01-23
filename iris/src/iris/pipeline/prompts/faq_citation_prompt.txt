@@ -18,10 +18,13 @@ Citation Formats:
 
 Return ONLY the answer text with inline citations added and the final citation list (no JSON, no markdown, no extra text). Do NOT add any extra headers like "Citations:".
 
-Here are the answer and the FAQs:
+The following information is provided:
 
-Answer without citations:
-{Answer}
+- Answer without citations:
+  {Answer}
 
-FAQs with their FAQ ID, FAQ Question title and FAQ Question Answer:
-{Paragraphs}
+- FAQs with their FAQ ID, FAQ Question title and FAQ Question Answer:
+  {Paragraphs}
+
+Important:
+- Do NOT add any extra headers or labels.

@@ -16,17 +16,15 @@ Your task:
 
 Citation Formats:
 
-1. For Lecture Transcriptions:
+1. For everything taken from the TranscriptionParagraphs section (Lecture Transcriptions):
    - Always include Lecture Unit ID, Start Time, End Time. Include Page only if available in the source.
-   - Start/End must be real timestamps from the source.
-   - Only include them if the end is larger than the start. Leave the field empty if start time and end time are the same number.
    - If a field is not present in the source, leave it empty.
    - Do NOT add any extra prefixes like "Lecture Transcription:" or "Lecture Slides:".
    - Format:
      [X] Lecture Unit ID: <id>, Start: <start time in seconds>, End: <end time in seconds>
      [X] Lecture Unit ID: <id>, Page: <page>, Start: <start time in seconds>, End: <end time in seconds>
 
-2. For Lecture Slides:
+2. For everything taken from the Paragraphs section (Lecture Slides):
    - Include Lecture Unit ID and Page ONLY. Do NOT include Start/End.
    - Do NOT add any extra prefixes like "Lecture Slides:".
    - Format:
@@ -46,10 +44,10 @@ Below the answer, the following information is provided:
 - Answer without citations:
   {Answer}
 
-- Paragraphs with their Lecture Unit ID and Page numbers for lecture slides:
+- Paragraphs for citing slides (with their Lecture Unit ID and Page numbers for lecture slides):
   {Paragraphs}
 
-- Paragraphs with their Lecture Unit ID, Page numbers, and start/end times in seconds for lecture transcriptions:
+- TranscriptionParagraphs for citing transcriptions/videos (with their Lecture Unit ID, Page numbers, and start/end times in seconds for lecture transcriptions):
   {TranscriptionParagraphs}
 
 Important:
