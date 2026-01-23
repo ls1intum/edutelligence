@@ -523,7 +523,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             state.message_history = self.get_recent_history_from_dto(state)
             user_query = self.get_text_of_latest_user_message(state)
 
-            # Create LLM from variant's model selection (local/cloud), fallback to agent_model
+            # Create LLM from variant's model selection (local/cloud)
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
 
             if local and hasattr(state.variant, "local_agent_model"):
@@ -533,6 +533,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             else:
                 raise AttributeError(
                     f"Variant {state.variant.id} is missing "
+                    f"{'local_agent_model' if local else 'cloud_agent_model'}"
+                )
+            if not selected_version:
+                raise ValueError(
+                    f"Variant {state.variant.id} has empty "
                     f"{'local_agent_model' if local else 'cloud_agent_model'}"
                 )
 
