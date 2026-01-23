@@ -531,7 +531,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             elif (not local) and hasattr(state.variant, "cloud_agent_model"):
                 selected_version = state.variant.cloud_agent_model
             else:
-                selected_version = state.variant.agent_model
+                raise AttributeError(
+                    f"Variant {state.variant.id} is missing "
+                    f"{'local_agent_model' if local else 'cloud_agent_model'}"
+                )
 
             state.llm = IrisLangchainChatModel(
                 request_handler=ModelVersionRequestHandler(version=selected_version),
