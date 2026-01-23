@@ -1,0 +1,23 @@
+You are given a list of citations and the full set of source paragraphs. For each citation, find the matching paragraph(s) and provide:
+- Keyword: one or two words (no more)
+- Summary: 1-2 sentences
+
+Rules:
+- Use ONLY the provided source paragraphs. Do not use the answer or outside knowledge.
+- Match citations to paragraphs by their identifiers (Lecture Unit ID, Page, Start/End times or FAQ ID).
+- If a citation has no page/start/end, match by ID only.
+- Keep the same order as the citations provided.
+- Return ONLY the formatted lines described below. No extra text.
+
+Output format (one line per citation):
+[<index>] Keyword: <keyword>; Summary: <summary>
+
+Index rules:
+- The bracketed index MUST match the exact numeric citation index from the citation list (e.g., [1], [2], [10]).
+- Do NOT use placeholders like [X] or any non-numeric index.
+
+Citations (from the citation list):
+{Citations}
+
+All source paragraphs:
+{Paragraphs}

@@ -1,117 +1,58 @@
 In the paragraphs below you are provided with an answer to a question. Underneath the answer, you will find two sets of source paragraphs:
 
-1. Lecture Slides: Contains information with Lecture Unit IDs and Page Numbers.
-2. Lecture Transcriptions: Contains information with Lecture Unit IDs, start times, and end times (HH:MM:SS and seconds).
+1. Lecture Slides: Contains Lecture Unit ID and Page number plus the content.
+2. Lecture Transcriptions: Contains Lecture Unit ID, optional Page number, start and end times in seconds plus the content.
 
-Your task is to add inline citation markers to the answer for any sentence that uses information from the provided sources.
+Your task:
 
-========================
-OUTPUT (VERY IMPORTANT)
-========================
-- Return ONLY the final answer text with inline citations added.
-- Do NOT return JSON.
-- Do NOT return a registry, explanation, headings, or any extra text.
-- The output must be the answer text only.
+- Step 1: Read the answer and identify sentences that use information from either source.
+- Step 2: After each sentence that contains used information, add a citation marker in square brackets. If a sentence uses information from more than one source, include each relevant citation marker.
+- Step 3: When assigning citation markers, if the same source (i.e., identical citation details) is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [1]) instead of assigning a new marker each time.
+- Step 4: At the end of the answer (after two empty lines), list all unique citations—one per relevant source—using the formats described below. Each unique source must appear only once in this final citation list.
+- Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output !NONE! without any citations.
+- Step 6: Always include citations if the answer contains any information from the provided paragraphs.
+- Step 7: If both lecture transcription and lecture slide sources are found to be relevant, include citations for both types of sources.
+- Step 8: Ensure there are two empty lines between the rewritten answer (with in-text citation markers) and the final citation list.
 
-========================
-LANGUAGE
-========================
-- Write ALL keywords and summaries in the user's language (English or German), matching the answer language.
+Citation Formats:
 
-========================
-WHAT TO CITE
-========================
-- Identify sentences in the answer that use information from the provided Lecture Slides and/or Lecture Transcriptions.
-- After each such sentence, append one or more citation markers.
-- If a sentence uses multiple sources, append multiple markers.
+1. For Lecture Transcriptions:
+   - Always include Lecture Unit ID, Start Time, End Time. Include Page only if available in the source.
+   - Start/End must be real timestamps from the source.
+   - Only include them if the end is larger than the start. Leave the field empty if start time and end time are the same number.
+   - If a field is not present in the source, leave it empty.
+   - Do NOT add any extra prefixes like "Lecture Transcription:" or "Lecture Slides:".
+   - Format:
+     [X] Lecture Unit ID: <id>, Start: <start time in seconds>, End: <end time in seconds>
+     [X] Lecture Unit ID: <id>, Page: <page>, Start: <start time in seconds>, End: <end time in seconds>
 
-========================
-EXISTING CITATIONS
-========================
-- Existing citation markers already in the answer must remain unchanged.
-- Do not edit, remove, or renumber existing markers.
+2. For Lecture Slides:
+   - Include Lecture Unit ID and Page ONLY. Do NOT include Start/End.
+   - Do NOT add any extra prefixes like "Lecture Slides:".
+   - Format:
+     [X] Lecture Unit ID: <id>, Page: <page>
 
-========================
-SOURCE IDENTITY (STRICT)
-========================
-To ensure stable reuse of keyword and summary, sources are considered identical ONLY by these keys:
+Example:
 
-Slides source key:
-- (lectureUnitId + page)
+If the answer is:
+Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua [1][2].
 
-Video source key:
-- (lectureUnitId + startTimeSeconds + endTimeSeconds)
+Then the citation list at the answer end might be:
+[1] Lecture Unit ID: 1234, Page: 6, Start: 12, End: 15
+[2] Lecture Unit ID: 5678, Page: 7
 
-IMPORTANT:
-- For slides, if lectureUnitId and page are the same, it is ALWAYS the SAME SOURCE.
-- For videos, if lectureUnitId and startTimeSeconds and endTimeSeconds are the same, it is ALWAYS the SAME SOURCE.
+Below the answer, the following information is provided:
 
-========================
-CANONICAL MARKER REUSE (STRICT)
-========================
-- For EACH unique Slides source key (lectureUnitId + page), you MUST choose exactly ONE keyword and ONE summary.
-  You MUST reuse the exact same keyword and the exact same summary (character-for-character) every time you cite that same slide page again.
-  You are NOT allowed to create a second variant marker for the same slide page, even if you cite different facts from that page.
-
-- For EACH unique Video source key (lectureUnitId + startTimeSeconds + endTimeSeconds), you MUST choose exactly ONE keyword and ONE summary.
-  You MUST reuse them verbatim every time you cite that same video segment again.
-
-- If you are about to cite a source key you have cited earlier, you MUST copy the previously used marker's keyword and summary exactly.
-  Do NOT paraphrase, shorten, expand, or change them.
-
-SUMMARY SCOPE REQUIREMENT:
-- Because one page/segment may support multiple statements, the summary MUST be a BROAD summary of that page/segment,
-  not a micro-step summary (e.g., not only "baking" or only "filling"). Choose a general summary that stays true for repeated citations.
-
-========================
-CITATION MARKER FORMAT (EXACT)
-========================
-After each cited sentence, append a marker in the exact format with EXACTLY 7 colon-separated fields:
-
-[cite:L:<lectureUnitId>:<page>:<startTimeSeconds>:<endTimeSeconds>:<keyword>:<summary>]
-
-Field rules:
-- "L" is used for all lecture content (slides or videos).
-- <lectureUnitId> must be the Lecture Unit ID from the source.
-- <page> is the slide page number if the cited material is a slide; otherwise leave it empty.
-- <startTimeSeconds> and <endTimeSeconds> are seconds if the cited material is a video segment; otherwise leave them empty.
-- Only fill fields that are actually available. If a field is not available, leave it empty but KEEP the colon position.
-  Examples:
-  - Slide citation: [cite:L:123:5:::keyword:summary]
-  - Video citation: [cite:L:123::120:180:keyword:summary]
-
-NUMERIC FIELD RULES (VERY IMPORTANT):
-- <page> must be NUMBERS ONLY (e.g., 28). Never include "p" or any other characters.
-- <startTimeSeconds> and <endTimeSeconds> must be NUMBERS ONLY.
-
-KEYWORD RULES:
-- <keyword> must be 1–2 words.
-- No punctuation, no ":" characters, no newlines.
-
-SUMMARY RULES:
-- <summary> must be EXACTLY 1 sentence.
-- 12–25 words.
-- No ":" characters, no newlines.
-
-COLON SAFETY:
-- Never insert extra colons.
-- Never remove colons.
-- The marker must always have exactly 7 colon-separated fields after "[cite".
-
-========================
-RELEVANCE
-========================
-- Only include citations for paragraphs that are actually relevant to the answer.
-- If no provided paragraphs were used, return the answer unchanged.
-
-========================
-INPUTS
-========================
 - Answer without citations:
   {Answer}
 
-- Paragraphs with their Lecture Unit IDs and Page Numbers for lecture slides:
+- Paragraphs with their Lecture Unit ID and Page numbers for lecture slides:
   {Paragraphs}
 
-- Paragraphs with their Lecture Unit IDs, start times and end times for lecture transcriptions:
+- Paragraphs with their Lecture Unit ID, Page numbers, and start/end times in seconds for lecture transcriptions:
   {TranscriptionParagraphs}
+
+Important:
+- If the answer does not contain any information from the provided paragraphs or if there are no paragraphs, output the unchanged answer without any citations.
+- Ensure there are two empty lines between the rewritten answer (with in-text citations) and the citation list at the end.
+- Do NOT add any extra headers or labels like "Citations:" or "**Citations:**". Output only the answer text and the citation list.
