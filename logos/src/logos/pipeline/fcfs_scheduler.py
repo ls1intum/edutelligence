@@ -9,7 +9,7 @@ from typing import Optional
 
 from logos.queue.priority_queue import Priority
 
-from .scheduler_interface import SchedulingRequest, SchedulingResult
+from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
 from .base_scheduler import BaseScheduler
 
 
@@ -25,18 +25,31 @@ class FcfScheduler(BaseScheduler):
     """
 
     async def schedule(self, request: SchedulingRequest) -> Optional[SchedulingResult]:
-        if not request.candidates:
+        if not request.classified_models:
             return None
 
-        sorted_candidates = sorted(request.candidates, key=lambda x: x[1], reverse=True)
+        sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
         target_model_id, weight, priority_int, _ = sorted_candidates[0]
-        provider_type = self._model_registry.get(target_model_id)
+        
+        # Find the first deployment matching target_model_id
+        deployment = next(
+            (d for d in request.deployments if d["model_id"] == target_model_id),
+            None
+        )
+        
+        if not deployment:
+            logger.warning("No deployment found for model_id=%s", target_model_id)
+            return None
 
+        provider_type = deployment["type"]
+        provider_id = deployment["provider_id"]
+        
         if not provider_type:
+            logger.warning("No provider type found for provider_id=%s", provider_id)
             return None
 
         if provider_type == 'ollama':
-            if self._ollama.try_reserve_capacity(target_model_id):
+            if self._ollama.try_reserve_capacity(target_model_id, provider_id, request.request_id):
                 logger.info(
                     "Reserved capacity on Ollama model %s (weight=%.2f)",
                     target_model_id,
@@ -44,6 +57,7 @@ class FcfScheduler(BaseScheduler):
                 )
                 return self._create_result(
                     target_model_id,
+                    provider_id,
                     provider_type,
                     priority_int,
                     request.request_id,
@@ -52,6 +66,7 @@ class FcfScheduler(BaseScheduler):
         else:
             return self._create_result(
                 target_model_id,
+                provider_id,
                 provider_type,
                 priority_int,
                 request.request_id,
@@ -62,13 +77,13 @@ class FcfScheduler(BaseScheduler):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(future, target_model_id, priority)
+        entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
         logger.info(
             "Request %s queued for model %s (weight=%.2f, depth=%s)",
             request.request_id,
             target_model_id,
             weight,
-            self._queue_mgr.get_total_depth(target_model_id),
+            self._queue_mgr.get_total_depth_by_deployment(target_model_id, provider_id),
         )
 
         try:
@@ -77,9 +92,17 @@ class FcfScheduler(BaseScheduler):
 
             if provider_type == 'ollama':
                 try:
+                    if result.was_queued:
+                        self._ollama.on_request_start(
+                            request.request_id,
+                            model_id=result.model_id,
+                            provider_id=provider_id,
+                            priority=priority.name.lower(),
+                        )
                     self._ollama.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
+                        provider_id=provider_id,
                     )
                 except KeyError:
                     pass
@@ -87,4 +110,12 @@ class FcfScheduler(BaseScheduler):
             return result
         except asyncio.TimeoutError:
             self._queue_mgr.remove(entry_id)
-            return None
+            raise QueueTimeoutError(
+                request_id=request.request_id,
+                model_id=target_model_id,
+                provider_id=provider_id,
+                timeout_s=timeout,
+            )
+        except asyncio.CancelledError:
+            self._queue_mgr.remove(entry_id)
+            raise

@@ -61,7 +61,7 @@ CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    provider_type VARCHAR(20) DEFAULT 'cloud',  -- 'ollama' or 'cloud'
+    provider_type VARCHAR(20) DEFAULT 'cloud',  -- e.g., 'ollama' or 'azure'
     auth_name TEXT NOT NULL,
     auth_format TEXT NOT NULL,
 
@@ -81,18 +81,10 @@ CREATE TABLE providers (
 
 CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
 
-CREATE TABLE model_api_keys (
-    id SERIAL PRIMARY KEY,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
-    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    api_key TEXT NOT NULL
-);
-
 CREATE TABLE models (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     endpoint TEXT NOT NULL,
-    api_id INTEGER REFERENCES model_api_keys(id) ON DELETE SET NULL,
     weight_privacy threshold_enum DEFAULT('LOCAL'),
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
@@ -109,11 +101,19 @@ CREATE TABLE model_provider (
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
 );
 
+CREATE TABLE model_api_keys (
+    id SERIAL PRIMARY KEY,
+    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    api_key TEXT NOT NULL,
+    UNIQUE(model_id, provider_id)
+);
+
 -- SDI: Per-model per-provider configuration for scheduling
 -- Lookup chain: model_provider_config (here) → providers table → hardcoded defaults
 CREATE TABLE model_provider_config (
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-    provider_name VARCHAR(50) NOT NULL,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
 
     -- SDI Configuration (per-model overrides)
     cold_start_threshold_ms REAL DEFAULT 1000.0,
@@ -133,7 +133,7 @@ CREATE TABLE model_provider_config (
 
     last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
 
-    PRIMARY KEY (model_id, provider_name)
+    PRIMARY KEY (model_id, provider_id)
 );
 
 CREATE TABLE profile_model_permissions (
@@ -212,6 +212,7 @@ CREATE TABLE jobs (
     id SERIAL PRIMARY KEY,
     status job_status_enum NOT NULL DEFAULT 'pending',
     process_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     request_payload JSONB NOT NULL,
     result_payload JSONB,
     error_message TEXT,
