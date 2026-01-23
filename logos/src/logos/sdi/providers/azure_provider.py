@@ -144,6 +144,7 @@ class AzureDataProvider:
 
         return ModelStatus(
             model_id=model_id,
+            provider_id=int(self.provider_id) if self.provider_id is not None else 0,
             is_loaded=True,  # Always available in cloud
             vram_mb=0,  # No VRAM constraints
             expires_at=None,  # No expiration

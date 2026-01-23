@@ -57,12 +57,12 @@ class OllamaDataProvider:
 
     def __init__(
         self,
+        provider_id: int,
         name: str,
         base_url: Optional[str],
         total_vram_mb: int,
         queue_manager: "PriorityQueueManager",  # REQUIRED
         refresh_interval: float = 5.0,
-        provider_id: Optional[int] = None,
         db_manager = None
     ):
         """
@@ -78,6 +78,7 @@ class OllamaDataProvider:
             provider_id: Database provider ID (for config lookups)
             db_manager: Database manager instance (for config lookups)
         """
+        self.provider_id = provider_id
         self.name = name
         self.base_url = base_url.rstrip('/') if base_url else None
         
@@ -87,7 +88,6 @@ class OllamaDataProvider:
         self.total_vram_mb = total_vram_mb
         self.queue_manager = queue_manager  # Store queue manager reference
         self.refresh_interval = refresh_interval
-        self.provider_id = provider_id
         self._db = db_manager
 
         # Model registration
@@ -99,6 +99,7 @@ class OllamaDataProvider:
 
         # Track active requests (NOT queue - queue is in queue_manager)
         self._model_active: Dict[int, int] = {}  # model_id → requests currently processing
+        self._active_request_ids: Dict[str, int] = {}  # request_id → model_id
 
         # Thread safety
         self._lock = threading.RLock()
@@ -151,7 +152,7 @@ class OllamaDataProvider:
         # Level 1: Check model_provider_config
         if self._db and model_id:
             try:
-                model_config = self._db.get_model_provider_config(model_id, self.name)
+                model_config = self._db.get_model_provider_config(model_id, self.provider_id)
                 if model_config and model_config.get(config_key) is not None:
                     return model_config[config_key]
             except Exception as e:
@@ -247,11 +248,11 @@ class OllamaDataProvider:
         """
         if not self.base_url:
             return None
-
-
         try:
+            headers = self._get_auth_headers_for_ps(self.provider_id)
             response = requests.get(
                 f"{self.base_url}/api/ps",
+                headers=headers if headers else None,
                 timeout=5.0
             )
 
@@ -267,6 +268,39 @@ class OllamaDataProvider:
             logger.error(f"[{self.name}] Unexpected error querying /api/ps: {e}")
 
         return None
+
+    def _get_auth_headers_for_ps(self, provider_id: int) -> Dict[str, str] | None:
+        """
+        Build auth headers for /api/ps based on provider config in DB.
+        """
+        try:
+            if self._db:
+                auth = self._db.get_provider_auth(self.provider_id)
+            else:
+                from logos.dbutils.dbmanager import DBManager
+                with DBManager() as db:
+                    auth = db.get_provider_auth(provider_id)
+
+            if not auth:
+                return {}
+
+            auth_name = (auth.get("auth_name") or "").strip()
+            auth_format = auth.get("auth_format") or ""
+            api_key = auth.get("api_key")
+
+            if not auth_name or not auth_format:
+                return {}
+            if not api_key:
+                logger.warning(
+                    "Missing API key for provider=%s - /api/ps auth skipped",
+                    provider_id
+                )
+                return {}
+
+            return {auth_name: auth_format.format(api_key)}
+        except Exception as e:
+            logger.warning(f"Failed to resolve /api/ps auth for {provider_id}: {e}")
+            return {}
 
 
 
@@ -299,7 +333,7 @@ class OllamaDataProvider:
             loaded_info = self._loaded_models.get(model_name)
 
             # Query queue state from queue_manager (real 3-level breakdown)
-            queue_state = self.queue_manager.get_state(model_id)
+            queue_state = self.queue_manager.get_state(model_id, self.provider_id)
 
             # Track active requests separately
             active_requests = self._model_active.get(model_id, 0)
@@ -311,6 +345,7 @@ class OllamaDataProvider:
 
                 return ModelStatus(
                     model_id=model_id,
+                    provider_id=self.provider_id,
                     is_loaded=not is_expired,
                     vram_mb=loaded_info['size_vram'] // (1024 * 1024),
                     expires_at=loaded_info['expires_at'],
@@ -322,6 +357,7 @@ class OllamaDataProvider:
                 # Model not loaded
                 return ModelStatus(
                     model_id=model_id,
+                    provider_id=self.provider_id,
                     is_loaded=False,
                     vram_mb=0,
                     expires_at=None,
@@ -355,7 +391,7 @@ class OllamaDataProvider:
                 loaded_models=list(self._loaded_models.keys())
             )
 
-    def increment_active(self, model_id: int) -> None:
+    def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
         """
         Track when a request starts processing.
 
@@ -363,18 +399,37 @@ class OllamaDataProvider:
 
         Args:
             model_id: Model handling the request
+            request_id: Request identifier to bind active slot ownership
         """
         with self._lock:
+            if request_id:
+                if request_id in self._active_request_ids:
+                    return
+                self._active_request_ids[request_id] = model_id
             self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
 
-    def decrement_active(self, model_id: int, reuse_slot: bool = False) -> None:
+    def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:
         """
         Track when a request completes processing.
         
         Args:
             model_id: Model that handled the request
             reuse_slot: If True, do NOT decrement count (hand off to queued request)
+            request_id: Request identifier to release active slot ownership
         """
+        if request_id:
+            with self._lock:
+                mapped_model = self._active_request_ids.pop(request_id, None)
+                if mapped_model is not None:
+                    model_id = mapped_model
+            if reuse_slot:
+                logger.debug(
+                    "Reuse slot for model %s, active count remains %s",
+                    model_id,
+                    self._model_active.get(model_id, 0),
+                )
+                return
+
         if reuse_slot:
             # Slot is being handed off to a queued request immediately.
             # Do not decrement the counter.
@@ -386,7 +441,7 @@ class OllamaDataProvider:
             self._model_active[model_id] = max(0, current_active - 1)
             logger.debug(f"Decremented active count for model {model_id}: {current_active} -> {self._model_active[model_id]}")
 
-    def try_reserve_capacity(self, model_id: int) -> bool:
+    def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         """
         Atomically check availability and reserve capacity.
         
@@ -399,11 +454,25 @@ class OllamaDataProvider:
             max_capacity = self.get_config_value(model_id, "parallel_capacity", self.DEFAULT_PARALLEL_CAPACITY)
             
             if current_active < max_capacity:
+                if request_id in self._active_request_ids:
+                    return True
+                self._active_request_ids[request_id] = model_id
                 self._model_active[model_id] = current_active + 1
                 logger.debug(f"Reserved capacity for model {model_id}: {current_active} -> {self._model_active[model_id]} (max={max_capacity})")
                 return True
             logger.debug(f"Capacity full for model {model_id}: {current_active}/{max_capacity}")
             return False
+
+    def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
+        """
+        Bind an active slot to a request_id (with optional increment).
+        """
+        with self._lock:
+            if request_id in self._active_request_ids:
+                return
+            self._active_request_ids[request_id] = model_id
+            if increment_active:
+                self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
 
     def get_active_count(self, model_id: int) -> int:
         """
@@ -414,6 +483,37 @@ class OllamaDataProvider:
         """
         with self._lock:
             return self._model_active.get(model_id, 0)
+
+    def get_debug_state(self) -> Dict[int, Dict[str, Any]]:
+        """
+        Snapshot active counts and queue depth for all registered models.
+        """
+        with self._lock:
+            models = {}
+            for model_id, model_name in self._model_id_to_name.items():
+                max_capacity = self.get_config_value(
+                    model_id,
+                    "parallel_capacity",
+                    self.DEFAULT_PARALLEL_CAPACITY,
+                )
+                queue_state = self.queue_manager.get_state(model_id, self.provider_id)
+                active_request_ids = [
+                    req_id for req_id, mid in self._active_request_ids.items()
+                    if mid == model_id
+                ]
+                models[model_id] = {
+                    "model_name": model_name,
+                    "active": self._model_active.get(model_id, 0),
+                    "max_capacity": max_capacity,
+                    "queue_depth": queue_state.total,
+                    "queue_depth_breakdown": {
+                        "low": queue_state.low,
+                        "normal": queue_state.normal,
+                        "high": queue_state.high,
+                    },
+                    "active_request_ids": active_request_ids,
+                }
+            return models
 
     def _parse_timestamp(self, ts_str: Optional[str]) -> datetime:
         """

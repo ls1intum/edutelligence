@@ -14,7 +14,7 @@ is provided (and uses `scheduled_ts` as the start marker).
 
 ## Recorder API (src/logos/monitoring/recorder.py)
 - `record_enqueue(request_id, model_id, provider_id, initial_priority, queue_depth, timeout_s=None)`
-- `record_scheduled(request_id, model_id, priority_when_scheduled, queue_depth_at_schedule, available_vram_mb=None, azure_rate_remaining_requests=None, azure_rate_remaining_tokens=None)`
+- `record_scheduled(request_id, model_id, provider_id, priority_when_scheduled, queue_depth_at_schedule, available_vram_mb=None, azure_rate_remaining_requests=None, azure_rate_remaining_tokens=None)`
 - `record_complete(request_id, result_status, cold_start=None, error_message=None)`
 
 Usage:

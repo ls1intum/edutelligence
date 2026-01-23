@@ -72,7 +72,8 @@ facade.register_model(
     provider_name='gpu-1',
     ollama_admin_url='http://gpu-1.internal:11434',
     model_name='llama3.3:latest',
-    total_vram_mb=49152  # 48GB
+    total_vram_mb=49152,  # 48GB
+    provider_id=1
 )
 
 facade.register_model(
@@ -80,17 +81,18 @@ facade.register_model(
     provider_name='gpu-2',
     ollama_admin_url='http://gpu-2.internal:11434',
     model_name='llama3.1:8b',
-    total_vram_mb=49152
+    total_vram_mb=49152,
+    provider_id=2
 )
 
 # Query model status (returns ModelStatus dataclass)
-status = facade.get_model_status(1)
+status = facade.get_model_status(1, provider_id=1)
 if status.is_loaded and status.queue_depth < 3:
     # Good candidate: warm and not overloaded
     schedule_to_model(1)
 
 # Get capacity info (returns OllamaCapacity dataclass)
-capacity = facade.get_capacity_info('gpu-1')
+capacity = facade.get_capacity_info(1)
 if capacity.available_vram_mb > 4096:
     # Enough VRAM to load new model
     load_model('new-model')
@@ -116,23 +118,24 @@ facade.register_model(
     model_id=10,
     provider_name='azure',
     model_name='gpt-4',
-    model_endpoint='https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions'
+    model_endpoint='https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions',
+    provider_id=10
 )
 
 # Query model status (returns ModelStatus dataclass)
-status = facade.get_model_status(10)
+status = facade.get_model_status(10, provider_id=10)
 if status.queue_depth < 10:
     # Not overloaded
     schedule_to_model(10)
 
 # Get rate limit info (returns AzureCapacity dataclass)
-capacity = facade.get_capacity_info('azure', 'gpt-4o')
+capacity = facade.get_capacity_info(10, 'gpt-4o')
 if capacity.has_capacity and capacity.rate_limit_remaining_requests > 10:
     # Send request
     make_api_call()
 
 # Update rate limits after API call
-facade.update_rate_limits('azure', 'gpt-4o', response.headers)
+facade.update_rate_limits(10, 'gpt-4o', response.headers)
 
 # Note: Azure facades do not support request lifecycle tracking
 # (on_request_start, on_request_begin_processing, on_request_complete)
@@ -142,20 +145,19 @@ facade.update_rate_limits('azure', 'gpt-4o', response.headers)
 ## Key Methods
 
 **OllamaSchedulingDataFacade API:**
-- `register_model(model_id, provider_name, ollama_admin_url, model_name, total_vram_mb)` - Register Ollama model
-- `get_model_status(model_id)` → `ModelStatus` - Get current status (returns dataclass)
-- `get_capacity_info(provider_name)` → `OllamaCapacity` - Get VRAM availability (returns dataclass)
-- `get_scheduling_data(model_ids)` → `List[ModelStatus]` - Batch query multiple models
+- `register_model(model_id, provider_name, ollama_admin_url, model_name, total_vram_mb, provider_id)` - Register Ollama model
+- `get_model_status(model_id, provider_id)` → `ModelStatus` - Get current status (returns dataclass)
+- `get_capacity_info(provider_id)` → `OllamaCapacity` - Get VRAM availability (returns dataclass)
 - `on_request_start(request_id: str, model_id: int, priority: str = 'normal')` - Track request arrival (→ queue)
 - `on_request_begin_processing(request_id: str)` - Track processing start (queue → active)
 - `on_request_complete(request_id: str, was_cold_start: bool, duration_ms: int)` → `RequestMetrics` - Track completion
 
 **AzureSchedulingDataFacade API:**
-- `register_model(model_id, provider_name, model_name, model_endpoint)` - Register Azure model
-- `get_model_status(model_id)` → `ModelStatus` - Get current status (returns dataclass)
-- `get_capacity_info(provider_name, deployment_name)` → `AzureCapacity` - Get rate limits (returns dataclass)
-- `get_scheduling_data(model_ids)` → `List[ModelStatus]` - Batch query multiple models
-- `update_rate_limits(provider_name, deployment_name, response_headers)` - Update rate limits from API response
+- `register_model(model_id, provider_name, model_name, model_endpoint, provider_id)` - Register Azure model
+- `get_model_status(model_id, provider_id)` → `ModelStatus` - Get current status (returns dataclass)
+- `get_capacity_info(provider_id, deployment_name)` → `AzureCapacity` - Get rate limits (returns dataclass)
+- `get_scheduling_data(deployments)` → `List[ModelStatus]` - Batch query multiple deployments
+- `update_rate_limits(provider_id, deployment_name, response_headers)` - Update rate limits from API response
 
 **Note:** Azure facade does not support request lifecycle tracking (cloud providers manage queues internally)
 
@@ -257,7 +259,7 @@ CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    provider_type VARCHAR(20) DEFAULT 'cloud',
+    provider_type VARCHAR(20) NOT NULL,
 
     -- SDI: Ollama monitoring
     ollama_admin_url TEXT DEFAULT '', -- used for /api/ps calls
@@ -279,13 +281,13 @@ Per-model overrides for cold start thresholds and observed statistics:
 ```sql
 CREATE TABLE model_provider_config (
     model_id INTEGER NOT NULL,
-    provider_name VARCHAR(50) NOT NULL,
+    provider_id INTEGER NOT NULL,
     cold_start_threshold_ms REAL DEFAULT 1000.0,
     parallel_capacity INTEGER DEFAULT NULL,
     keep_alive_seconds INTEGER DEFAULT NULL,
     observed_avg_cold_load_ms REAL DEFAULT NULL,
     observed_avg_warm_load_ms REAL DEFAULT NULL,
-    PRIMARY KEY (model_id, provider_name)
+    PRIMARY KEY (model_id, provider_id)
 );
 ```
 
