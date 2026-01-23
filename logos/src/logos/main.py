@@ -47,6 +47,36 @@ def _get_processing_timeout_s(scheduling_stats: Optional[Dict[str, Any]]) -> Opt
     return None
 
 
+def _record_azure_rate_limits(
+    scheduling_stats: Optional[Dict[str, Any]],
+    headers: Dict[str, str],
+) -> None:
+    if not scheduling_stats or not headers:
+        return
+    request_id = scheduling_stats.get("request_id")
+    if not request_id:
+        return
+
+    headers_lower = {k.lower(): v for k, v in headers.items()}
+    remaining_requests = headers_lower.get("x-ratelimit-remaining-requests")
+    remaining_tokens = headers_lower.get("x-ratelimit-remaining-tokens")
+
+    provider_metrics = {}
+    if remaining_requests is not None:
+        try:
+            provider_metrics["azure_rate_remaining_requests"] = int(remaining_requests)
+        except (TypeError, ValueError):
+            pass
+    if remaining_tokens is not None:
+        try:
+            provider_metrics["azure_rate_remaining_tokens"] = int(remaining_tokens)
+        except (TypeError, ValueError):
+            pass
+
+    if provider_metrics:
+        _pipeline.record_provider_metrics(request_id, provider_metrics)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -354,6 +384,10 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                     _pipeline.update_provider_stats(model_id, provider_id, headers)
                 except Exception:
                     pass
+                try:
+                    _record_azure_rate_limits(scheduling_stats, headers)
+                except Exception:
+                    pass
 
             # Prepare headers and payload using context resolver
             headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
@@ -504,6 +538,10 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
         if exec_result.headers:
             try:
                 _pipeline.update_provider_stats(model_id, provider_id, exec_result.headers)
+            except Exception:
+                pass
+            try:
+                _record_azure_rate_limits(scheduling_stats, exec_result.headers)
             except Exception:
                 pass
 

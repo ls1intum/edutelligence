@@ -100,6 +100,21 @@ class MonitoringRecorder:
         """Attach provider_id once it is resolved (after scheduling)."""
         self._write(request_id, provider_id=provider_id)
 
+    def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:
+        """
+        Update provider metrics (e.g. Azure rate limits) for a request.
+        """
+        if not provider_metrics:
+            return
+
+        payload = {}
+        for key, value in provider_metrics.items():
+            if key in ["available_vram_mb", "azure_rate_remaining_requests", "azure_rate_remaining_tokens"]:
+                payload[key] = value
+
+        if payload:
+            self._write(request_id, **payload)
+
     def _write(self, request_id: str, **fields: object) -> None:
         try:
             with self._db_factory() as db:

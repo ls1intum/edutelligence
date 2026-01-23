@@ -319,6 +319,10 @@ class RequestPipeline:
             
         self._scheduler.update_provider_stats(model_id, provider_id, headers)
 
+    def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:
+        """Record provider metrics (e.g. Azure rate limits) for a request."""
+        self._monitoring.record_provider_metrics(request_id, provider_metrics)
+
 
 @dataclass
 class _ClassificationResult:
