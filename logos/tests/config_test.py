@@ -31,6 +31,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         data = {
             "provider_name": "azure",
             "base_url": BASE_URL,
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/setup", json=data, headers=headers)
@@ -50,7 +51,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "base_url": f"{BASE_URL}",
             "api_key": f"{API_KEY}",
             "auth_name": "api-key",
-            "auth_format": "{}"
+            "auth_format": "{}",
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
@@ -238,7 +240,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "base_url": f"{BASE_URL}",
             "api_key": "",
             "auth_name": "api-key",
-            "auth_format": "{}"
+            "auth_format": "{}",
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)

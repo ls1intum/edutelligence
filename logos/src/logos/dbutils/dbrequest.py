@@ -10,6 +10,7 @@ class LogosKeyModel(BaseModel):
 class LogosSetupRequest(BaseModel):
     base_url: str
     provider_name: str
+    provider_type: str
 
 
 class SetLogRequest(LogosKeyModel):
@@ -20,6 +21,7 @@ class SetLogRequest(LogosKeyModel):
 class AddServiceProxyRequest(LogosKeyModel):
     base_url: str
     provider_name: str
+    provider_type: str
 
 
 class AddProviderRequest(LogosKeyModel):
@@ -28,6 +30,7 @@ class AddProviderRequest(LogosKeyModel):
     api_key: str
     auth_name: str
     auth_format: str
+    provider_type: str
 
 
 class AddProfileRequest(LogosKeyModel):
@@ -143,10 +146,6 @@ class AddServiceRequest(LogosKeyModel):
 
 class GetProcessIdRequest(LogosKeyModel):
     pass
-
-
-class GetAPIIdRequest(LogosKeyModel):
-    api_key: str
 
 
 class GetImportDataRequest(LogosKeyModel):

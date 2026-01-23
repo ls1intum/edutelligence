@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Set, Tuple, Optional
 import grpc
@@ -26,7 +25,7 @@ from logos.responses import (
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
 from logos.pipeline.fcfs_scheduler import FcfScheduler
-from logos.pipeline.executor import Executor
+from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
@@ -38,6 +37,14 @@ logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _ollama_monitor: Optional[OllamaProviderMonitor] = None
+
+OLLAMA_PROCESSING_TIMEOUT_S = 60
+
+
+def _get_processing_timeout_s(scheduling_stats: Optional[Dict[str, Any]]) -> Optional[int]:
+    if scheduling_stats and scheduling_stats.get("provider_type") == "ollama":
+        return OLLAMA_PROCESSING_TIMEOUT_S
+    return None
 
 
 @asynccontextmanager
@@ -71,23 +78,6 @@ async def lifespan(app: FastAPI):
     model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(_pipeline), _grpc_server)
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
-
-    # Initial provider setup from environment variables
-    DEFAULT_PROVIDER = os.getenv("PROVIDER_NAME")
-    DEFAULT_BASE_URL = os.getenv("BASE_URL")
-    FORMAT = '%(levelname)-8s: %(asctime)s at module %(module)-15s %(message)s'
-    logging.basicConfig(format=FORMAT, level=logging.DEBUG)
-    if DEFAULT_PROVIDER and len(DEFAULT_BASE_URL) > 5:
-        logging.info("Creating Proxy Configuration...")
-        with DBManager() as db:
-            db.is_root_initialized()
-        logging.info("Processing setup. Initialized: %s", str(DBManager.is_initialized()))
-        if not DBManager.is_initialized():
-            lk = setup_proxy.setup(DEFAULT_BASE_URL, DEFAULT_PROVIDER)
-            if "error" in lk:
-                logging.error("Error during proxy setup: %s", lk)
-            else:
-                logging.info("Created proxy configuration: %s", lk)
 
     yield
 
@@ -257,7 +247,18 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
             # Provider-level SDI config (VRAM, admin URL, etc.)
             provider_config = db.get_provider_config(provider_id) or {}
 
-            if provider_type == "ollama" or "ollama" in provider_name.lower() or "openwebui" in provider_name.lower():
+            if not provider_type:
+                logger.warning(
+                    "Skipping provider %s (%s) for model %s: missing provider_type",
+                    provider_id,
+                    provider_name,
+                    model_id,
+                )
+                continue
+
+            provider_type = provider_type.lower()
+
+            if provider_type == "ollama":
                 _ollama_facade.register_model(
                     model_id=model_id,
                     provider_name=provider_name,
@@ -266,7 +267,7 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
                     total_vram_mb=provider_config.get("total_vram_mb", 65536),
                     provider_id=provider_id,
                 )
-            elif provider_type == "azure" or "azure" in provider_name.lower():
+            elif provider_type == "azure":
                 _azure_facade.register_model(
                     model_id=model_id,
                     provider_name=provider_name,
@@ -284,15 +285,16 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
                 )
 
 
-def _build_model_registry() -> Dict[int, str]:
-    """Build mapping of model_id -> provider_type."""
-    registry = {}
+def _build_model_registry() -> Dict[tuple[int, int], str]:
+    """Build mapping of (model_id, provider_id) -> provider_type."""
+    registry: Dict[tuple[int, int], str] = {}
     with DBManager() as db:
         for deployment in db.get_all_deployments():
             model_id = deployment["model_id"]
+            provider_id = deployment["provider_id"]
             provider_type = deployment.get("type")
-            if model_id not in registry and provider_type:
-                registry[model_id] = provider_type
+            if provider_type:
+                registry[(model_id, provider_id)] = provider_type
     return registry
 
 
@@ -343,35 +345,72 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
         first_chunk = None
         last_chunk = None
         error_message = None
+        timed_out = False
+        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
 
         try:
             def process_headers(headers: dict):
                 try:
-                    _pipeline.update_provider_stats(model_id, headers)
+                    _pipeline.update_provider_stats(model_id, provider_id, headers)
                 except Exception:
                     pass
 
             # Prepare headers and payload using context resolver
             headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-            async for chunk in _pipeline.executor.execute_streaming(context.forward_url, headers, prepared_payload, on_headers=process_headers):
-                yield chunk
+            if processing_timeout_s:
+                async with asyncio.timeout(processing_timeout_s):
+                    async for chunk in _pipeline.executor.execute_streaming(
+                        context.forward_url,
+                        headers,
+                        prepared_payload,
+                        on_headers=process_headers,
+                    ):
+                        yield chunk
 
-                # Parse chunk for logging
-                line = chunk.decode().strip()
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        blob = json.loads(line[6:])
-                        last_chunk = blob  # Keep track of last chunk (may have usage)
-                        if first_chunk is None:
-                            first_chunk = blob
-                        if "choices" in blob and blob["choices"]:
-                            delta = blob["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                full_text += content
-                    except json.JSONDecodeError:
-                        pass
+                        # Parse chunk for logging
+                        line = chunk.decode().strip()
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                blob = json.loads(line[6:])
+                                last_chunk = blob  # Keep track of last chunk (may have usage)
+                                if first_chunk is None:
+                                    first_chunk = blob
+                                if "choices" in blob and blob["choices"]:
+                                    delta = blob["choices"][0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        full_text += content
+                            except json.JSONDecodeError:
+                                pass
+            else:
+                async for chunk in _pipeline.executor.execute_streaming(
+                    context.forward_url,
+                    headers,
+                    prepared_payload,
+                    on_headers=process_headers,
+                ):
+                    yield chunk
+
+                    # Parse chunk for logging
+                    line = chunk.decode().strip()
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            blob = json.loads(line[6:])
+                            last_chunk = blob  # Keep track of last chunk (may have usage)
+                            if first_chunk is None:
+                                first_chunk = blob
+                            if "choices" in blob and blob["choices"]:
+                                delta = blob["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    full_text += content
+                        except json.JSONDecodeError:
+                            pass
+        except asyncio.TimeoutError:
+            timed_out = True
+            error_message = f"Processing timeout after {processing_timeout_s}s"
+            logger.warning("Streaming request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
         except Exception as e:
             error_message = str(e)
             raise e
@@ -405,7 +444,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                     )
 
             if scheduling_stats:
-                status = "error" if error_message else "success"
+                status = "timeout" if timed_out else ("error" if error_message else "success")
                 
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
@@ -437,12 +476,34 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-        exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
+        timed_out = False
+        error_message = None
+
+        try:
+            if processing_timeout_s:
+                exec_result = await asyncio.wait_for(
+                    _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload),
+                    timeout=processing_timeout_s,
+                )
+            else:
+                exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        except asyncio.TimeoutError:
+            timed_out = True
+            error_message = f"Processing timeout after {processing_timeout_s}s"
+            logger.warning("Sync request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
+            exec_result = ExecutionResult(
+                success=False,
+                response={"error": error_message},
+                error=error_message,
+                usage={},
+                is_streaming=False,
+            )
 
         # Update rate limits from response headers
         if exec_result.headers:
             try:
-                _pipeline.update_provider_stats(model_id, exec_result.headers)
+                _pipeline.update_provider_stats(model_id, provider_id, exec_result.headers)
             except Exception:
                 pass
 
@@ -474,19 +535,21 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 )
 
         if scheduling_stats:
-            status = "success" if exec_result.success else "error"
+            status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _pipeline.record_completion(
                 request_id=scheduling_stats.get("request_id"),
                 result_status=status,
-                error_message=exec_result.error if not exec_result.success else None,
+                error_message=error_message if timed_out else (exec_result.error if not exec_result.success else None),
                 cold_start=scheduling_stats.get("is_cold_start")
             )
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
-            return {"status_code": 200 if exec_result.success else 500, "data": response_payload}
+            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+            return {"status_code": status_code, "data": response_payload}
         else:
-            return JSONResponse(content=exec_result.response, status_code=200 if exec_result.success else 500)
+            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+            return JSONResponse(content=exec_result.response, status_code=status_code)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -1239,12 +1302,6 @@ async def get_process_id(data: GetProcessIdRequest):
         return db.get_process_id(data.logos_key)
 
 
-@app.post("/logosdb/get_api_id")
-async def get_api_id(data: GetAPIIdRequest):
-    with DBManager() as db:
-        return db.get_api_id(data.logos_key, data.api_key)
-
-
 @app.post("/logosdb/get_role")
 async def get_role(data: GetRole):
     with DBManager() as db:
@@ -1374,6 +1431,24 @@ async def request_event_stats_options():
             "Access-Control-Allow-Methods": "POST, OPTIONS",
         },
     )
+
+
+@app.get("/logosdb/scheduler_state")
+async def scheduler_state(request: Request):
+    """
+    Debug endpoint to inspect in-memory scheduler and Ollama capacity state.
+    """
+    headers = dict(request.headers)
+    authenticate_logos_key(headers)
+
+    if not _pipeline or not _ollama_facade:
+        return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
+
+    payload = {
+        "queue_total": _pipeline.scheduler.get_total_queue_depth(),
+        "ollama": _ollama_facade.debug_state(),
+    }
+    return JSONResponse(content=payload, status_code=200)
 
 
 @app.post("/logosdb/get_ollama_vram_stats")

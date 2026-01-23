@@ -28,7 +28,7 @@ class BaseScheduler(SchedulerInterface):
         queue_manager: PriorityQueueManager,
         ollama_facade: OllamaSchedulingDataFacade,
         azure_facade: AzureSchedulingDataFacade,
-        model_registry: Dict[int, str] | None = None,
+        model_registry: Dict[tuple[int, int], str] | None = None,
     ):
         self._queue_mgr = queue_manager
         self._ollama = ollama_facade
@@ -93,7 +93,7 @@ class BaseScheduler(SchedulerInterface):
 
         elif provider_type == 'azure':
             try:
-                cap = self._azure.get_model_capacity(model_id)
+                cap = self._azure.get_model_capacity(model_id, provider_id)
                 if cap:
                     provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
                     provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
@@ -128,7 +128,18 @@ class BaseScheduler(SchedulerInterface):
         self._check_starvation(model_id, provider_id)
 
         depth_before = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
-        has_waiters = depth_before > 0
+
+        next_task = None
+        entry = None
+        while True:
+            next_task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
+            if not next_task:
+                break
+            if isinstance(next_task, asyncio.Future) and next_task.done():
+                continue
+            break
+
+        has_waiters = next_task is not None
 
         if provider_type == 'ollama':
             try:
@@ -148,7 +159,6 @@ class BaseScheduler(SchedulerInterface):
             except KeyError:
                 pass
 
-        next_task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
         if next_task and isinstance(next_task, asyncio.Future):
             if not next_task.done():
                 priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
@@ -171,7 +181,7 @@ class BaseScheduler(SchedulerInterface):
                         pass
                 elif provider_type == 'azure':
                     try:
-                        cap = self._azure.get_model_capacity(model_id)
+                        cap = self._azure.get_model_capacity(model_id, provider_id)
                         if cap:
                             provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
                             provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
@@ -217,18 +227,18 @@ class BaseScheduler(SchedulerInterface):
         """Get total queued requests."""
         return self._queue_mgr.get_total_depth_all()
 
-    def update_provider_stats(self, model_id: int, headers: Dict[str, str]) -> None:
+    def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider-specific statistics (e.g., rate limits) from response headers.
         Currently only Azure uses response headers for rate-limits; Ollama is no-op.
         """
-        provider_type = self._model_registry.get(model_id)
+        provider_type = self._model_registry.get((model_id, provider_id))
         if not provider_type:
             return
 
         if provider_type == "azure":
             try:
-                self._azure.update_model_rate_limits(model_id, headers)
+                self._azure.update_model_rate_limits(model_id, provider_id, headers)
             except Exception:
                 logger.debug("Failed to update Azure rate limits for model %s", model_id, exc_info=False)
 

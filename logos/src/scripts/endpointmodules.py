@@ -4,14 +4,15 @@ File containing methods calling logos endpoints.
 from logos.dbutils.dbmanager import DBManager
 
 
-def endpoint_add_provider(logos_key: str, base_url: str, provider_name: str, api_key: str):
+def endpoint_add_provider(logos_key: str, base_url: str, provider_name: str, api_key: str, provider_type: str):
     data = {
         "logos_key": f"{logos_key}",
         "provider_name": f"{provider_name}",
         "base_url": f"{base_url}",
         "api_key": f"{api_key}",
         "auth_name": "api-key",
-        "auth_format": "{}"
+        "auth_format": "{}",
+        "provider_type": f"{provider_type}",
     }
     with DBManager() as man:
         return man.add_provider(**data)

@@ -15,7 +15,12 @@ from logos.monitoring.recorder import MonitoringRecorder
 
 from logos.queue.models import Priority
 
-from .scheduler_interface import SchedulerInterface, SchedulingRequest, SchedulingResult
+from .scheduler_interface import (
+    SchedulerInterface,
+    SchedulingRequest,
+    SchedulingResult,
+    QueueTimeoutError,
+)
 from .executor import Executor, ExecutionResult
 from .context_resolver import ContextResolver, ExecutionContext
 
@@ -122,6 +127,15 @@ class RequestPipeline:
                 error="No models passed classification",
             )
         
+        sorted_candidates = sorted(
+            classification_result.candidates, key=lambda x: x[1], reverse=True
+        )
+        target_model_id, _, priority_int, _ = sorted_candidates[0]
+        target_deployment = next(
+            (d for d in request.deployments if d["model_id"] == target_model_id),
+            None,
+        )
+
         # 2. Scheduling
         scheduling_request = SchedulingRequest(
             request_id=request_id,
@@ -134,16 +148,39 @@ class RequestPipeline:
         # Record enqueue
         self._monitoring.record_enqueue(
             request_id=request_id,
-            model_id=None,
-            provider_id=None,
-            initial_priority=Priority.from_int(classification_result.candidates[0][2]).name.lower(),
+            model_id=target_deployment["model_id"] if target_deployment else None,
+            provider_id=target_deployment["provider_id"] if target_deployment else None,
+            initial_priority=Priority.from_int(priority_int).name.lower(),
             queue_depth=self._scheduler.get_total_queue_depth(),
             timeout_s=request.payload.get("timeout_s"),
         )
         
-        scheduling_result = await self._scheduler.schedule(scheduling_request)
+        try:
+            scheduling_result = await self._scheduler.schedule(scheduling_request)
+        except QueueTimeoutError as exc:
+            logger.warning("Request %s timed out waiting in queue", request_id)
+            self.record_completion(
+                request_id=request_id,
+                result_status="timeout",
+                error_message=str(exc),
+            )
+            return PipelineResult(
+                success=False,
+                model_id=exc.model_id,
+                provider_id=exc.provider_id,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={"error": "Queue wait timeout"},
+                error=str(exc),
+            )
+
         if not scheduling_result:
             logger.warning(f"Request {request_id} failed scheduling: All models unavailable")
+            self.record_completion(
+                request_id=request_id,
+                result_status="error",
+                error_message="All candidate models unavailable (rate-limited or no capacity)",
+            )
             return PipelineResult(
                 success=False,
                 model_id=None,
@@ -153,22 +190,12 @@ class RequestPipeline:
                 scheduling_stats={"error": "No available model"},
                 error="All candidate models unavailable (rate-limited or no capacity)",
             )
-
-        if not scheduling_result:
-            return PipelineResult(
-                success=False,
-                model_id=None,
-                provider_id=None,
-                execution_context=None,
-                classification_stats=classification_result.stats,
-                scheduling_stats={},
-                error="Scheduling failed",
-            )
         
         # Record scheduled
         self._monitoring.record_scheduled(
             request_id=request_id,
             model_id=scheduling_result.model_id,
+            provider_id=scheduling_result.provider_id,
             priority_when_scheduled=scheduling_result.priority_when_scheduled,
             queue_depth_at_schedule=scheduling_result.queue_depth_at_schedule,
             provider_metrics=scheduling_result.provider_metrics
@@ -278,18 +305,19 @@ class RequestPipeline:
             cold_start=cold_start
         )
 
-    def update_provider_stats(self, model_id: int, headers: Dict[str, str]) -> None:
+    def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.
         
         Args:
             model_id: The model that generated the response.
+            provider_id: The provider that served the request.
             headers: Response headers containing rate limit info.
         """
         if not headers:
             return
             
-        self._scheduler.update_provider_stats(model_id, headers)
+        self._scheduler.update_provider_stats(model_id, provider_id, headers)
 
 
 @dataclass

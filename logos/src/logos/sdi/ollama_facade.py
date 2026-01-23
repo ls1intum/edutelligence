@@ -107,6 +107,37 @@ class OllamaSchedulingDataFacade:
         provider = self._providers[int(provider_id)]
         return provider.get_capacity_info()
 
+    def debug_state(self) -> Dict[str, Dict]:
+        """
+        Snapshot provider/model capacity and tracked request state.
+        """
+        with self._lock:
+            providers: Dict[str, Dict] = {}
+            for provider_id, provider in self._providers.items():
+                providers[str(provider_id)] = {
+                    "name": provider.name,
+                    "base_url": provider.base_url,
+                    "models": provider.get_debug_state(),
+                }
+
+            now = time.time()
+            tracked_requests: Dict[str, Dict] = {}
+            for request_id, data in self._request_tracking.items():
+                arrival_time = data.get("arrival_time")
+                processing_start = data.get("processing_start_time")
+                tracked_requests[request_id] = {
+                    "model_id": data.get("model_id"),
+                    "provider_id": data.get("provider_id"),
+                    "priority": data.get("priority"),
+                    "arrival_age_s": (now - arrival_time) if arrival_time else None,
+                    "processing_age_s": (now - processing_start) if processing_start else None,
+                }
+
+            return {
+                "providers": providers,
+                "tracked_requests": tracked_requests,
+            }
+
     def on_request_start(
         self,
         request_id: str,
@@ -149,10 +180,12 @@ class OllamaSchedulingDataFacade:
             model_id = tracking_data['model_id']
             provider_id = provider_id if provider_id is not None else tracking_data.get('provider_id')
 
-            # Increment active request count for this model (if requested)
-            if increment_active:
-                provider = self._get_provider_for_model(model_id, provider_id)
-                provider.increment_active(model_id)
+            provider = self._get_provider_for_model(model_id, provider_id)
+            provider.track_active_request(
+                request_id=request_id,
+                model_id=model_id,
+                increment_active=increment_active,
+            )
 
             # Record processing start time
             tracking_data['processing_start_time'] = time.time()
@@ -183,7 +216,7 @@ class OllamaSchedulingDataFacade:
 
             # Decrement active request count (or reuse slot)
             provider = self._get_provider_for_model(model_id, provider_id)
-            provider.decrement_active(model_id, reuse_slot=reuse_slot)
+            provider.decrement_active(model_id, reuse_slot=reuse_slot, request_id=request_id)
 
             # Create metrics dataclass
             metrics = RequestMetrics(
@@ -202,7 +235,7 @@ class OllamaSchedulingDataFacade:
 
             return metrics
 
-    def try_reserve_capacity(self, model_id: int, provider_id: int) -> bool:
+    def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
         """
         Attempt to reserve execution capacity for a model.
         Atomic check-and-increment.
@@ -213,7 +246,7 @@ class OllamaSchedulingDataFacade:
         try:
             ollama_data_provider = self._providers[int(provider_id)]
 
-            return ollama_data_provider.try_reserve_capacity(model_id)
+            return ollama_data_provider.try_reserve_capacity(model_id, request_id)
         except ValueError:
             return False
         except KeyError:
@@ -223,19 +256,10 @@ class OllamaSchedulingDataFacade:
         """
         Resolve provider instance for a model.
         """
-        if provider_id is not None:
-            try:
-                return self._providers[int(provider_id)]
-            except KeyError:
-                raise ValueError(f"Provider '{provider_id}' not found for model {model_id}")
+        if provider_id is None:
+            raise ValueError(f"provider_id is required for model {model_id}")
 
-        provider_ids = self._model_to_provider.get(model_id)
-        if not provider_ids:
-            raise ValueError(f"Model {model_id} not registered with any Ollama provider")
-
-        # Fall back to first known provider for this model (deterministic)
-        provider_key = sorted(provider_ids)[0]
         try:
-            return self._providers[int(provider_key)]
+            return self._providers[int(provider_id)]
         except KeyError:
-            raise ValueError(f"Provider '{provider_key}' not found for model {model_id}")
+            raise ValueError(f"Provider '{provider_id}' not found for model {model_id}")

@@ -61,7 +61,7 @@ CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    provider_type VARCHAR(20) DEFAULT 'cloud',  -- 'ollama' or 'cloud'
+    provider_type VARCHAR(20) DEFAULT 'cloud',  -- e.g., 'ollama' or 'azure'
     auth_name TEXT NOT NULL,
     auth_format TEXT NOT NULL,
 
@@ -113,7 +113,7 @@ CREATE TABLE model_api_keys (
 -- Lookup chain: model_provider_config (here) → providers table → hardcoded defaults
 CREATE TABLE model_provider_config (
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-    provider_name VARCHAR(50) NOT NULL,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
 
     -- SDI Configuration (per-model overrides)
     cold_start_threshold_ms REAL DEFAULT 1000.0,
@@ -133,7 +133,7 @@ CREATE TABLE model_provider_config (
 
     last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
 
-    PRIMARY KEY (model_id, provider_name)
+    PRIMARY KEY (model_id, provider_id)
 );
 
 CREATE TABLE profile_model_permissions (

@@ -10,7 +10,7 @@ from typing import List, Tuple, Optional
 from logos.queue.priority_queue import Priority
 
 from .base_scheduler import BaseScheduler
-from .scheduler_interface import SchedulingRequest, SchedulingResult
+from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,11 @@ class UtilizationAwareScheduler(BaseScheduler):
         3.  **Async Wait**: The method `await`s until the request is dequeued by a `release()`
             call from another request.
         """
-        best_candidate = self._select_best_candidate(request.classified_models, request.deployments)
+        best_candidate = self._select_best_candidate(
+            request.classified_models,
+            request.deployments,
+            request.request_id,
+        )
 
         if best_candidate:
             model_id, provider_id, provider_type, _, priority_int = best_candidate
@@ -92,6 +96,13 @@ class UtilizationAwareScheduler(BaseScheduler):
 
             if provider_type == 'ollama':
                 try:
+                    if result.was_queued:
+                        self._ollama.on_request_start(
+                            request.request_id,
+                            model_id=result.model_id,
+                            provider_id=provider_id,
+                            priority=priority.name.lower(),
+                        )
                     self._ollama.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
@@ -103,12 +114,21 @@ class UtilizationAwareScheduler(BaseScheduler):
             return result
         except asyncio.TimeoutError:
             self._queue_mgr.remove(entry_id)
-            return None
+            raise QueueTimeoutError(
+                request_id=request.request_id,
+                model_id=target_model_id,
+                provider_id=provider_id,
+                timeout_s=timeout,
+            )
+        except asyncio.CancelledError:
+            self._queue_mgr.remove(entry_id)
+            raise
 
     def _select_best_candidate(
         self,
         candidates: List[Tuple[int, float, int, int]],
-        deployments: list
+        deployments: list,
+        request_id: str,
     ) -> Optional[Tuple[int, int, str, float, int]]:
         """Find the best immediately available model."""
         scored_candidates = []
@@ -135,7 +155,7 @@ class UtilizationAwareScheduler(BaseScheduler):
 
         for model_id, provider_id, provider_type, score, priority_int in scored_candidates:
             if provider_type == 'ollama':
-                if self._ollama.try_reserve_capacity(model_id, provider_id):
+                if self._ollama.try_reserve_capacity(model_id, provider_id, request_id):
                     logger.info(
                         "Reserved capacity on Ollama model %s (score=%.2f)",
                         model_id,
@@ -172,7 +192,7 @@ class UtilizationAwareScheduler(BaseScheduler):
 
         if provider_type == 'azure':
             try:
-                status = self._azure.get_model_status(model_id)
+                status = self._azure.get_model_status(model_id, provider_id)
                 return 5 if status.is_loaded else None
             except (ValueError, KeyError):
                 return None

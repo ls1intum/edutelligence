@@ -9,7 +9,7 @@ from typing import Optional
 
 from logos.queue.priority_queue import Priority
 
-from .scheduler_interface import SchedulingRequest, SchedulingResult
+from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
 from .base_scheduler import BaseScheduler
 
 
@@ -49,7 +49,7 @@ class FcfScheduler(BaseScheduler):
             return None
 
         if provider_type == 'ollama':
-            if self._ollama.try_reserve_capacity(target_model_id, provider_id):
+            if self._ollama.try_reserve_capacity(target_model_id, provider_id, request.request_id):
                 logger.info(
                     "Reserved capacity on Ollama model %s (weight=%.2f)",
                     target_model_id,
@@ -92,6 +92,13 @@ class FcfScheduler(BaseScheduler):
 
             if provider_type == 'ollama':
                 try:
+                    if result.was_queued:
+                        self._ollama.on_request_start(
+                            request.request_id,
+                            model_id=result.model_id,
+                            provider_id=provider_id,
+                            priority=priority.name.lower(),
+                        )
                     self._ollama.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
@@ -103,4 +110,12 @@ class FcfScheduler(BaseScheduler):
             return result
         except asyncio.TimeoutError:
             self._queue_mgr.remove(entry_id)
-            return None
+            raise QueueTimeoutError(
+                request_id=request.request_id,
+                model_id=target_model_id,
+                provider_id=provider_id,
+                timeout_s=timeout,
+            )
+        except asyncio.CancelledError:
+            self._queue_mgr.remove(entry_id)
+            raise

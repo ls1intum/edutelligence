@@ -221,7 +221,6 @@ class DBManager:
                 SELECT mak.api_key,
                        providers.name  as name,
                        providers.base_url as base_url,
-                       mak.id          as api_id,
                        providers.id    as provider_id,
                        providers.auth_name as auth_name,
                        providers.auth_format as auth_format,
@@ -245,7 +244,6 @@ class DBManager:
                 "api_key": result.api_key,
                 "provider_name": result.name,
                 "base_url": result.base_url,
-                "api_id": result.api_id,
                 "provider_id": result.provider_id,
                 "auth_name": result.auth_name,
                 "auth_format": result.auth_format,
@@ -311,11 +309,15 @@ class DBManager:
         return {"result": f"Created root user. ID: {user_id}", "api_key": api_key}
 
     def add_provider(self, logos_key: str, provider_name: str, base_url: str,
-                     api_key: str, auth_name: str, auth_format: str) -> Tuple[dict, int]:
+                     api_key: str, auth_name: str, auth_format: str, provider_type: str) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
+        provider_type = (provider_type or "").strip()
+        if not provider_type:
+            return {"error": "provider_type is required"}, 400
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
-                                       "auth_name": auth_name, "auth_format": auth_format})
+                                       "auth_name": auth_name, "auth_format": auth_format,
+                                       "provider_type": provider_type})
         return {"result": f"Created Provider.", "provider-id": pk}, 200
 
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
@@ -1020,7 +1022,7 @@ class DBManager:
         self,
         logos_key: str,
         model_id: int,
-        provider_name: str,
+        provider_id: int,
         cold_start_threshold_ms: float = None,
         parallel_capacity: int = None,
         keep_alive_seconds: int = None,
@@ -1036,7 +1038,7 @@ class DBManager:
         Args:
             logos_key: Authorization key (root user only)
             model_id: Model ID to configure
-            provider_name: Provider name (e.g., "openwebui", "azure", "openai")
+            provider_id: Provider ID
             cold_start_threshold_ms: Threshold for detecting cold starts (ms)
             parallel_capacity: Max concurrent requests this model can handle
             keep_alive_seconds: How long model stays loaded when idle
@@ -1052,7 +1054,7 @@ class DBManager:
         # Build config dict with only provided values
         config = {
             "model_id": int(model_id),
-            "provider_name": provider_name
+            "provider_id": int(provider_id)
         }
 
         if cold_start_threshold_ms is not None:
@@ -1074,7 +1076,7 @@ class DBManager:
         placeholders = [f":{col}" for col in columns]
 
         # Build UPDATE clause for conflict resolution (exclude PK columns)
-        update_columns = [col for col in columns if col not in ["model_id", "provider_name"]]
+        update_columns = [col for col in columns if col not in ["model_id", "provider_id"]]
         if update_columns:
             set_expressions = ", ".join(f"{col} = EXCLUDED.{col}" for col in update_columns)
             set_clause = f"{set_expressions}, last_updated = CURRENT_TIMESTAMP"
@@ -1085,9 +1087,9 @@ class DBManager:
         sql = text(f"""
             INSERT INTO model_provider_config ({', '.join(columns)})
             VALUES ({', '.join(placeholders)})
-            ON CONFLICT (model_id, provider_name)
+            ON CONFLICT (model_id, provider_id)
             DO UPDATE SET {set_clause}
-            RETURNING model_id, provider_name
+            RETURNING model_id, provider_id
         """)
 
         result = self.session.execute(sql, config)
@@ -1097,41 +1099,41 @@ class DBManager:
         return {
             "result": "Created/updated SDI model-provider configuration",
             "model_id": row[0],
-            "provider_name": row[1]
+            "provider_id": row[1]
         }, 200
 
     def get_model_provider_config(
         self,
         model_id: int,
-        provider_name: str
+        provider_id: int
     ) -> Optional[Dict[str, Any]]:
         """
         Retrieve SDI configuration for a model-provider pair.
 
         Args:
             model_id: Model ID to query
-            provider_name: Provider name (e.g., "openwebui", "azure", "openai")
+            provider_id: Provider ID
 
         Returns:
             Dictionary with configuration fields if found, None otherwise
         """
         sql = text("""
-            SELECT model_id, provider_name, cold_start_threshold_ms,
+            SELECT model_id, provider_id, cold_start_threshold_ms,
                    parallel_capacity, keep_alive_seconds,
                    observed_avg_cold_load_ms, observed_avg_warm_load_ms, last_updated
             FROM model_provider_config
-            WHERE model_id = :model_id AND provider_name = :provider_name
+            WHERE model_id = :model_id AND provider_id = :provider_id
         """)
 
         result = self.session.execute(sql, {
             "model_id": model_id,
-            "provider_name": provider_name
+            "provider_id": int(provider_id)
         }).fetchone()
 
         if result:
             return {
                 "model_id": result[0],
-                "provider_name": result[1],
+                "provider_id": result[1],
                 "cold_start_threshold_ms": result[2],
                 "parallel_capacity": result[3],
                 "keep_alive_seconds": result[4],
@@ -1515,19 +1517,6 @@ class DBManager:
             return {"error": "Key not found"}, 500
         return {"result": exc[0]}, 200
 
-    def get_api_id(self, logos_key: str, api_key: str):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-        sql = text("""
-                    SELECT id
-                    FROM model_api_keys
-                    WHERE api_key = :api_key
-        """)
-        exc = self.session.execute(sql, {"api_key": api_key}).fetchone()
-        if exc is None:
-            return {"error": "Key not found"}
-        return {"result": f"API-ID: {exc[0]}"}, 200
-
     def get_auth_info_to_deployment(self, model_id: int, provider_id: int, profile_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Resolve auth + routing info for a model/provider pair, optionally scoped to a profile.
@@ -1618,7 +1607,6 @@ class DBManager:
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
                             JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
-                            JOIN profile_model_permissions pmp ON m.id = pmp.model_id
                    ORDER BY m.id, p.id
                    """)
         rows = self.session.execute(sql, {}).mappings().all()
