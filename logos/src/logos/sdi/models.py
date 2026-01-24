@@ -32,6 +32,7 @@ class ModelStatus:
     """
 
     model_id: int
+    provider_id: int
     is_loaded: bool
     vram_mb: int
     expires_at: Optional[datetime]

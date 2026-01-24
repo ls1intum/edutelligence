@@ -23,11 +23,12 @@ Usage (Ollama):
         provider_name='openwebui',
         ollama_admin_url='http://gpu-vm-1.internal:11434',
         model_name='llama3.3:latest',
-        total_vram_mb=49152  # 48GB
+        total_vram_mb=49152,  # 48GB
+        provider_id=1
     )
 
     # Query for scheduling decisions (returns ModelStatus dataclass)
-    status = facade.get_model_status(1)
+    status = facade.get_model_status(1, provider_id=1)
     if status.is_loaded and status.queue_depth < 3:
         # Good candidate: warm and not overloaded
         ...
@@ -48,17 +49,18 @@ Usage (Azure):
         model_id=10,
         provider_name='azure',
         model_name='gpt-4',
-        model_endpoint='https://my.openai.azure.com/openai/deployments/gpt-4o/chat/completions'
+        model_endpoint='https://my.openai.azure.com/openai/deployments/gpt-4o/chat/completions',
+        provider_id=10
     )
 
     # Get capacity info (returns AzureCapacity dataclass)
-    capacity = facade.get_capacity_info('azure', 'gpt-4o')
+    capacity = facade.get_capacity_info(10, 'gpt-4o')
     if capacity.has_capacity:
         # Send request
         ...
 
     # Update rate limits after API call
-    facade.update_rate_limits('azure', 'gpt-4o', response.headers)
+    facade.update_rate_limits(10, 'gpt-4o', response.headers)
 """
 
 from .ollama_facade import OllamaSchedulingDataFacade
