@@ -1,19 +1,17 @@
+import json
 import os
 import re
 from enum import Enum
+from typing import Literal
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
+from pydantic import BaseModel, ConfigDict, Field
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
-    LectureRetrievalDTO,
-)
-from iris.llm import (
-    CompletionArguments,
-    ModelVersionRequestHandler,
-)
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
@@ -27,36 +25,131 @@ class InformationType(str, Enum):
     FAQS = "FAQS"
 
 
+class CitationItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    index: int = Field(ge=1)
+    type: Literal["L", "F"]
+    entityid: int = Field(ge=1)
+    page: int | None = Field(default=None, ge=1)
+    start: int | None = Field(default=None, ge=0)
+    end: int | None = Field(default=None, ge=0)
+
+
+class CitationPromptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answer_with_markers: str
+    citations: list[CitationItem]
+
+
+class SummaryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    index: int = Field(ge=1)
+    keyword: str
+    summary: str
+
+
+class SummaryPromptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    summaries: list[SummaryItem]
+
+
+_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+
+def _extract_marker_indices(answer_with_markers: str) -> set[int]:
+    return {int(m.group(1)) for m in _MARKER_RE.finditer(answer_with_markers)}
+
+
+def _validate_marker_coverage(resp: CitationPromptResponse) -> None:
+    marker_indices = _extract_marker_indices(resp.answer_with_markers)
+    citation_indices = [c.index for c in resp.citations]
+    cited_set = set(citation_indices)
+
+    if len(citation_indices) != len(cited_set):
+        raise ValueError("Duplicate citation indices in citations array")
+
+    missing = sorted(marker_indices - cited_set)
+    if missing:
+        raise ValueError(f"Missing citation objects for marker indices: {missing}")
+
+
+def _validate_citation_semantics(resp: CitationPromptResponse) -> None:
+    for c in resp.citations:
+        if c.type == "F":
+            if c.page is not None or c.start is not None or c.end is not None:
+                raise ValueError("FAQ citations must have page/start/end = null")
+        else:
+            is_transcription = c.start is not None or c.end is not None
+            if is_transcription:
+                if c.start is None or c.end is None:
+                    raise ValueError(
+                        "Transcription citations must have both start and end"
+                    )
+            else:
+                if c.page is None:
+                    raise ValueError("Slide citations must have page != null")
+
+
+def _validate_summary_coverage(
+    summary_resp: SummaryPromptResponse, citation_resp: CitationPromptResponse
+) -> None:
+    needed = [c.index for c in citation_resp.citations]
+    got = [s.index for s in summary_resp.summaries]
+    if len(got) != len(set(got)):
+        raise ValueError("Duplicate indices in summaries array")
+    missing = sorted(set(needed) - set(got))
+    if missing:
+        raise ValueError(f"Missing summaries for citation indices: {missing}")
+
+
 class CitationPipeline(SubPipeline):
-    """A generic reranker pipeline that can be used to rerank a list of documents based on a question"""
+    """Adds inline citations in [cite:...] format by running:
+    1) citation prompt -> JSON (answer_with_markers + citations[])
+    2) summary prompt -> JSON (summaries[])
+    then builds inline [cite:...] deterministically.
+    """
 
     llms: dict
     pipelines: dict
-    prompt_str: str
 
     def __init__(self):
         super().__init__(implementation_id="citation_pipeline")
         dirname = os.path.dirname(__file__)
-        prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
-        with open(prompt_file_path, "r", encoding="utf-8") as file:
-            self.lecture_prompt_str = file.read()
-        prompt_file_path = os.path.join(
-            dirname, "..", "prompts", "citation_keyword_summary_prompt.txt"
-        )
-        with open(prompt_file_path, "r", encoding="utf-8") as file:
-            self.citation_keyword_summary_prompt_str = file.read()
-        prompt_file_path = os.path.join(
-            dirname, "..", "prompts", "faq_citation_prompt.txt"
-        )
-        with open(prompt_file_path, "r", encoding="utf-8") as file:
-            self.faq_prompt_str = file.read()
-        self.tokens = []
 
-        # Create LLM variants
+        with open(
+            os.path.join(dirname, "..", "prompts", "citation_prompt.txt"),
+            "r",
+            encoding="utf-8",
+        ) as f:
+            self.lecture_prompt_str = f.read()
+
+        with open(
+            os.path.join(dirname, "..", "prompts", "faq_citation_prompt.txt"),
+            "r",
+            encoding="utf-8",
+        ) as f:
+            self.faq_prompt_str = f.read()
+
+        with open(
+            os.path.join(
+                dirname, "..", "prompts", "citation_keyword_summary_prompt.txt"
+            ),
+            "r",
+            encoding="utf-8",
+        ) as f:
+            self.citation_keyword_summary_prompt_str = f.read()
+
+        with open(
+            os.path.join(dirname, "..", "prompts", "json_fix_prompt.txt"),
+            "r",
+            encoding="utf-8",
+        ) as f:
+            self.json_fix_prompt_str = f.read()
+
+        self.tokens = []
         self.llms = {}
         self.pipelines = {}
 
-        # Default variant
         default_request_handler = ModelVersionRequestHandler(version="gpt-4.1-nano")
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
@@ -65,7 +158,6 @@ class CitationPipeline(SubPipeline):
         self.llms["default"] = default_llm
         self.pipelines["default"] = default_llm | StrOutputParser()
 
-        # Advanced variant
         advanced_request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,
@@ -83,10 +175,6 @@ class CitationPipeline(SubPipeline):
     def create_formatted_lecture_string(
         self, lecture_retrieval_dto: LectureRetrievalDTO
     ):
-        """
-        Create a formatted string from the data
-        """
-
         formatted_string_lecture_page_chunks = ""
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
@@ -99,7 +187,6 @@ class CitationPipeline(SubPipeline):
             formatted_string_lecture_page_chunks += lct
 
         formatted_string_lecture_transcriptions = ""
-
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
             start_time_sec = paragraph.segment_start_time
             end_time_sec = paragraph.segment_end_time
@@ -112,341 +199,182 @@ class CitationPipeline(SubPipeline):
                 f"---{paragraph.segment_text}---\n\n"
             )
             formatted_string_lecture_transcriptions += lct
-        return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
-            "}", "}}"
-        ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
+
+        return (
+            formatted_string_lecture_page_chunks.replace("{", "{{").replace("}", "}}"),
+            formatted_string_lecture_transcriptions.replace("{", "{{").replace(
+                "}", "}}"
+            ),
+        )
 
     def create_formatted_faq_string(self, faqs):
-        """
-        Create a formatted string from the data
-        """
         formatted_string = ""
         for faq in faqs:
-            faq = (
+            line = (
                 f"FAQ ID: {faq.get(FaqSchema.FAQ_ID.value)}, "
                 f"FAQ Question Title: {faq.get(FaqSchema.QUESTION_TITLE.value)}, "
                 f"FAQ Answer: {faq.get(FaqSchema.QUESTION_ANSWER.value)}"
             )
-            formatted_string += faq
-
+            formatted_string += line
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
-    _TRANSCRIPTION_CITATION_RE = re.compile(
-        r"^\[(\d+)\]\s*Lecture Unit ID:\s*(\d+)(?:,\s*Page:\s*(\d+))?,\s*Start:\s*(\d+),\s*End:\s*(\d+)\s*$"
-    )
-    _SLIDE_CITATION_RE = re.compile(
-        r"^\[(\d+)\]\s*Lecture Unit ID:\s*(\d+),\s*Page:\s*(\d+)\s*$"
-    )
-    _FAQ_CITATION_RE = re.compile(r"^\[(\d+)\]\s*FAQ ID:\s*(\d+)\s*$")
-    _KEYWORD_SUMMARY_RE = re.compile(
-        r"^\[(\d+)\]\s*Keyword:\s*(.*?);\s*Summary:\s*(.+)\s*$"
-    )
+    def _parse_citation_json(self, raw: str) -> CitationPromptResponse:
+        data = json.loads(raw)
+        resp = CitationPromptResponse.model_validate(data)
+        _validate_marker_coverage(resp)
+        _validate_citation_semantics(resp)
+        return resp
 
-    def _extract_citation_entries(self, response_text: str):
-        entries = []
-        for raw_line in response_text.splitlines():
-            line = raw_line.strip()
-            if not line.startswith("["):
-                continue
-            match = self._TRANSCRIPTION_CITATION_RE.match(line)
-            if match:
-                entries.append(
-                    {
-                        "index": int(match.group(1)),
-                        "type": "transcription",
-                        "lecture_unit_id": int(match.group(2)),
-                        "page_number": (
-                            int(match.group(3)) if match.group(3) is not None else None
-                        ),
-                        "start": int(match.group(4)),
-                        "end": int(match.group(5)),
-                    }
-                )
-                continue
-            match = self._SLIDE_CITATION_RE.match(line)
-            if match:
-                entries.append(
-                    {
-                        "index": int(match.group(1)),
-                        "type": "slide",
-                        "lecture_unit_id": int(match.group(2)),
-                        "page_number": int(match.group(3)),
-                    }
-                )
-        return entries
+    def _parse_summary_json(
+        self, raw: str, citation_resp: CitationPromptResponse
+    ) -> SummaryPromptResponse:
+        data = json.loads(raw)
+        resp = SummaryPromptResponse.model_validate(data)
+        _validate_summary_coverage(resp, citation_resp)
+        return resp
 
-    def _extract_faq_citation_entries(self, response_text: str):
-        entries = []
-        for raw_line in response_text.splitlines():
-            line = raw_line.strip()
-            if not line.startswith("["):
-                continue
-            match = self._FAQ_CITATION_RE.match(line)
-            if match:
-                entries.append(
-                    {
-                        "index": int(match.group(1)),
-                        "faq_id": int(match.group(2)),
-                    }
-                )
-        return entries
-
-    def _format_citation_content(
-        self, entries, lecture_retrieval_dto: LectureRetrievalDTO
+    def _fix_json_with_llm(
+        self, pipeline, language_instruction: str, schema_desc: str, raw_output: str
     ) -> str:
-        slide_content_map = {}
-        for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
-            if not paragraph.page_text_content:
-                continue
-            slide_content_map[(paragraph.lecture_unit_id, paragraph.page_number)] = (
-                paragraph.page_text_content
-            )
-
-        transcription_content_map = {}
-        for paragraph in lecture_retrieval_dto.lecture_transcriptions:
-            if not paragraph.segment_text:
-                continue
-            transcription_content_map[
-                (
-                    paragraph.lecture_unit_id,
-                    paragraph.page_number,
-                    int(paragraph.segment_start_time),
-                    int(paragraph.segment_end_time),
-                )
-            ] = paragraph.segment_text
-
-        formatted = ""
-        for entry in entries:
-            if entry["type"] == "transcription":
-                key_with_page = (
-                    entry["lecture_unit_id"],
-                    entry["page_number"],
-                    entry["start"],
-                    entry["end"],
-                )
-                key_without_page = (
-                    entry["lecture_unit_id"],
-                    None,
-                    entry["start"],
-                    entry["end"],
-                )
-                content = transcription_content_map.get(
-                    key_with_page,
-                    transcription_content_map.get(key_without_page, ""),
-                )
-                page_number = entry["page_number"]
-                page_part = f", Page: {page_number}" if page_number is not None else ""
-                index = entry["index"]
-                lecture_unit_id = entry["lecture_unit_id"]
-                start = entry["start"]
-                end = entry["end"]
-                formatted += (
-                    f"[{index}] Lecture Unit ID: {lecture_unit_id}"
-                    f"{page_part}, Start: {start}, End: {end}\n"
-                    f"Content:\n---{content}---\n\n"
-                )
-            else:
-                key = (entry["lecture_unit_id"], entry["page_number"])
-                content = slide_content_map.get(key, "")
-                index = entry["index"]
-                lecture_unit_id = entry["lecture_unit_id"]
-                page_number = entry["page_number"]
-                formatted += (
-                    f"[{index}] Lecture Unit ID: {lecture_unit_id}, "
-                    f"Page: {page_number}\n"
-                    f"Content:\n---{content}---\n\n"
-                )
-
-        return formatted.replace("{", "{{").replace("}", "}}")
-
-    def _format_faq_citation_content(self, entries, faqs) -> str:
-        faq_content_map = {}
-        for faq in faqs:
-            faq_id = faq.get(FaqSchema.FAQ_ID.value)
-            if faq_id is None:
-                continue
-            title = faq.get(FaqSchema.QUESTION_TITLE.value, "")
-            answer = faq.get(FaqSchema.QUESTION_ANSWER.value, "")
-            faq_content_map[int(faq_id)] = (
-                f"FAQ Question Title: {title}\nFAQ Answer: {answer}"
-            )
-
-        formatted = ""
-        for entry in entries:
-            content = faq_content_map.get(entry["faq_id"], "")
-            index = entry["index"]
-            faq_id = entry["faq_id"]
-            formatted += (
-                f"[{index}] FAQ ID: {faq_id}\n" f"Content:\n---{content}---\n\n"
-            )
-
-        return formatted.replace("{", "{{").replace("}", "}}")
-
-    def _split_answer_citation_blocks(self, response_text: str):
-        lines = response_text.splitlines()
-
-        # Collect keyword/summary lines from the bottom.
-        keyword_lines = []
-        idx = len(lines) - 1
-        while idx >= 0 and not lines[idx].strip():
-            idx -= 1
-        while idx >= 0 and self._KEYWORD_SUMMARY_RE.match(lines[idx].strip()):
-            keyword_lines.append(lines[idx].strip())
-            idx -= 1
-        keyword_lines.reverse()
-
-        # Skip trailing blanks and stray !NONE!/header lines between blocks.
-        while idx >= 0 and (
-            not lines[idx].strip()
-            or lines[idx].strip() == "!NONE!"
-            or lines[idx].strip().lower() in {"citations:", "**citations:**"}
-        ):
-            idx -= 1
-
-        # Collect citation list lines.
-        citation_lines = []
-        while idx >= 0:
-            line = lines[idx].strip()
-            if line == "!NONE!" or line.lower() in {"citations:", "**citations:**"}:
-                idx -= 1
-                continue
-            if (
-                self._TRANSCRIPTION_CITATION_RE.match(line)
-                or self._SLIDE_CITATION_RE.match(line)
-                or self._FAQ_CITATION_RE.match(line)
-            ):
-                citation_lines.append(line)
-                idx -= 1
-                continue
-            break
-        citation_lines.reverse()
-
-        # The rest is the answer body.
-        answer_lines = lines[: idx + 1]
-        answer_text = "\n".join(answer_lines).rstrip()
-
-        return answer_text, citation_lines, keyword_lines
-
-    def _build_citation_map(self, citation_lines, keyword_lines):
-        keyword_map = {}
-        for line in keyword_lines:
-            match = self._KEYWORD_SUMMARY_RE.match(line.strip())
-            if not match:
-                continue
-            idx = int(match.group(1))
-            keyword_map[idx] = (match.group(2).strip(), match.group(3).strip())
-
-        citation_map = {}
-        for line in citation_lines:
-            line = line.strip()
-            match = self._TRANSCRIPTION_CITATION_RE.match(line)
-            if match:
-                idx = int(match.group(1))
-                lecture_unit_id = int(match.group(2))
-                page = match.group(3) if match.group(3) is not None else ""
-                start = match.group(4)
-                end = match.group(5)
-                if start == end:
-                    start = ""
-                    end = ""
-                keyword, summary = keyword_map.get(idx, ("", ""))
-                citation_map[idx] = {
-                    "type": "L",
-                    "id": str(lecture_unit_id),
-                    "page": page,
-                    "start": start,
-                    "end": end,
-                    "keyword": keyword,
-                    "summary": summary,
-                }
-                continue
-
-            match = self._SLIDE_CITATION_RE.match(line)
-            if match:
-                idx = int(match.group(1))
-                lecture_unit_id = int(match.group(2))
-                page = match.group(3)
-                keyword, summary = keyword_map.get(idx, ("", ""))
-                citation_map[idx] = {
-                    "type": "L",
-                    "id": str(lecture_unit_id),
-                    "page": page,
-                    "start": "",
-                    "end": "",
-                    "keyword": keyword,
-                    "summary": summary,
-                }
-                continue
-
-            match = self._FAQ_CITATION_RE.match(line)
-            if match:
-                idx = int(match.group(1))
-                faq_id = int(match.group(2))
-                keyword, summary = keyword_map.get(idx, ("", ""))
-                citation_map[idx] = {
-                    "type": "F",
-                    "id": str(faq_id),
-                    "page": "",
-                    "start": "",
-                    "end": "",
-                    "keyword": keyword,
-                    "summary": summary,
-                }
-
-        return citation_map
-
-    def _inline_citations_and_strip_blocks(self, response_text: str) -> str:
-        if response_text.strip() == "!NONE!":
-            return response_text.strip()
-
-        answer_text, citation_lines, keyword_lines = self._split_answer_citation_blocks(
-            response_text
+        fix_prompt = PromptTemplate(
+            template=language_instruction + self.json_fix_prompt_str,
+            input_variables=["Schema", "RawOutput"],
         )
-        if not citation_lines:
-            return response_text.strip()
+        fixed = (fix_prompt | pipeline).invoke(
+            {"Schema": schema_desc, "RawOutput": raw_output}
+        )
+        return str(fixed).strip()
 
-        citation_map = self._build_citation_map(citation_lines, keyword_lines)
-        if not citation_map:
-            return answer_text or response_text.strip()
+    def _retry_citation_prompt(
+        self,
+        pipeline,
+        language_instruction: str,
+        prompt_template: PromptTemplate,
+        prompt_vars: dict,
+        max_tries: int = 3,
+    ) -> CitationPromptResponse | None:
+        schema_desc = (
+            'Expected JSON schema: {"answer_with_markers": <string>, "citations": '
+            '[{"index": <int>, "type": "L"|"F", "entityid": <int>, "page": <int|null>, '
+            '"start": <int|null>, "end": <int|null>}]}'
+        )
+        last_error = None
+        for attempt in range(1, max_tries + 1):
+            raw = str((prompt_template | pipeline).invoke(prompt_vars)).strip()
+            try:
+                return self._parse_citation_json(raw)
+            except Exception as e:
+                last_error = e
+                logger.debug("Citation JSON attempt %s failed: %s", attempt, e)
+                try:
+                    fixed = self._fix_json_with_llm(
+                        pipeline, language_instruction, schema_desc, raw
+                    )
+                    return self._parse_citation_json(fixed)
+                except Exception as e2:
+                    last_error = e2
+                    continue
 
-        def _replace(match):
-            idx = int(match.group(1))
+        logger.warning("Citation JSON failed after %s tries: %s", max_tries, last_error)
+        return None
+
+    def _retry_summary_prompt(
+        self,
+        pipeline,
+        language_instruction: str,
+        prompt_template: PromptTemplate,
+        prompt_vars: dict,
+        citation_resp: CitationPromptResponse,
+        max_tries: int = 3,
+    ) -> SummaryPromptResponse | None:
+        schema_desc = (
+            'Expected JSON schema: {"summaries": [{"index": <int>, "keyword": <string>, '
+            '"summary": <string>}]}'
+        )
+        last_error = None
+        for attempt in range(1, max_tries + 1):
+            raw = str((prompt_template | pipeline).invoke(prompt_vars)).strip()
+            try:
+                return self._parse_summary_json(raw, citation_resp)
+            except Exception as e:
+                last_error = e
+                logger.debug("Summary JSON attempt %s failed: %s", attempt, e)
+                try:
+                    fixed = self._fix_json_with_llm(
+                        pipeline, language_instruction, schema_desc, raw
+                    )
+                    return self._parse_summary_json(fixed, citation_resp)
+                except Exception as e2:
+                    last_error = e2
+                    continue
+
+        logger.warning("Summary JSON failed after %s tries: %s", max_tries, last_error)
+        return None
+
+    def _build_inline_answer(
+        self,
+        citation_resp: CitationPromptResponse,
+        summary_resp: SummaryPromptResponse | None,
+    ) -> str:
+        summary_map: dict[int, tuple[str, str]] = {}
+        if summary_resp is not None:
+            for s in summary_resp.summaries:
+                summary_map[s.index] = (s.keyword or "", s.summary or "")
+
+        citation_map: dict[int, dict[str, str]] = {}
+        for c in citation_resp.citations:
+            keyword, summ = summary_map.get(c.index, ("", ""))
+            page = "" if c.page is None else str(c.page)
+            start = "" if c.start is None else str(c.start)
+            end = "" if c.end is None else str(c.end)
+
+            citation_map[c.index] = {
+                "type": c.type,
+                "id": str(c.entityid),
+                "page": page,
+                "start": start,
+                "end": end,
+                "keyword": keyword,
+                "summary": summ,
+            }
+
+        def _replace(m: re.Match) -> str:
+            idx = int(m.group(1))
             data = citation_map.get(idx)
             if not data:
-                return match.group(0)
-            citation_type = data["type"]
-            citation_id = data["id"]
-            page = data["page"]
-            start = data["start"]
-            end = data["end"]
-            keyword = data["keyword"]
-            summary = data["summary"]
+                return m.group(0)
+            cite_type = data["type"]
+            cite_id = data["id"]
+            cite_page = data["page"]
+            cite_start = data["start"]
+            cite_end = data["end"]
+            cite_keyword = data["keyword"]
+            cite_summary = data["summary"]
             return (
-                f"[cite:{citation_type}:{citation_id}:{page}:"
-                f"{start}:{end}:{keyword}:{summary}]"
+                f"[cite:{cite_type}:{cite_id}:{cite_page}:"
+                f"{cite_start}:{cite_end}:{cite_keyword}:{cite_summary}]"
             )
 
-        return re.sub(r"\[(\d+)\]", _replace, answer_text)
+        return re.sub(_MARKER_RE, _replace, citation_resp.answer_with_markers)
+
+    def _append_failure_note(self, answer: str, user_language: str) -> str:
+        note_de = "Hinweis: Die Quellenangaben konnten gerade nicht generiert werden. Bitte versuche es erneut."
+        note_en = "Note: Citations could not be generated right now. Please try again."
+        note = note_de if user_language == "de" else note_en
+        if answer.endswith("\n"):
+            return answer.rstrip("\n") + "\n\n" + note
+        return answer.rstrip() + "\n\n" + note
 
     @observe(name="Citation Pipeline")
     def __call__(
         self,
-        information,  #: #Union[List[dict], List[str]],
+        information,
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
         variant: str = "default",
         user_language: str = "en",
         **kwargs,
     ) -> str:
-        """
-        Runs the pipeline
-            :param information: List of info as list of dicts or strings to augment response
-            :param query: The query
-            :param information_type: The type of information provided. can be either lectures or faqs
-            :param variant: The variant of the model to use ("default" or "advanced")
-            :param user_language: The user's preferred language ("en" or "de")
-            :return: Answer text with inline citations added
-        """
         paras = ""
         paragraphs_page_chunks = ""
         paragraphs_transcriptions = ""
@@ -457,124 +385,89 @@ class CitationPipeline(SubPipeline):
         llm = self.llms[variant]
         pipeline = self.pipelines[variant]
 
-        if information_type == InformationType.FAQS:
-            paras = self.create_formatted_faq_string(information) or ""
-            self.prompt_str = self.faq_prompt_str
-        if information_type == InformationType.PARAGRAPHS:
-            paragraphs_page_chunks, paragraphs_transcriptions = (
-                self.create_formatted_lecture_string(information)
-            )
-            paragraphs_page_chunks = paragraphs_page_chunks or ""
-            paragraphs_transcriptions = paragraphs_transcriptions or ""
-            self.prompt_str = self.lecture_prompt_str
-
-        # Add language instruction to prompt
         if user_language == "de":
             language_instruction = "Format all citations and references in German.\n\n"
         else:
             language_instruction = "Format all citations and references in English.\n\n"
 
+        if information_type == InformationType.FAQS:
+            paras = self.create_formatted_faq_string(information) or ""
+            prompt_str = self.faq_prompt_str
+            prompt = PromptTemplate(
+                template=language_instruction + prompt_str,
+                input_variables=["Answer", "Paragraphs"],
+            )
+            prompt_vars = {"Answer": answer, "Paragraphs": paras}
+        else:
+            paragraphs_page_chunks, paragraphs_transcriptions = (
+                self.create_formatted_lecture_string(information)
+            )
+            paragraphs_page_chunks = paragraphs_page_chunks or ""
+            paragraphs_transcriptions = paragraphs_transcriptions or ""
+            prompt_str = self.lecture_prompt_str
+            prompt = PromptTemplate(
+                template=language_instruction + prompt_str,
+                input_variables=["Answer", "Paragraphs", "TranscriptionParagraphs"],
+            )
+            prompt_vars = {
+                "Answer": answer,
+                "Paragraphs": paragraphs_page_chunks,
+                "TranscriptionParagraphs": paragraphs_transcriptions,
+            }
+
         try:
-            if information_type == InformationType.FAQS:
-                self.default_prompt = PromptTemplate(
-                    template=language_instruction + self.prompt_str,
-                    input_variables=[
-                        "Answer",
-                        "Paragraphs",
-                    ],
-                )
-                response = (self.default_prompt | pipeline).invoke(
-                    {
-                        "Answer": answer,
-                        "Paragraphs": paras,
-                    }
-                )
-            else:
-                self.default_prompt = PromptTemplate(
-                    template=language_instruction + self.prompt_str,
-                    input_variables=[
-                        "Answer",
-                        "Paragraphs",
-                        "TranscriptionParagraphs",
-                    ],
-                )
-                response = (self.default_prompt | pipeline).invoke(
-                    {
-                        "Answer": answer,
-                        "Paragraphs": paragraphs_page_chunks,
-                        "TranscriptionParagraphs": paragraphs_transcriptions,
-                    }
-                )
+            citation_resp = self._retry_citation_prompt(
+                pipeline=pipeline,
+                language_instruction=language_instruction,
+                prompt_template=prompt,
+                prompt_vars=prompt_vars,
+                max_tries=3,
+            )
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            response_text = str(response).strip()
 
-            if information_type == InformationType.PARAGRAPHS and isinstance(
-                information, LectureRetrievalDTO
-            ):
-                _, citation_lines, _ = self._split_answer_citation_blocks(response_text)
-                if citation_lines:
-                    citations_block = "\n".join(citation_lines).strip()
-                    paragraphs_block = (
-                        (paragraphs_page_chunks or "").strip()
-                        + "\n\n"
-                        + (paragraphs_transcriptions or "").strip()
-                    ).strip()
-                    if citations_block and paragraphs_block:
-                        keyword_prompt = PromptTemplate(
-                            template=language_instruction
-                            + self.citation_keyword_summary_prompt_str,
-                            input_variables=[
-                                "Citations",
-                                "Paragraphs",
-                            ],
-                        )
-                        keyword_response = (keyword_prompt | pipeline).invoke(
-                            {
-                                "Citations": citations_block,
-                                "Paragraphs": paragraphs_block,
-                            }
-                        )
-                        self._append_tokens(
-                            llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE
-                        )
-                        response_text = (
-                            response_text.rstrip()
-                            + "\n\n"
-                            + str(keyword_response).strip()
-                        )
-            if information_type == InformationType.FAQS and isinstance(
-                information, list
-            ):
-                _, citation_lines, _ = self._split_answer_citation_blocks(response_text)
-                if citation_lines:
-                    citations_block = "\n".join(citation_lines).strip()
-                    paragraphs_block = (paras or "").strip()
-                    if citations_block and paragraphs_block:
-                        keyword_prompt = PromptTemplate(
-                            template=language_instruction
-                            + self.citation_keyword_summary_prompt_str,
-                            input_variables=[
-                                "Citations",
-                                "Paragraphs",
-                            ],
-                        )
-                        keyword_response = (keyword_prompt | pipeline).invoke(
-                            {
-                                "Citations": citations_block,
-                                "Paragraphs": paragraphs_block,
-                            }
-                        )
-                        self._append_tokens(
-                            llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE
-                        )
-                        response_text = (
-                            response_text.rstrip()
-                            + "\n\n"
-                            + str(keyword_response).strip()
-                        )
+            if citation_resp is None:
+                return self._append_failure_note(answer, user_language)
 
-            response_text = self._inline_citations_and_strip_blocks(response_text)
-            return response_text or answer
+            if not citation_resp.citations:
+                return citation_resp.answer_with_markers or answer
+
+            if information_type == InformationType.FAQS:
+                paragraphs_block = (paras or "").strip()
+            else:
+                paragraphs_block = (
+                    (paragraphs_page_chunks or "").strip()
+                    + "\n\n"
+                    + (paragraphs_transcriptions or "").strip()
+                ).strip()
+
+            summary_prompt = PromptTemplate(
+                template=language_instruction
+                + self.citation_keyword_summary_prompt_str,
+                input_variables=["CitationsJSON", "Paragraphs"],
+            )
+            summary_vars = {
+                "CitationsJSON": json.dumps(
+                    [c.model_dump() for c in citation_resp.citations],
+                    ensure_ascii=False,
+                ),
+                "Paragraphs": paragraphs_block,
+            }
+
+            summary_resp = self._retry_summary_prompt(
+                pipeline=pipeline,
+                language_instruction=language_instruction,
+                prompt_template=summary_prompt,
+                prompt_vars=summary_vars,
+                citation_resp=citation_resp,
+                max_tries=3,
+            )
+            self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
+
+            if summary_resp is None:
+                return self._append_failure_note(answer, user_language)
+
+            return self._build_inline_answer(citation_resp, summary_resp) or answer
+
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
-            raise e
+            raise
