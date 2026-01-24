@@ -56,15 +56,14 @@ export default function Models() {
           id: model[0],
           name: model[1],
           endpoint: model[2],
-          api_id: model[3],
-          weight_privacy: model[4],
-          weight_latency: model[5],
-          weight_accuracy: model[6],
-          weight_cost: model[7],
-          weight_quality: model[8],
-          tags: model[9],
-          parallel: model[10],
-          description: model[11],
+          weight_privacy: model[3],
+          weight_latency: model[4],
+          weight_accuracy: model[5],
+          weight_cost: model[6],
+          weight_quality: model[7],
+          tags: model[8],
+          parallel: model[9],
+          description: model[10],
         }));
         setModels(formattedModels);
       }
@@ -167,7 +166,6 @@ const ModelsTable = ({ models }: { models: any[] }) => {
           <TableHead>ID</TableHead>
           <TableHead>Name</TableHead>
           <TableHead>Endpoint</TableHead>
-          <TableHead>API-ID</TableHead>
           <TableHead>Privacy</TableHead>
           <TableHead>Latency</TableHead>
           <TableHead>Accuracy</TableHead>
@@ -184,7 +182,6 @@ const ModelsTable = ({ models }: { models: any[] }) => {
             <TableData>{model.id}</TableData>
             <TableData>{model.name}</TableData>
             <TableData>{model.endpoint}</TableData>
-            <TableData>{model.api_id}</TableData>
             <TableData>{model.weight_privacy}</TableData>
             <TableData>{model.weight_latency}</TableData>
             <TableData>{model.weight_accuracy}</TableData>

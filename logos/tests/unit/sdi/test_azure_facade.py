@@ -17,8 +17,8 @@ def test_azure_facade_status_and_capacity_updates():
     )
 
     # Initial: no rate-limit info -> has capacity
-    status = facade.get_model_status(10)
-    capacity = facade.get_capacity_info("azure", "gpt-4o")
+    status = facade.get_model_status(10, provider_id=2)
+    capacity = facade.get_capacity_info(2, "gpt-4o")
     assert status.is_loaded is True
     assert status.queue_state is None
     assert capacity.has_capacity is True
@@ -28,8 +28,8 @@ def test_azure_facade_status_and_capacity_updates():
         "x-ratelimit-remaining-requests": "0",
         "x-ratelimit-remaining-tokens": "0",
     }
-    facade.update_rate_limits("azure", "gpt-4o", headers_block)
-    capacity_block = facade.get_capacity_info("azure", "gpt-4o")
+    facade.update_rate_limits(2, "gpt-4o", headers_block)
+    capacity_block = facade.get_capacity_info(2, "gpt-4o")
     assert capacity_block.has_capacity is False
 
     # Threshold (remaining <= 10 treated as no capacity in provider logic)
@@ -37,8 +37,8 @@ def test_azure_facade_status_and_capacity_updates():
         "x-ratelimit-remaining-requests": "5",
         "x-ratelimit-remaining-tokens": "500",
     }
-    facade.update_rate_limits("azure", "gpt-4o", headers_low)
-    capacity_low = facade.get_capacity_info("azure", "gpt-4o")
+    facade.update_rate_limits(2, "gpt-4o", headers_low)
+    capacity_low = facade.get_capacity_info(2, "gpt-4o")
     assert capacity_low.has_capacity is False
 
     # Recovered
@@ -46,8 +46,8 @@ def test_azure_facade_status_and_capacity_updates():
         "x-ratelimit-remaining-requests": "50",
         "x-ratelimit-remaining-tokens": "5000",
     }
-    facade.update_rate_limits("azure", "gpt-4o", headers_ok)
-    capacity_ok = facade.get_capacity_info("azure", "gpt-4o")
+    facade.update_rate_limits(2, "gpt-4o", headers_ok)
+    capacity_ok = facade.get_capacity_info(2, "gpt-4o")
     # To simplify, we assume that having more than 10 remaining requests means capacity is available
     assert capacity_ok.has_capacity is True
     assert capacity_ok.rate_limit_remaining_requests == 50
