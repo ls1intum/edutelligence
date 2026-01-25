@@ -4,7 +4,7 @@
 -- Create the table for per-model per-provider configuration
 CREATE TABLE IF NOT EXISTS model_provider_config (
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-    provider_name VARCHAR(50) NOT NULL,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
 
     -- SDI Configuration (per-model overrides)
     cold_start_threshold_ms REAL DEFAULT 1000.0,
@@ -24,9 +24,9 @@ CREATE TABLE IF NOT EXISTS model_provider_config (
 
     last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
 
-    PRIMARY KEY (model_id, provider_name)
+    PRIMARY KEY (model_id, provider_id)
 );
 
 -- Create index for faster lookups
 CREATE INDEX IF NOT EXISTS idx_model_provider_config_model_id ON model_provider_config(model_id);
-CREATE INDEX IF NOT EXISTS idx_model_provider_config_provider_name ON model_provider_config(provider_name);
+CREATE INDEX IF NOT EXISTS idx_model_provider_config_provider_id ON model_provider_config(provider_id);
