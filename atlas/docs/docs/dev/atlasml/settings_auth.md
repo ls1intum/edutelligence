@@ -10,11 +10,10 @@ Module: `atlasml/config.py`. Settings are strongly typed via Pydantic and loaded
 
 Environment variables:
 
-- `ATLAS_API_KEYS`: JSON array of API key tokens (e.g., `["key1","key2"]`)
+- `ATLAS_API_KEYS`: Comma-separated list of API key tokens (e.g., `key1,key2`)
 - `WEAVIATE_HOST`: Full HTTPS URL of centralized Weaviate instance (e.g., `https://weaviate.example.com`)
 - `WEAVIATE_PORT`: Weaviate HTTPS port (always `443` for centralized setup)
-- `WEAVIATE_GRPC_PORT`: Weaviate gRPC port (always `50051` for centralized setup)
-- `WEAVIATE_API_KEY`: API key for authenticating with centralized Weaviate
+- `WEAVIATE_API_KEY`: API key for authenticating with centralized Weaviate (REST API only)
 - `OPENAI_API_KEY`: Azure OpenAI API key for generating embeddings
 - `OPENAI_API_URL`: Azure OpenAI endpoint URL
 - `SENTRY_DSN`: Optional Sentry DSN (used when `ENV=production`)
