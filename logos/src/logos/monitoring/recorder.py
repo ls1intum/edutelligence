@@ -49,6 +49,7 @@ class MonitoringRecorder:
         self,
         request_id: str,
         model_id: int,
+        provider_id: Optional[int],
         priority_when_scheduled: Optional[str],
         queue_depth_at_schedule: Optional[int],
         provider_metrics: Dict[str, Any] = None,
@@ -59,12 +60,14 @@ class MonitoringRecorder:
         Args:
             request_id: Unique request ID.
             model_id: Selected model ID.
+            provider_id: Selected provider ID.
             priority_when_scheduled: Priority string (low/normal/high).
             queue_depth_at_schedule: Total system queue depth at scheduling time.
             provider_metrics: Dictionary of provider-specific metrics (e.g. VRAM, rate limits).
         """
         payload = {
             "model_id": model_id,
+            "provider_id": provider_id,
             "priority_when_scheduled": priority_when_scheduled,
             "queue_depth_at_schedule": queue_depth_at_schedule,
             "scheduled_ts": datetime.datetime.now(datetime.timezone.utc),
@@ -96,6 +99,21 @@ class MonitoringRecorder:
     def record_provider(self, request_id: str, provider_id: int) -> None:
         """Attach provider_id once it is resolved (after scheduling)."""
         self._write(request_id, provider_id=provider_id)
+
+    def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:
+        """
+        Update provider metrics (e.g. Azure rate limits) for a request.
+        """
+        if not provider_metrics:
+            return
+
+        payload = {}
+        for key, value in provider_metrics.items():
+            if key in ["available_vram_mb", "azure_rate_remaining_requests", "azure_rate_remaining_tokens"]:
+                payload[key] = value
+
+        if payload:
+            self._write(request_id, **payload)
 
     def _write(self, request_id: str, **fields: object) -> None:
         try:
