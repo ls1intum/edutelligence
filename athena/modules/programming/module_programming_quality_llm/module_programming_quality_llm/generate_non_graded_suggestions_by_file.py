@@ -279,4 +279,74 @@ async def generate_suggestions_by_file(
                 )
             )
 
+    # Filter feedbacks based on priority to keep count manageable (15-20 range)
+    feedbacks = _filter_feedbacks_by_priority(feedbacks)
+
     return feedbacks
+
+
+def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
+    """
+    Filter feedbacks based on priority to keep count in a manageable range.
+    Removes feedbacks starting from lowest priority, only as many as needed to reach the limit.
+
+    Priority order (lowest to highest): NICE TO HAVE < MINOR ISSUE < MAJOR ISSUE < CRITICAL ISSUE
+
+    - Over 25 feedbacks: Remove MAJOR, MINOR, NICE TO HAVE until reaching 25
+    - Over 20 feedbacks: Remove MINOR and NICE TO HAVE until reaching 20
+    - Over 15 feedbacks: Remove NICE TO HAVE until reaching 15
+    """
+    total_count = len(feedbacks)
+    
+    if total_count <= 15:
+        return feedbacks
+
+    # Categorize feedbacks by priority
+    critical = []
+    major = []
+    minor = []
+    nice_to_have = []
+    other = []  # Feedbacks that don't match any category
+
+    for fb in feedbacks:
+        desc = fb.description
+        if desc.startswith("CRITICAL"):
+            critical.append(fb)
+        elif desc.startswith("MAJOR"):
+            major.append(fb)
+        elif desc.startswith("MINOR"):
+            minor.append(fb)
+        elif desc.startswith("NICE"):
+            nice_to_have.append(fb)
+        else:
+            other.append(fb)
+
+    # Determine target limit based on current count
+    if total_count > 25:
+        target_limit = 25
+        removable_categories = [nice_to_have, minor, major]  # Order: lowest priority first
+    elif total_count > 20:
+        target_limit = 20
+        removable_categories = [nice_to_have, minor]
+    else:  # total_count > 15
+        target_limit = 15
+        removable_categories = [nice_to_have]
+
+    # Calculate how many we need to remove
+    to_remove = total_count - target_limit
+
+    # Remove feedbacks starting from lowest priority categories
+    for category in removable_categories:
+        if to_remove <= 0:
+            break
+
+        # Remove only as many as needed from this category
+        remove_from_category = min(len(category), to_remove)
+        # Remove from the end of the category list (arbitrary choice)
+        del category[-remove_from_category:]
+        to_remove -= remove_from_category
+
+    # Reconstruct the filtered list
+    filtered = critical + major + minor + nice_to_have + other
+
+    return filtered
