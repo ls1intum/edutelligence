@@ -9,9 +9,8 @@ from memiris.api.memory_dto import MemoryDTO
 
 class MemoryDataDTO(BaseModel):
     """
-    A data transfer object (DTO) for representing a memory.
-    See the `Memory` class for more details on the memory object.
-    Excludes the vectors, as they are internal to the system.
+    A data transfer object (DTO) aggregating memory data.
+    Contains memories, learnings, and connections for a tenant.
     """
 
     memories: List[MemoryDTO]
