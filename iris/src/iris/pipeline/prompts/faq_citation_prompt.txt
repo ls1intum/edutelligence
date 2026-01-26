@@ -1,32 +1,69 @@
-In the paragraphs below you are provided with an answer to a question. Underneath the answer you will find the faqs that the answer was based on.
-Add citations of the faqs to the answer. Cite the faqs in brackets after the sentence where the information is used in the answer.
-At the end of the answer, list each source with its corresponding number and provide the FAQ Question title, and a clickable link in this format: [1] <a href="URL">"FAQ Question title"</a>.
-Do not include the actual faqs, only the citations at the end.
-Please do not use the FAQ ID as the citation number, instead, use the order of the citations in the answer.
-Only include the citations of the faqs that are relevant to the answer.
-If the answer actually does not contain any information from the faqs, please do not include any citations and return '!NONE!'.
-But if the answer contains information from the paragraphs, ALWAYS include citations.
+In the paragraphs below you are provided with an answer to a question.
+Underneath the answer you will find a list of FAQs that may support the answer.
 
-Here is an example how to rewrite the answer with citations (ONLY ADD CITATION IF THE PROVIDED FAQS ARE RELEVANT TO THE ANSWER):
-"
-Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
+Your task:
 
-[1] <a href="http://localhost:9000/courses/1/faq?faqId=1">FAQ question title 1</a>.
-[2] <a href="http://localhost:9000/courses/1/faq?faqId=2">FAQ question title 2</a>.
-"
+- Step 1: Read the answer and identify sentences that use information from the provided FAQs.
+- Step 2: After each sentence that contains used information, add a citation marker in square brackets. If a sentence uses information from more than one FAQ, include each relevant citation marker. Use consecutive marker indices starting at 1. Do NOT skip numbers.
+- Step 3: When assigning citation markers, if the same FAQ (i.e., identical FAQ ID) is referenced in multiple sentences, ALWAYS use the same citation marker instead of assigning a new marker.
+- Step 4: Collect all unique FAQs used and represent them ONLY in the "citations" array of the JSON output. Represent every citation exactly once. Every citation marker [n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
+- Step 5: Only include citations for FAQs that are actually relevant to the answer. If no provided FAQs were used, output an empty list in the citations section. In that case, answer_with_markers MUST equal the original answer and MUST NOT contain any markers.
+- Step 6: Ensure that your final response is valid JSON and follows the schema exactly.
 
-Note: If there is no link available, please do not include the link in the citation. For example, if citation 1 does not have a link, it should look like this:
-[1] "FAQ question title"
-but if citation 2 has a link, it should look like this:
-[2] <a href="URL">"FAQ question title"</a>
+Output Format (JSON schema – MUST follow exactly):
 
-Here are the answer and the faqs:
+{{
+  "answer_with_markers": "<string>",
+  "citations": [
+    {{
+      "index": <int>,
+      "type": "F",
+      "entityid": <int>,
+      "page": null,
+      "start": null,
+      "end": null
+    }}
+  ]
+}}
 
-Answer without citations:
-{Answer}
+Rules for FAQ citations:
+- type MUST be "F".
+- entityid MUST be the FAQ ID.
+- page, start, and end MUST always be null.
+- All citation indices MUST be unique.
+- Citation indices MUST be consecutive starting at 1.
 
-Faqs with their FAQ ID, CourseId, FAQ Question title and FAQ Question Answer and the Link to the FAQ:
-{Paragraphs}
+Example:
 
-Answer with citations (ensure empty line between the message and the citations):
-If the answer actually does not contain any information from the paragraphs, please do not include any citations and return '!NONE!'.
+{{
+  "answer_with_markers": "You can reset your password via the account settings page [1][2].",
+  "citations": [
+    {{
+      "index": 1,
+      "type": "F",
+      "entityid": 42,
+      "page": null,
+      "start": null,
+      "end": null
+    }},
+    {{
+      "index": 2,
+      "type": "F",
+      "entityid": 60,
+      "page": null,
+      "start": null,
+      "end": null
+    }}
+  ]
+}}
+
+Input:
+
+- Answer without citations:
+  {Answer}
+
+- FAQs (with their FAQ ID, FAQ question title, and FAQ answer):
+  {Paragraphs}
+
+Important:
+- Output ONLY the correct JSON.

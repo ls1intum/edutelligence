@@ -1,58 +1,103 @@
 In the paragraphs below you are provided with an answer to a question. Underneath the answer, you will find two sets of source paragraphs:
 
-1. Lecture Slides: Contains information with Lecture Names, Unit Names, Links, and Page Numbers.
-2. Lecture Transcriptions: Contains information with Lecture Names, Unit Names, Page Numbers, Links, start times, and end times.
+1. Lecture Slides: Contains Lecture Unit ID and Page number plus the content.
+2. Lecture Transcriptions: Contains Lecture Unit ID, optional Page number, start and end times in seconds plus the content.
 
 Your task:
 
+- Step 0: Output something in JSON format. Follow the prompt to know how exactelly.
 - Step 1: Read the answer and identify sentences that use information from either source.
-- Step 2: After each sentence that contains used information, add a citation marker in square brackets. If a sentence uses information from more than one source, include each relevant citation marker.
+- Step 2: After each sentence that contains used information, add a citation marker in square brackets. If a sentence uses information from more than one source, include each relevant citation marker. Use consecutive marker indices starting at 1. Do NOT skip numbers.
 - Step 3: When assigning citation markers, if the same source (i.e., identical citation details) is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [1]) instead of assigning a new marker each time.
-- Step 4: At the end of the answer (after two empty lines), list all unique citations—one per relevant source—using the formats described below. Each unique source must appear only once in this final citation list.
-- Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output !NONE! without any citations.
+- Step 4: Collect all unique sources used and represent them ONLY in the "citations" array of the JSON output. Represent every citation once. Every citation marker [n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
+- Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output an empty list in the citations section of the JSON output.
 - Step 6: Always include citations if the answer contains any information from the provided paragraphs.
 - Step 7: If both lecture transcription and lecture slide sources are found to be relevant, include citations for both types of sources.
-- Step 8: Ensure there are two empty lines between the rewritten answer (with in-text citation markers) and the final citation list.
+- Step 8: Ensure that your final response is in the JSON format.
+
+Output Format (JSON schema - MUST follow exactly):
+
+{{
+  "answer_with_markers": "<string>",
+  "citations": [
+    {{
+      "index": <int>,
+      "type": "L",
+      "entityid": <int>,
+      "page": <int|null>,
+      "start": <int|null>,
+      "end": <int|null>
+    }}
+  ]
+}}
 
 Citation Formats:
 
-1. For Lecture Transcriptions:
-   - Format with a link available - with the start time stated in the link; if the link contains "?video_only=1" remove it and add the correct timestamp:
-     [X] <a href="URL"?t="start time" target="_blank">"Lecture title", "Lecture unit title", page number, start time, end time</a>.
-   - ONLY if no link is available, do not include a clickable link; simply output the citation text (e.g., "Lecture title", "Lecture unit title", "page number", start time, end time). Start and end times should be displayed in the format hh:mm:ss.
-   - **Important:** Ensure that a start time and an end time are always displayed for lecture transcriptions, regardless of link availability.
-   - URL modification for transcriptions: If the URL has a "videoOnly" parameter, remove it. If you know the start time, add it to the URL as a query parameter in the format `?t=ss`, where `ss` is the start time in seconds.
-   - You are given the time in HH:MM:SS AND in seconds. Use the seconds value for the URL; use the HH:MM:SS format for the citation text.
-   - If you use this format with start and end times, ALWAYS link to the transcription with the start time included, not to the slides.
+1. For everything taken from the TranscriptionParagraphs section (Lecture Transcriptions):
+   - Always include Lecture Unit ID as entityid, Start Time in seconds, End Time in seconds.
+   - Include Page only if available in the source.
+   - If a field is not present in the source, set it to null .
+   - For the index use the corresponding number n from the citation marker [n] in the text.
+   - Format:
+    {{
+      "index": n,
+      "type": "L",
+      "entityid": <int>,
+      "page": <int|null>,
+      "start": <int>,
+      "end": <int>
+    }}
 
-
-2. For Lecture Slides:
-   - Format with a link available:
-     [X] <a href="URL" target="_blank">Lecture title, Lecture unit title, page number(s)</a>.
-   - If no link is available, output the citation without a clickable link, e.g.,
-     [X] "Lecture title", "Lecture unit title", "page number(s)".
-   - If you use this format with only the page number and no transcription times, ALWAYS link to the slides (usually a PDF) and not to the transcription.
+2. For everything taken from the Paragraphs section (Lecture Slides):
+   - Always include Lecture Unit ID as entityid, Page.
+   - Do NOT include Start/End.
+   - If a field is not present in the source, set it to null.
+   - For the index use the corresponding number n from the citation marker [n] in the text.
+   - Format:
+    {{
+      "index": n,
+      "type": "L",
+      "entityid": <int>,
+      "page": <int>,
+      "start": null,
+      "end": null
+    }}
 
 Example:
 
-If the answer is:
-Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua [1][2].
+{{
+  "answer_with_markers": "Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua [1][2].",
+  "citations": [
+    {{
+      "index": 1,
+      "type": "L",
+      "entityid": 1234,
+      "page": 6,
+      "start": 12,
+      "end": 15
+    }},
+    {{
+      "index": 2,
+      "type": "L",
+      "entityid": 5678,
+      "page": 6,
+      "start": null,
+      "end": null
+    }}
+  ]
+}}
 
-Then the citation list at the answer end might be:
-[1] <a href="https://example.com/1234?t=12">Slide 6, start at 00:00:12, end at 00:00:15</a>.
-[2] <a href="https://example.com/1234?t=17">Lecture Title, Unit Title, page 7</a>.
-
-Below the answer, the following information is provided:
+Input:
 
 - Answer without citations:
   {Answer}
 
-- Paragraphs with their Lecture Names, Unit Names, Links and Page Numbers for lecture slides:
+- Paragraphs for citing slides (with their Lecture Unit ID and Page numbers for lecture slides):
   {Paragraphs}
 
-- Paragraphs with their Lecture Names, Unit Names, Page Numbers, Links, start times and end times for lecture transcriptions:
+- TranscriptionParagraphs for citing transcriptions/videos (with their Lecture Unit ID, Page numbers, and start/end times in seconds for lecture transcriptions):
   {TranscriptionParagraphs}
 
 Important:
-- If the answer does not contain any information from the provided paragraphs or if there are no paragraphs, output !NONE! without any citations.
-- Ensure there are two empty lines between the rewritten answer (with in-text citations) and the citation list at the end.
+- If the answer does not contain any information from the provided paragraphs or if there are no paragraphs, output the unchanged answer in the JSON without any citations.
+- Only output the correct JSON and nothing else.
