@@ -26,21 +26,23 @@ export default function AddProvider() {
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [providerKey, setProviderKey] = useState("");
+  const [providerType, setProviderType] = useState("");
   const [authName, setAuthName] = useState("");
   const [authFormat, setAuthFormat] = useState("");
 
   const handleSubmit = async () => {
-    if (!name || !baseUrl || !providerKey) {
-      setStatusMessage("Name, Base URL, and API Key are required.");
+    if (!name || !baseUrl || !providerKey || !providerType) {
+      setStatusMessage("Name, Base URL, API Key, and Provider Type are required.");
       return;
     }
 
     const payload = {
-      name,
+      provider_name: name,
       base_url: baseUrl,
       api_key: providerKey,
       auth_name: authName,
       auth_format: authFormat,
+      provider_type: providerType,
       logos_key: apiKey,
     };
 
@@ -67,6 +69,7 @@ export default function AddProvider() {
         setProviderKey("");
         setAuthName("");
         setAuthFormat("");
+        setProviderType("");
       } else {
         setStatusMessage("Could not add the provider. Please try again.");
       }
@@ -98,6 +101,12 @@ export default function AddProvider() {
             value={name}
             onChangeText={setName}
             placeholder="Azure OpenAI"
+          />
+          <FormField
+            label="Provider Type"
+            value={providerType}
+            onChangeText={setProviderType}
+            placeholder="azure"
           />
           <FormField
             label="Base URL"

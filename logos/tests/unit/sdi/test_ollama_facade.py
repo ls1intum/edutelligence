@@ -22,16 +22,16 @@ def test_ollama_facade_updates_status_from_ps(monkeypatch):
     monkeypatch.setattr("logos.sdi.providers.ollama_provider.OllamaDataProvider._fetch_ps_via_http", fake_fetch)
     monkeypatch.setattr("logos.sdi.providers.ollama_provider.OllamaDataProvider._load_provider_config", fake_load_config)
 
-    facade._providers["ollama"].refresh_data()
+    facade._providers[4].refresh_data()
 
-    status_warm = facade.get_model_status(1)
-    status_cold = facade.get_model_status(14)
+    status_warm = facade.get_model_status(1, provider_id=4)
+    status_cold = facade.get_model_status(14, provider_id=4)
     assert status_warm.is_loaded is True
     assert status_warm.vram_mb == 8192
     assert status_cold.is_loaded is False
     assert status_cold.vram_mb == 0
 
-    cap = facade.get_capacity_info("ollama")
+    cap = facade.get_capacity_info(4)
     assert cap.total_vram_mb == 65536
     assert cap.available_vram_mb == 65536 - 8192
     assert "llama3.3:latest" in cap.loaded_models
@@ -47,17 +47,17 @@ def test_queue_state_from_facade(monkeypatch):
     monkeypatch.setattr("logos.sdi.providers.ollama_provider.OllamaDataProvider._fetch_ps_via_http", lambda self: payload)
     monkeypatch.setattr("logos.sdi.providers.ollama_provider.OllamaDataProvider._load_provider_config", lambda self: {})
 
-    facade._providers["ollama"].refresh_data()
+    facade._providers[4].refresh_data()
 
     # Push some requests into queue_mgr to reflect queue_state
     for _ in range(2):
-        facade.queue_manager.enqueue("task", model_id=1, priority=Priority.LOW)
+        facade.queue_manager.enqueue("task", model_id=1, provider_id=4, priority=Priority.LOW)
     for _ in range(3):
-        facade.queue_manager.enqueue("task", model_id=1, priority=Priority.NORMAL)
+        facade.queue_manager.enqueue("task", model_id=1, provider_id=4, priority=Priority.NORMAL)
     for _ in range(1):
-        facade.queue_manager.enqueue("task", model_id=1, priority=Priority.HIGH)
+        facade.queue_manager.enqueue("task", model_id=1, provider_id=4, priority=Priority.HIGH)
 
-    status = facade.get_model_status(1)
+    status = facade.get_model_status(1, provider_id=4)
     assert status.queue_state.low == 2
     assert status.queue_state.normal == 3
     assert status.queue_state.high == 1
