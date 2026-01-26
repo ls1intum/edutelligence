@@ -646,7 +646,7 @@ class MemirisWrapper:
 
             # Only include connection if it has at least one other valid memory besides the current one
             if len(other_memories) > 0:
-                connection_dtos.append(MemoryConnectionDTO.from_connection(conn, cm))
+                connection_dtos.append(MemoryConnectionDTO.from_connection(conn))
 
         return MemoryWithRelationsDTO(
             memory=memory_dto, learnings=learning_dtos, connections=connection_dtos
