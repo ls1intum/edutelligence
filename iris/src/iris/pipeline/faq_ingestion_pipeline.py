@@ -68,7 +68,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
                 description="Default FAQ ingestion variant using efficient models.",
                 chat_model="gpt-4.1-mini",
                 embedding_model="text-embedding-3-small",
-            )
+            ),
         ]
 
     @observe(name="FAQ Ingestion Pipeline")

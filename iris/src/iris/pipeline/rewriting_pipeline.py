@@ -50,14 +50,17 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         self,
         callback: RewritingCallback,
         variant: Literal["faq", "problem_statement"],
+        local: bool = False,
     ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
         self.db = VectorDatabase()
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
+        self.request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-4.1"
+        )
         self.tokens = []
         self.variant = variant
-        self.faq_retriever = FaqRetrieval(self.db.client)
+        self.faq_retriever = FaqRetrieval(self.db.client, local=local)
 
     @observe(name="Rewriting Pipeline")
     def __call__(
@@ -182,14 +185,17 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
                 variant_id="faq",
                 name="Default FAQ Variant",
                 description="Default FAQ rewriting variant.",
-                rewriting_model="gpt-4.1",
-                consistency_model="gpt-4.1",
+                cloud_rewriting_model="gpt-4.1",
+                cloud_consistency_model="gpt-4.1",
+                local_rewriting_model="gpt-oss:120b",
+                local_consistency_model="gpt-oss:120b",
             ),
             RewritingVariant(
                 variant_id="problem_statement",
                 name="Default Variant",
                 description="Default Problem statement rewriting variant.",
-                rewriting_model="gpt-4.1",
+                cloud_rewriting_model="gpt-4.1",
+                local_rewriting_model="gpt-oss:120b",
             ),
         ]
 
