@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "module_programming_quality_llm"
+version = "0.0.1"
+description = "Programming quality LLM module."
+authors = ["Aniruddh Zaveri <aniruddh.zaveri@tum.de>", "Konrad Weiß <konrad2002.weiss@tum.de>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "3.11.*"
+# if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
+# athena = { path = "../athena", develop = true }
+athena = { path = "../../../athena", develop = true }
+#athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
+llm_core = { path = "../../../llm_core", develop = true }
+gitpython = "^3.1.41"
+tiktoken = "0.7.0"
+promptlayer = "^0.1.85"
+python-dotenv = "^1.0.0"
+nltk = "3.9.1"
+
+[tool.poetry.group.dev.dependencies]
+types-requests = "^2.31.0.8"
+pydantic = "^2.11.7"
+prospector = "^1.10.2"
+setuptools = "^69.0.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.2.0"
+pytest-asyncio = "^0.26.0"
+
+[tool.poetry.scripts]
+module = "athena:run_module"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
