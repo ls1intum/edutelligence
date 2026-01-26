@@ -9,14 +9,20 @@ services:
     command: echo "Athena build succeeded, exiting (this is normal)"
 
   llm_core:
-      build: ./llm_core
+      build:
+        context: ./llm_core
+        additional_contexts:
+          athena: service:athena
       depends_on:
         - athena
       image: llm_core
       command: echo "llm_core build succeeded, exiting (this is normal)"
 
   assessment_module_manager:
-    build: ./assessment_module_manager
+    build:
+      context: ./assessment_module_manager
+      additional_contexts:
+        athena: service:athena
     depends_on:
       - athena
     ports:
@@ -26,7 +32,10 @@ services:
 
   module_example:
     hostname: module-example
-    build: modules/programming/module_example
+    build:
+      context: modules/programming/module_example
+      additional_contexts:
+        athena: service:athena
     depends_on:
       - athena
     ports:
@@ -34,7 +43,11 @@ services:
 
   module_programming_llm:
     hostname: module-programming-llm
-    build: modules/programming/module_programming_llm
+    build:
+      context: modules/programming/module_programming_llm
+      additional_contexts:
+        athena: service:athena
+        llm_core: service:llm_core
     depends_on:
       - athena
       - llm_core
@@ -43,7 +56,11 @@ services:
 
   module_text_llm:
     hostname: module-text-llm
-    build: modules/text/module_text_llm
+    build:
+      context: modules/text/module_text_llm
+      additional_contexts:
+        athena: service:athena
+        llm_core: service:llm_core
     depends_on:
       - athena
       - llm_core
@@ -52,7 +69,10 @@ services:
 
   module_text_cofee:
     hostname: module-text-cofee
-    build: modules/text/module_text_cofee
+    build:
+      context: modules/text/module_text_cofee
+      additional_contexts:
+        athena: service:athena
     depends_on:
       - athena
     ports:
@@ -60,7 +80,10 @@ services:
 
   module_programming_themisml:
     hostname: module-programming-themisml
-    build: modules/programming/module_programming_themisml
+    build:
+      context: modules/programming/module_programming_themisml
+      additional_contexts:
+        athena: service:athena
     depends_on:
       - athena
     ports:
@@ -68,7 +91,10 @@ services:
 
   module_programming_apted:
     hostname: module-programming-apted
-    build: modules/programming/module_programming_apted
+    build:
+      context: modules/programming/module_programming_apted
+      additional_contexts:
+        athena: service:athena
     depends_on:
       - athena
     ports:
@@ -76,7 +102,11 @@ services:
 
   module_modeling_llm:
     hostname: module-modeling-llm
-    build: modules/modeling/module_modeling_llm
+    build:
+      context: modules/modeling/module_modeling_llm
+      additional_contexts:
+        athena: service:athena
+        llm_core: service:llm_core
     depends_on:
       - athena
       - llm_core
@@ -85,7 +115,10 @@ services:
 
   module_programming_winnowing:
     hostname: module-programming-winnowing
-    build: modules/programming/module_programming_winnowing
+    build:
+      context: modules/programming/module_programming_winnowing
+      additional_contexts:
+        athena: service:athena
     depends_on:
       - athena
     ports:

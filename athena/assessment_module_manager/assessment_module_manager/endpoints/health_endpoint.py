@@ -13,7 +13,7 @@ async def is_healthy(module: Module) -> bool:
         async with httpx.AsyncClient(base_url=str(module.url)) as client:
             response = await client.get('/')
         return response.status_code == 200 and response.json()["status"] == "ok"
-    except httpx.ConnectError:
+    except (httpx.ConnectError, httpx.ConnectTimeout):
         logger.error("Server is not reachable: %s", module)
         return False
     except KeyError:
