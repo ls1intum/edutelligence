@@ -100,3 +100,20 @@ class IrisLangchainChatModel(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         return "Iris"
+
+    @property
+    def model_name(self) -> str:
+        """Return the underlying model name for Langfuse tracing."""
+        if hasattr(self.request_handler, "version"):
+            return self.request_handler.version
+        return "unknown"
+
+    @property
+    def model(self) -> str:
+        """Alias for model_name - some integrations look for this."""
+        return self.model_name
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        """Return identifying parameters for LangChain/Langfuse."""
+        return {"model_name": self.model_name, "model": self.model_name}

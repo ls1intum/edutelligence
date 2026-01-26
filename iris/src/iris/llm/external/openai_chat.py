@@ -14,21 +14,21 @@ from typing import (
 
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langfuse.openai import AzureOpenAI, OpenAI
 from openai import APIConnectionError  # Added for retry logic
 from openai import (
     APIError,
     APITimeoutError,
     ContentFilterFinishReasonError,
-    OpenAI,
     RateLimitError,
 )
-from openai.lib.azure import AzureOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
 from pydantic import BaseModel
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.tracing import observe
 
 from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
@@ -220,6 +220,7 @@ class OpenAIChatModel(ChatModel):
 
     api_key: str
 
+    @observe(name="OpenAI Chat Completion")
     def chat(
         self,
         messages: list[PyrisMessage],

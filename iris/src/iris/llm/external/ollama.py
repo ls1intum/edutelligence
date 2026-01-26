@@ -20,6 +20,8 @@ from ollama import Client, Message
 from pydantic import BaseModel, Field
 from requests.auth import HTTPBasicAuth
 
+from iris.tracing import observe
+
 from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisMessage
@@ -138,6 +140,7 @@ class OllamaModel(
             headers=headers,
         )
 
+    @observe(name="Ollama Completion", as_type="generation")
     def complete(
         self,
         prompt: str,
@@ -278,6 +281,7 @@ class OllamaModel(
         except Exception as e:
             return {"error": f"Exception in tool '{name}': {e}"}
 
+    @observe(name="Ollama Chat", as_type="generation")
     def chat(
         self,
         messages: list,  # list[PyrisMessage]
@@ -355,6 +359,7 @@ class OllamaModel(
             model_used,
         )
 
+    @observe(name="Ollama Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:
         response = self._client.embeddings(
             model=self.model, prompt=text, options=self.options

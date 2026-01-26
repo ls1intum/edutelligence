@@ -1,5 +1,9 @@
 -- Add jobs table for async job tracking
-CREATE TYPE IF NOT EXISTS job_status_enum AS ENUM ('pending', 'running', 'success', 'failed');
+DO $$ BEGIN
+    CREATE TYPE job_status_enum AS ENUM ('pending', 'running', 'success', 'failed');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 CREATE TABLE IF NOT EXISTS jobs (
     id SERIAL PRIMARY KEY,

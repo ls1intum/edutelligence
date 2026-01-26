@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from iris.domain.data.simple_submission_dto import SimpleSubmissionDTO
 
@@ -70,3 +70,10 @@ class ExerciseWithSubmissionsDTO(BaseModel):
 
     class Config:
         require_by_default = False
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v):
+        if isinstance(v, str):
+            return v.upper().replace("-", "_")
+        return v
