@@ -1,17 +1,16 @@
 import json
-import logging
 import os
-import traceback
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
+from iris.tracing import observe
 
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
@@ -51,7 +50,7 @@ from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CourseChatPipeline(
@@ -252,6 +251,11 @@ class CourseChatPipeline(
         Returns:
             str: The system message content
         """
+        # Extract user language with fallback
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         # Get tool permissions
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
@@ -277,6 +281,7 @@ class CourseChatPipeline(
         # Prepare template context
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
             "has_competencies": bool(state.dto.course.competencies),
             "has_exercises": bool(state.dto.course.exercises),
             "allow_lecture_tool": allow_lecture_tool,
@@ -465,6 +470,11 @@ class CourseChatPipeline(
         Returns:
             str: The output with citations added
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         if lecture_content_storage.get("content"):
             base_url = dto.settings.artemis_base_url if dto.settings else ""
             output = self.citation_pipeline(
@@ -472,6 +482,7 @@ class CourseChatPipeline(
                 output,
                 InformationType.PARAGRAPHS,
                 variant=variant.id,
+                user_language=user_language,
                 base_url=base_url,
             )
         if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
@@ -485,6 +496,7 @@ class CourseChatPipeline(
                 output,
                 InformationType.FAQS,
                 variant=variant.id,
+                user_language=user_language,
                 base_url=base_url,
             )
 
@@ -509,12 +521,19 @@ class CourseChatPipeline(
         Returns:
             The generated suggestions or None if generation failed
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             if output:
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = dto.chat_history
                 suggestion_dto.last_message = output
-                suggestions = self.suggestion_pipeline(suggestion_dto)
+                suggestions = self.suggestion_pipeline(
+                    suggestion_dto, user_language=user_language
+                )
 
                 if self.suggestion_pipeline.tokens is not None:
                     self._track_tokens(state, self.suggestion_pipeline.tokens)
@@ -529,7 +548,6 @@ class CourseChatPipeline(
                 "An error occurred while running the course chat interaction suggestion pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return None
 
     def _generate_session_title(
@@ -541,7 +559,7 @@ class CourseChatPipeline(
         dto: CourseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the conversation history.
 
         Args:
             state: The current pipeline execution state
@@ -549,19 +567,11 @@ class CourseChatPipeline(
             dto: The pipeline execution DTO
 
         Returns:
-            The generated session title or None if not applicable
+            The generated session title or None if not applicable.
         """
-        # Generate only the 'first time'
-        # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
-        # - or directly with the user's first message (len == 1)
-        if len(dto.chat_history) in (1, 2):
-            first_user_msg = (
-                dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
-            )
-            return super()._create_session_title(state, output, first_user_msg)
-        return None
+        return self.update_session_title(state, output, dto.session_title)
 
-    @traceable(name="Course Chat Pipeline")
+    @observe(name="Course Chat Pipeline")
     def __call__(
         self,
         dto: CourseChatPipelineExecutionDTO,
@@ -587,7 +597,6 @@ class CourseChatPipeline(
                 "An error occurred while running the course chat pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             callback.error(
                 "An error occurred while running the course chat pipeline.",
                 tokens=[],

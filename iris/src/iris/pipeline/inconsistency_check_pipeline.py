@@ -1,11 +1,10 @@
-import logging
 import re
 from typing import Dict, List, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
 from iris.domain.variant.inconsistency_check_variant import InconsistencyCheckVariant
@@ -19,9 +18,10 @@ from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
     solver_prompt,
 )
+from iris.tracing import observe
 from iris.web.status.status_update import InconsistencyCheckCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
@@ -55,7 +55,7 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         self.callback = callback
         self.tokens = []
 
-    @traceable(name="Inconsistency Check Pipeline")
+    @observe(name="Inconsistency Check Pipeline")
     def __call__(self, dto: InconsistencyCheckPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline to check for inconsistencies in the exercise

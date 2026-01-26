@@ -1,5 +1,6 @@
-import logging
 from typing import List
+
+from iris.common.logging_config import get_logger
 
 from ...domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -8,7 +9,7 @@ from ...domain.status.stage_dto import StageDTO
 from ...domain.status.stage_state_dto import StageStateEnum
 from .status_update import StatusCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TranscriptionIngestionStatus(StatusCallback):

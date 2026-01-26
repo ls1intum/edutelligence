@@ -1,18 +1,18 @@
-import logging
 import os
 from datetime import datetime
 from typing import Any, Callable, List, Optional
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
+from iris.tracing import observe
 
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
@@ -31,7 +31,7 @@ from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecut
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import datetime_to_string, format_custom_instructions
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TextExerciseChatPipeline(
@@ -241,6 +241,11 @@ class TextExerciseChatPipeline(
         """
         dto = state.dto
 
+        # Extract user language with fallback
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         exercise_title = dto.exercise.title if dto.exercise else ""
         course_name = (
             dto.exercise.course.name if dto.exercise and dto.exercise.course else ""
@@ -265,6 +270,7 @@ class TextExerciseChatPipeline(
         # Build system prompt using Jinja2 template
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
             "exercise_id": dto.exercise.id if dto.exercise else "",
             "exercise_title": exercise_title,
             "course_name": course_name,
@@ -399,6 +405,11 @@ class TextExerciseChatPipeline(
         Returns:
             The result with citations added.
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             # Add FAQ citations
             faq_storage = getattr(state, "faq_storage", {})
@@ -412,6 +423,7 @@ class TextExerciseChatPipeline(
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 
@@ -427,6 +439,7 @@ class TextExerciseChatPipeline(
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 
@@ -453,7 +466,7 @@ class TextExerciseChatPipeline(
         dto: TextExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the latest user prompt and the model output.
 
         Args:
             state: The current pipeline execution state
@@ -463,12 +476,9 @@ class TextExerciseChatPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if len(dto.chat_history) == 1:
-            first_user_msg = dto.chat_history[0].contents[0].text_content
-            return super()._create_session_title(state, output, first_user_msg)
-        return None
+        return self.update_session_title(state, output, dto.session_title)
 
-    @traceable(name="Text Exercise Chat Pipeline")
+    @observe(name="Text Exercise Chat Pipeline")
     def __call__(
         self,
         dto: TextExerciseChatPipelineExecutionDTO,

@@ -1,5 +1,4 @@
 import concurrent.futures
-import logging
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -8,16 +7,17 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.tracing import observe
 
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -26,7 +26,7 @@ from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
 from ..pipeline.sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def merge_retrieved_chunks(
@@ -93,7 +93,7 @@ class BaseRetrieval(SubPipeline, ABC):
         self.collection = schema_init_func(client)
         self.tokens = []
 
-    @traceable(name="Retrieval: Question Assessment")
+    @observe(name="Retrieval: Question Assessment")
     def assess_question(
         self,
         chat_history: list[PyrisMessage],
@@ -122,12 +122,12 @@ class BaseRetrieval(SubPipeline, ABC):
 
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info("Response from assessment pipeline: %s", response)
+            logger.debug("Assessment completed | result=%s", response)
             return response == "YES"
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Student Query")
+    @observe(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
         chat_history: list[PyrisMessage],
@@ -163,7 +163,7 @@ class BaseRetrieval(SubPipeline, ABC):
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Search in DB")
+    @observe(name="Retrieval: Search in DB")
     def search_in_db(
         self,
         query: str,
@@ -196,7 +196,7 @@ class BaseRetrieval(SubPipeline, ABC):
             filters=filter_weaviate,
         )
 
-    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
+    @observe(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(
         self,
         chat_history: list[PyrisMessage],

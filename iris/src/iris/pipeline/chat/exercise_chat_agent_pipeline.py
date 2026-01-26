@@ -1,4 +1,3 @@
-import logging
 import os
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
@@ -8,11 +7,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
+from iris.tracing import observe
 
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
@@ -47,8 +47,7 @@ from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = get_logger(__name__)
 
 
 class ExerciseChatAgentPipeline(
@@ -269,6 +268,11 @@ class ExerciseChatAgentPipeline(
         dto = state.dto
         query = self.get_latest_user_message(state)
 
+        # Extract user language with fallback
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
         exercise_title: str = dto.exercise.name if dto.exercise else ""
         programming_language = (
@@ -284,6 +288,7 @@ class ExerciseChatAgentPipeline(
         # Build system prompt using Jinja2 template
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
             "exercise_title": exercise_title,
             "problem_statement": problem_statement,
             "programming_language": programming_language,
@@ -355,6 +360,7 @@ class ExerciseChatAgentPipeline(
             state.callback.error("Error in processing response")
             return state.result
 
+    @observe(name="Response Refinement")
     def _refine_response(
         self,
         state: AgentPipelineExecutionState[
@@ -427,6 +433,11 @@ class ExerciseChatAgentPipeline(
         Returns:
             The result with citations added.
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             # Add FAQ citations
             faq_storage = getattr(state, "faq_storage", {})
@@ -440,6 +451,7 @@ class ExerciseChatAgentPipeline(
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 
@@ -455,6 +467,7 @@ class ExerciseChatAgentPipeline(
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
+                    user_language=user_language,
                     base_url=base_url,
                 )
 
@@ -484,12 +497,19 @@ class ExerciseChatAgentPipeline(
             state: The current pipeline execution state.
             result: The final result string.
         """
+        # Extract user language
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         try:
             if result:
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
-                suggestions = self.suggestion_pipeline(suggestion_dto)
+                suggestions = self.suggestion_pipeline(
+                    suggestion_dto, user_language=user_language
+                )
 
                 if self.suggestion_pipeline.tokens is not None:
                     self._track_tokens(state, self.suggestion_pipeline.tokens)
@@ -517,7 +537,7 @@ class ExerciseChatAgentPipeline(
         dto: ExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
-        Generate session title from the first user prompt and the model output.
+        Generate a session title from the latest user prompt and the model output.
 
         Args:
             state: The current pipeline execution state
@@ -527,12 +547,9 @@ class ExerciseChatAgentPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        if len(dto.chat_history) == 1:
-            first_user_msg = dto.chat_history[0].contents[0].text_content
-            return super()._create_session_title(state, output, first_user_msg)
-        return None
+        return self.update_session_title(state, output, dto.session_title)
 
-    @traceable(name="Exercise Chat Agent Pipeline")
+    @observe(name="Exercise Chat Agent Pipeline")
     def __call__(
         self,
         dto: ExerciseChatPipelineExecutionDTO,

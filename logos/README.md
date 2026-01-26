@@ -69,7 +69,7 @@ To deploy Logos locally or on a server:
    docker compose -f ./logos/docker-compose.yaml build
    ```
    
-   and afterward
+   and afterwards
    
    ```
    docker compose -f ./logos/docker-compose.yaml up

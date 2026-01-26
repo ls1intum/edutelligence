@@ -9,7 +9,6 @@ from llm_core.utils.append_format_instructions import append_format_instructions
 from llm_core.utils.llm_utils import remove_system_message
 from llm_core.models.model_config import ModelConfig
 from langchain_core.messages import AIMessage, BaseMessage
-from typing import Optional, Type, TypeVar, List, Union
 import json
 
 T = TypeVar("T", bound=BaseModel)

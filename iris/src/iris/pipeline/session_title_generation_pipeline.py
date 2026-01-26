@@ -1,27 +1,25 @@
-import logging
-import traceback
+import os
 from typing import Optional
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline.prompts.session_title_generation_prompt import (
-    session_title_generation_prompt,
-)
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SessionTitleGenerationPipeline(SubPipeline):
     """
-    Pipeline that generates a session title from the first user message and the LLM response for all iris chats.
+    Pipeline that generates a session title from the conversation history.
     """
 
     llm: IrisLangchainChatModel
@@ -39,6 +37,15 @@ class SessionTitleGenerationPipeline(SubPipeline):
             request_handler=request_handler,
             completion_args=completion_args,
         )
+        # Set up Jinja2 environment and load the prompt template
+        template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(template_dir),
+            autoescape=select_autoescape(["html", "xml", "j2"]),
+        )
+        self.prompt_template = self.jinja_env.get_template(
+            "session_title_generation_prompt.j2"
+        )
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
 
@@ -48,18 +55,23 @@ class SessionTitleGenerationPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    @traceable(name="Session Title Generation Pipeline")
+    @observe(name="Session Title Generation Pipeline")
     def __call__(
-        self, first_user_msg: str, llm_response: str, **kwargs
+        self,
+        current_session_title: str,
+        recent_messages: list[str],
+        user_language: str = "en",
+        **kwargs,
     ) -> Optional[str]:
-        prompt = ChatPromptTemplate.from_messages(
-            [("system", session_title_generation_prompt())]
+        prompt_text = self.prompt_template.render(
+            current_session_title=current_session_title,
+            recent_messages=recent_messages,
+            user_language=user_language,
         )
+        prompt = ChatPromptTemplate.from_messages([("system", prompt_text)])
         try:
             logger.info("Running Session Title Generation Pipeline")
-            session_title = (prompt | self.pipeline).invoke(
-                {"first_user_msg": first_user_msg, "llm_response": llm_response}
-            )
+            session_title = (prompt | self.pipeline).invoke({})
             self.tokens = self.llm.tokens
             self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
             return session_title
@@ -68,5 +80,4 @@ class SessionTitleGenerationPipeline(SubPipeline):
                 "An error occurred while running the session title generation pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return None

@@ -1,5 +1,3 @@
-import logging
-import traceback
 from typing import List
 
 from langchain_core.messages import AIMessage
@@ -8,14 +6,15 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 from pydantic.v1 import BaseModel, Field
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from iris.tracing import observe
 
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -39,7 +38,7 @@ from ..prompts.iris_interaction_suggestion_prompts import (
 )
 from ..sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class Questions(BaseModel):
@@ -82,13 +81,17 @@ class InteractionSuggestionPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    @traceable(name="Interaction Suggestion Pipeline")
+    @observe(name="Interaction Suggestion Pipeline")
     def __call__(
-        self, dto: InteractionSuggestionPipelineExecutionDTO, **kwargs
+        self,
+        dto: InteractionSuggestionPipelineExecutionDTO,
+        user_language: str = "en",
+        **kwargs,
     ) -> list[str]:
         """
         Runs the pipeline
             :param dto: The pipeline execution data transfer object
+            :param user_language: The user's preferred language ("en" or "de")
             :param kwargs: The keyword arguments
 
         """
@@ -111,6 +114,12 @@ class InteractionSuggestionPipeline(SubPipeline):
             chat_history_exists_prompt = exercise_chat_history_exists_prompt
             chat_begin_prompt = exercise_chat_begin_prompt
 
+        # Add language instruction
+        if user_language == "de":
+            language_instruction = "\nGenerate questions in German, using 'du' form."
+        else:
+            language_instruction = "\nGenerate questions in English."
+
         try:
             logger.info("Running course interaction suggestion pipeline...")
 
@@ -132,7 +141,8 @@ class InteractionSuggestionPipeline(SubPipeline):
                             "system",
                             iris_suggestion_initial_system_prompt
                             + "\n"
-                            + chat_history_exists_prompt,
+                            + chat_history_exists_prompt
+                            + language_instruction,
                         ),
                         *chat_history_messages,
                         ("system", chat_begin_prompt),
@@ -154,5 +164,4 @@ class InteractionSuggestionPipeline(SubPipeline):
                 "An error occurred while running the interaction suggestion chat pipeline",
                 exc_info=e,
             )
-            traceback.print_exc()
             return []
