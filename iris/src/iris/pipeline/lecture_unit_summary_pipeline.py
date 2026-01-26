@@ -16,6 +16,7 @@ from iris.pipeline.prompts.lecture_unit_summary_prompt import (
     lecture_unit_summary_prompt,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 
 
 class LectureUnitSummaryPipeline(SubPipeline):
@@ -47,6 +48,7 @@ class LectureUnitSummaryPipeline(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+    @observe(name="Lecture Unit Summary Pipeline")
     def __call__(self, *args, **kwargs):
         lecture_unit_segment_text = ""
         for summary in self.lecture_unit_segment_summaries:

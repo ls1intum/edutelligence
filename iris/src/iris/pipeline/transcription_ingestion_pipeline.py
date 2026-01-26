@@ -1,4 +1,3 @@
-from asyncio.log import logger
 from functools import reduce
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +7,7 @@ from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from iris.domain.data.metrics.transcription_dto import (
@@ -25,12 +25,15 @@ from iris.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
+
+logger = get_logger(__name__)
 
 CHUNK_SEPARATOR_CHAR = "\31"
 
@@ -67,6 +70,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+    @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
             self.callback.in_progress("Deleting existing transcription data")

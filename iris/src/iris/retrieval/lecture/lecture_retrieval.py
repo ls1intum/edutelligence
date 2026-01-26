@@ -1,5 +1,4 @@
 import concurrent.futures
-from asyncio.log import logger
 from enum import Enum
 from typing import List
 
@@ -8,10 +7,10 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -54,6 +53,7 @@ from iris.retrieval.lecture.lecture_transcription_retrieval import (
 from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
+from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -66,6 +66,8 @@ from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+
+logger = get_logger(__name__)
 
 
 class QueryRewriteMode(Enum):
@@ -106,6 +108,7 @@ class LectureRetrieval(SubPipeline):
 
         self.cohere_client = RerankRequestHandler("cohere")
 
+    @observe(name="Lecture Retrieval")
     def __call__(
         self,
         query: str,
@@ -312,7 +315,7 @@ class LectureRetrieval(SubPipeline):
                 ],
             )
 
-    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
+    @observe(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(
         self,
         chat_history: list[PyrisMessage],
@@ -443,7 +446,7 @@ class LectureRetrieval(SubPipeline):
             hypothetical_lecture_transcriptions_answer_query,
         )
 
-    @traceable(name="Retrieval: Rewrite Student Query")
+    @observe(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
         chat_history: List[PyrisMessage],
@@ -480,12 +483,12 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Student Query with Exercise Context")
+    @observe(name="Retrieval: Rewrite Student Query with Exercise Context")
     def rewrite_student_query_with_exercise_context(
         self,
         chat_history: List[PyrisMessage],
@@ -528,12 +531,12 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Elaborated Query")
+    @observe(name="Retrieval: Rewrite Elaborated Query")
     def rewrite_elaborated_query(
         self,
         chat_history: list[PyrisMessage],
@@ -578,12 +581,12 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from retirval pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
+    @observe(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
     def rewrite_elaborated_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],
@@ -633,7 +636,7 @@ class LectureRetrieval(SubPipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e

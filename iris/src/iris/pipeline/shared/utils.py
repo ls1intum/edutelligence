@@ -1,13 +1,13 @@
-import logging
 from datetime import datetime
 from typing import Callable, List, Optional, Tuple
 
 from langchain_core.tools import StructuredTool
 
+from ...common.logging_config import get_logger
 from ...domain import FeatureDTO
 from ...llm.external.model import LanguageModel
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def generate_structured_tool_from_function(
