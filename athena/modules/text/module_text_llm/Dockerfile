@@ -21,10 +21,12 @@ COPY --from=llm_core /code /llm_core
 # install dependencies
 RUN poetry config virtualenvs.create true \
     && poetry config virtualenvs.in-project true \
-    && poetry install --no-interaction --no-ansi
+    && poetry install --no-interaction --no-ansi --no-root
 
 # Project files
 COPY . ./
+
+RUN poetry install --no-interaction --no-ansi
 
 # poetry scripts don't work here
 CMD poetry run python -m module_*
