@@ -14,6 +14,9 @@ from iris.domain.chat.course_chat.course_chat_status_update_dto import (
 from iris.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
     ExerciseChatStatusUpdateDTO,
 )
+from iris.domain.communication.autonomous_tutor_pipeline_status_update_dto import (
+    AutonomousTutorPipelineStatusUpdateDTO,
+)
 from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
     TutorSuggestionStatusUpdateDTO,
 )
@@ -123,6 +126,8 @@ class StatusCallback(ABC):
         accessed_memories: Optional[List[Memory]] = None,
         created_memories: Optional[List[Memory]] = None,
         artifact: Optional[str] = None,
+        confidence: Optional[float] = None,
+        should_post_directly: Optional[bool] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -155,6 +160,10 @@ class StatusCallback(ABC):
             )
         if hasattr(self.status, "artifact"):
             self.status.artifact = artifact
+        if hasattr(self.status, "confidence"):
+            self.status.confidence = confidence
+        if hasattr(self.status, "should_post_directly"):
+            self.status.should_post_directly = should_post_directly
         next_stage = self.get_next_stage()
 
         if next_stage is not None:
@@ -475,6 +484,34 @@ class TutorSuggestionCallback(StatusCallback):
             url,
             run_id,
             TutorSuggestionStatusUpdateDTO(stages=stages),
+            stages[stage],
+            stage,
+        )
+
+
+class AutonomousTutorCallback(StatusCallback):
+    """Status callback for autonomous tutor pipeline."""
+
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: List[StageDTO],
+    ):
+        url = f"{base_url}/{self.api_url}/autonomous-tutor/runs/{run_id}/status"
+        stages = initial_stages or []
+        stage = len(stages)
+        stages += [
+            StageDTO(
+                weight=30,
+                state=StageStateEnum.NOT_STARTED,
+                name="Thinking",
+            ),
+        ]
+        super().__init__(
+            url,
+            run_id,
+            AutonomousTutorPipelineStatusUpdateDTO(stages=stages),
             stages[stage],
             stage,
         )
