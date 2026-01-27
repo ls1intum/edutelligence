@@ -31,6 +31,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         data = {
             "provider_name": "azure",
             "base_url": BASE_URL,
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/setup", json=data, headers=headers)
@@ -50,7 +51,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "base_url": f"{BASE_URL}",
             "api_key": f"{API_KEY}",
             "auth_name": "api-key",
-            "auth_format": "{}"
+            "auth_format": "{}",
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
@@ -104,7 +106,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "profile_id": 1,
-            "api_id": 1,
+            "provider_id": 1,
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_provider", json=data,
@@ -160,7 +162,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
-            "api_id": 1,
+            "provider_id": 1,
+            "api_key": f"{API_KEY}",
             "model_id": 1,
         }
 
@@ -237,7 +240,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "base_url": f"{BASE_URL}",
             "api_key": "",
             "auth_name": "api-key",
-            "auth_format": "{}"
+            "auth_format": "{}",
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
@@ -255,7 +259,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
-            "api_id": 2,
+            "provider_id": 2,
             "profile_id": 2,
         }
 
