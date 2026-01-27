@@ -88,6 +88,7 @@ class Provider(Base):
     base_url = Column(Text, nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
+    api_key = Column(Text, nullable=True)
 
 
 class ModelProvider(Base):

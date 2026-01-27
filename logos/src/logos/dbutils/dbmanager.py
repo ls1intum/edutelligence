@@ -1179,25 +1179,20 @@ class DBManager:
             }
         return None
 
-    # TODO: Currently we support keys per provider/model pair , we dont have specific keys per provider, this is a workaround
     def get_provider_auth(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
-        Retrieve provider auth header formatting and any available API key.
+        Retrieve provider auth header formatting and API key.
 
         Returns:
             Dict with auth_name, auth_format, api_key (may be None) or None if provider not found.
         """
         sql = text("""
-            SELECT providers.id,
-                   providers.auth_name,
-                   providers.auth_format,
-                   model_api_keys.api_key
+            SELECT id,
+                   auth_name,
+                   auth_format,
+                   api_key
             FROM providers
-            LEFT JOIN model_api_keys
-                   ON model_api_keys.provider_id = providers.id
-            WHERE providers.id = :provider_id
-            ORDER BY model_api_keys.id
-            LIMIT 1
+            WHERE id = :provider_id
         """)
 
         result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()

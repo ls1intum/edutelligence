@@ -64,6 +64,7 @@ CREATE TABLE providers (
     provider_type VARCHAR(20) DEFAULT 'cloud',  -- e.g., 'ollama' or 'azure'
     auth_name TEXT NOT NULL,
     auth_format TEXT NOT NULL,
+    api_key TEXT DEFAULT NULL,
 
     -- SDI: Ollama-specific monitoring fields (NULL for cloud providers)
     ollama_admin_url TEXT DEFAULT '',  -- TODO: For Ollama providers, add internal admin endpoint when avaliable
