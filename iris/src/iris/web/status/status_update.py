@@ -8,14 +8,14 @@ from sentry_sdk import capture_exception, capture_message
 
 from iris.common.logging_config import get_logger
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_status_update_dto import (
+    AutonomousTutorPipelineStatusUpdateDTO,
+)
 from iris.domain.chat.course_chat.course_chat_status_update_dto import (
     CourseChatStatusUpdateDTO,
 )
 from iris.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
     ExerciseChatStatusUpdateDTO,
-)
-from iris.domain.communication.autonomous_tutor_pipeline_status_update_dto import (
-    AutonomousTutorPipelineStatusUpdateDTO,
 )
 from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
     TutorSuggestionStatusUpdateDTO,

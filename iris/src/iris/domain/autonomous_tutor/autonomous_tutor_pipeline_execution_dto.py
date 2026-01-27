@@ -20,4 +20,3 @@ class AutonomousTutorPipelineExecutionDto(PipelineExecutionDTO):
     )
     text_exercise: Optional[TextExerciseDTO] = Field(default=None, alias="textExercise")
     lecture: Optional[PyrisLectureDTO] = Field(default=None)
-    exam_id: Optional[int] = Field(default=None, alias="examId")
