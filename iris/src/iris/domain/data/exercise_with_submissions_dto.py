@@ -73,7 +73,7 @@ class ExerciseWithSubmissionsDTO(BaseModel):
 
     @field_validator("type", mode="before")
     @classmethod
-    def uppercase_type(cls, v):
+    def normalize_type(cls, v):
         if isinstance(v, str):
-            return v.upper()
+            return v.upper().replace("-", "_")
         return v
