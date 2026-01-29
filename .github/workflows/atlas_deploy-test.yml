@@ -16,48 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     environment: 'Atlas - Test 1'
     steps:
-      - name: Write .env to remote host
+      - name: Setup Traefik on remote host
         uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.VM_HOST }}
           username: ${{ vars.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           script: |
-            sudo mkdir -p /opt/atlasml
             sudo mkdir -p /opt/atlasml/traefik
-            # Create acme.json with correct permissions for Let's Encrypt certificates
             sudo touch /opt/atlasml/traefik/acme.json
             sudo chmod 600 /opt/atlasml/traefik/acme.json
-            cat << EOF | sudo tee /opt/atlasml/.env > /dev/null
-            # AtlasML Domain and SSL Configuration
-            ATLASML_DOMAIN='${{ secrets.ATLASML_DOMAIN }}'
-            LETSENCRYPT_EMAIL='${{ secrets.LETSENCRYPT_EMAIL }}'
-            IMAGE_TAG='${{ inputs.image-tag }}'
-
-            # Python Configuration
-            PYTHONPATH='${{ secrets.PYTHONPATH }}'
-
-            # Weaviate Connection (Centralized Instance)
-            WEAVIATE_HOST='${{ secrets.WEAVIATE_HOST }}'
-            WEAVIATE_PORT='${{ secrets.WEAVIATE_PORT }}'
-            WEAVIATE_GRPC_PORT='${{ secrets.WEAVIATE_GRPC_PORT }}'
-            WEAVIATE_API_KEY='${{ secrets.WEAVIATE_API_KEY }}'
-
-            # Azure OpenAI Configuration
-            OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}'
-            OPENAI_API_URL='${{ secrets.OPENAI_API_URL }}'
-
-            # AtlasML Authentication
-            ATLAS_API_KEYS='${{ secrets.ATLAS_API_KEYS }}'
-
-            # Monitoring and Environment
-            SENTRY_DSN='${{ secrets.SENTRY_DSN }}'
-            ENV='${{ secrets.ENV }}'
-
-            # Optional: IP Whitelisting (leave empty for no restrictions)
-            ALLOWED_IPS='${{ secrets.ALLOWED_IPS }}'
-            EOF
-            sudo chmod 600 /opt/atlasml/.env
 
   deploy-atlasml:
     needs: provision-env
