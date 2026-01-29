@@ -12,7 +12,7 @@ type VramChartProps = {
   width: number;
   vramDayOffset: number;
   setVramDayOffset: (offset: number) => void;
-  fetchVramStats: () => void;
+  fetchVramStats: (options?: { silent?: boolean }) => void;
   isVramLoading: boolean;
   vramError: string | null;
   vramDataByProvider: { [url: string]: Array<any> };

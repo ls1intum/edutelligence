@@ -887,12 +887,25 @@ class DBManager:
                 COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
                 re.result_status,
                 re.enqueue_ts,
+                re.scheduled_ts,
                 re.request_complete_ts,
                 CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
                      THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts))
                      ELSE NULL
                 END AS run_seconds,
-                re.cold_start
+                CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts))
+                     ELSE NULL
+                END AS queue_seconds,
+                CASE WHEN re.enqueue_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.enqueue_ts))
+                     ELSE NULL
+                END AS total_seconds,
+                re.cold_start,
+                re.initial_priority,
+                re.priority_when_scheduled,
+                re.queue_depth_at_enqueue,
+                re.error_message
             FROM request_events re
             LEFT JOIN models m ON m.id = re.model_id
             LEFT JOIN providers p ON p.id = re.provider_id
@@ -908,10 +921,19 @@ class DBManager:
                 "request_id": row["request_id"],
                 "model_name": row["model_name"],
                 "provider_name": row["provider_name"],
-                "status": row["result_status"] if row["result_status"] else "unknown",
+                "status": row["result_status"] if row["result_status"] else "pending",
                 "timestamp": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
                 "duration": float(row["run_seconds"]) if row["run_seconds"] is not None else None,
-                "cold_start": row["cold_start"]
+                "cold_start": row["cold_start"],
+                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
+                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
+                "queue_seconds": float(row["queue_seconds"]) if row["queue_seconds"] is not None else None,
+                "total_seconds": float(row["total_seconds"]) if row["total_seconds"] is not None else None,
+                "initial_priority": row["initial_priority"],
+                "priority_when_scheduled": row["priority_when_scheduled"],
+                "queue_depth_at_enqueue": row["queue_depth_at_enqueue"],
+                "error_message": row["error_message"],
             })
 
         return {"requests": results}, 200
@@ -1393,17 +1415,20 @@ class DBManager:
 
         sql = text("""
             SELECT
-                ollama_admin_url,
-                snapshot_ts,
-                total_vram_used_bytes,
-                total_models_loaded,
-                loaded_models,
-                MAX(total_vram_used_bytes) OVER (PARTITION BY ollama_admin_url) AS capacity_bytes
-            FROM ollama_provider_snapshots
-            WHERE poll_success = TRUE
-              AND snapshot_ts >= :start_ts
-              AND snapshot_ts < :end_ts
-            ORDER BY ollama_admin_url, snapshot_ts
+                s.ollama_admin_url,
+                s.snapshot_ts,
+                s.total_vram_used_bytes,
+                s.total_models_loaded,
+                s.loaded_models,
+                p.total_vram_mb,
+                MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.ollama_admin_url) AS capacity_bytes
+            FROM ollama_provider_snapshots s
+            LEFT JOIN providers p
+              ON p.ollama_admin_url = s.ollama_admin_url
+            WHERE s.poll_success = TRUE
+              AND s.snapshot_ts >= :start_ts
+              AND s.snapshot_ts < :end_ts
+            ORDER BY s.ollama_admin_url, s.snapshot_ts
         """)
 
         try:
@@ -1413,9 +1438,10 @@ class DBManager:
 
             providers_data: Dict[str, List[Dict[str, Any]]] = {}
 
-            for url, ts, used_bytes, models_loaded, loaded_models, capacity_bytes in rows:
+            for url, ts, used_bytes, models_loaded, loaded_models, total_vram_mb, capacity_bytes in rows:
                 used = int(used_bytes or 0)
-                cap = int(capacity_bytes or 0)
+                configured_mb = int(total_vram_mb or 0)
+                cap = configured_mb * 1024 * 1024 if configured_mb > 0 else int(capacity_bytes or 0)
                 remaining_bytes = (cap - used) if cap and cap > used else None
                 if url not in providers_data:
                     providers_data[url] = []
@@ -1425,6 +1451,7 @@ class DBManager:
                     "vram_bytes": used,
                     "used_vram_mb": used // (1024 * 1024),
                     "remaining_vram_mb": (remaining_bytes // (1024 * 1024)) if isinstance(remaining_bytes, int) else None,
+                    "total_vram_mb": configured_mb if configured_mb > 0 else None,
                     "models_loaded": models_loaded,
                     "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
                 })

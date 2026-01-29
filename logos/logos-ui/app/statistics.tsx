@@ -24,6 +24,15 @@ import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
 import { Button, ButtonIcon } from "@/components/ui/button";
+import {
+  Select,
+  SelectBackdrop,
+  SelectContent,
+  SelectInput,
+  SelectItem,
+  SelectPortal,
+  SelectTrigger,
+} from "@/components/ui/select";
 
 import { CheckIcon, CloseIcon } from "@/components/ui/icon";
 import { RotateCw } from "lucide-react-native";
@@ -53,6 +62,69 @@ import RequestStack, {
   RequestItem,
 } from "@/components/statistics/request-stack";
 import { Skeleton } from "@/components/ui/skeleton";
+
+type VramSeriesPoint = {
+  value: number;
+  label: string;
+  timestamp: number;
+  used_vram_gb?: number;
+  remaining_vram_gb?: number;
+  total_vram_gb?: number;
+  models_loaded?: number;
+  loaded_model_names?: string[];
+  loaded_models?: Array<{ name: string; size_gb: number }>;
+  _empty?: boolean;
+};
+
+const formatProviderLabel = (value: string) =>
+  value.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+const buildVramSignature = (
+  providers: Array<{ url: string; data: Array<any> }>
+): string =>
+  [...providers]
+    .sort((a, b) => a.url.localeCompare(b.url))
+    .map((provider) => {
+      const last = provider.data?.[provider.data.length - 1] || {};
+      const models = Array.isArray(last.loaded_models)
+        ? last.loaded_models
+            .map((m: any) => `${m.name}:${m.size_vram_mb ?? m.size_vram ?? ""}`)
+            .join("|")
+        : "";
+      return [
+        provider.url,
+        last.timestamp ?? "",
+        last.used_vram_mb ?? last.vram_mb ?? "",
+        last.remaining_vram_mb ?? "",
+        last.total_vram_mb ?? "",
+        models,
+      ].join("::");
+    })
+    .join("||");
+
+const getPieSizing = (width: number) => {
+  const size = Math.min(width, 260);
+  return {
+    radius: size / 2.1,
+    innerRadius: size / 3.2,
+  };
+};
+
+const MODEL_SLICE_COLORS = [
+  CHART_PALETTE.provider1,
+  CHART_PALETTE.provider2,
+  CHART_PALETTE.cloud,
+  CHART_PALETTE.local,
+];
+
+const FREE_SLICE_COLOR = CHART_PALETTE.provider3;
+const OTHER_SLICE_COLOR = CHART_PALETTE.total;
+
+const BYTES_PER_MIB = 1024 * 1024;
+const BYTES_PER_GB_DECIMAL = 1_000_000_000;
+
+const toDecimalGb = (bytes: number) =>
+  Number((bytes / BYTES_PER_GB_DECIMAL).toFixed(2));
 
 export default function Statistics() {
   const { apiKey } = useAuth();
@@ -89,11 +161,13 @@ export default function Statistics() {
   const [nowRef] = useState<number>(Date.now()); // Stable hydration
   const [vramDayOffset, setVramDayOffset] = useState(0); // 0 = today, 1 = yesterday, etc.
   const [vramDataByProvider, setVramDataByProvider] = useState<{
-    [url: string]: Array<{ value: number; label: string; timestamp: string }>;
+    [url: string]: Array<VramSeriesPoint>;
   }>({});
+  const [selectedVramProvider, setSelectedVramProvider] = useState<string | null>(null);
   const [vramBaseline, setVramBaseline] = useState<any[]>([]);
   const [vramBucketSizeSec, setVramBucketSizeSec] = useState(10);
   const [vramTotalBuckets, setVramTotalBuckets] = useState(8640);
+  const vramSignatureRef = useRef<string | null>(null);
   const initialFetchDone = useRef(false);
 
   // Compute filtered rows
@@ -121,6 +195,95 @@ export default function Statistics() {
     }
     return rows;
   }, [allRows, timeWindow, customRange, nowRef]);
+
+  const vramProviders = useMemo(
+    () => Object.keys(vramDataByProvider).sort(),
+    [vramDataByProvider]
+  );
+
+  useEffect(() => {
+    if (!vramProviders.length) {
+      setSelectedVramProvider(null);
+      return;
+    }
+    if (!selectedVramProvider || !vramProviders.includes(selectedVramProvider)) {
+      setSelectedVramProvider(vramProviders[0]);
+    }
+  }, [vramProviders, selectedVramProvider]);
+
+  const latestVramSample = useMemo(() => {
+    if (!selectedVramProvider) return null;
+    const series = vramDataByProvider[selectedVramProvider] || [];
+    for (let i = series.length - 1; i >= 0; i -= 1) {
+      const point = series[i];
+      if (
+        point &&
+        !point._empty &&
+        (point.used_vram_gb != null || point.remaining_vram_gb != null)
+      ) {
+        return point;
+      }
+    }
+    return null;
+  }, [selectedVramProvider, vramDataByProvider]);
+
+  const vramPieData = useMemo(() => {
+    const usedGb = latestVramSample?.used_vram_gb ?? 0;
+    const remainingGb = latestVramSample?.remaining_vram_gb ?? 0;
+    const totalGb = latestVramSample?.total_vram_gb ?? usedGb + remainingGb;
+    if (totalGb <= 0) return [];
+
+    const modelSlices =
+      latestVramSample?.loaded_models?.map((model, index) => ({
+        value: model.size_gb,
+        color: MODEL_SLICE_COLORS[index % MODEL_SLICE_COLORS.length],
+        text: model.name,
+      })) || [];
+
+    const modeledUsed = modelSlices.reduce((sum, slice) => sum + slice.value, 0);
+    const otherUsed = Math.max(0, usedGb - modeledUsed);
+
+    const slices = [...modelSlices];
+    if (otherUsed > 0.1) {
+      slices.push({
+        value: otherUsed,
+        color: OTHER_SLICE_COLOR,
+        text: modelSlices.length ? "Other" : "Used",
+      });
+    }
+
+    slices.push({
+      value: remainingGb,
+      color: FREE_SLICE_COLOR,
+      text: "Free",
+    });
+
+    return slices;
+  }, [latestVramSample]);
+
+  const vramSummary = useMemo(() => {
+    const usedGb = latestVramSample?.used_vram_gb ?? 0;
+    const remainingGb = latestVramSample?.remaining_vram_gb ?? 0;
+    const totalGb = usedGb + remainingGb;
+    const freePct = totalGb > 0 ? Math.round((remainingGb / totalGb) * 100) : 0;
+    const models = latestVramSample?.loaded_models ?? [];
+    const modelPreview =
+      models.length > 0
+        ? `${models
+            .slice(0, 3)
+            .map((m) => m.name)
+            .join(", ")}${models.length > 3 ? ` +${models.length - 3} more` : ""}`
+        : "No models reported";
+    return {
+      usedGb,
+      remainingGb,
+      totalGb,
+      freePct,
+      modelsLoaded: latestVramSample?.models_loaded ?? models.length,
+      modelPreview,
+      models,
+    };
+  }, [latestVramSample]);
 
   // Recalculate stats whenever filteredRows changes
   const computeStats = useCallback(
@@ -488,14 +651,35 @@ export default function Statistics() {
 
           // User wants "Remaining Memory" logic
           const raw = b.raw;
-          const remainingMb = raw.remaining_vram_mb || 0;
-          const remainingGb = Number((remainingMb / 1024).toFixed(2));
-          const usedGb = Number(
-            ((raw.used_vram_mb || raw.vram_mb || 0) / 1024).toFixed(2)
-          );
-          const loadedModelNames = (raw.loaded_models || []).map(
-            (m: any) => m.name
-          );
+          const usedBytes =
+            typeof raw.vram_bytes === "number"
+              ? raw.vram_bytes
+              : (raw.used_vram_mb || raw.vram_mb || 0) * BYTES_PER_MIB;
+          const configuredTotalBytes =
+            (raw.total_vram_mb || 0) * BYTES_PER_MIB;
+          const remainingBytes =
+            raw.remaining_vram_mb != null
+              ? raw.remaining_vram_mb * BYTES_PER_MIB
+              : Math.max(0, configuredTotalBytes - usedBytes);
+          const remainingGb = toDecimalGb(remainingBytes);
+          const usedGb = toDecimalGb(usedBytes);
+          const totalGb = toDecimalGb(usedBytes + remainingBytes);
+          const loadedModels = (raw.loaded_models || [])
+            .map((m: any) => {
+              const sizeBytes =
+                typeof m.size_vram === "number"
+                  ? m.size_vram
+                  : typeof m.size_vram_mb === "number"
+                    ? m.size_vram_mb * BYTES_PER_MIB
+                    : 0;
+              const sizeGb = toDecimalGb(sizeBytes);
+              return {
+                name: m.name ?? m.model ?? "model",
+                size_gb: sizeGb,
+              };
+            })
+            .filter((m: any) => m.size_gb > 0);
+          const loadedModelNames = loadedModels.map((m: any) => m.name);
 
           return {
             value: remainingGb, // Chart Remaining VRAM
@@ -503,8 +687,10 @@ export default function Statistics() {
             timestamp: t.timestamp,
             used_vram_gb: usedGb,
             remaining_vram_gb: remainingGb,
+            total_vram_gb: totalGb,
             models_loaded: raw.models_loaded ?? 0,
             loaded_model_names: loadedModelNames,
+            loaded_models: loadedModels,
             // Ensure we have properties needed for render
             hideDataPoint: false, // Show data points
             dataPointRadius: 2,
@@ -548,6 +734,7 @@ export default function Statistics() {
         timestamp: ts,
         remaining_vram_mb: Math.round(freeMb),
         vram_mb: Math.round(usedMb),
+        total_vram_mb: 30518,
         models_loaded: Math.floor(Math.random() * 4),
         loaded_models: [],
       };
@@ -654,7 +841,8 @@ export default function Statistics() {
     [apiKey, timeWindow, customRange, applyTimeSeriesLabels, computeStats]
   );
 
-  const fetchVramStats = useCallback(async () => {
+  const fetchVramStats = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
     if (isUsingDemoData) {
       // In demo mode, show mock VRAM data
       // Re-calculate vramDayDate locally here
@@ -673,7 +861,7 @@ export default function Statistics() {
       return;
     }
 
-    setIsVramLoading(true);
+    if (!silent) setIsVramLoading(true);
     setVramError(null);
 
     // Calculate vramDayDate
@@ -720,6 +908,12 @@ export default function Statistics() {
           });
 
           if (vramData.providers) {
+            const signature = buildVramSignature(vramData.providers || []);
+            if (signature === vramSignatureRef.current) {
+              if (!silent) setIsVramLoading(false);
+              return;
+            }
+            vramSignatureRef.current = signature;
             processVramData(vramData.providers || [], "day", vramDayDate);
           } else {
             const mockProviders = buildMockVramProviders(vramDayDate);
@@ -739,7 +933,7 @@ export default function Statistics() {
       setVramError(null);
       processVramData(mockProviders, "day", vramDayDate);
     } finally {
-      setIsVramLoading(false);
+      if (!silent) setIsVramLoading(false);
     }
   }, [
     apiKey,
@@ -748,11 +942,26 @@ export default function Statistics() {
     isUsingDemoData,
     buildMockVramProviders,
     processVramData,
+    vramSignatureRef,
   ]);
 
   // Separate effect for VRAM fetching
   useEffect(() => {
     fetchVramStats();
+  }, [fetchVramStats]);
+
+  // Poll VRAM utilization every 5 seconds
+  useEffect(() => {
+    let isMounted = true;
+    const tick = async () => {
+      if (!isMounted) return;
+      await fetchVramStats({ silent: true });
+    };
+    const intervalId = setInterval(tick, 5000);
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
   }, [fetchVramStats]);
 
   // Poll for latest requests every 2 seconds
@@ -1013,11 +1222,145 @@ export default function Statistics() {
 
         {stats ? (
           <VStack space="lg">
-            {/* Latest Requests Stack - Positioned ABOVE the refresh/controls */}
-            <RequestStack
-              requests={latestRequests}
-              error={latestRequestsError}
-            />
+            {/* Latest Requests + VRAM Utilization */}
+            <View className="w-full flex-col gap-4 xl:flex-row xl:items-stretch xl:gap-8">
+              <View className="w-full xl:flex-1">
+                <RequestStack
+                  requests={latestRequests}
+                  error={latestRequestsError}
+                />
+              </View>
+              <View className="hidden xl:flex w-px bg-outline-200 mx-4" />
+              <View className="w-full xl:flex-1">
+                <ChartCard
+                  title="VRAM Utilization"
+                  subtitle="Latest snapshot per Ollama provider"
+                  className="h-full"
+                >
+                  {(width) => {
+                    if (isVramLoading) {
+                      return (
+                        <Skeleton
+                          variant="rounded"
+                          className="rounded-lg"
+                          style={{ height: 320 }}
+                          startColor="bg-secondary-300"
+                        />
+                      );
+                    }
+
+                    if (vramError) {
+                      return <EmptyState message={vramError} />;
+                    }
+
+                    if (!vramProviders.length) {
+                      return (
+                        <EmptyState message="No VRAM snapshot data available." />
+                      );
+                    }
+
+                    if (!selectedVramProvider || !vramPieData.length) {
+                      return (
+                        <EmptyState message="No utilization data for the selected provider." />
+                      );
+                    }
+
+                    return (
+                      <VStack space="md" className="w-full">
+                        <View className="w-full">
+                          <Select
+                            selectedValue={selectedVramProvider}
+                            onValueChange={(val) => setSelectedVramProvider(val || null)}
+                          >
+                            <SelectTrigger className="rounded-full border border-outline-200 bg-background-50 px-3 py-2">
+                              <SelectInput
+                                placeholder="Select provider"
+                                value={formatProviderLabel(selectedVramProvider)}
+                                className="text-typography-900"
+                              />
+                            </SelectTrigger>
+                            <SelectPortal>
+                              <SelectBackdrop />
+                              <SelectContent className="border border-outline-200 bg-background-50">
+                                {vramProviders.map((provider) => (
+                                  <SelectItem
+                                    key={provider}
+                                    label={formatProviderLabel(provider)}
+                                    value={provider}
+                                  />
+                                ))}
+                              </SelectContent>
+                            </SelectPortal>
+                          </Select>
+                        </View>
+
+                        <View className="h-px w-full bg-outline-200" />
+
+                        {(() => {
+                          const { radius, innerRadius } = getPieSizing(width);
+                          return (
+                        <View style={{ alignItems: "center" }}>
+                          <View
+                            style={{
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <View
+                              pointerEvents="none"
+                              className="absolute rounded-full bg-secondary-200"
+                              style={{ width: innerRadius * 2, height: innerRadius * 2 }}
+                            />
+                            <PieChart
+                              data={vramPieData}
+                              donut
+                              innerRadius={innerRadius}
+                              radius={radius}
+                              isAnimated={false}
+                              focusOnPress
+                              toggleFocusOnPress
+                              centerLabelComponent={() => (
+                                <View className="items-center">
+                                  <Text className="text-xs text-typography-500 dark:text-typography-400">
+                                    Free
+                                  </Text>
+                                  <Text className="text-xl font-semibold text-typography-900 dark:text-typography-50">
+                                    {vramSummary.freePct}%
+                                  </Text>
+                                  <Text className="text-xs text-typography-500 dark:text-typography-400">
+                                    of {vramSummary.totalGb.toFixed(1)} GB
+                                  </Text>
+                                </View>
+                              )}
+                            />
+                          </View>
+
+                          <VStack className="mt-4 space-y-1">
+                            {vramPieData.map((d, i) => (
+                              <HStack key={i} space="xs" className="items-center">
+                                <View
+                                  style={{
+                                    width: 10,
+                                    height: 10,
+                                    borderRadius: 5,
+                                    backgroundColor: d.color,
+                                  }}
+                                />
+                                <Text className="text-xs text-typography-700">
+                                  {d.text}: {d.value.toFixed(1)} GB
+                                </Text>
+                              </HStack>
+                            ))}
+                          </VStack>
+                        </View>
+                          );
+                        })()}
+                      </VStack>
+                    );
+                  }}
+                </ChartCard>
+              </View>
+            </View>
 
             <View className="mt-8 h-[1px] w-full bg-outline-200" />
 
@@ -1211,53 +1554,55 @@ export default function Statistics() {
                   />
                 ) : (
                   <ChartCard title="Request Type" className="flex-1">
-                    {(width) => (
-                      <View style={{ alignItems: "center" }}>
-                        <View
-                          style={{
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <PieChart
-                            data={providerPieData}
-                            donut
-                            innerRadius={width / 4}
-                            radius={width / 2.5}
-                            showText={false}
-                            textColor="white"
-                            textSize={12}
-                            showValuesAsLabels
-                            isAnimated={false}
-                            animationDuration={600}
-                            focusOnPress
-                            toggleFocusOnPress
-                          />
+                    {(width) => {
+                      const { radius, innerRadius } = getPieSizing(width);
+                      return (
+                        <View style={{ alignItems: "center" }}>
                           <View
-                            pointerEvents="none"
-                            className="absolute rounded-full bg-secondary-200"
-                            style={{ width: width / 2, height: width / 2 }}
-                          />
+                            style={{
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <View
+                              pointerEvents="none"
+                              className="absolute rounded-full bg-secondary-200"
+                              style={{ width: innerRadius * 2, height: innerRadius * 2 }}
+                            />
+                            <PieChart
+                              data={providerPieData}
+                              donut
+                              innerRadius={innerRadius}
+                              radius={radius}
+                              showText={false}
+                              textColor="white"
+                              textSize={12}
+                              showValuesAsLabels
+                              isAnimated={false}
+                              focusOnPress
+                              toggleFocusOnPress
+                            />
+                          </View>
+                          <VStack className="mt-4 space-y-1">
+                            {providerPieData.map((d, i) => (
+                              <HStack key={i} space="xs" className="items-center">
+                                <View
+                                  style={{
+                                    width: 10,
+                                    height: 10,
+                                    borderRadius: 5,
+                                    backgroundColor: d.color,
+                                  }}
+                                />
+                                <Text className="text-xs text-typography-700">
+                                  {d.text}: {d.value}
+                                </Text>
+                              </HStack>
+                            ))}
+                          </VStack>
                         </View>
-                        <VStack className="mt-4 space-y-1">
-                          {providerPieData.map((d, i) => (
-                            <HStack key={i} space="xs" className="items-center">
-                              <View
-                                style={{
-                                  width: 10,
-                                  height: 10,
-                                  borderRadius: 5,
-                                  backgroundColor: d.color,
-                                }}
-                              />
-                              <Text className="text-xs text-typography-700">
-                                {d.text}: {d.value}
-                              </Text>
-                            </HStack>
-                          ))}
-                        </VStack>
-                      </View>
-                    )}
+                      );
+                    }}
                   </ChartCard>
                 )}
               </View>
@@ -1271,50 +1616,52 @@ export default function Statistics() {
                   />
                 ) : (
                   <ChartCard title="Model Share" className="flex-1">
-                      {(width) => (
-                        <View style={{ alignItems: "center" }}>
-                          <View
-                            style={{
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                          >
-                            <PieChart
-                              data={modelPieData}
-                              donut
-                              innerRadius={width / 4}
-                              radius={width / 2.5}
-                              showText={false}
-                              isAnimated={false}
-                              animationDuration={600}
-                              focusOnPress
-                              toggleFocusOnPress
-                            />
+                      {(width) => {
+                        const { radius, innerRadius } = getPieSizing(width);
+                        return (
+                          <View style={{ alignItems: "center" }}>
                             <View
-                              pointerEvents="none"
-                              className="absolute rounded-full bg-secondary-200"
-                              style={{ width: width / 2, height: width / 2 }}
-                            />
+                              style={{
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              <View
+                                pointerEvents="none"
+                                className="absolute rounded-full bg-secondary-200"
+                                style={{ width: innerRadius * 2, height: innerRadius * 2 }}
+                              />
+                              <PieChart
+                                data={modelPieData}
+                                donut
+                                innerRadius={innerRadius}
+                                radius={radius}
+                                showText={false}
+                                isAnimated={false}
+                                focusOnPress
+                                toggleFocusOnPress
+                              />
+                            </View>
+                            <VStack className="mt-4 space-y-1">
+                              {modelPieData.map((d, i) => (
+                                <HStack key={i} space="xs" className="items-center">
+                                  <View
+                                    style={{
+                                      width: 10,
+                                      height: 10,
+                                      borderRadius: 5,
+                                      backgroundColor: d.color,
+                                    }}
+                                  />
+                                  <Text className="text-xs text-typography-700">
+                                    {d.text}
+                                  </Text>
+                                </HStack>
+                              ))}
+                            </VStack>
                           </View>
-                          <VStack className="mt-4 space-y-1">
-                            {modelPieData.map((d, i) => (
-                              <HStack key={i} space="xs" className="items-center">
-                                <View
-                                  style={{
-                                    width: 10,
-                                    height: 10,
-                                    borderRadius: 5,
-                                    backgroundColor: d.color,
-                                  }}
-                                />
-                                <Text className="text-xs text-typography-700">
-                                  {d.text}
-                                </Text>
-                              </HStack>
-                            ))}
-                          </VStack>
-                        </View>
-                      )}
+                        );
+                      }}
                     </ChartCard>
                   )}
                 </View>
