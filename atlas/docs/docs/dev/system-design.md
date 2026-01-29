@@ -345,7 +345,7 @@ class Settings(BaseModel):
 
 1. **Environment Variables** (`.env` file):
    ```bash
-   ATLAS_API_KEYS=["key1","key2"]
+   ATLAS_API_KEYS=key1,key2
    WEAVIATE_HOST=localhost
    WEAVIATE_PORT=8085
    ```

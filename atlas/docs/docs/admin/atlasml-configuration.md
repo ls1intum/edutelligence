@@ -27,23 +27,23 @@ These variables **must** be set for AtlasML to function:
 ### API Authentication
 
 ```bash
-ATLAS_API_KEYS='["key1","key2","key3"]'
+ATLAS_API_KEYS=key1,key2,key3
 ```
 
-**Description**: JSON array of API keys for authenticating requests from Artemis.
+**Description**: Comma-separated list of API keys for authenticating requests from Artemis.
 
-**Format**: JSON array string
+**Format**: Comma-separated string (no spaces around commas recommended)
 
 **Example**:
 ```bash
 # Single key
-ATLAS_API_KEYS='["my-secure-api-key-2025"]'
+ATLAS_API_KEYS=YOUR_ATLAS_API_KEY
 
 # Multiple keys (for key rotation)
-ATLAS_API_KEYS='["current-key","backup-key"]'
+ATLAS_API_KEYS=CURRENT_KEY,BACKUP_KEY
 
 # Production example
-ATLAS_API_KEYS='["prod-key-artemis-1","prod-key-artemis-2"]'
+ATLAS_API_KEYS=PROD_KEY_1,PROD_KEY_2
 ```
 
 **Security Notes**:
@@ -60,7 +60,7 @@ openssl rand -hex 32
 # Using Python
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
-# Example output: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+# Example output: (a 32+ character random string)
 ```
 
 ---
@@ -90,9 +90,10 @@ AtlasML requires the **centralized Weaviate setup** located in `/weaviate` direc
 - **Required**: Must be `443` (centralized setup uses Traefik with HTTPS)
 
 **WEAVIATE_GRPC_PORT**:
-- **Description**: gRPC port for Weaviate (used for faster queries)
+- **Description**: gRPC port for Weaviate (required by Weaviate Python client v4)
 - **Default**: `50051`
-- **Required**: Must be `50051` (as configured in centralized setup)
+- **Required**: Yes - the Weaviate Python client v4 requires gRPC for optimal performance
+- **Note**: This port must be accessible from AtlasML to the Weaviate server
 
 **WEAVIATE_API_KEY**:
 - **Description**: API key for authenticating with Weaviate
@@ -104,11 +105,16 @@ AtlasML requires the **centralized Weaviate setup** located in `/weaviate` direc
 
 ```bash
 # Production (using centralized Weaviate)
+# HTTPS/REST on port 443 with gRPC enabled (gRPC port 50051 must also be reachable)
 WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
 WEAVIATE_GRPC_PORT=50051
-WEAVIATE_API_KEY=your-secure-weaviate-api-key-from-weaviate-env
+WEAVIATE_API_KEY=YOUR_WEAVIATE_API_KEY
 ```
+
+:::note
+The Weaviate Python client v4 requires **both** REST and gRPC protocols. Ensure the gRPC port (default: 50051 for self-hosted) is accessible from AtlasML to the Weaviate server.
+:::
 
 ---
 
@@ -264,7 +270,7 @@ IMAGE_TAG=feature-new-embeddings
 IMAGE_TAG=pr-123
 ```
 
-**Used in**: `compose.atlas.yaml`
+**Used in**: `docker-compose.prod.yml`
 
 ```yaml
 image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
@@ -280,12 +286,11 @@ image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
 # .env.development
 
 # API Keys (development)
-ATLAS_API_KEYS='["dev-test-key"]'
+ATLAS_API_KEYS=dev-test-key
 
 # Weaviate (centralized setup - required)
 WEAVIATE_HOST=https://weaviate-dev.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=dev-weaviate-api-key
 
 # OpenAI (optional for dev)
@@ -315,12 +320,11 @@ Even for development, use the centralized Weaviate setup. For local development 
 # .env.staging
 
 # API Keys (staging)
-ATLAS_API_KEYS='["staging-key-1","staging-key-2"]'
+ATLAS_API_KEYS=staging-key-1,staging-key-2
 
 # Weaviate (centralized setup)
 WEAVIATE_HOST=https://weaviate-staging.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=staging-weaviate-api-key
 
 # OpenAI (staging)
@@ -346,12 +350,11 @@ IMAGE_TAG=develop
 # .env.production
 
 # API Keys (production - KEEP SECURE!)
-ATLAS_API_KEYS='["prod-artemis-key-2025-q1","prod-artemis-key-2025-q1-backup"]'
+ATLAS_API_KEYS=prod-artemis-key-2025-q1,prod-artemis-key-2025-q1-backup
 
 # Weaviate (centralized setup)
 WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=prod-weaviate-api-key-secure
 
 # OpenAI (production)
@@ -447,9 +450,9 @@ Use HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, etc.
 
 **Example with Vault**:
 ```bash
-# Store secret
+# Store secret (use comma-separated format for API keys)
 vault kv put secret/atlasml/prod \
-  api_keys='["key1","key2"]' \
+  api_keys='key1,key2' \
   openai_key='your-key'
 
 # Retrieve and export
@@ -487,8 +490,10 @@ docker exec atlasml env | grep -E "(WEAVIATE|OPENAI|ATLAS|ENV)" | sed 's/=.*/=**
 ### Test Configuration
 
 ```bash
-# Test Weaviate connection
-curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
+# Test Weaviate connection (HTTPS production example)
+curl ${WEAVIATE_HOST}/v1/.well-known/ready
+# For local/dev without scheme, use:
+# curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
 
 # Test AtlasML health
 curl http://localhost/api/v1/health
@@ -505,18 +510,26 @@ curl -H "Authorization: your-key" http://localhost/api/v1/competency/suggest \
 ```bash
 # Check ATLAS_API_KEYS format
 echo $ATLAS_API_KEYS
-# Should be: ["key1","key2"]
-# NOT: ["key1", "key2"] (no spaces)
-# NOT: [key1,key2] (missing quotes)
+# Should be comma-separated: key1,key2
+# NOT: ["key1","key2"] (JSON array not supported)
+# NOT: key1, key2 (no spaces around commas)
+
+# Extract first key for testing
+KEY=$(echo $ATLAS_API_KEYS | cut -d',' -f1)
+echo "First key: $KEY"
 ```
 
 **Error**: `Weaviate connection failed`
 ```bash
-# Check connectivity
-curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
+# Check connectivity (HTTPS production example)
+curl ${WEAVIATE_HOST}/v1/.well-known/ready
+# For local/dev without scheme, use:
+# curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
 
 # Check from container
-docker exec atlasml curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
+docker exec atlasml curl ${WEAVIATE_HOST}/v1/.well-known/ready
+# For local/dev without scheme, use:
+# docker exec atlasml curl http://${WEAVIATE_HOST}:${WEAVIATE_PORT}/v1/.well-known/ready
 ```
 
 **Error**: `OpenAI API error`
@@ -534,18 +547,18 @@ curl https://${OPENAI_API_URL}/openai/deployments \
 
 ```bash
 # ✅ Good - 32+ characters, random
-ATLAS_API_KEYS='["8h7f6e5d4c3b2a1z9y8x7w6v5u4t3s2r"]'
+ATLAS_API_KEYS=8h7f6e5d4c3b2a1z9y8x7w6v5u4t3s2r
 
 # ❌ Bad - Short, predictable
-ATLAS_API_KEYS='["test","password123"]'
+ATLAS_API_KEYS=test,password123
 ```
 
 ### 2. Separate Environments
 
 ```bash
 # ✅ Good - Different keys per environment
-# .env.dev:   ATLAS_API_KEYS='["dev-key"]'
-# .env.prod:  ATLAS_API_KEYS='["prod-key"]'
+# .env.dev:   ATLAS_API_KEYS=dev-key
+# .env.prod:  ATLAS_API_KEYS=prod-key
 
 # ❌ Bad - Same keys everywhere
 ```
@@ -554,7 +567,7 @@ ATLAS_API_KEYS='["test","password123"]'
 
 ```bash
 # Support multiple keys for zero-downtime rotation
-ATLAS_API_KEYS='["current-key","new-key"]'
+ATLAS_API_KEYS=current-key,new-key
 
 # Process:
 # 1. Add new key
@@ -583,7 +596,7 @@ secrets/
 
 ```bash
 # .env.example (commit this)
-ATLAS_API_KEYS='["REPLACE_WITH_YOUR_KEY"]'
+ATLAS_API_KEYS=REPLACE_WITH_YOUR_KEY
 WEAVIATE_HOST=localhost
 WEAVIATE_PORT=8085
 OPENAI_API_KEY=REPLACE_WITH_YOUR_KEY
@@ -623,10 +636,11 @@ docker exec atlasml printenv ATLAS_API_KEYS
 ```bash
 # Check format
 echo $ATLAS_API_KEYS
-# Must be valid JSON array
+# Must be comma-separated
 
-# Test with curl
-curl -H "Authorization: $(echo $ATLAS_API_KEYS | jq -r '.[0]')" \
+# Test with curl (use first key if multiple)
+KEY=$(echo $ATLAS_API_KEYS | cut -d',' -f1)
+curl -H "Authorization: $KEY" \
   http://localhost/api/v1/health
 ```
 
