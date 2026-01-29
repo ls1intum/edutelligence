@@ -19,9 +19,9 @@ jobs:
       - name: Write .env to remote host
         uses: appleboy/ssh-action@v1.2.4
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           script: |
             sudo mkdir -p /opt/atlasml
             sudo mkdir -p /opt/atlasml/traefik
