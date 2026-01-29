@@ -46,6 +46,12 @@ MIGRATIONS=(
     "010_remove_api_id_from_models.sql"
     "010b_revert_profile_constraint.sql"
     "011_restructure_model_api_keys_to_model_based.sql"
+    "012_dedup_models_providers.sql"
+    "013_set_ollama_provider_urls_and_auth.sql"
+    "014_add_api_key_to_providers.sql"
+    "015_add_snapshot_retention_cron.sql"
+    "016_move_endpoint_to_model_api_keys.sql"
+    "017_snapshot_provider_id_migration.sql"
 )
 
 FAILED=0

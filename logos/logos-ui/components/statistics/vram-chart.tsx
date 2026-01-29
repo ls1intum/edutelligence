@@ -132,14 +132,13 @@ export default function VramChart({
           paddingHorizontal: 8,
         }}
       >
-        {providers.map((url, index) => {
-          if (url === "No Data") return null;
+        {providers.map((name, index) => {
+          if (name === "No Data") return null;
           const color = getProviderColor(index);
-          const shortUrl = url.replace("http://", "").split(":")[0];
 
           return (
             <View
-              key={url}
+              key={name}
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -162,7 +161,7 @@ export default function VramChart({
                   color: CHART_PALETTE.textLight,
                 }}
               >
-                {shortUrl}
+                {name}
               </Text>
             </View>
           );
@@ -202,9 +201,9 @@ export default function VramChart({
               hidePointers: true,
             });
           }
-          providers.forEach((url, idx) => {
+          providers.forEach((name, idx) => {
             dataSet.push({
-              data: displayData[url] || [],
+              data: displayData[name] || [],
               color: getProviderColor(idx),
               thickness: 1.5,
               hideDataPoints: true,

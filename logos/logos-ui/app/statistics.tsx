@@ -76,14 +76,11 @@ type VramSeriesPoint = {
   _empty?: boolean;
 };
 
-const formatProviderLabel = (value: string) =>
-  value.replace(/^https?:\/\//, "").replace(/\/$/, "");
-
 const buildVramSignature = (
-  providers: Array<{ url: string; data: Array<any> }>
+  providers: Array<{ provider_id: number; name: string; data: Array<any> }>
 ): string =>
   [...providers]
-    .sort((a, b) => a.url.localeCompare(b.url))
+    .sort((a, b) => a.name.localeCompare(b.name))
     .map((provider) => {
       const last = provider.data?.[provider.data.length - 1] || {};
       const models = Array.isArray(last.loaded_models)
@@ -92,7 +89,7 @@ const buildVramSignature = (
             .join("|")
         : "";
       return [
-        provider.url,
+        provider.name,
         last.timestamp ?? "",
         last.used_vram_mb ?? last.vram_mb ?? "",
         last.remaining_vram_mb ?? "",
@@ -571,7 +568,7 @@ export default function Statistics() {
 
   const processVramData = useCallback(
     (
-      providers: Array<{ url: string; data: Array<any> }>,
+      providers: Array<{ provider_id: number; name: string; data: Array<any> }>,
       period: string,
       dayAnchor?: Date
     ) => {
@@ -697,7 +694,7 @@ export default function Statistics() {
             _empty: false,
           };
         });
-        processed[p.url] = lineData;
+        processed[p.name] = lineData;
       });
 
       // Provide a baseline for the x-axis labels and total width.
@@ -741,7 +738,8 @@ export default function Statistics() {
     });
     return [
       {
-        url: "mock.provider",
+        provider_id: 0,
+        name: "Mock Provider",
         data: samples,
       },
     ];
@@ -1207,10 +1205,6 @@ export default function Statistics() {
         >
           Statistics
         </Text>
-        <Text className="text-center text-gray-500 dark:text-gray-300">
-          Live insights from the request_events table: request volumes, timings,
-          and health.
-        </Text>
 
         {isUsingDemoData && (
           <Box className="mb-4 w-full rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
@@ -1275,7 +1269,7 @@ export default function Statistics() {
                             <SelectTrigger className="rounded-full border border-outline-200 bg-background-50 px-3 py-2">
                               <SelectInput
                                 placeholder="Select provider"
-                                value={formatProviderLabel(selectedVramProvider)}
+                                value={selectedVramProvider ?? ""}
                                 className="text-typography-900"
                               />
                             </SelectTrigger>
@@ -1285,7 +1279,7 @@ export default function Statistics() {
                                 {vramProviders.map((provider) => (
                                   <SelectItem
                                     key={provider}
-                                    label={formatProviderLabel(provider)}
+                                    label={provider}
                                     value={provider}
                                   />
                                 ))}

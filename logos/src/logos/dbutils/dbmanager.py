@@ -1312,7 +1312,7 @@ class DBManager:
             - ollama_admin_url
         """
         sql = text("""
-            SELECT id, ollama_admin_url
+            SELECT id, ollama_admin_url, name
             FROM providers
             WHERE provider_type = 'ollama'
             ORDER BY id
@@ -1324,12 +1324,13 @@ class DBManager:
             providers.append({
                 "id": row.id,
                 "ollama_admin_url": row.ollama_admin_url,
+                "name": row.name,
             })
         return providers
 
     def insert_provider_snapshot(
         self,
-        ollama_admin_url: str,
+        provider_id: int,
         total_models_loaded: int,
         total_vram_used_bytes: int,
         loaded_models: List[Dict[str, Any]],
@@ -1340,7 +1341,7 @@ class DBManager:
         Insert Ollama provider snapshot into monitoring table.
 
         Args:
-            ollama_admin_url: Ollama admin URL (e.g., "http://host.docker.internal:11435")
+            provider_id: Provider ID (FK to providers.id)
             total_models_loaded: Number of models currently loaded
             total_vram_used_bytes: Total VRAM used by all loaded models (in bytes)
             loaded_models: List of model details (name, size_vram, expires_at)
@@ -1349,14 +1350,14 @@ class DBManager:
         """
         sql = text("""
             INSERT INTO ollama_provider_snapshots (
-                ollama_admin_url,
+                provider_id,
                 total_models_loaded,
                 total_vram_used_bytes,
                 loaded_models,
                 poll_success,
                 error_message
             ) VALUES (
-                :ollama_admin_url,
+                :provider_id,
                 :total_models_loaded,
                 :total_vram_used_bytes,
                 :loaded_models,
@@ -1366,7 +1367,7 @@ class DBManager:
         """)
 
         self.session.execute(sql, {
-            "ollama_admin_url": ollama_admin_url,
+            "provider_id": provider_id,
             "total_models_loaded": total_models_loaded,
             "total_vram_used_bytes": total_vram_used_bytes,
             "loaded_models": json.dumps(loaded_models),
@@ -1415,20 +1416,21 @@ class DBManager:
 
         sql = text("""
             SELECT
-                s.ollama_admin_url,
+                s.provider_id,
+                p.name AS provider_name,
                 s.snapshot_ts,
                 s.total_vram_used_bytes,
                 s.total_models_loaded,
                 s.loaded_models,
                 p.total_vram_mb,
-                MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.ollama_admin_url) AS capacity_bytes
+                MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.provider_id) AS capacity_bytes
             FROM ollama_provider_snapshots s
             LEFT JOIN providers p
-              ON p.ollama_admin_url = s.ollama_admin_url
+              ON p.id = s.provider_id
             WHERE s.poll_success = TRUE
               AND s.snapshot_ts >= :start_ts
               AND s.snapshot_ts < :end_ts
-            ORDER BY s.ollama_admin_url, s.snapshot_ts
+            ORDER BY s.provider_id, s.snapshot_ts
         """)
 
         try:
@@ -1436,16 +1438,16 @@ class DBManager:
             if not rows:
                 return {"error": "No VRAM data available for the requested day."}, 404
 
-            providers_data: Dict[str, List[Dict[str, Any]]] = {}
+            providers_data: Dict[int, Dict[str, Any]] = {}
 
-            for url, ts, used_bytes, models_loaded, loaded_models, total_vram_mb, capacity_bytes in rows:
+            for pid, provider_name, ts, used_bytes, models_loaded, loaded_models, total_vram_mb, capacity_bytes in rows:
                 used = int(used_bytes or 0)
                 configured_mb = int(total_vram_mb or 0)
                 cap = configured_mb * 1024 * 1024 if configured_mb > 0 else int(capacity_bytes or 0)
                 remaining_bytes = (cap - used) if cap and cap > used else None
-                if url not in providers_data:
-                    providers_data[url] = []
-                providers_data[url].append({
+                if pid not in providers_data:
+                    providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+                providers_data[pid]["data"].append({
                     "timestamp": ts.isoformat() if ts else None,
                     "vram_mb": used // (1024 * 1024),
                     "vram_bytes": used,
@@ -1457,8 +1459,8 @@ class DBManager:
                 })
 
             providers_list = [
-                {"url": url, "data": data_points}
-                for url, data_points in providers_data.items()
+                {"provider_id": pid, "name": info["name"], "data": info["data"]}
+                for pid, info in providers_data.items()
             ]
             return {"providers": providers_list}, 200
 
