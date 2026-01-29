@@ -20,7 +20,7 @@ type VramChartProps = {
   vramBucketSizeSec: number;
   vramTotalBuckets: number;
   getProviderColor: (index: number) => string;
-  nowRef: number;
+  nowMs: number;
 };
 
 export default function VramChart({
@@ -35,7 +35,7 @@ export default function VramChart({
   vramBucketSizeSec,
   vramTotalBuckets,
   getProviderColor,
-  nowRef,
+  nowMs,
 }: VramChartProps) {
   const dayButtons = Array.from({ length: 7 }).map((_, idx) => {
     const label =
@@ -227,7 +227,7 @@ export default function VramChart({
           }
 
           // Calculate "now" position if viewing today (in UTC)
-          const now = new Date(nowRef);
+          const now = new Date(nowMs);
           const isToday = vramDayOffset === 0;
           let nowXPosition: number | null = null;
 

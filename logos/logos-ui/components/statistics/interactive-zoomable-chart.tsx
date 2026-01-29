@@ -9,7 +9,7 @@ import { Animated, Easing, PanResponder, View } from "react-native";
 import { LineChart } from "react-native-gifted-charts";
 
 import { Button, ButtonIcon } from "@/components/ui/button";
-import { CheckIcon, CloseIcon } from "@/components/ui/icon";
+import { CheckIcon } from "@/components/ui/icon";
 import EmptyState from "@/components/statistics/empty-state";
 import type { SelectionState } from "@/components/statistics/types";
 
@@ -45,10 +45,6 @@ export default function InteractiveZoomableChart({
     [containerWidth]
   );
 
-  // Calculate dynamic spacing to fill the width
-  const dataLength = totalLineData.length;
-  const spacing = dataLength > 1 ? chartWidth / (dataLength - 1) : chartWidth;
-
   // Helper: Map x in chart-space to timestamp (anything beyond the drawn chart maps to the latest point)
   const getTimestampFromX = useCallback(
     (x: number) => {
@@ -70,13 +66,6 @@ export default function InteractiveZoomableChart({
     const endX = Math.max(selection.start, selection.end);
     const startTs = getTimestampFromX(startX);
     const endTs = getTimestampFromX(endX);
-
-    console.log("[InteractiveZoomableChart] confirmSelection", {
-      startX,
-      endX,
-      startIso: new Date(startTs).toISOString(),
-      endIso: new Date(endTs).toISOString(),
-    });
 
     setSelection(null);
     selectionRef.current = null;
@@ -155,15 +144,6 @@ export default function InteractiveZoomableChart({
           const finalStart = Math.min(startX, endX);
           const finalEnd = Math.max(startX, endX);
           const span = finalEnd - finalStart;
-
-          console.log("[InteractiveZoomableChart] release", {
-            rawStart,
-            rawEnd,
-            finalStart,
-            finalEnd,
-            hitRightEdge,
-            span,
-          });
 
           if (span > MIN_SELECTION_PX || hitRightEdge) {
             const finalized: SelectionState = {
