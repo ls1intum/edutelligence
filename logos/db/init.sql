@@ -85,7 +85,6 @@ CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOU
 CREATE TABLE models (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
-    endpoint TEXT NOT NULL,
     weight_privacy threshold_enum DEFAULT('LOCAL'),
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
@@ -107,6 +106,7 @@ CREATE TABLE model_api_keys (
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     api_key TEXT NOT NULL,
+    endpoint TEXT NOT NULL DEFAULT '',
     UNIQUE(model_id, provider_id)
 );
 

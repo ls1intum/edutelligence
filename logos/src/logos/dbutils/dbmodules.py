@@ -67,7 +67,6 @@ class Model(Base):
     __tablename__ = 'models'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    endpoint = Column(Text)
     weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
@@ -107,6 +106,7 @@ class ModelApiKey(Base):
     model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
     provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
     api_key = Column(Text, nullable=False)
+    endpoint = Column(Text, nullable=False, default='')
 
     model = relationship("Model")
     provider = relationship("Provider")

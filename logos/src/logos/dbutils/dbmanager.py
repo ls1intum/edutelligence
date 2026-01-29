@@ -363,18 +363,18 @@ class DBManager:
         results = self.session.execute(sql, {"process_id": process_id}).fetchall()
         return [{"id": r.id, "name": r.name} for r in results]
 
-    def add_model(self, logos_key: str, name: str, endpoint: str):
+    def add_model(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name, "endpoint": endpoint})
+        pk = self.insert("models", {"name": name})
         return {"result": f"Created Model", "model_id": pk}, 200
 
-    def add_full_model(self, logos_key: str, name: str, endpoint: str,
+    def add_full_model(self, logos_key: str, name: str,
                        weight_privacy: str = "LOCAL", worse_accuracy: int = None, worse_quality: int = None, worse_latency: int = None, worse_cost: int = None, tags: str = "", parallel: int = 1,
                        description: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name, "endpoint": endpoint, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
+        pk = self.insert("models", {"name": name, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
         return self.rebalance_added_model(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
 
     def update_model_weights(self, logos_key: str, id: int, category: str, value: int):
@@ -430,7 +430,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
+            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
             if mid == updated_model_id and category == "privacy":
                 privacy_data.append((feedback, mid))
             else:
@@ -473,7 +473,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
+            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
             if mid != deleted_model_id:
                 privacy_data.append((p, mid))
             accuracy_data.append((a, mid))
@@ -511,7 +511,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
+            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
             # Add privacy data (we don't add it later as it's not handled via the model handler)
             privacy_data.append((p, mid))
             if mid == new_model_id:
@@ -1439,7 +1439,7 @@ class DBManager:
             logger.error(f"Failed to query ollama_vram_stats: {e}")
             return {"error": str(e)}, 500
 
-    def connect_model_api(self, logos_key: str, model_id: int, provider_id: int, api_key: str):
+    def connect_model_api(self, logos_key: str, model_id: int, provider_id: int, api_key: str, endpoint: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
 
@@ -1453,16 +1453,17 @@ class DBManager:
             return {"error": "Model is not connected to the specified provider."}, 400
 
         sql = text("""
-                    INSERT INTO model_api_keys (model_id, provider_id, api_key)
-                    VALUES (:model_id, :provider_id, :api_key)
+                    INSERT INTO model_api_keys (model_id, provider_id, api_key, endpoint)
+                    VALUES (:model_id, :provider_id, :api_key, :endpoint)
                     ON CONFLICT (model_id, provider_id)
-                    DO UPDATE SET api_key = EXCLUDED.api_key
+                    DO UPDATE SET api_key = EXCLUDED.api_key, endpoint = EXCLUDED.endpoint
                     RETURNING id
                 """)
         result = self.session.execute(sql, {
             "model_id": int(model_id),
             "provider_id": int(provider_id),
-            "api_key": api_key
+            "api_key": api_key,
+            "endpoint": endpoint
         }).fetchone()
         self.session.commit()
         return {"result": f"Added api-connection to model.", "api_key_id": result.id if result else None}, 200
@@ -1470,7 +1471,7 @@ class DBManager:
     def add_model_provider_profile(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, profile_id: int, api_key: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        r, c = self.add_model(logos_key, model_name, model_endpoint)
+        r, c = self.add_model(logos_key, model_name)
         if c != 200:
             return r, c
         model_id = r["model_id"]
@@ -1480,7 +1481,7 @@ class DBManager:
         r, c = self.connect_profile_model(logos_key, model_id, profile_id)
         if c != 200:
             return r, c
-        r, c = self.connect_model_api(logos_key, model_id, provider_id, api_key)
+        r, c = self.connect_model_api(logos_key, model_id, provider_id, api_key, endpoint=model_endpoint)
         if c != 200:
             return r, c
         return {"result": f"Successfully added model and connected to profile {profile_id}"}, 200
@@ -1533,7 +1534,7 @@ class DBManager:
         sql = text(f"""
             SELECT m.id          AS model_id,
                    m.name        AS model_name,
-                   m.endpoint    AS endpoint,
+                   mak.endpoint  AS endpoint,
                    p.id          AS provider_id,
                    p.name        AS provider_name,
                    p.base_url    AS base_url,
@@ -1552,6 +1553,15 @@ class DBManager:
 
         row = self.session.execute(sql, params).mappings().first()
         return dict(row) if row else None
+
+    def get_endpoint_for_deployment(self, model_id: int, provider_id: int) -> Optional[str]:
+        """Get the endpoint for a specific model-provider deployment from model_api_keys."""
+        sql = text("""
+            SELECT endpoint FROM model_api_keys
+            WHERE model_id = :model_id AND provider_id = :provider_id
+        """)
+        row = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
+        return row.endpoint if row else None
 
     def get_deployments_by_profile(self, logos_key: str, profile_id: int) -> list[Deployment]:
         """
@@ -1718,7 +1728,7 @@ class DBManager:
         Get a list of models accessible by a given key.
         """
         sql = text("""
-            SELECT DISTINCT models.id, models.name, models.endpoint, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT DISTINCT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models, profile_model_permissions, profiles, process
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
@@ -1726,18 +1736,18 @@ class DBManager:
                 and profile_model_permissions.model_id = models.id
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.name, i.endpoint, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [(i.id, i.name, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
     def get_all_models_data(self):
         """
         Get a list of models and their data in the database. Used for rebalancing.
         """
         sql = text("""
-            SELECT models.id, models.name, models.endpoint, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models
         """)
         result = self.session.execute(sql).fetchall()
-        return [(i.id, i.name, i.endpoint, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [(i.id, i.name, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
     def get_policy_info(self, logos_key: str):
         """
@@ -1776,7 +1786,6 @@ class DBManager:
         return {
             "id": result.id,
             "name": result.name,
-            "endpoint": result.endpoint,
             "weight_privacy": result.weight_privacy,
             "weight_latency": result.weight_latency,
             "weight_accuracy": result.weight_accuracy,

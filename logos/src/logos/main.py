@@ -298,11 +298,12 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
                     provider_id=provider_id,
                 )
             elif provider_type == "azure":
+                endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
                 _azure_facade.register_model(
                     model_id=model_id,
                     provider_name=provider_name,
                     model_name=model_name,
-                    model_endpoint=model_info["endpoint"],
+                    model_endpoint=endpoint or "",
                     provider_id=provider_id,
                 )
             else:
@@ -338,7 +339,6 @@ def classifier() -> ClassificationManager:
                 mdls.append({
                     "id": tpl["id"],
                     "name": tpl["name"],
-                    "endpoint": tpl["endpoint"],
                     "weight_privacy": tpl["weight_privacy"],
                     "weight_latency": tpl["weight_latency"],
                     "weight_accuracy": tpl["weight_accuracy"],
