@@ -64,7 +64,7 @@ jobs:
     if: ${{ inputs.deploy-atlasml }}
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
-      environment: 'AtlasML - Test 1'
+      environment: 'Atlas - Test 1'
       docker-compose-file: './atlas/docker-compose.prod.yml'
       main-image-name: ls1intum/edutelligence/atlasml
       image-tag: ${{ inputs.image-tag }}
