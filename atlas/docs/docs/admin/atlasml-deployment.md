@@ -103,54 +103,66 @@ on:
     inputs:
       image-tag:
         type: string
-        description: 'Image tag to deploy'
-        required: true
+        description: 'Image tag to deploy (default: pr-<number> if PR exists, latest for default branch)'
       deploy-atlasml:
         type: boolean
         default: true
-        description: (Re-)deploys AtlasML
+        description: (Re-)deploys AtlasML.
 ```
+
+#### Required GitHub Configuration
+
+The workflow uses the organization's standard naming conventions for secrets and variables.
+
+**Environment Variables** (in GitHub Environment `Atlas - Test 1`):
+- `VM_HOST` - Target server hostname/IP
+- `VM_USERNAME` - SSH username
+
+**Environment Secrets** (in GitHub Environment `Atlas - Test 1`):
+- `VM_SSH_PRIVATE_KEY` - SSH private key for server access
+- All application secrets (e.g., `ATLASML_DOMAIN`, `WEAVIATE_HOST`, `OPENAI_API_KEY`, etc.)
+
+:::tip
+The reusable deployment workflow automatically creates the `.env` file from all secrets configured in the GitHub environment, excluding infrastructure secrets like `VM_SSH_PRIVATE_KEY`.
+:::
 
 #### Steps
 
 **Step 1: Provision Environment**
 
-Writes `.env` file to remote server:
+Sets up Traefik directories and SSL certificate file on the remote server:
 
 ```yaml
-- name: Write .env to remote host
-  uses: appleboy/ssh-action@v1.0.3
+- name: Setup Traefik on remote host
+  uses: appleboy/ssh-action@v1.2.4
   with:
-    host: ${{ secrets.SSH_HOST }}
-    username: ${{ secrets.SSH_USERNAME }}
-    key: ${{ secrets.SSH_PRIVATE_KEY }}
+    host: ${{ vars.VM_HOST }}
+    username: ${{ vars.VM_USERNAME }}
+    key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
     script: |
-      sudo mkdir -p /opt/atlasml
-      cat << EOF | sudo tee /opt/atlasml/.env > /dev/null
-      PYTHONPATH='${{ secrets.PYTHONPATH }}'
-      WEAVIATE_HOST='${{ secrets.WEAVIATE_HOST }}'
-      WEAVIATE_PORT='${{ secrets.WEAVIATE_PORT }}'
-      ATLAS_API_KEYS='${{ secrets.ATLAS_API_KEYS }}'
-      OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}'
-      OPENAI_API_URL='${{ secrets.OPENAI_API_URL }}'
-      ENV='${{ secrets.ENV }}'
-      EOF
-      sudo chmod 600 /opt/atlasml/.env
+      sudo mkdir -p /opt/atlasml/traefik
+      sudo touch /opt/atlasml/traefik/acme.json
+      sudo chmod 600 /opt/atlasml/traefik/acme.json
 ```
+
+:::note
+The `.env` file is automatically created by the reusable deployment workflow using secrets and variables configured in the GitHub environment. You don't need to manually write environment variables.
+:::
 
 **Step 2: Deploy AtlasML**
 
-Uses reusable workflow to deploy:
+Uses the organization's reusable workflow to deploy:
 
 ```yaml
 - name: Deploy AtlasML
   uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
   with:
-    environment: 'AtlasML - Test 1'
+    environment: 'Atlas - Test 1'
     docker-compose-file: './atlas/docker-compose.prod.yml'
     main-image-name: ls1intum/edutelligence/atlasml
     image-tag: ${{ inputs.image-tag }}
     deployment-base-path: '/opt/atlasml'
+  secrets: inherit
 ```
 
 #### How to Deploy
