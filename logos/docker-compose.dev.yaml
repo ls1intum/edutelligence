@@ -1,3 +1,6 @@
+# Development docker-compose - builds images locally
+# Uses Traefik's default self-signed certificates for localhost (no Let's Encrypt)
+
 services:
   traefik:
     image: traefik:v3.6.1
@@ -8,9 +11,6 @@ services:
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.secure8080.address=:8080"
-      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
       - "--api.dashboard=true"
       # - "--entrypoints.grpc.address=:50051"
     ports:
@@ -19,7 +19,6 @@ services:
       # - "50051:50051"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./letsencrypt:/letsencrypt
     networks:
       - internal
       - extern
@@ -50,7 +49,6 @@ services:
       - "traefik.http.routers.logos-server-v1.rule=PathPrefix(`/v1`)"
       - "traefik.http.routers.logos-server-v1.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-v1.tls=true"
-      - "traefik.http.routers.logos-server-v1.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-v1.service=logos-server"
       - "traefik.http.routers.logos-server-v1.priority=100"
 
@@ -58,7 +56,6 @@ services:
       - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
       - "traefik.http.routers.logos-server-openai.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-openai.tls=true"
-      - "traefik.http.routers.logos-server-openai.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-openai.service=logos-server"
       - "traefik.http.routers.logos-server-openai.priority=100"
 
@@ -66,7 +63,6 @@ services:
       - "traefik.http.routers.logos-server-jobs.rule=PathPrefix(`/jobs`)"
       - "traefik.http.routers.logos-server-jobs.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-jobs.tls=true"
-      - "traefik.http.routers.logos-server-jobs.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-jobs.service=logos-server"
       - "traefik.http.routers.logos-server-jobs.priority=100"
 
@@ -74,7 +70,6 @@ services:
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
       - "traefik.http.routers.logos-server-logosdb.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-logosdb.tls=true"
-      - "traefik.http.routers.logos-server-logosdb.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-logosdb.service=logos-server"
       - "traefik.http.routers.logos-server-logosdb.priority=100"
 
@@ -82,7 +77,6 @@ services:
       - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.logos-server-docs.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-docs.tls=true"
-      - "traefik.http.routers.logos-server-docs.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-docs.service=logos-server"
       - "traefik.http.routers.logos-server-docs.priority=100"
 
@@ -129,21 +123,12 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Dev (https://localhost:8080) ===
+      # === Dev (https://localhost:8080) - uses Traefik's default self-signed cert ===
       - "traefik.http.routers.internal-ui-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
       - "traefik.http.routers.internal-ui-dev.entrypoints=secure8080"
       - "traefik.http.routers.internal-ui-dev.tls=true"
-      - "traefik.http.routers.internal-ui-dev.tls.certresolver=letsencrypt"
       - "traefik.http.routers.internal-ui-dev.service=internal-ui-svc"
       - "traefik.http.routers.internal-ui-dev.priority=0"
-
-      # === Prod (https://logos.ase.cit.tum.de:8080) ===
-      - "traefik.http.routers.internal-ui-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui-prod.entrypoints=secure8080"
-      - "traefik.http.routers.internal-ui-prod.tls=true"
-      - "traefik.http.routers.internal-ui-prod.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.internal-ui-prod.service=internal-ui-svc"
-      - "traefik.http.routers.internal-ui-prod.priority=0"
 
       # Shared service definition
       - "traefik.http.services.internal-ui-svc.loadbalancer.server.port=80"
@@ -163,19 +148,10 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Prod (https://logos.ase.cit.tum.de) ===
-      - "traefik.http.routers.landing-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
-      - "traefik.http.routers.landing-prod.entrypoints=websecure"
-      - "traefik.http.routers.landing-prod.tls=true"
-      - "traefik.http.routers.landing-prod.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.landing-prod.service=landing-svc"
-      - "traefik.http.routers.landing-prod.priority=1"
-
-      # === Dev (https://localhost) ===
+      # === Dev (https://localhost) - uses Traefik's default self-signed cert ===
       - "traefik.http.routers.landing-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
       - "traefik.http.routers.landing-dev.entrypoints=websecure"
       - "traefik.http.routers.landing-dev.tls=true"
-      - "traefik.http.routers.landing-dev.tls.certresolver=letsencrypt"
       - "traefik.http.routers.landing-dev.service=landing-svc"
       - "traefik.http.routers.landing-dev.priority=1"
 

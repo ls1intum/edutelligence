@@ -1,3 +1,7 @@
+# Production docker-compose - pulls images from GitHub Container Registry
+# Image tags can be overridden via environment variables or .env file
+# Example: LOGOS_IMAGE_TAG=1.0.0 docker compose up -d
+
 services:
   traefik:
     image: traefik:v3.6.1
@@ -25,7 +29,7 @@ services:
       - extern
 
   logos-server:
-    image: ghcr.io/ls1intum/edutelligence/logos:latest
+    image: ghcr.io/ls1intum/edutelligence/logos:${LOGOS_IMAGE_TAG:-latest}
     container_name: logos-server
     restart: unless-stopped
     depends_on:
@@ -117,21 +121,13 @@ services:
       - internal
 
   logos-ui:
-    image: ghcr.io/ls1intum/edutelligence/logos-ui:latest
+    image: ghcr.io/ls1intum/edutelligence/logos-ui:${LOGOS_IMAGE_TAG:-latest}
     container_name: logos-ui
     restart: unless-stopped
     expose:
       - "80"
     labels:
       - "traefik.enable=true"
-
-      # === Dev (https://localhost:8080) ===
-      - "traefik.http.routers.internal-ui-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui-dev.entrypoints=secure8080"
-      - "traefik.http.routers.internal-ui-dev.tls=true"
-      - "traefik.http.routers.internal-ui-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.internal-ui-dev.service=internal-ui-svc"
-      - "traefik.http.routers.internal-ui-dev.priority=0"
 
       # === Prod (https://logos.ase.cit.tum.de:8080) ===
       - "traefik.http.routers.internal-ui-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
@@ -141,13 +137,13 @@ services:
       - "traefik.http.routers.internal-ui-prod.service=internal-ui-svc"
       - "traefik.http.routers.internal-ui-prod.priority=0"
 
-      # Shared service definition
+      # Service definition
       - "traefik.http.services.internal-ui-svc.loadbalancer.server.port=80"
     networks:
       - internal
 
   landing-page:
-    image: ghcr.io/ls1intum/edutelligence/logos-landing:latest
+    image: ghcr.io/ls1intum/edutelligence/logos-landing:${LOGOS_IMAGE_TAG:-latest}
     container_name: logos-landing
     restart: unless-stopped
     environment:
@@ -165,15 +161,7 @@ services:
       - "traefik.http.routers.landing-prod.service=landing-svc"
       - "traefik.http.routers.landing-prod.priority=1"
 
-      # === Dev (https://localhost) ===
-      - "traefik.http.routers.landing-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
-      - "traefik.http.routers.landing-dev.entrypoints=websecure"
-      - "traefik.http.routers.landing-dev.tls=true"
-      - "traefik.http.routers.landing-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.landing-dev.service=landing-svc"
-      - "traefik.http.routers.landing-dev.priority=1"
-
-      # Shared service definition
+      # Service definition
       - "traefik.http.services.landing-svc.loadbalancer.server.port=80"
     networks:
       - extern

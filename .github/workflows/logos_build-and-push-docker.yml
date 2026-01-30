@@ -28,7 +28,8 @@ jobs:
       release_tag: ${{ steps.compute-tag.outputs.release_tag }}
     steps:
       - name: Compute Tag
-        uses: actions/github-script@v7
+        # actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         id: compute-tag
         with:
           result-encoding: string
@@ -63,7 +64,8 @@ jobs:
   build-and-push-server:
     name: Build and Push Logos Server
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
+    # ls1intum/.github@main
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@e479a4eccbba098760e5a3ff47b73c7c7dfdb15b
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos
       docker-file: ./logos/Dockerfile
@@ -73,7 +75,8 @@ jobs:
   build-and-push-ui:
     name: Build and Push Logos UI
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
+    # ls1intum/.github@main
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@e479a4eccbba098760e5a3ff47b73c7c7dfdb15b
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos-ui
       docker-file: ./logos/logos-ui/Dockerfile
@@ -83,7 +86,8 @@ jobs:
   build-and-push-landing:
     name: Build and Push Logos Landing
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
+    # ls1intum/.github@main
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@e479a4eccbba098760e5a3ff47b73c7c7dfdb15b
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos-landing
       docker-file: ./logos/logos-landing/Dockerfile
