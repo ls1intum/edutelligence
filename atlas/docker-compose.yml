@@ -13,7 +13,7 @@
 
 services:
   weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.32.2
+    image: cr.weaviate.io/semitechnologies/weaviate:1.34.10
     container_name: weaviate-local
     restart: unless-stopped
     command:
