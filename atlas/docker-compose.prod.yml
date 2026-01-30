@@ -62,11 +62,11 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.atlasml.entrypoints=http"
-      - "traefik.http.routers.atlasml.rule=Host(`${ATLASML_DOMAIN}`)"
+      - "traefik.http.routers.atlasml.rule=PathPrefix(`/`)"
       - "traefik.http.middlewares.atlasml-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.routers.atlasml.middlewares=atlasml-https-redirect"
       - "traefik.http.routers.atlasml-secure.entrypoints=https"
-      - "traefik.http.routers.atlasml-secure.rule=Host(`${ATLASML_DOMAIN}`)"
+      - "traefik.http.routers.atlasml-secure.rule=PathPrefix(`/`)"
       - "traefik.http.routers.atlasml-secure.tls=true"
       - "traefik.http.routers.atlasml-secure.tls.certresolver=letsencrypt"
       - "traefik.http.routers.atlasml-secure.tls.options=default@file"

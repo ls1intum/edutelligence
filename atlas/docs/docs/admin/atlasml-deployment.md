@@ -120,7 +120,7 @@ The workflow uses the organization's standard naming conventions for secrets and
 
 **Environment Secrets** (in GitHub Environment `Atlas - Test 1`):
 - `VM_SSH_PRIVATE_KEY` - SSH private key for server access
-- All application secrets (e.g., `ATLASML_DOMAIN`, `WEAVIATE_HOST`, `OPENAI_API_KEY`, etc.)
+- All application secrets (e.g., `WEAVIATE_HOST`, `WEAVIATE_API_KEY`, `OPENAI_API_KEY`, etc.)
 
 :::tip
 The reusable deployment workflow automatically creates the `.env` file from all secrets configured in the GitHub environment, excluding infrastructure secrets like `VM_SSH_PRIVATE_KEY`.
