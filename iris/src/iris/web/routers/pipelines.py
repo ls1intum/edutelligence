@@ -13,6 +13,9 @@ from iris.domain import (
     FeatureDTO,
     InconsistencyCheckPipelineExecutionDTO,
 )
+from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
+    AutonomousTutorPipelineExecutionDto,
+)
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
@@ -28,6 +31,7 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
+from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from iris.pipeline.chat.exercise_chat_agent_pipeline import (
     ExerciseChatAgentPipeline,
@@ -45,6 +49,7 @@ from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPip
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
+    AutonomousTutorCallback,
     CompetencyExtractionCallback,
     CourseChatStatusCallback,
     ExerciseChatStatusCallback,
@@ -415,6 +420,50 @@ def run_communication_tutor_suggestions_pipeline(
     thread.start()
 
 
+def run_autonomous_tutor_pipeline_worker(
+    dto: AutonomousTutorPipelineExecutionDto, variant_id: str, request_id: str
+):
+    set_request_id(request_id)
+    logger.info("Autonomous tutor pipeline started")
+    try:
+        callback = AutonomousTutorCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        for variant in AutonomousTutorPipeline.get_variants():
+            if variant.id == variant_id:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {variant_id}")
+        pipeline = AutonomousTutorPipeline()
+    except Exception as e:
+        logger.error("Error preparing autonomous tutor pipeline", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
+        pipeline(dto=dto, variant=variant, callback=callback)
+    except Exception as e:
+        logger.error("Error running autonomous tutor pipeline", exc_info=e)
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/autonomous-tutor/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDto):
+    variant = validate_pipeline_variant(dto.settings, AutonomousTutorPipeline)
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_autonomous_tutor_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
+    thread.start()
+
+
 @router.get("/{feature}/variants")
 def get_pipeline(feature: str) -> list[FeatureDTO]:
     """
@@ -468,6 +517,10 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
         case "TUTOR_SUGGESTION":
             return get_available_variants(
                 TutorSuggestionPipeline.get_variants(), available_llms
+            )
+        case "AUTONOMOUS_TUTOR":
+            return get_available_variants(
+                AutonomousTutorPipeline.get_variants(), available_llms
             )
         case _:
             raise HTTPException(
