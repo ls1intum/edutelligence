@@ -477,6 +477,8 @@ def trace_subprocess(
                     )
                 except Exception as e:
                     logger.debug("Failed to end subprocess trace: %s", e)
+                finally:
+                    self.span = None
 
     tracer = SubprocessTracer()
     ctx = get_current_context()

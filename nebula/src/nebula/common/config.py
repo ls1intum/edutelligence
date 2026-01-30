@@ -5,10 +5,18 @@ from pathlib import Path
 
 import yaml
 
-# Use LangFuse-instrumented OpenAI clients when available for automatic tracing
-try:
-    from langfuse.openai import AzureOpenAI, OpenAI  # type: ignore[import-not-found]
-except ImportError:
+# Use LangFuse-instrumented OpenAI clients when enabled and available for automatic tracing
+_langfuse_enabled = os.environ.get("LANGFUSE_ENABLED", "").lower() == "true"
+
+if _langfuse_enabled:
+    try:
+        from langfuse.openai import (  # type: ignore[import-not-found]
+            AzureOpenAI,
+            OpenAI,
+        )
+    except ImportError:
+        from openai import AzureOpenAI, OpenAI
+else:
     from openai import AzureOpenAI, OpenAI
 
 
