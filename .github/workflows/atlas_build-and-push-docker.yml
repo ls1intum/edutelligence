@@ -21,7 +21,7 @@ jobs:
             dockerfile: ./atlas/AtlasMl/Dockerfile
             image: ghcr.io/ls1intum/edutelligence/atlasml
             context: ./atlas/AtlasMl
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@feat/minor-build-improvements
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ${{ matrix.image }}
       docker-file: ${{ matrix.dockerfile }}

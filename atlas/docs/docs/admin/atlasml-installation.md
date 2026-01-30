@@ -267,7 +267,7 @@ ls -la /opt/atlasml/traefik/acme.json
 # If certificate fails, check:
 # 1. Domain DNS points to server IP
 # 2. Ports 80/443 are open
-# 3. ATLASML_DOMAIN and LETSENCRYPT_EMAIL are set correctly
+# 3. LETSENCRYPT_EMAIL is set correctly
 ```
 
 :::tip
