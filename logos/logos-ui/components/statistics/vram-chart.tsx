@@ -188,8 +188,12 @@ export default function VramChart({
           const endSpacing = 50;
 
           const totalBuckets = vramTotalBuckets || 8640;
-          const chartWidth =
-            totalBuckets * VRAM_SPACING + initialSpacing + endSpacing;
+          const plotWidth =
+            (Math.max(totalBuckets, 1) - 1) * VRAM_SPACING +
+            initialSpacing +
+            endSpacing;
+          const chartWidth = plotWidth + yAxisLabelWidth;
+          const plotStartX = yAxisLabelWidth + initialSpacing;
 
           const dataSet: any[] = [];
           if (vramBaseline.length) {
@@ -222,7 +226,7 @@ export default function VramChart({
           for (let h = 0; h <= 24; h++) {
             hourLabels.push({
               time: `${h}:00`,
-              x: initialSpacing + h * PIXELS_PER_HOUR,
+              x: h * PIXELS_PER_HOUR,
             });
           }
 
@@ -245,8 +249,7 @@ export default function VramChart({
             const diffSec = (nowMs - todayStartMs) / 1000;
             if (diffSec >= 0 && diffSec <= 86400) {
               const bucketsFromStart = diffSec / vramBucketSizeSec;
-              nowXPosition =
-                initialSpacing + bucketsFromStart * VRAM_SPACING;
+              nowXPosition = plotStartX + bucketsFromStart * VRAM_SPACING;
             }
           }
 
@@ -308,12 +311,12 @@ export default function VramChart({
                   .reduce((a, b) => a + b, 0)}`}
                 isAnimated={true}
                 dataSet={dataSet}
-                height={CHART_HEIGHT}
-                adjustToWidth={false}
-                width={chartWidth}
-                initialSpacing={initialSpacing}
-                endSpacing={endSpacing}
-                spacing={VRAM_SPACING}
+                  height={CHART_HEIGHT}
+                  adjustToWidth={false}
+                  width={chartWidth}
+                  initialSpacing={initialSpacing}
+                  endSpacing={endSpacing}
+                  spacing={VRAM_SPACING}
                 yAxisThickness={0}
                 yAxisLabelWidth={yAxisLabelWidth}
                 xAxisThickness={1}
@@ -479,7 +482,7 @@ export default function VramChart({
                     key={i}
                     style={{
                       position: "absolute",
-                      left: lbl.x - 10,
+                      left: plotStartX + lbl.x - 10,
                       color: CHART_PALETTE.textLight,
                       fontSize: 10,
                     }}
