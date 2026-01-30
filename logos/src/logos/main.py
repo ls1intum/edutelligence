@@ -38,7 +38,7 @@ _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _ollama_monitor: Optional[OllamaProviderMonitor] = None
 
-OLLAMA_PROCESSING_TIMEOUT_S = 60
+OLLAMA_PROCESSING_TIMEOUT_S = 120
 
 
 def _get_processing_timeout_s(scheduling_stats: Optional[Dict[str, Any]]) -> Optional[int]:

@@ -250,15 +250,65 @@ export default function VramChart({
             }
           }
 
+          const CHART_HEIGHT = 220;
+          const CHART_TOP_INSET = 24;
+
           return (
-            <View style={{ position: "relative", paddingBottom: 40 }}>
-              <LineChart
+            <View
+              style={{
+                position: "relative",
+                paddingBottom: 40,
+                paddingTop: CHART_TOP_INSET,
+                overflow: "visible",
+              }}
+            >
+              {/* "Now" indicator line (rendered below chart layers) */}
+              {nowXPosition !== null && (
+                <View
+                  style={{
+                    position: "absolute",
+                    left: Math.max((nowXPosition ?? 0) - 1, 0),
+                    top: CHART_TOP_INSET,
+                    height: CHART_HEIGHT,
+                    width: 1,
+                    borderStyle: "dashed",
+                    borderWidth: 1,
+                    borderColor: "#ef4444",
+                    zIndex: 0,
+                    pointerEvents: "none",
+                  }}
+                >
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: -18,
+                      left: -14,
+                      backgroundColor: "#ef4444",
+                      paddingHorizontal: 4,
+                      borderRadius: 4,
+                      zIndex: 1,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "white",
+                        fontSize: 9,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      NOW
+                    </Text>
+                  </View>
+                </View>
+              )}
+              <View style={{ zIndex: 1 }}>
+                <LineChart
                 key={`vram-${vramDayOffset}-${Object.keys(displayData).length}-${Object.values(displayData)
                   .map((d) => d.length)
                   .reduce((a, b) => a + b, 0)}`}
                 isAnimated={true}
                 dataSet={dataSet}
-                height={220}
+                height={CHART_HEIGHT}
                 adjustToWidth={false}
                 width={chartWidth}
                 initialSpacing={initialSpacing}
@@ -308,16 +358,19 @@ export default function VramChart({
                         })
                       : anyItem?.label || "";
 
-                    return (
-                      <View
-                        style={{
-                          backgroundColor: "#1f2937",
-                          padding: 8,
-                          borderRadius: 8,
-                          borderWidth: 1,
-                          borderColor: "#374151",
-                        }}
-                      >
+                        return (
+                          <View
+                            style={{
+                              backgroundColor: "#1f2937",
+                              padding: 8,
+                              borderRadius: 8,
+                              borderWidth: 1,
+                              borderColor: "#374151",
+                              position: "relative",
+                              zIndex: 50,
+                              elevation: 50,
+                            }}
+                          >
                         <Text
                           style={{
                             color: "#9ca3af",
@@ -410,44 +463,7 @@ export default function VramChart({
                 }}
                 interpolateMissingValues={false}
               />
-              {/* "Now" indicator line */}
-              {nowXPosition !== null && (
-                <View
-                  style={{
-                    position: "absolute",
-                    left: Math.max((nowXPosition ?? 0) - 1, 0),
-                    top: 0,
-                    bottom: 0,
-                    width: 1,
-                    borderStyle: "dashed",
-                    borderWidth: 1,
-                    borderColor: "#ef4444",
-                    zIndex: 10,
-                    pointerEvents: "none",
-                  }}
-                >
-                  <View
-                    style={{
-                      position: "absolute",
-                      top: -16,
-                      left: -14,
-                      backgroundColor: "#ef4444",
-                      paddingHorizontal: 4,
-                      borderRadius: 4,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: "white",
-                        fontSize: 9,
-                        fontWeight: "bold",
-                      }}
-                    >
-                      NOW
-                    </Text>
-                  </View>
-                </View>
-              )}
+              </View>
               {/* Custom X Axis Labels */}
               <View
                 style={{

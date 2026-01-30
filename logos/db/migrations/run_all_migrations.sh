@@ -52,6 +52,7 @@ MIGRATIONS=(
     "015_add_snapshot_retention_cron.sql"
     "016_move_endpoint_to_model_api_keys.sql"
     "017_snapshot_provider_id_migration.sql"
+    "018_drop_model_provider_config.sql"
 )
 
 FAILED=0
@@ -110,8 +111,8 @@ else
     echo ""
 
     # Verify key tables exist
-    log "Checking for new tables..."
-    docker exec logos-db psql -U postgres -d logosdb -c "\dt" | grep -E "jobs|model_provider_config|request_events|ollama_provider_snapshots" || true
+log "Checking for new tables..."
+docker exec logos-db psql -U postgres -d logosdb -c "\dt" | grep -E "jobs|request_events|ollama_provider_snapshots" || true
 
     echo ""
     log "Checking providers table columns..."
