@@ -12,7 +12,7 @@ def ask_gpt_for_slide_number(image_b64: str, job_id: str | None = None) -> int |
     The trace_span provides context, and LangFuse's OpenAI wrapper
     automatically traces the actual API call nested within.
     """
-    model = "gpt-4o-mini"
+    model = "gpt-4.1-mini"
 
     with trace_span(
         "GPT Vision Slide Detection",
