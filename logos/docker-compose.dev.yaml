@@ -25,7 +25,9 @@ services:
       - extern
 
   logos-server:
-    image: ghcr.io/ls1intum/edutelligence/logos:latest
+    build:
+      context: ../
+      dockerfile: ./logos/Dockerfile
     container_name: logos-server
     restart: unless-stopped
     depends_on:
@@ -117,7 +119,9 @@ services:
       - internal
 
   logos-ui:
-    image: ghcr.io/ls1intum/edutelligence/logos-ui:latest
+    build:
+      context: ../
+      dockerfile: ./logos/logos-ui/Dockerfile
     container_name: logos-ui
     restart: unless-stopped
     expose:
@@ -147,7 +151,9 @@ services:
       - internal
 
   landing-page:
-    image: ghcr.io/ls1intum/edutelligence/logos-landing:latest
+    build:
+      context: ../
+      dockerfile: ./logos/logos-landing/Dockerfile
     container_name: logos-landing
     restart: unless-stopped
     environment:
