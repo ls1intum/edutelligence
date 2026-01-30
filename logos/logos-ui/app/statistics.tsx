@@ -389,6 +389,7 @@ export default function Statistics() {
       const baseline = timeline.map((t) => ({
         value: 0,
         label: t.label,
+        timestamp: t.timestamp,
         _isBaseline: true,
       }));
 

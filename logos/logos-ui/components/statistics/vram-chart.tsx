@@ -194,6 +194,10 @@ export default function VramChart({
             endSpacing;
           const chartWidth = plotWidth + yAxisLabelWidth;
           const plotStartX = yAxisLabelWidth + initialSpacing;
+          const plotEndX =
+            plotStartX +
+            (Math.max(totalBuckets, 1) - 1) * VRAM_SPACING +
+            endSpacing;
 
           const dataSet: any[] = [];
           if (vramBaseline.length) {
@@ -265,6 +269,44 @@ export default function VramChart({
                 overflow: "visible",
               }}
             >
+              {/* Future window (subtle shading) */}
+              {nowXPosition !== null && nowXPosition < plotEndX && (
+                <View
+                  style={{
+                    position: "absolute",
+                    left: nowXPosition,
+                    top: CHART_TOP_INSET,
+                    height: CHART_HEIGHT,
+                    width: Math.max(0, plotEndX - nowXPosition),
+                    backgroundColor: "rgba(148, 163, 184, 0.08)",
+                    zIndex: 0,
+                    pointerEvents: "none",
+                  }}
+                >
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 8,
+                      paddingHorizontal: 6,
+                      paddingVertical: 2,
+                      borderRadius: 10,
+                      backgroundColor: "rgba(148, 163, 184, 0.12)",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#94a3b8",
+                        fontSize: 9,
+                        letterSpacing: 0.6,
+                        fontWeight: "600",
+                      }}
+                    >
+                      FUTURE
+                    </Text>
+                  </View>
+                </View>
+              )}
               {/* "Now" indicator line (rendered below chart layers) */}
               {nowXPosition !== null && (
                 <View
@@ -340,8 +382,8 @@ export default function VramChart({
                   pointerStripWidth: 1,
                   pointerColor: CHART_PALETTE.provider1,
                   radius: 4,
-                  pointerLabelWidth: 160,
-                  pointerLabelHeight: 110,
+                  pointerLabelWidth: 180,
+                  pointerLabelHeight: 130,
                   activatePointersOnLongPress: false,
                   autoAdjustPointerLabelPosition: true,
                   pointerLabelComponent: (items: any) => {
@@ -351,21 +393,24 @@ export default function VramChart({
                     );
 
                     const anyItem = (items || [])[0];
-                    const ts = anyItem?.timestamp;
-                    const labelText = ts
+                    const timeSource =
+                      (items || []).find((item: any) => item?.timestamp != null) ||
+                      anyItem;
+                    const ts = timeSource?.timestamp;
+                    const labelTime = ts
                       ? new Date(ts).toLocaleTimeString("en-GB", {
                           hour: "2-digit",
                           minute: "2-digit",
                           second: "2-digit",
                           timeZone: "UTC",
                         })
-                      : anyItem?.label || "";
+                      : timeSource?.label || "";
 
                         return (
                           <View
                             style={{
                               backgroundColor: "#1f2937",
-                              padding: 8,
+                              padding: 10,
                               borderRadius: 8,
                               borderWidth: 1,
                               borderColor: "#374151",
@@ -374,15 +419,41 @@ export default function VramChart({
                               elevation: 50,
                             }}
                           >
-                        <Text
+                        <View
                           style={{
-                            color: "#9ca3af",
-                            fontSize: 10,
-                            marginBottom: 4,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            marginBottom: 6,
                           }}
                         >
-                          {labelText}
-                        </Text>
+                          <Text
+                            style={{
+                              color: "#e5e7eb",
+                              fontSize: 11,
+                              fontWeight: "600",
+                              letterSpacing: 0.3,
+                            }}
+                          >
+                            {labelTime || "--:--:--"}
+                          </Text>
+                          <Text
+                            style={{
+                              color: "#94a3b8",
+                              fontSize: 9,
+                            }}
+                          >
+                            UTC
+                          </Text>
+                        </View>
+                        <View
+                          style={{
+                            height: 1,
+                            backgroundColor: "#334155",
+                            opacity: 0.6,
+                            marginBottom: 6,
+                          }}
+                        />
                         {providerItems.length === 0 ? (
                           <Text
                             style={{
@@ -400,7 +471,7 @@ export default function VramChart({
                                 <View
                                   style={{
                                     flexDirection: "row",
-                                    alignItems: "center",
+                                    alignItems: "flex-start",
                                   }}
                                 >
                                   <View
@@ -411,21 +482,24 @@ export default function VramChart({
                                         item.dataPointsColor || "gray",
                                       borderRadius: 2,
                                       marginRight: 6,
+                                      marginTop: 3,
                                     }}
                                   />
-                                  <View>
+                                  <View style={{ flex: 1 }}>
                                     <Text
                                       style={{
                                         color: "white",
-                                        fontSize: 10,
+                                        fontSize: 11,
+                                        fontWeight: "600",
                                       }}
                                     >
                                       {item.remaining_vram_gb} GB free
                                     </Text>
                                     <Text
                                       style={{
-                                        color: "#e2e8f0",
+                                        color: "#cbd5f5",
                                         fontSize: 10,
+                                        marginTop: 2,
                                       }}
                                     >
                                       Used: {item.used_vram_gb} GB
