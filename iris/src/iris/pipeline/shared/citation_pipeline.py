@@ -484,4 +484,4 @@ class CitationPipeline(SubPipeline):
 
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
-            raise
+            raise e
