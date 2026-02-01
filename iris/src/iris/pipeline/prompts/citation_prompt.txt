@@ -13,7 +13,9 @@ Your task:
 - Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output an empty list in the citations section of the JSON output.
 - Step 6: Always include citations if the answer contains any information from the provided paragraphs.
 - Step 7: If both lecture transcription and lecture slide sources are found to be relevant, include citations for both types of sources.
-- Step 8: Ensure that your final response is in the JSON format.
+- Step 8: For each citation, include the exact source paragraph text you used from the Paragraphs or TranscriptionParagraphs below.
+- Step 9: Set "paragraph_type" to "slide" for Paragraphs or "transcription" for TranscriptionParagraphs.
+- Step 10: Ensure that your final response is in the JSON format.
 
 Output Format (JSON schema - MUST follow exactly):
 
@@ -26,7 +28,9 @@ Output Format (JSON schema - MUST follow exactly):
       "entityid": <int>,
       "page": <int|null>,
       "start": <int|null>,
-      "end": <int|null>
+      "end": <int|null>,
+      "paragraph_type": "slide"|"transcription",
+      "paragraph": "<string>"
     }}
   ]
 }}
@@ -45,7 +49,9 @@ Citation Formats:
       "entityid": <int>,
       "page": <int|null>,
       "start": <int>,
-      "end": <int>
+      "end": <int>,
+      "paragraph_type": "transcription",
+      "paragraph": "<string>"
     }}
 
 2. For everything taken from the Paragraphs section (Lecture Slides):
@@ -60,7 +66,9 @@ Citation Formats:
       "entityid": <int>,
       "page": <int>,
       "start": null,
-      "end": null
+      "end": null,
+      "paragraph_type": "slide",
+      "paragraph": "<string>"
     }}
 
 Example:
@@ -74,7 +82,9 @@ Example:
       "entityid": 1234,
       "page": 6,
       "start": 12,
-      "end": 15
+      "end": 15,
+      "paragraph_type": "transcription",
+      "paragraph": "Lorem ipsum transcription text."
     }},
     {{
       "index": 2,
@@ -82,7 +92,9 @@ Example:
       "entityid": 5678,
       "page": 6,
       "start": null,
-      "end": null
+      "end": null,
+      "paragraph_type": "slide",
+      "paragraph": "Lorem ipsum slide text."
     }}
   ]
 }}

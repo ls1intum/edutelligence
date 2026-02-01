@@ -33,6 +33,8 @@ class CitationItem(BaseModel):
     page: int | None = Field(default=None, ge=1)
     start: int | None = Field(default=None, ge=0)
     end: int | None = Field(default=None, ge=0)
+    paragraph_type: Literal["slide", "transcription", "faq"]
+    paragraph: str
 
 
 class CitationPromptResponse(BaseModel):
@@ -76,10 +78,16 @@ def _validate_marker_coverage(resp: CitationPromptResponse) -> None:
 def _validate_citation_semantics(resp: CitationPromptResponse) -> None:
     for c in resp.citations:
         if c.type == "F":
+            if c.paragraph_type != "faq":
+                raise ValueError("FAQ citations must have paragraph_type = faq")
             if c.page is not None or c.start is not None or c.end is not None:
                 raise ValueError("FAQ citations must have page/start/end = null")
         else:
-            is_transcription = c.start is not None or c.end is not None
+            if c.paragraph_type not in ("slide", "transcription"):
+                raise ValueError(
+                    "Lecture citations must have paragraph_type = slide or transcription"
+                )
+            is_transcription = c.paragraph_type == "transcription"
             if is_transcription:
                 if c.start is None or c.end is None:
                     raise ValueError(
@@ -88,6 +96,10 @@ def _validate_citation_semantics(resp: CitationPromptResponse) -> None:
             else:
                 if c.page is None:
                     raise ValueError("Slide citations must have page != null")
+                if c.start is not None or c.end is not None:
+                    raise ValueError("Slide citations must have start/end = null")
+        if not c.paragraph.strip():
+            raise ValueError("Citations must include a non-empty paragraph")
 
 
 def _validate_summary_coverage(
@@ -256,7 +268,8 @@ class CitationPipeline(SubPipeline):
         schema_desc = (
             'Expected JSON schema: {"answer_with_markers": <string>, "citations": '
             '[{"index": <int>, "type": "L"|"F", "entityid": <int>, "page": <int|null>, '
-            '"start": <int|null>, "end": <int|null>}]}'
+            '"start": <int|null>, "end": <int|null>, "paragraph_type": '
+            '"slide"|"transcription"|"faq", "paragraph": <string>}]}'
         )
         last_error = None
         for attempt in range(1, max_tries + 1):
@@ -431,26 +444,16 @@ class CitationPipeline(SubPipeline):
             if not citation_resp.citations:
                 return citation_resp.answer_with_markers or answer
 
-            if information_type == InformationType.FAQS:
-                paragraphs_block = (paras or "").strip()
-            else:
-                paragraphs_block = (
-                    (paragraphs_page_chunks or "").strip()
-                    + "\n\n"
-                    + (paragraphs_transcriptions or "").strip()
-                ).strip()
-
             summary_prompt = PromptTemplate(
                 template=language_instruction
                 + self.citation_keyword_summary_prompt_str,
-                input_variables=["CitationsJSON", "Paragraphs"],
+                input_variables=["CitationsJSON"],
             )
             summary_vars = {
                 "CitationsJSON": json.dumps(
                     [c.model_dump() for c in citation_resp.citations],
                     ensure_ascii=False,
                 ),
-                "Paragraphs": paragraphs_block,
             }
 
             summary_resp = self._retry_summary_prompt(

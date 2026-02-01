@@ -8,7 +8,9 @@ Your task:
 - Step 3: When assigning citation markers, if the same FAQ (i.e., identical FAQ ID) is referenced in multiple sentences, ALWAYS use the same citation marker instead of assigning a new marker.
 - Step 4: Collect all unique FAQs used and represent them ONLY in the "citations" array of the JSON output. Represent every citation exactly once. Every citation marker [n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
 - Step 5: Only include citations for FAQs that are actually relevant to the answer. If no provided FAQs were used, output an empty list in the citations section. In that case, answer_with_markers MUST equal the original answer and MUST NOT contain any markers.
-- Step 6: Ensure that your final response is valid JSON and follows the schema exactly.
+- Step 6: For each citation, include the exact FAQ Answer text you used in the Paragraphs below.
+- Step 7: Set "paragraph_type" to "faq".
+- Step 8: Ensure that your final response is valid JSON and follows the schema exactly.
 
 Output Format (JSON schema – MUST follow exactly):
 
@@ -21,7 +23,9 @@ Output Format (JSON schema – MUST follow exactly):
       "entityid": <int>,
       "page": null,
       "start": null,
-      "end": null
+      "end": null,
+      "paragraph_type": "faq",
+      "paragraph": "<string>"
     }}
   ]
 }}
@@ -44,7 +48,9 @@ Example:
       "entityid": 42,
       "page": null,
       "start": null,
-      "end": null
+      "end": null,
+      "paragraph_type": "faq",
+      "paragraph": "Reset your password in account settings."
     }},
     {{
       "index": 2,
@@ -52,7 +58,9 @@ Example:
       "entityid": 60,
       "page": null,
       "start": null,
-      "end": null
+      "end": null,
+      "paragraph_type": "faq",
+      "paragraph": "Admins can reset passwords for users."
     }}
   ]
 }}
@@ -62,7 +70,7 @@ Input:
 - Answer without citations:
   {Answer}
 
-- FAQs (with their FAQ ID, FAQ question title, and FAQ answer):
+- FAQs Paragraphs (with their FAQ ID, FAQ question title, and FAQ answer):
   {Paragraphs}
 
 Important:
