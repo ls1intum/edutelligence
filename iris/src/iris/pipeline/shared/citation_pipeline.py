@@ -102,6 +102,16 @@ def _validate_citation_semantics(resp: CitationPromptResponse) -> None:
             raise ValueError("Citations must include a non-empty paragraph")
 
 
+def _normalize_slide_citation_timestamps(
+    resp: CitationPromptResponse,
+) -> CitationPromptResponse:
+    for c in resp.citations:
+        if c.paragraph_type == "slide":
+            c.start = None
+            c.end = None
+    return resp
+
+
 def _validate_summary_coverage(
     summary_resp: SummaryPromptResponse, citation_resp: CitationPromptResponse
 ) -> None:
@@ -233,6 +243,7 @@ class CitationPipeline(SubPipeline):
     def _parse_citation_json(self, raw: str) -> CitationPromptResponse:
         data = json.loads(raw)
         resp = CitationPromptResponse.model_validate(data)
+        resp = _normalize_slide_citation_timestamps(resp)
         _validate_marker_coverage(resp)
         _validate_citation_semantics(resp)
         return resp
