@@ -70,7 +70,7 @@ curl -H "Authorization: Bearer YOUR_WEAVIATE_API_KEY" https://your-weaviate-doma
 # (Weaviate runs on a separate server - see /weaviate directory)
 
 # Restart AtlasML
-docker-compose -f compose.atlas.yaml restart atlasml
+docker-compose -f docker-compose.prod.yml restart atlasml
 ```
 
 #### 3. Port Already in Use
@@ -91,7 +91,7 @@ sudo netstat -tulpn | grep :80
 sudo systemctl stop nginx  # or apache2
 
 # Or change AtlasML port in compose file
-# Edit compose.atlas.yaml:
+# Edit docker-compose.prod.yml:
 #   ports:
 #     - '8080:8000'  # Use 8080 instead of 80
 ```
@@ -112,7 +112,7 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
 docker pull ghcr.io/ls1intum/edutelligence/atlasml:main
 
 # Restart
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
 ---
@@ -144,7 +144,7 @@ curl http://localhost/api/v1/health
 **If health check takes >10s**, increase timeout:
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 healthcheck:
   timeout: 30s  # Increase from 10s
 ```
@@ -210,7 +210,7 @@ ping your-weaviate-domain.com
 cat /opt/atlasml/.env | grep WEAVIATE_API_KEY
 
 # Restart AtlasML with updated configuration
-docker-compose -f compose.atlas.yaml restart
+docker-compose -f docker-compose.prod.yml restart
 ```
 
 #### If Weaviate Server Down
@@ -276,7 +276,7 @@ curl https://${OPENAI_API_URL}/openai/deployments \
 OPENAI_API_KEY=correct-key-from-azure
 
 # Restart
-docker-compose -f compose.atlas.yaml restart atlasml
+docker-compose -f docker-compose.prod.yml restart atlasml
 ```
 
 #### Wrong URL
@@ -289,7 +289,7 @@ docker-compose -f compose.atlas.yaml restart atlasml
 OPENAI_API_URL=https://correct-resource.openai.azure.com
 
 # Restart
-docker-compose -f compose.atlas.yaml restart atlasml
+docker-compose -f docker-compose.prod.yml restart atlasml
 ```
 
 #### Network/Firewall Block
@@ -318,9 +318,9 @@ curl http://localhost/api/v1/competency/suggest
 # 1. Check API keys configured
 docker exec atlasml printenv ATLAS_API_KEYS
 
-# 2. Verify format (must be JSON array)
+# 2. Verify format (must be comma-separated)
 echo $ATLAS_API_KEYS
-# Should be: ["key1","key2"]
+# Should be: key1,key2 (comma-separated, no brackets)
 ```
 
 **Solutions**:
@@ -338,16 +338,16 @@ curl -H "Authorization: your-api-key" http://localhost/api/v1/competency/suggest
 #### Wrong Key Format in .env
 
 ```bash
-# ❌ Bad - Not valid JSON
-ATLAS_API_KEYS=[key1,key2]          # Missing quotes
-ATLAS_API_KEYS=["key1", "key2"]     # Extra spaces
-ATLAS_API_KEYS="[\"key1\"]"         # Escaped quotes
+# ❌ Bad - Incorrect formats
+ATLAS_API_KEYS=["key1","key2"]      # JSON array (not supported)
+ATLAS_API_KEYS=[key1,key2]          # Brackets
+ATLAS_API_KEYS="key1, key2"         # Spaces around commas
 
-# ✅ Good - Valid JSON array
-ATLAS_API_KEYS='["key1","key2"]'
+# ✅ Good - Comma-separated
+ATLAS_API_KEYS=key1,key2
 
 # Fix and restart
-docker-compose -f compose.atlas.yaml restart atlasml
+docker-compose -f docker-compose.prod.yml restart atlasml
 ```
 
 #### Key Mismatch
@@ -477,14 +477,14 @@ docker stats atlasml --no-stream
 
 # If consistently >80%, scale up:
 # Option 1: Increase CPU limit
-# compose.atlas.yaml:
+# docker-compose.prod.yml:
 #   deploy:
 #     resources:
 #       limits:
 #         cpus: '4.0'  # Increase from 2.0
 
 # Option 2: Scale horizontally (multiple instances)
-docker-compose -f compose.atlas.yaml up -d --scale atlasml=3
+docker-compose -f docker-compose.prod.yml up -d --scale atlasml=3
 ```
 
 #### High Memory Usage
@@ -494,7 +494,7 @@ docker-compose -f compose.atlas.yaml up -d --scale atlasml=3
 docker stats atlasml --no-stream
 
 # If near limit, increase memory
-# compose.atlas.yaml:
+# docker-compose.prod.yml:
 #   deploy:
 #     resources:
 #       limits:
@@ -550,7 +550,7 @@ docker stats atlasml --no-stream
 #### Increase Memory Limit
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 deploy:
   resources:
     limits:
@@ -565,7 +565,7 @@ deploy:
 # Look for memory leaks in logs
 
 # Restart to clear memory (temporary fix)
-docker-compose -f compose.atlas.yaml restart atlasml
+docker-compose -f docker-compose.prod.yml restart atlasml
 ```
 
 #### Add Memory Monitoring
@@ -601,13 +601,13 @@ docker images | grep atlasml
 
 ```bash
 # Pull latest
-docker-compose -f compose.atlas.yaml pull
+docker-compose -f docker-compose.prod.yml pull
 
 # Stop and remove container
-docker-compose -f compose.atlas.yaml down
+docker-compose -f docker-compose.prod.yml down
 
 # Start with new image
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify new version
 docker logs atlasml | grep "Started"
@@ -620,10 +620,10 @@ docker logs atlasml | grep "Started"
 docker rmi ghcr.io/ls1intum/edutelligence/atlasml:old-tag
 
 # Pull specific version
-IMAGE_TAG=v1.2.0 docker-compose -f compose.atlas.yaml pull
+IMAGE_TAG=v1.2.0 docker-compose -f docker-compose.prod.yml pull
 
 # Restart
-IMAGE_TAG=v1.2.0 docker-compose -f compose.atlas.yaml up -d
+IMAGE_TAG=v1.2.0 docker-compose -f docker-compose.prod.yml up -d
 ```
 
 ---
@@ -642,8 +642,8 @@ cat .env >> .env.temp
 mv .env.temp .env
 
 # Pull and restart
-docker-compose -f compose.atlas.yaml pull
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml pull
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify
 docker logs atlasml

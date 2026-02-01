@@ -62,16 +62,20 @@ curl http://localhost/api/v1/health
 
 ### Docker Health Check
 
-Configured in `compose.atlas.yaml`:
+Configured in `docker-compose.prod.yml`:
 
 ```yaml
 healthcheck:
-  test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1/health']
+  test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health').getcode() == 200 else 1)"]
   interval: 30s
   timeout: 10s
   retries: 3
-  start_period: 10s
+  start_period: 30s
 ```
+
+:::note
+The health check uses Python's `urllib` instead of `curl` because `curl` is not installed in the slim Python Docker image. This approach is more reliable and doesn't require additional dependencies.
+:::
 
 **Parameters**:
 - `interval`: Check every 30 seconds
@@ -191,7 +195,7 @@ docker logs atlasml 2>&1 | grep -E "(WARNING|ERROR)"
 
 ### Log Rotation
 
-Configured in `compose.atlas.yaml`:
+Configured in `docker-compose.prod.yml`:
 
 ```yaml
 logging:
@@ -229,7 +233,7 @@ For production, send logs to a centralized system:
 #### Option 1: Syslog
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 logging:
   driver: syslog
   options:
@@ -299,7 +303,7 @@ docker stats atlasml --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}
 Prevent resource exhaustion:
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 services:
   atlasml:
     deploy:
@@ -372,7 +376,7 @@ docker system prune -a --volumes
 
 **Configure in .env**:
 ```bash
-SENTRY_DSN=https://examplekey@o123456.ingest.sentry.io/7891011
+SENTRY_DSN=https://YOUR_SENTRY_KEY@YOUR_ORG.ingest.sentry.io/YOUR_PROJECT_ID
 ENV=production
 ```
 
