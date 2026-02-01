@@ -93,6 +93,8 @@ def _validate_citation_semantics(resp: CitationPromptResponse) -> None:
                     raise ValueError(
                         "Transcription citations must have both start and end"
                     )
+                if c.end < c.start:
+                    raise ValueError("Transcription citations must have end >= start")
             else:
                 if c.page is None:
                     raise ValueError("Slide citations must have page != null")
