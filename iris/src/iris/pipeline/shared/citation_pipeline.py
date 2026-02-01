@@ -237,7 +237,7 @@ class CitationPipeline(SubPipeline):
                 f"FAQ Question Title: {faq.get(FaqSchema.QUESTION_TITLE.value)}, "
                 f"FAQ Answer: {faq.get(FaqSchema.QUESTION_ANSWER.value)}"
             )
-            formatted_string += line
+            formatted_string += line + "\n\n"
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
     def _parse_citation_json(self, raw: str) -> CitationPromptResponse:
@@ -340,10 +340,19 @@ class CitationPipeline(SubPipeline):
         citation_resp: CitationPromptResponse,
         summary_resp: SummaryPromptResponse | None,
     ) -> str:
+        def _sanitize_marker_field(value: str) -> str:
+            if not value:
+                return ""
+            cleaned = value.replace(":", " -").replace("]", ")").replace("[", "(")
+            return " ".join(cleaned.split())
+
         summary_map: dict[int, tuple[str, str]] = {}
         if summary_resp is not None:
             for s in summary_resp.summaries:
-                summary_map[s.index] = (s.keyword or "", s.summary or "")
+                summary_map[s.index] = (
+                    _sanitize_marker_field(s.keyword or ""),
+                    _sanitize_marker_field(s.summary or ""),
+                )
 
         citation_map: dict[int, dict[str, str]] = {}
         for c in citation_resp.citations:
@@ -358,8 +367,8 @@ class CitationPipeline(SubPipeline):
                 "page": page,
                 "start": start,
                 "end": end,
-                "keyword": keyword,
-                "summary": summ,
+                "keyword": _sanitize_marker_field(keyword),
+                "summary": _sanitize_marker_field(summ),
             }
 
         def _replace(m: re.Match) -> str:

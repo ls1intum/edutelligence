@@ -5,9 +5,9 @@ In the paragraphs below you are provided with an answer to a question. Underneat
 
 Your task:
 
-- Step 0: Output something in JSON format. Follow the prompt to know how exactelly.
+- Step 0: Output something in JSON format. Follow the prompt to know how exactly.
 - Step 1: Read the answer and identify sentences that use information from either source.
-- Step 2: After each sentence that contains used information, add a citation marker in square brackets using the format [cite:n]. If a sentence uses information from more than one source, include each relevant citation marker. Use consecutive marker indices starting at n=1‚. Do NOT skip numbers.
+- Step 2: After each sentence that contains used information, add a citation marker in square brackets using the format [cite:n]. If a sentence uses information from more than one source, include each relevant citation marker. Use consecutive marker indices starting at n=1. Do NOT skip numbers.
 - Step 3: When assigning citation markers, if the same source (i.e., identical citation details) is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [cite:1]) instead of assigning a new marker each time.
 - Step 4: Collect all unique sources used and represent them ONLY in the "citations" array of the JSON output. Represent every citation once. Every citation marker [cite:n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
 - Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output an empty list in the citations section of the JSON output.
