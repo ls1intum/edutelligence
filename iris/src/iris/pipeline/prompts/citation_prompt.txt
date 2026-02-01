@@ -111,5 +111,5 @@ Input:
   {TranscriptionParagraphs}
 
 Important:
-- If the answer does not contain any information from the provided paragraphs or if there are no paragraphs, output the unchanged answer in the JSON without any citations.
+- If the answer does not contain any information from the provided paragraphs or if there are no paragraphs, output the unchanged answer in the JSON with a citations field present as an empty array (e.g., "citations": []) and no markers in answer_with_markers.
 - Only output the correct JSON and nothing else.
