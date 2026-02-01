@@ -109,9 +109,10 @@ Single API key definition.
 #### `WeaviateSettings`
 ```python
 class WeaviateSettings(BaseModel):
-    host: str          # e.g., "localhost"
-    port: int          # e.g., 8085
-    grpc_port: int     # e.g., 50051
+    host: str          # e.g., "weaviate.example.com"
+    port: int          # e.g., 443
+    api_key: str|None  # optional API key
+    scheme: str        # "http" or "https"
 ```
 
 Weaviate connection parameters.
@@ -139,8 +140,8 @@ def get_settings(use_defaults: bool = False) -> Settings:
 ```
 
 **Environment Variables**:
-- `ATLAS_API_KEYS`: JSON array of API keys
-- `WEAVIATE_HOST`, `WEAVIATE_PORT`, `WEAVIATE_GRPC_PORT`
+- `ATLAS_API_KEYS`: Comma-separated list of API keys
+- `WEAVIATE_HOST`, `WEAVIATE_PORT`, `WEAVIATE_API_KEY` (optional)
 - `SENTRY_DSN`, `ENV`
 
 **When to Modify**:

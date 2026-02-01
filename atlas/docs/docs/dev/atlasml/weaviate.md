@@ -8,9 +8,9 @@ Module: `atlasml/clients/weaviate.py`. The client wraps the official SDK with a 
 
 :::info Centralized Weaviate Setup
 AtlasML connects to the **centralized Weaviate instance** shared by AtlasML and Iris microservices. This requires:
-- HTTPS connection (`https://your-weaviate-domain.com`)
+- HTTPS REST connection (`https://your-weaviate-domain.com`)
 - API key authentication
-- Ports 443 (HTTPS) and 50051 (gRPC)
+- Port 443 open to AtlasML (gRPC is not used)
 
 See the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md) for setup instructions.
 :::
