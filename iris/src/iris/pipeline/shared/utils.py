@@ -5,6 +5,7 @@ from langchain_core.tools import StructuredTool
 
 from ...common.logging_config import get_logger
 from ...domain import FeatureDTO
+from ...domain.data.post_dto import PostDTO
 from ...llm.external.model import LanguageModel
 
 logger = get_logger(__name__)
@@ -110,3 +111,37 @@ def datetime_to_string(dt: Optional[datetime]) -> str:
         return "No date provided"
     else:
         return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_post_discussion(post: PostDTO, include_user_ids: bool = False) -> str:
+    """
+    Format a post and its answers into a readable discussion string.
+    Use this if you want to provide additional context regarding the discussion of a post.
+
+    Args:
+        post: The post DTO containing the question and answers.
+        include_user_ids: Whether to include user IDs in the output.
+
+    Returns:
+        Formatted discussion string.
+    """
+    if not post or not post.content:
+        return "No post content available."
+
+    if include_user_ids:
+        discussion = f"The post's question is: {post.content} by user {post.user_id}\n"
+    else:
+        discussion = f"Student's question: {post.content}\n"
+
+    if post.answers:
+        discussion += "Previous responses:\n"
+        for answer in post.answers:
+            if answer.content:
+                if include_user_ids:
+                    discussion += f"- {answer.content} by user {answer.user_id}\n"
+                else:
+                    discussion += f"- {answer.content}\n"
+    else:
+        discussion += "No previous responses yet."
+
+    return discussion

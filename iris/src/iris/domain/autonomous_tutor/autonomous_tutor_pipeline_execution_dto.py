@@ -14,7 +14,7 @@ from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
 class AutonomousTutorPipelineExecutionDto(PipelineExecutionDTO):
     course: CourseDTO
     post: PostDTO
-    student: UserDTO
+    user: UserDTO
     programming_exercise: Optional[ProgrammingExerciseDTO] = Field(
         default=None, alias="programmingExercise"
     )
