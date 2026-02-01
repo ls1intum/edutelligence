@@ -4,9 +4,9 @@ Underneath the answer you will find a list of FAQs that may support the answer.
 Your task:
 
 - Step 1: Read the answer and identify sentences that use information from the provided FAQs.
-- Step 2: After each sentence that contains used information, add a citation marker in square brackets. If a sentence uses information from more than one FAQ, include each relevant citation marker. Use consecutive marker indices starting at 1. Do NOT skip numbers.
+- Step 2: After each sentence that contains used information, add a citation marker in square brackets using the format [cite:n]. If a sentence uses information from more than one FAQ, include each relevant citation marker. Use consecutive marker indices starting at n=1. Do NOT skip numbers.
 - Step 3: When assigning citation markers, if the same FAQ (i.e., identical FAQ ID) is referenced in multiple sentences, ALWAYS use the same citation marker instead of assigning a new marker.
-- Step 4: Collect all unique FAQs used and represent them ONLY in the "citations" array of the JSON output. Represent every citation exactly once. Every citation marker [n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
+- Step 4: Collect all unique FAQs used and represent them ONLY in the "citations" array of the JSON output. Represent every citation exactly once. Every citation marker [cite:n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
 - Step 5: Only include citations for FAQs that are actually relevant to the answer. If no provided FAQs were used, output an empty list in the citations section. In that case, answer_with_markers MUST equal the original answer and MUST NOT contain any markers.
 - Step 6: For each citation, include the exact FAQ Answer text you used in the Paragraphs below.
 - Step 7: Set "paragraph_type" to "faq".
@@ -40,7 +40,7 @@ Rules for FAQ citations:
 Example:
 
 {{
-  "answer_with_markers": "You can reset your password via the account settings page [1][2].",
+  "answer_with_markers": "You can reset your password via the account settings page [cite:1][cite:2].",
   "citations": [
     {{
       "index": 1,

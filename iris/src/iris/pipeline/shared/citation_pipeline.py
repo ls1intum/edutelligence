@@ -55,7 +55,7 @@ class SummaryPromptResponse(BaseModel):
     summaries: list[SummaryItem]
 
 
-_MARKER_RE = re.compile(r"\[(\d+)\]")
+_MARKER_RE = re.compile(r"\[cite:(\d+)\]")
 
 
 def _extract_marker_indices(answer_with_markers: str) -> set[int]:

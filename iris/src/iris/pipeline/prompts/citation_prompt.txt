@@ -7,9 +7,9 @@ Your task:
 
 - Step 0: Output something in JSON format. Follow the prompt to know how exactelly.
 - Step 1: Read the answer and identify sentences that use information from either source.
-- Step 2: After each sentence that contains used information, add a citation marker in square brackets. If a sentence uses information from more than one source, include each relevant citation marker. Use consecutive marker indices starting at 1. Do NOT skip numbers.
-- Step 3: When assigning citation markers, if the same source (i.e., identical citation details) is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [1]) instead of assigning a new marker each time.
-- Step 4: Collect all unique sources used and represent them ONLY in the "citations" array of the JSON output. Represent every citation once. Every citation marker [n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
+- Step 2: After each sentence that contains used information, add a citation marker in square brackets using the format [cite:n]. If a sentence uses information from more than one source, include each relevant citation marker. Use consecutive marker indices starting at n=1‚. Do NOT skip numbers.
+- Step 3: When assigning citation markers, if the same source (i.e., identical citation details) is referenced in multiple sentences, ALWAYS use the same citation marker (e.g., [cite:1]) instead of assigning a new marker each time.
+- Step 4: Collect all unique sources used and represent them ONLY in the "citations" array of the JSON output. Represent every citation once. Every citation marker [cite:n] that appears in answer_with_markers MUST have exactly one corresponding object in the citations array with index == n. Do NOT include citation objects that are not referenced by a marker.
 - Step 5: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output an empty list in the citations section of the JSON output.
 - Step 6: Always include citations if the answer contains any information from the provided paragraphs.
 - Step 7: If both lecture transcription and lecture slide sources are found to be relevant, include citations for both types of sources.
@@ -41,7 +41,7 @@ Citation Formats:
    - Always include Lecture Unit ID as entityid, Start Time in seconds, End Time in seconds.
    - Include Page only if available in the source.
    - If a field is not present in the source, set it to null .
-   - For the index use the corresponding number n from the citation marker [n] in the text.
+   - For the index use the corresponding number n from the citation marker [cite:n] in the text.
    - Format:
     {{
       "index": n,
@@ -58,7 +58,7 @@ Citation Formats:
    - Always include Lecture Unit ID as entityid, Page.
    - Do NOT include Start/End.
    - If a field is not present in the source, set it to null.
-   - For the index use the corresponding number n from the citation marker [n] in the text.
+   - For the index use the corresponding number n from the citation marker [cite:n] in the text.
    - Format:
     {{
       "index": n,
@@ -74,7 +74,7 @@ Citation Formats:
 Example:
 
 {{
-  "answer_with_markers": "Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua [1][2].",
+  "answer_with_markers": "Lorem ipsum dolor sit amet, consectetur adipiscing elit [cite:1]. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua [cite:1][cite:2].",
   "citations": [
     {{
       "index": 1,
