@@ -102,6 +102,18 @@ def _validate_citation_semantics(resp: CitationPromptResponse) -> None:
             raise ValueError("Citations must include a non-empty paragraph")
 
 
+def _filter_unreferenced_citations(
+    resp: CitationPromptResponse,
+) -> CitationPromptResponse:
+    marker_indices = _extract_marker_indices(resp.answer_with_markers)
+    if not marker_indices:
+        resp.citations = []
+        return resp
+
+    resp.citations = [c for c in resp.citations if c.index in marker_indices]
+    return resp
+
+
 def _normalize_slide_citation_timestamps(
     resp: CitationPromptResponse,
 ) -> CitationPromptResponse:
@@ -246,6 +258,7 @@ class CitationPipeline(SubPipeline):
         resp = _normalize_slide_citation_timestamps(resp)
         _validate_marker_coverage(resp)
         _validate_citation_semantics(resp)
+        resp = _filter_unreferenced_citations(resp)
         return resp
 
     def _parse_summary_json(
