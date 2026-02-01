@@ -9,6 +9,9 @@ Then output per citation object:
 Rules:
 - Use ONLY the provided paragraph in each citation object.
 - Do NOT use outside knowledge.
+- Choose a content-specific keyword for each citation (topic/entity/concept), not a medium.
+- Do NOT use generic medium words like "slides", "video", "lecture", "transcript", "segment".
+- Each keyword MUST be unique across all citations in the output.
 - Output MUST be ONLY valid JSON (no markdown, no extra text).
 
 Output JSON schema:
