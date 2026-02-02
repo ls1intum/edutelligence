@@ -173,11 +173,13 @@ class CitationPipeline(SubPipeline):
         seq = 0
         self._last_citation_content_by_seq = {}
         for faq in faqs:
-            seq += 1
             faq_id = faq.get(FaqSchema.FAQ_ID.value)
-            question = faq.get(FaqSchema.QUESTION_TITLE.value)
-            answer = faq.get(FaqSchema.QUESTION_ANSWER.value)
+            question = faq.get(FaqSchema.QUESTION_TITLE.value) or ""
+            answer = faq.get(FaqSchema.QUESTION_ANSWER.value) or ""
             content = f"{question} {answer}".strip()
+            if not content:
+                continue
+            seq += 1
             self._last_citation_content_by_seq[seq] = content
             formatted_faqs.append(
                 {
