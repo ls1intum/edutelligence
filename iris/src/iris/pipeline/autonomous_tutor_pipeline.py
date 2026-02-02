@@ -212,6 +212,8 @@ class AutonomousTutorPipeline(
         confidence = self._estimate_confidence(state)
         should_post_directly = confidence >= self.DIRECT_POST_CONFIDENCE_THRESHOLD
 
+        logger.info("Generated response: %s", state.result)
+
         state.callback.done(
             "Response generated",
             final_result=state.result,
