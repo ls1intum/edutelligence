@@ -17,7 +17,7 @@ jobs:
     environment: 'Atlas - Test 1'
     steps:
       - name: Setup Traefik on remote host
-        uses: appleboy/ssh-action@v1.2.4
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ vars.VM_HOST }}
           username: ${{ vars.VM_USERNAME }}
