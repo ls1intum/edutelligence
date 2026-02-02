@@ -215,14 +215,19 @@ class CitationPipeline(SubPipeline):
         return keyword, summary
 
     def _build_keyword_summary_map(
-        self, pipeline, language_instruction: str, used_numbers: list[int]
+        self,
+        pipeline,
+        language_instruction: str,
+        used_numbers: list[int],
+        user_language: str,
     ) -> dict[int, tuple[str, str]]:
         summary_prompt = PromptTemplate(
             template=language_instruction + self.keyword_summary_prompt_str,
-            input_variables=["Paragraph"],
+            input_variables=["Paragraph", "UsedKeywords"],
         )
         summaries: dict[int, tuple[str, str]] = {}
         seen: set[int] = set()
+        used_keywords: set[str] = set()
         for num in used_numbers:
             if num in seen:
                 continue
@@ -231,10 +236,16 @@ class CitationPipeline(SubPipeline):
             if not paragraph.strip():
                 summaries[num] = ("", "")
                 continue
+            used_keywords_str = ", ".join(sorted(used_keywords))
             raw = str(
-                (summary_prompt | pipeline).invoke({"Paragraph": paragraph})
+                (summary_prompt | pipeline).invoke(
+                    {"Paragraph": paragraph, "UsedKeywords": used_keywords_str}
+                )
             ).strip()
-            summaries[num] = self._parse_keyword_summary_response(raw)
+            keyword, summary = self._parse_keyword_summary_response(raw)
+            if keyword:
+                used_keywords.add(keyword)
+            summaries[num] = (keyword, summary)
         return summaries
 
     def _replace_cite_blocks_with_keyword_summary(
@@ -314,6 +325,7 @@ class CitationPipeline(SubPipeline):
                 pipeline=pipeline,
                 language_instruction=language_instruction,
                 used_numbers=self.used_citation_numbers,
+                user_language=user_language,
             )
             response_str = self._replace_cite_blocks_with_keyword_summary(
                 response_str, summaries
