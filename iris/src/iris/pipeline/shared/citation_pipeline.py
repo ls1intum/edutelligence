@@ -47,8 +47,14 @@ class CitationPipeline(SubPipeline):
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.faq_prompt_str = file.read()
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "citation_keyword_summary_prompt.txt"
+        )
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
+            self.keyword_summary_prompt_str = file.read()
         self.tokens = []
         self.used_citation_numbers: list[int] = []
+        self._last_citation_content_by_seq: dict[int, str] = {}
 
         # Create LLM variants
         self.llms = {}
@@ -104,11 +110,13 @@ class CitationPipeline(SubPipeline):
             )
 
         seq = 0
+        self._last_citation_content_by_seq = {}
         lecture_page_chunks = []
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
                 continue
             seq += 1
+            self._last_citation_content_by_seq[seq] = paragraph.page_text_content
             lecture_page_chunks.append(
                 {
                     "id": build_citation_id(
@@ -135,6 +143,7 @@ class CitationPipeline(SubPipeline):
                 else None
             )
             seq += 1
+            self._last_citation_content_by_seq[seq] = paragraph.segment_text
             lecture_transcriptions.append(
                 {
                     "id": build_citation_id(
@@ -160,12 +169,14 @@ class CitationPipeline(SubPipeline):
         """
         formatted_faqs = []
         seq = 0
+        self._last_citation_content_by_seq = {}
         for faq in faqs:
             seq += 1
             faq_id = faq.get(FaqSchema.FAQ_ID.value)
             question = faq.get(FaqSchema.QUESTION_TITLE.value)
             answer = faq.get(FaqSchema.QUESTION_ANSWER.value)
             content = f"{question} {answer}".strip()
+            self._last_citation_content_by_seq[seq] = content
             formatted_faqs.append(
                 {
                     "id": f"[cite:F:{faq_id}:::!{seq}]",
@@ -187,6 +198,66 @@ class CitationPipeline(SubPipeline):
         for match in re.finditer(r"\[cite:[LF]:[^]]*?!(\d+)\]", answer):
             numbers.append(int(match.group(1)))
         return numbers
+
+    def _sanitize_citation_field(self, value: str) -> str:
+        if not value:
+            return ""
+        cleaned = value.replace(":", " -").replace("]", ")").replace("[", "(")
+        return " ".join(cleaned.split())
+
+    def _parse_keyword_summary_response(self, raw: str) -> tuple[str, str]:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return "", ""
+        keyword = self._sanitize_citation_field(str(data.get("keyword", "")).strip())
+        summary = self._sanitize_citation_field(str(data.get("summary", "")).strip())
+        return keyword, summary
+
+    def _build_keyword_summary_map(
+        self, pipeline, language_instruction: str, used_numbers: list[int]
+    ) -> dict[int, tuple[str, str]]:
+        summary_prompt = PromptTemplate(
+            template=language_instruction + self.keyword_summary_prompt_str,
+            input_variables=["Paragraph"],
+        )
+        summaries: dict[int, tuple[str, str]] = {}
+        seen: set[int] = set()
+        for num in used_numbers:
+            if num in seen:
+                continue
+            seen.add(num)
+            paragraph = self._last_citation_content_by_seq.get(num, "")
+            if not paragraph.strip():
+                summaries[num] = ("", "")
+                continue
+            raw = str(
+                (summary_prompt | pipeline).invoke({"Paragraph": paragraph})
+            ).strip()
+            summaries[num] = self._parse_keyword_summary_response(raw)
+        return summaries
+
+    def _replace_cite_blocks_with_keyword_summary(
+        self, answer: str, summaries: dict[int, tuple[str, str]]
+    ) -> str:
+        def _replace(m: re.Match) -> str:
+            cite_type = m.group(1)
+            entity_id = m.group(2)
+            page = m.group(3)
+            start = m.group(4)
+            end = m.group(5)
+            num = int(m.group(7))
+            keyword, summary = summaries.get(num, ("", ""))
+            return (
+                f"[cite:{cite_type}:{entity_id}:{page}:{start}:{end}:"
+                f"{keyword}:{summary}]"
+            )
+
+        return re.sub(
+            r"\[cite:([LF]):([^:\]]*):([^:\]]*):([^:\]]*):([^:\]]*)(?::([^!\]]*))?!(\d+)\]",
+            _replace,
+            answer,
+        )
 
     @observe(name="Citation Pipeline")
     def __call__(
@@ -222,8 +293,6 @@ class CitationPipeline(SubPipeline):
             paragraphs = self.create_formatted_lecture_string(information)
             self.prompt_str = self.lecture_prompt_str
 
-        print(paragraphs)
-
         # Add language instruction to prompt
         if user_language == "de":
             language_instruction = "Format all citations and references in German.\n\n"
@@ -241,6 +310,14 @@ class CitationPipeline(SubPipeline):
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             response_str = str(response)
             self.used_citation_numbers = self.extract_used_citation_numbers(response_str)
+            summaries = self._build_keyword_summary_map(
+                pipeline=pipeline,
+                language_instruction=language_instruction,
+                used_numbers=self.used_citation_numbers,
+            )
+            response_str = self._replace_cite_blocks_with_keyword_summary(
+                response_str, summaries
+            )
             return response_str
         except Exception as e:
             logger.error("citation pipeline failed %s", e)

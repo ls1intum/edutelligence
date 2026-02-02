@@ -1,0 +1,10 @@
+You are given a paragraph. Create:
+- keyword: 1-2 words
+- summary: 1-2 sentences
+
+Rules:
+- Do NOT include ":" or "[" or "]" in either keyword or summary.
+- Return JSON only in this exact shape: {{"keyword": "...", "summary": "..."}}
+
+Paragraph:
+{Paragraph}
