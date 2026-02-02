@@ -1,5 +1,5 @@
-import datetime
 import os
+import json
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
@@ -82,60 +82,84 @@ class CitationPipeline(SubPipeline):
         """
         Create a formatted string from the data
         """
+        def build_citation_id(
+            lecture_unit_id, page_number=None, start_time_sec=None, end_time_sec=None
+        ):
+            def format_part(value):
+                return "" if value is None else str(value)
 
-        formatted_string_lecture_page_chunks = ""
+            return (
+                "[cite:L:"
+                f"{format_part(lecture_unit_id)}:"
+                f"{format_part(page_number)}:"
+                f"{format_part(start_time_sec)}:"
+                f"{format_part(end_time_sec)}]"
+            )
+
+        lecture_page_chunks = []
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
                 continue
-            # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
-            if ".deattachment" in paragraph.lecture_unit_link:
-                paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
-                    ".deattachment", ".de/api/core/files/attachment"
-                )
-            lct = (
-                f"Lecture: {paragraph.lecture_name},"
-                f" Unit: {paragraph.lecture_unit_name},"
-                f" Page: {paragraph.page_number},"
-                f" Link: {paragraph.lecture_unit_link or "No link available"},"
-                f"\nContent:\n---{paragraph.page_text_content}---\n\n"
+            lecture_page_chunks.append(
+                {
+                    "id": build_citation_id(
+                        paragraph.lecture_unit_id, paragraph.page_number, None, None
+                    ),
+                    "content": paragraph.page_text_content,
+                }
             )
-            formatted_string_lecture_page_chunks += lct
 
-        formatted_string_lecture_transcriptions = ""
-
+        lecture_transcriptions = []
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
-            start_time_sec = paragraph.segment_start_time
-            end_time_sec = paragraph.segment_end_time
-            start_time_str = str(datetime.timedelta(seconds=int(start_time_sec)))
-            end_time_str = str(datetime.timedelta(seconds=int(end_time_sec)))
-            lct = (
-                f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}, Link: {paragraph.video_link or "No link available"}, "
-                f"Start Time: {start_time_str}, End Time: {end_time_str},\n"
-                f"Content:\n"
-                f"---{paragraph.segment_text}---\n\n"
+            start_time_sec = (
+                int(paragraph.segment_start_time)
+                if paragraph.segment_start_time is not None
+                else None
             )
-            formatted_string_lecture_transcriptions += lct
-        return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
-            "}", "}}"
-        ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
+            end_time_sec = (
+                int(paragraph.segment_end_time)
+                if paragraph.segment_end_time is not None
+                else None
+            )
+            lecture_transcriptions.append(
+                {
+                    "id": build_citation_id(
+                        paragraph.lecture_unit_id,
+                        paragraph.page_number,
+                        start_time_sec,
+                        end_time_sec,
+                    ),
+                    "content": paragraph.segment_text,
+                }
+            )
+
+        formatted_string = json.dumps(
+            {
+                "page_chunks": lecture_page_chunks,
+                "transcriptions": lecture_transcriptions,
+            },
+            ensure_ascii=True,
+        )
+        return formatted_string.replace("{", "{{").replace("}", "}}")
 
     def create_formatted_faq_string(self, faqs, base_url):
         """
         Create a formatted string from the data
         """
-        formatted_string = ""
+        formatted_faqs = []
         for faq in faqs:
-            faq = (
-                f"FAQ ID {faq.get(FaqSchema.FAQ_ID.value)},"
-                f" CourseId {faq.get(FaqSchema.COURSE_ID.value)} ,"
-                f" FAQ Question title {faq.get(FaqSchema.QUESTION_TITLE.value)} and"
-                f" FAQ Question Answer {faq.get(FaqSchema.QUESTION_ANSWER.value)} and"
-                f" FAQ link {base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId="
-                f"{faq.get(FaqSchema.FAQ_ID.value)}"
+            faq_id = faq.get(FaqSchema.FAQ_ID.value)
+            question = faq.get(FaqSchema.QUESTION_TITLE.value)
+            answer = faq.get(FaqSchema.QUESTION_ANSWER.value)
+            content = f"{question} {answer}".strip()
+            formatted_faqs.append(
+                {
+                    "id": f"[cite:F:{faq_id}:::]",
+                    "content": content,
+                }
             )
-            formatted_string += faq
 
+        formatted_string = json.dumps(formatted_faqs, ensure_ascii=True)
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
     @observe(name="Citation Pipeline")
@@ -157,9 +181,7 @@ class CitationPipeline(SubPipeline):
             :param user_language: The user's preferred language ("en" or "de")
             :return: Selected file content
         """
-        paras = ""
-        paragraphs_page_chunks = ""
-        paragraphs_transcriptions = ""
+        paragraphs = ""
 
         if variant not in self.llms:
             variant = "default"
@@ -168,15 +190,15 @@ class CitationPipeline(SubPipeline):
         pipeline = self.pipelines[variant]
 
         if information_type == InformationType.FAQS:
-            paras = self.create_formatted_faq_string(
+            paragraphs = self.create_formatted_faq_string(
                 information, kwargs.get("base_url")
             )
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
-            paragraphs_page_chunks, paragraphs_transcriptions = (
-                self.create_formatted_lecture_string(information)
-            )
+            paragraphs = self.create_formatted_lecture_string(information)
             self.prompt_str = self.lecture_prompt_str
+
+        #print(paragraphs)
 
         # Add language instruction to prompt
         if user_language == "de":
@@ -191,15 +213,11 @@ class CitationPipeline(SubPipeline):
             )
             if information_type == InformationType.FAQS:
                 response = (self.default_prompt | pipeline).invoke(
-                    {"Answer": answer, "Paragraphs": paras}
+                    {"Answer": answer, "Paragraphs": paragraphs}
                 )
             else:
                 response = (self.default_prompt | pipeline).invoke(
-                    {
-                        "Answer": answer,
-                        "Paragraphs": paragraphs_page_chunks,
-                        "TranscriptionParagraphs": paragraphs_transcriptions,
-                    }
+                    {"Answer": answer, "Paragraphs": paragraphs}
                 )
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             if "!NONE!" in str(response):
