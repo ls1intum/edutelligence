@@ -132,6 +132,8 @@ class CitationPipeline(SubPipeline):
 
         lecture_transcriptions = []
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
+            if not paragraph.segment_text:
+                continue
             start_time_sec = (
                 int(paragraph.segment_start_time)
                 if paragraph.segment_start_time is not None
