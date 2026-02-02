@@ -95,51 +95,25 @@ cd /opt/atlasml
 sudo chown $USER:$USER /opt/atlasml
 ```
 
-### Step 4: Download Compose File
+### Step 4: Download Configuration Files
 
 ```bash
-# Download from GitHub
-curl -o compose.atlas.yaml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/compose.atlas.yaml
+# Download production Docker Compose file
+curl -o docker-compose.prod.yml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/docker-compose.prod.yml
 
-# Or create manually
-cat > compose.atlas.yaml << 'EOF'
-services:
-  atlasml:
-    image: 'ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}'
-    env_file:
-      - .env
-    environment:
-      PYTHONPATH: ${PYTHONPATH:-/atlasml}
-      WEAVIATE_HOST: ${WEAVIATE_HOST}
-      WEAVIATE_PORT: ${WEAVIATE_PORT:-80}
-      WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT:-443}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_API_URL: ${OPENAI_API_URL}
-      ATLAS_API_KEYS: ${ATLAS_API_KEYS}
-      SENTRY_DSN: ${SENTRY_DSN}
-      ENV: ${ENV:-production}
-    restart: unless-stopped
-    ports:
-      - '80:8000'
-    networks:
-      - shared-network
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1/health']
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '50m'
-        max-file: '5'
+# Download environment template
+curl -o .env.example https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/.env.example
 
-networks:
-  shared-network:
-    name: shared-network
-    driver: bridge
-EOF
+# Create Traefik configuration directory
+mkdir -p traefik
+
+# Download Traefik configuration files
+curl -o traefik/traefik.yml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/traefik/traefik.yml
+curl -o traefik/config.yml https://raw.githubusercontent.com/ls1intum/edutelligence/main/atlas/traefik/config.yml
+
+# Create SSL certificate file with correct permissions
+touch traefik/acme.json
+chmod 600 traefik/acme.json
 ```
 
 ### Step 5: Set Up Weaviate
@@ -172,7 +146,7 @@ AtlasML requires the centralized Weaviate setup with Traefik and API key authent
 4. **Save the following for AtlasML configuration:**
    - Weaviate domain (e.g., `weaviate.example.com`)
    - Weaviate API key
-   - Weaviate ports: `443` (HTTPS), `50051` (gRPC)
+   - Weaviate port: `443` (HTTPS REST)
 
 ### Step 6: Create Environment File
 
@@ -180,13 +154,12 @@ See [Configuration Guide](./atlasml-configuration.md) for detailed explanation o
 
 ```bash
 cat > /opt/atlasml/.env << 'EOF'
-# API Authentication
-ATLAS_API_KEYS='["your-secure-api-key-here"]'
+# API Authentication (comma-separated)
+ATLAS_API_KEYS=your-secure-api-key-here
 
-# Weaviate Connection (from centralized Weaviate setup)
+# Weaviate Connection (from centralized Weaviate setup - REST API only)
 WEAVIATE_HOST=https://your-weaviate-domain.com
 WEAVIATE_PORT=443
-WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=your-weaviate-api-key
 
 # OpenAI Configuration (Azure)
@@ -224,13 +197,13 @@ Never commit the `.env` file to version control. Keep your API keys secure.
 cd /opt/atlasml
 
 # Pull the image
-docker-compose -f compose.atlas.yaml pull
+docker-compose -f docker-compose.prod.yml pull
 
 # Start the service
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Check status
-docker-compose -f compose.atlas.yaml ps
+docker-compose -f docker-compose.prod.yml ps
 ```
 
 **Expected output**:
@@ -262,50 +235,44 @@ docker logs atlasml
 ### 1. Configure Firewall
 
 ```bash
-# Allow HTTP/HTTPS
+# Allow HTTP/HTTPS (required for Traefik and Let's Encrypt)
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 
-# Allow only from Artemis server (recommended)
-sudo ufw allow from ARTEMIS_SERVER_IP to any port 80
+# Allow only from Artemis server (recommended for additional security)
+sudo ufw allow from ARTEMIS_SERVER_IP to any port 443
 ```
 
-### 2. Set Up Reverse Proxy (Nginx)
+### 2. Verify SSL/TLS Certificate
 
-For HTTPS support:
+The production setup uses **Traefik** as the reverse proxy with automatic Let's Encrypt SSL certificates. No additional reverse proxy (like Nginx) is needed.
+
+**Verify certificate issuance:**
 
 ```bash
-# Install Nginx
-sudo apt-get install nginx certbot python3-certbot-nginx
+# Wait a few minutes after first deployment for Let's Encrypt
+# Then verify HTTPS is working
+curl -v https://your-atlasml-domain.com/api/v1/health
 
-# Create configuration
-sudo cat > /etc/nginx/sites-available/atlasml << 'EOF'
-server {
-    listen 443 ssl http2;
-    server_name atlasml.yourdomain.com;
-
-    ssl_certificate /etc/letsencrypt/live/atlasml.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/atlasml.yourdomain.com/privkey.pem;
-
-    location / {
-        proxy_pass http://localhost:80;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-EOF
-
-# Enable site
-sudo ln -s /etc/nginx/sites-available/atlasml /etc/nginx/sites-enabled/
-
-# Get SSL certificate
-sudo certbot --nginx -d atlasml.yourdomain.com
-
-# Reload Nginx
-sudo systemctl reload nginx
+# Check Traefik logs for certificate issues
+docker logs atlasml-traefik 2>&1 | grep -i "certificate\|acme"
 ```
+
+**Troubleshooting SSL:**
+
+```bash
+# Check acme.json permissions (must be 600)
+ls -la /opt/atlasml/traefik/acme.json
+
+# If certificate fails, check:
+# 1. Domain DNS points to server IP
+# 2. Ports 80/443 are open
+# 3. LETSENCRYPT_EMAIL is set correctly
+```
+
+:::tip
+Traefik automatically handles certificate renewal. No manual intervention needed.
+:::
 
 ### 3. Enable Auto-Start
 
@@ -330,10 +297,10 @@ See [Monitoring Guide](./atlasml-monitoring.md) for detailed monitoring setup.
 cd /opt/atlasml
 
 # Pull new image
-docker-compose -f compose.atlas.yaml pull
+docker-compose -f docker-compose.prod.yml pull
 
 # Restart service (zero downtime if using load balancer)
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify
 docker logs atlasml
@@ -346,8 +313,8 @@ docker logs atlasml
 echo "IMAGE_TAG=v1.2.0" >> /opt/atlasml/.env
 
 # Pull and restart
-docker-compose -f compose.atlas.yaml pull
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml pull
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
 ---
@@ -388,7 +355,7 @@ docker-compose -f compose.weaviate.yaml up -d
 
 ```bash
 # Stop and remove containers
-docker-compose -f compose.atlas.yaml down
+docker-compose -f docker-compose.prod.yml down
 
 # Remove images
 docker rmi ghcr.io/ls1intum/edutelligence/atlasml:main

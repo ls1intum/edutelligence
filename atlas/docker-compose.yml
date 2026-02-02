@@ -1,5 +1,21 @@
+# Docker Compose for Local Development (Artemis Developers)
+#
+# This setup is for Artemis developers who want to test AtlasML locally
+# without setting up certificates, proxies, or centralized Weaviate.
+#
+# Usage:
+#   docker-compose up -d
+#
+# Access AtlasML at: http://localhost:8000
+# Access Weaviate at: http://localhost:8085
+#
+# For AtlasML development (modifying AtlasML code), use docker-compose.dev.yml instead.
+
 services:
   weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.30.0
+    container_name: weaviate-local
+    restart: unless-stopped
     command:
       - --host
       - 0.0.0.0
@@ -7,13 +23,11 @@ services:
       - '8085'
       - --scheme
       - http
-    image: cr.weaviate.io/semitechnologies/weaviate:1.30.0
     ports:
-      - 8085:8085
-      - 50051:50051
+      - "8085:8085"
+      - "50051:50051"
     volumes:
       - weaviate_data:/var/lib/weaviate
-    restart: on-failure
     environment:
       CLIP_INFERENCE_API: 'http://multi2vec-clip:8080'
       QUERY_DEFAULTS_LIMIT: 25
@@ -23,45 +37,60 @@ services:
       ENABLE_API_BASED_MODULES: 'true'
       CLUSTER_HOSTNAME: 'node1'
     healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'wget -qO- http://localhost:8085/v1/.well-known/ready >/dev/null 2>&1 || exit 1',
-        ]
-      interval: 5s
-      timeout: 3s
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/v1/.well-known/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
       retries: 30
-      start_period: 15s
+      start_period: 30s
+    depends_on:
+      multi2vec-clip:
+        condition: service_healthy
+
   multi2vec-clip:
     image: cr.weaviate.io/semitechnologies/multi2vec-clip:sentence-transformers-clip-ViT-B-32-multilingual-v1
+    container_name: multi2vec-clip-local
+    restart: unless-stopped
     ports:
-      - 8081:8080
+      - "8081:8080"
     environment:
       ENABLE_CUDA: '0'
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
-  # atlasml:
-  #   build:
-  #     context: ./AtlasMl
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - 8000:8000
-  #   volumes:
-  #     - ./AtlasMl/atlasml:/atlasml/atlasml
-  #   environment:
-  #     - PYTHONPATH=/atlasml
-  #     - WEAVIATE_HOST=weaviate
-  #     - WEAVIATE_PORT=8085
-  #     - WEAVIATE_GRPC_PORT=50051
-  #     - OPENAI_API_KEY=
-  #     - OPENAI_API_URL=https://ase-se01.openai.azure.com
-  #     - ATLAS_API_KEYS=["test"]
-  #     - SENTRY_DSN=https://8fe7eac930933ea3c83ff7a66555de18@sentry.aet.cit.tum.de/6
-  #     - ENV=production
-  #   depends_on:
-  #     weaviate:
-  #       condition: service_healthy
-  #   networks:
-  #     - default
+  atlasml:
+    image: ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG:-latest}
+    container_name: atlasml-local
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      PYTHONPATH: /atlasml
+      WEAVIATE_HOST: http://weaviate
+      WEAVIATE_PORT: 8085
+      WEAVIATE_GRPC_PORT: 50051
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_URL: ${OPENAI_API_URL:-https://ase-se01.openai.azure.com}
+      ATLAS_API_KEYS: ${ATLAS_API_KEYS:-dev-test-key}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ENV: development
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; import sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health').getcode() == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      weaviate:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   default:
