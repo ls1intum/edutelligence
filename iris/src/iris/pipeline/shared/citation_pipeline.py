@@ -219,7 +219,6 @@ class CitationPipeline(SubPipeline):
         pipeline,
         language_instruction: str,
         used_numbers: list[int],
-        user_language: str,
     ) -> dict[int, tuple[str, str]]:
         summary_prompt = PromptTemplate(
             template=language_instruction + self.keyword_summary_prompt_str,
@@ -325,7 +324,6 @@ class CitationPipeline(SubPipeline):
                 pipeline=pipeline,
                 language_instruction=language_instruction,
                 used_numbers=self.used_citation_numbers,
-                user_language=user_language,
             )
             response_str = self._replace_cite_blocks_with_keyword_summary(
                 response_str, summaries
