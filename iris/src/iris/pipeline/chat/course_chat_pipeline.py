@@ -427,17 +427,17 @@ class CourseChatPipeline(
         # Generate title
         session_title = self._generate_session_title(state, state.result, state.dto)
 
-        # Generate suggestions
-        suggestions = self._generate_suggestions(state, state.result, state.dto)
-
+        # Send the result first so the user sees the message immediately
         state.callback.done(
             "Response created",
             final_result=state.result,
             tokens=state.tokens,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
-            suggestions=suggestions,
             session_title=session_title,
         )
+
+        # Generate and send suggestions separately (async from user's perspective)
+        self._generate_suggestions(state, state.result, state.dto)
 
         return state.result
 
@@ -509,17 +509,17 @@ class CourseChatPipeline(
         ],
         output: str,
         dto: CourseChatPipelineExecutionDTO,
-    ) -> Optional[Any]:
+    ) -> None:
         """
-        Generate interaction suggestions based on the output.
+        Generate interaction suggestions based on the output and send them via callback.
+
+        This is called after the main response has been sent, so suggestions are
+        delivered asynchronously from the user's perspective.
 
         Args:
             state: The current pipeline execution state
             output: The agent's output
             dto: The pipeline execution DTO
-
-        Returns:
-            The generated suggestions or None if generation failed
         """
         # Extract user language
         user_language = "en"
@@ -538,17 +538,20 @@ class CourseChatPipeline(
                 if self.suggestion_pipeline.tokens is not None:
                     self._track_tokens(state, self.suggestion_pipeline.tokens)
 
-                return suggestions
+                # Send suggestions separately
+                state.callback.done(
+                    final_result=None,
+                    suggestions=suggestions,
+                    tokens=state.tokens,
+                )
             else:
                 # This should never happen but whatever
                 logger.warning("No output generated, skipping suggestion generation")
-                return None
         except Exception as e:
             logger.error(
                 "An error occurred while running the course chat interaction suggestion pipeline",
                 exc_info=e,
             )
-            return None
 
     def _generate_session_title(
         self,
