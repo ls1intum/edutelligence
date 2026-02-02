@@ -217,6 +217,7 @@ class CitationPipeline(SubPipeline):
     def _build_keyword_summary_map(
         self,
         pipeline,
+        llm,
         language_instruction: str,
         used_numbers: list[int],
     ) -> dict[int, tuple[str, str]]:
@@ -241,6 +242,7 @@ class CitationPipeline(SubPipeline):
                     {"Paragraph": paragraph, "UsedKeywords": used_keywords_str}
                 )
             ).strip()
+            self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             keyword, summary = self._parse_keyword_summary_response(raw)
             if keyword:
                 used_keywords.add(keyword)
@@ -322,6 +324,7 @@ class CitationPipeline(SubPipeline):
             self.used_citation_numbers = self.extract_used_citation_numbers(response_str)
             summaries = self._build_keyword_summary_map(
                 pipeline=pipeline,
+                llm=llm,
                 language_instruction=language_instruction,
                 used_numbers=self.used_citation_numbers,
             )
