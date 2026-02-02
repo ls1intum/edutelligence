@@ -39,9 +39,9 @@ Weaviate is the vector database powering AtlasML's semantic search and similarit
 Configure Weaviate connection in `.env`:
 
 ```bash
-WEAVIATE_HOST=localhost
-WEAVIATE_PORT=8085
-WEAVIATE_GRPC_PORT=50051
+WEAVIATE_HOST=https://weaviate.example.com   # include scheme
+WEAVIATE_PORT=443                           # REST port
+WEAVIATE_API_KEY=your-weaviate-api-key     # optional for secured clusters
 ```
 
 ### Connection in Code
@@ -51,13 +51,19 @@ WEAVIATE_GRPC_PORT=50051
 ```python
 from atlasml.config import get_settings
 import weaviate
+from weaviate.auth import AuthApiKey
 
 settings = get_settings()
 
-client = weaviate.connect_to_local(
-    host=settings.weaviate.host,
-    port=settings.weaviate.port,
-    grpc_port=settings.weaviate.grpc_port
+auth_credentials = AuthApiKey(api_key=settings.weaviate.api_key) if settings.weaviate.api_key else None
+
+client = weaviate.connect_to_custom(
+    http_host=settings.weaviate.host,
+    http_port=settings.weaviate.port,
+    http_secure=(settings.weaviate.scheme == "https"),
+    grpc_host=None,       # REST-only
+    grpc_port=None,
+    auth_credentials=auth_credentials,
 )
 ```
 

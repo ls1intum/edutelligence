@@ -1,0 +1,86 @@
+# Docker Compose for AtlasML Development
+#
+# This setup is for AtlasML developers who are actively modifying AtlasML code.
+# It runs only the infrastructure (Weaviate + Multi2vec-CLIP) in Docker.
+# AtlasML should be run locally using Poetry for fast iteration and debugging.
+#
+# Usage:
+#   1. Start infrastructure:
+#      docker compose -f docker-compose.dev.yml up -d
+#
+#   2. Run AtlasML locally (in another terminal):
+#      cd AtlasMl
+#      poetry install
+#      cp .env.example .env  # Configure with your Azure OpenAI credentials
+#      poetry run uvicorn atlasml.app:app --reload
+#
+# Access AtlasML at: http://localhost:8000 (running locally via Poetry)
+# Access Weaviate at: http://localhost:8085 (running in Docker)
+# Access Multi2vec-CLIP at: http://localhost:8081 (running in Docker)
+#
+# Benefits of running AtlasML locally:
+# - Instant code changes with --reload (no Docker rebuild)
+# - Full IDE debugging support (breakpoints, step-through)
+# - Fast development iteration cycle
+# - Direct Poetry dependency management
+#
+# For detailed setup instructions, see: AtlasMl/README.md
+
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.34.10
+    container_name: weaviate-dev
+    restart: unless-stopped
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8085'
+      - --scheme
+      - http
+    ports:
+      - "8085:8085"
+      - "50051:50051"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      CLIP_INFERENCE_API: 'http://multi2vec-clip:8080'
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      ENABLE_MODULES: 'multi2vec-clip'
+      ENABLE_API_BASED_MODULES: 'true'
+      CLUSTER_HOSTNAME: 'node1'
+      LOG_LEVEL: 'info'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/v1/.well-known/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    depends_on:
+      multi2vec-clip:
+        condition: service_healthy
+
+  multi2vec-clip:
+    image: cr.weaviate.io/semitechnologies/multi2vec-clip:sentence-transformers-clip-ViT-B-32-multilingual-v1
+    container_name: multi2vec-clip-dev
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      ENABLE_CUDA: '0'
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+networks:
+  default:
+    driver: bridge
+
+volumes:
+  weaviate_data:
+    driver: local

@@ -15,21 +15,23 @@ This setup provides:
 ```
 ┌─────────────────┐         ┌─────────────────┐
 │     Atlas       │────────▶│                 │
-└─────────────────┘         │                 │
-                            │    Traefik      │
-┌─────────────────┐         │  (Port 80/443)  │
-│     Iris        │────────▶│                 │
-└─────────────────┘         │                 │
+└─────────────────┘         │    Traefik      │
+                            │  Port 80/443    │
+┌─────────────────┐         │  (REST + HTTPS) │
+│     Iris        │────────▶│  Port 50051     │
+└─────────────────┘         │  (gRPC + TLS)   │
                             └────────┬────────┘
-                                     │ HTTPS
-                                     ▼
-                            ┌─────────────────┐
-                            │    Weaviate     │◀──┐
-                            │   (Port 8080)   │   │
-                            └─────────────────┘   │
-                                                  │
-                            ┌─────────────────┐   │
-                            │ Multi2vec-CLIP  │───┘
+                                     │
+                        ┌────────────┴────────────┐
+                        │ HTTPS (REST)            │ gRPC + TLS
+                        ▼                         ▼
+                ┌─────────────────────────────────────┐
+                │            Weaviate                 │◀──┐
+                │  REST: 8080    │    gRPC: 50051     │   │
+                └─────────────────────────────────────┘   │
+                                                          │
+                            ┌─────────────────┐           │
+                            │ Multi2vec-CLIP  │───────────┘
                             │   (Port 8080)   │
                             └─────────────────┘
 ```
@@ -723,20 +725,22 @@ sudo aa-complain /etc/apparmor.d/docker
 
 ### External Access
 - **Port 80**: HTTP (redirects to HTTPS)
-- **Port 443**: HTTPS (Weaviate REST API)
-- **Port 50051**: gRPC (Weaviate gRPC API - required by Atlas and Iris)
+- **Port 443**: HTTPS (Weaviate REST API via Traefik)
+- **Port 50051**: gRPC with TLS (Weaviate gRPC API via Traefik - required by Python client v4)
+
+All external traffic (both REST and gRPC) is routed through Traefik with TLS encryption.
 
 ### Internal Network
 All services communicate over the `weaviate_network` bridge network:
-- `traefik` → `weaviate:8080` (HTTP)
-- `weaviate` → `multi2vec-clip:8080` (HTTP)
-- Atlas/Iris can access `weaviate:50051` (gRPC) directly
+- `traefik` → `weaviate:8080` (HTTP for REST API)
+- `traefik` → `weaviate:50051` (gRPC)
+- `weaviate` → `multi2vec-clip:8080` (HTTP for embeddings)
 
 ## Security Considerations
 
 1. **API Key Storage**: Store the `WEAVIATE_API_KEY` securely and never commit it to version control
-2. **Firewall**: Only expose ports 80, 443, and 50051 externally (or restrict 50051 to trusted IPs only)
-3. **gRPC Security**: Consider restricting port 50051 to specific IPs if not using internal access
+2. **Firewall**: Only expose ports 80, 443, and 50051 externally
+3. **TLS Everywhere**: Both REST (443) and gRPC (50051) traffic is encrypted via Traefik with Let's Encrypt certificates
 4. **Updates**: Regularly update Docker images for security patches
 5. **Backups**: Regularly backup the Weaviate data volume
 6. **Monitoring**: Monitor logs for suspicious activity
