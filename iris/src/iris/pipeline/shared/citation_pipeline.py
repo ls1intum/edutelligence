@@ -83,7 +83,11 @@ class CitationPipeline(SubPipeline):
         Create a formatted string from the data
         """
         def build_citation_id(
-            lecture_unit_id, page_number=None, start_time_sec=None, end_time_sec=None
+            lecture_unit_id,
+            page_number=None,
+            start_time_sec=None,
+            end_time_sec=None,
+            seq=None,
         ):
             def format_part(value):
                 return "" if value is None else str(value)
@@ -93,17 +97,24 @@ class CitationPipeline(SubPipeline):
                 f"{format_part(lecture_unit_id)}:"
                 f"{format_part(page_number)}:"
                 f"{format_part(start_time_sec)}:"
-                f"{format_part(end_time_sec)}]"
+                f"{format_part(end_time_sec)}"
+                f"!{format_part(seq)}]"
             )
 
+        seq = 0
         lecture_page_chunks = []
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
                 continue
+            seq += 1
             lecture_page_chunks.append(
                 {
                     "id": build_citation_id(
-                        paragraph.lecture_unit_id, paragraph.page_number, None, None
+                        paragraph.lecture_unit_id,
+                        paragraph.page_number,
+                        None,
+                        None,
+                        seq,
                     ),
                     "content": paragraph.page_text_content,
                 }
@@ -121,6 +132,7 @@ class CitationPipeline(SubPipeline):
                 if paragraph.segment_end_time is not None
                 else None
             )
+            seq += 1
             lecture_transcriptions.append(
                 {
                     "id": build_citation_id(
@@ -128,6 +140,7 @@ class CitationPipeline(SubPipeline):
                         paragraph.page_number,
                         start_time_sec,
                         end_time_sec,
+                        seq,
                     ),
                     "content": paragraph.segment_text,
                 }
@@ -147,14 +160,16 @@ class CitationPipeline(SubPipeline):
         Create a formatted string from the data
         """
         formatted_faqs = []
+        seq = 0
         for faq in faqs:
+            seq += 1
             faq_id = faq.get(FaqSchema.FAQ_ID.value)
             question = faq.get(FaqSchema.QUESTION_TITLE.value)
             answer = faq.get(FaqSchema.QUESTION_ANSWER.value)
             content = f"{question} {answer}".strip()
             formatted_faqs.append(
                 {
-                    "id": f"[cite:F:{faq_id}:::]",
+                    "id": f"[cite:F:{faq_id}:::!{seq}]",
                     "content": content,
                 }
             )
@@ -198,7 +213,7 @@ class CitationPipeline(SubPipeline):
             paragraphs = self.create_formatted_lecture_string(information)
             self.prompt_str = self.lecture_prompt_str
 
-        #print(paragraphs)
+        print(paragraphs)
 
         # Add language instruction to prompt
         if user_language == "de":
