@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
@@ -47,6 +48,7 @@ class CitationPipeline(SubPipeline):
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.faq_prompt_str = file.read()
         self.tokens = []
+        self.used_citation_numbers: list[int] = []
 
         # Create LLM variants
         self.llms = {}
@@ -147,15 +149,12 @@ class CitationPipeline(SubPipeline):
             )
 
         formatted_string = json.dumps(
-            {
-                "page_chunks": lecture_page_chunks,
-                "transcriptions": lecture_transcriptions,
-            },
+            lecture_page_chunks + lecture_transcriptions,
             ensure_ascii=True,
         )
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
-    def create_formatted_faq_string(self, faqs, base_url):
+    def create_formatted_faq_string(self, faqs):
         """
         Create a formatted string from the data
         """
@@ -176,6 +175,18 @@ class CitationPipeline(SubPipeline):
 
         formatted_string = json.dumps(formatted_faqs, ensure_ascii=True)
         return formatted_string.replace("{", "{{").replace("}", "}}")
+
+    def extract_used_citation_numbers(self, answer: str) -> list[int]:
+        """
+        Extracts the numeric suffix after '!' from citation blocks in the answer.
+        Example block: [cite:L/F:entityid:page:start:end!number]
+        """
+        if not answer:
+            return []
+        numbers = []
+        for match in re.finditer(r"\[cite:[LF]:[^]]*?!(\d+)\]", answer):
+            numbers.append(int(match.group(1)))
+        return numbers
 
     @observe(name="Citation Pipeline")
     def __call__(
@@ -205,9 +216,7 @@ class CitationPipeline(SubPipeline):
         pipeline = self.pipelines[variant]
 
         if information_type == InformationType.FAQS:
-            paragraphs = self.create_formatted_faq_string(
-                information, kwargs.get("base_url")
-            )
+            paragraphs = self.create_formatted_faq_string(information)
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
             paragraphs = self.create_formatted_lecture_string(information)
@@ -226,18 +235,13 @@ class CitationPipeline(SubPipeline):
                 template=language_instruction + self.prompt_str,
                 input_variables=["Answer", "Paragraphs"],
             )
-            if information_type == InformationType.FAQS:
-                response = (self.default_prompt | pipeline).invoke(
-                    {"Answer": answer, "Paragraphs": paragraphs}
-                )
-            else:
-                response = (self.default_prompt | pipeline).invoke(
-                    {"Answer": answer, "Paragraphs": paragraphs}
-                )
+            response = (self.default_prompt | pipeline).invoke(
+                {"Answer": answer, "Paragraphs": paragraphs}
+            )
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            if "!NONE!" in str(response):
-                return answer
-            return response
+            response_str = str(response)
+            self.used_citation_numbers = self.extract_used_citation_numbers(response_str)
+            return response_str
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
             raise e
