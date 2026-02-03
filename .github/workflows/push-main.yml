@@ -1,0 +1,21 @@
+name: Push to Main
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  packages: write
+
+jobs:
+  docs:
+    uses: ./.github/workflows/docs.yml
+    secrets: inherit

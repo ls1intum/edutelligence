@@ -1,0 +1,86 @@
+name: Build Atlas Documentation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: tj-actions/changed-files@v45
+        id: changed-docs
+        with:
+          files: atlas/docs/**
+
+      - uses: tj-actions/changed-files@v45
+        id: changed-workflow
+        with:
+          files: |
+            .github/workflows/docs.yml
+            .github/workflows/atlas_docs-build.yml
+
+      - id: changes
+        run: |
+          if [ "${{ steps.changed-docs.outputs.any_changed }}" = "true" ] || [ "${{ steps.changed-workflow.outputs.any_changed }}" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore Atlas docs from cache
+        id: cache-atlas
+        uses: actions/cache/restore@v4
+        with:
+          path: atlas/docs/build
+          key: atlas-docs-${{ hashFiles('atlas/docs/**') }}
+          restore-keys: |
+            atlas-docs-
+
+      - name: Setup Node.js
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-atlas.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: atlas/docs/package-lock.json
+
+      - name: Install dependencies
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-atlas.outputs.cache-hit != 'true'
+        run: |
+          cd atlas/docs
+          npm ci
+
+      - name: Build documentation
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-atlas.outputs.cache-hit != 'true'
+        run: |
+          cd atlas/docs
+          npm run build
+
+      - name: Save Atlas docs to cache
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-atlas.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: atlas/docs/build
+          key: atlas-docs-${{ hashFiles('atlas/docs/**') }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-docs
+          path: atlas/docs/build
+          retention-days: 1
