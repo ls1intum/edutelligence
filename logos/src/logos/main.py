@@ -410,6 +410,10 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                                 last_chunk = blob  # Keep track of last chunk (may have usage)
                                 if first_chunk is None:
                                     first_chunk = blob
+                                    # Log time to first token
+                                    if log_id:
+                                        with DBManager() as db:
+                                            db.set_time_at_first_token(log_id)
                                 if "choices" in blob and blob["choices"]:
                                     delta = blob["choices"][0].get("delta", {})
                                     content = delta.get("content", "")
@@ -434,6 +438,10 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                             last_chunk = blob  # Keep track of last chunk (may have usage)
                             if first_chunk is None:
                                 first_chunk = blob
+                                # Log time to first token
+                                if log_id:
+                                    with DBManager() as db:
+                                        db.set_time_at_first_token(log_id)
                             if "choices" in blob and blob["choices"]:
                                 delta = blob["choices"][0].get("delta", {})
                                 content = delta.get("content", "")
@@ -560,6 +568,8 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
             usage_tokens = extract_token_usage(usage) if usage else {}
 
             with DBManager() as db:
+                db.set_time_at_first_token(log_id)
+                db.set_response_timestamp(log_id)
                 db.set_response_payload(
                     log_id,
                     response_payload,
