@@ -26,11 +26,11 @@ class SessionTitleGenerationPipeline(SubPipeline):
     pipeline: Runnable
     tokens: TokenUsageDTO
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="session_title_generation_pipeline")
 
         # Set the langchain chat model
-        model = "gpt-4.1-nano"
+        model = "llama3.3:latest" if local else "gpt-4.1-nano"
         request_handler = ModelVersionRequestHandler(version=model)
         completion_args = CompletionArguments(temperature=0.2, max_tokens=30)
         self.llm = IrisLangchainChatModel(
