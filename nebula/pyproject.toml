@@ -24,6 +24,7 @@ pydub = "0.25.1"
 numpy = "<2.0.0"
 grpcio = "^1.62.1"
 grpcio-tools = "^1.62.1"
+langfuse = "^3.11.2"
 
 [tool.poetry.group.dev.dependencies]
 black = "^25.1.0"
