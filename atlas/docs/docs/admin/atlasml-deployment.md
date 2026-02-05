@@ -103,54 +103,66 @@ on:
     inputs:
       image-tag:
         type: string
-        description: 'Image tag to deploy'
-        required: true
+        description: 'Image tag to deploy (default: pr-<number> if PR exists, latest for default branch)'
       deploy-atlasml:
         type: boolean
         default: true
-        description: (Re-)deploys AtlasML
+        description: (Re-)deploys AtlasML.
 ```
+
+#### Required GitHub Configuration
+
+The workflow uses the organization's standard naming conventions for secrets and variables.
+
+**Environment Variables** (in GitHub Environment `Atlas - Test 1`):
+- `VM_HOST` - Target server hostname/IP
+- `VM_USERNAME` - SSH username
+
+**Environment Secrets** (in GitHub Environment `Atlas - Test 1`):
+- `VM_SSH_PRIVATE_KEY` - SSH private key for server access
+- All application secrets (e.g., `WEAVIATE_HOST`, `WEAVIATE_API_KEY`, `OPENAI_API_KEY`, etc.)
+
+:::tip
+The reusable deployment workflow automatically creates the `.env` file from all secrets configured in the GitHub environment, excluding infrastructure secrets like `VM_SSH_PRIVATE_KEY`.
+:::
 
 #### Steps
 
 **Step 1: Provision Environment**
 
-Writes `.env` file to remote server:
+Sets up Traefik directories and SSL certificate file on the remote server:
 
 ```yaml
-- name: Write .env to remote host
-  uses: appleboy/ssh-action@v1.0.3
+- name: Setup Traefik on remote host
+  uses: appleboy/ssh-action@v1.2.4
   with:
-    host: ${{ secrets.SSH_HOST }}
-    username: ${{ secrets.SSH_USERNAME }}
-    key: ${{ secrets.SSH_PRIVATE_KEY }}
+    host: ${{ vars.VM_HOST }}
+    username: ${{ vars.VM_USERNAME }}
+    key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
     script: |
-      sudo mkdir -p /opt/atlasml
-      cat << EOF | sudo tee /opt/atlasml/.env > /dev/null
-      PYTHONPATH='${{ secrets.PYTHONPATH }}'
-      WEAVIATE_HOST='${{ secrets.WEAVIATE_HOST }}'
-      WEAVIATE_PORT='${{ secrets.WEAVIATE_PORT }}'
-      ATLAS_API_KEYS='${{ secrets.ATLAS_API_KEYS }}'
-      OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}'
-      OPENAI_API_URL='${{ secrets.OPENAI_API_URL }}'
-      ENV='${{ secrets.ENV }}'
-      EOF
-      sudo chmod 600 /opt/atlasml/.env
+      sudo mkdir -p /opt/atlasml/traefik
+      sudo touch /opt/atlasml/traefik/acme.json
+      sudo chmod 600 /opt/atlasml/traefik/acme.json
 ```
+
+:::note
+The `.env` file is automatically created by the reusable deployment workflow using secrets and variables configured in the GitHub environment. You don't need to manually write environment variables.
+:::
 
 **Step 2: Deploy AtlasML**
 
-Uses reusable workflow to deploy:
+Uses the organization's reusable workflow to deploy:
 
 ```yaml
 - name: Deploy AtlasML
   uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
   with:
-    environment: 'AtlasML - Test 1'
-    docker-compose-file: './atlas/compose.atlas.yaml'
+    environment: 'Atlas - Test 1'
+    docker-compose-file: './atlas/docker-compose.prod.yml'
     main-image-name: ls1intum/edutelligence/atlasml
     image-tag: ${{ inputs.image-tag }}
     deployment-base-path: '/opt/atlasml'
+  secrets: inherit
 ```
 
 #### How to Deploy
@@ -339,8 +351,8 @@ cat .env >> .env.new
 mv .env.new .env
 
 # Pull and restart
-docker-compose -f compose.atlas.yaml pull
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml pull
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify
 docker logs atlasml
@@ -380,7 +392,7 @@ graph LR
 ### Using Docker Compose
 
 ```yaml
-# compose.atlas.yaml
+# docker-compose.prod.yml
 services:
   atlasml:
     image: ghcr.io/ls1intum/edutelligence/atlasml:${IMAGE_TAG}
@@ -394,7 +406,7 @@ services:
 
 **Deploy**:
 ```bash
-docker-compose -f compose.atlas.yaml up -d --no-deps --build atlasml
+docker-compose -f docker-compose.prod.yml up -d --no-deps --build atlasml
 ```
 
 This updates containers one at a time, ensuring at least one is always running.
@@ -408,7 +420,7 @@ This updates containers one at a time, ensuring at least one is always running.
 ```yaml
 # .env.dev
 ENV=development
-ATLAS_API_KEYS='["dev-key"]'
+ATLAS_API_KEYS=dev-key
 WEAVIATE_HOST=localhost
 OPENAI_API_KEY=dev-key
 ```
@@ -418,7 +430,7 @@ OPENAI_API_KEY=dev-key
 ```yaml
 # .env.staging
 ENV=staging
-ATLAS_API_KEYS='["staging-key-1","staging-key-2"]'
+ATLAS_API_KEYS=staging-key-1,staging-key-2
 WEAVIATE_HOST=weaviate-staging.internal
 OPENAI_API_KEY=staging-key
 SENTRY_DSN=https://...@sentry.../staging
@@ -429,7 +441,7 @@ SENTRY_DSN=https://...@sentry.../staging
 ```yaml
 # .env.production
 ENV=production
-ATLAS_API_KEYS='["prod-key-1","prod-key-2","prod-key-3"]'
+ATLAS_API_KEYS=prod-key-1,prod-key-2,prod-key-3
 WEAVIATE_HOST=weaviate.internal
 OPENAI_API_KEY=prod-key
 SENTRY_DSN=https://...@sentry.../production
@@ -572,13 +584,13 @@ docker logs atlasml
 **Solution**:
 ```bash
 # Force pull new image
-docker-compose -f compose.atlas.yaml pull
+docker-compose -f docker-compose.prod.yml pull
 
 # Remove old container
-docker-compose -f compose.atlas.yaml down
+docker-compose -f docker-compose.prod.yml down
 
 # Start with new image
-docker-compose -f compose.atlas.yaml up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Verify version (check logs for startup message)
 docker logs atlasml | grep "Starting"

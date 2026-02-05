@@ -16,33 +16,24 @@ jobs:
     runs-on: ubuntu-latest
     environment: 'Atlas - Test 1'
     steps:
-      - name: Write .env to remote host
-        uses: appleboy/ssh-action@v1.2.4
+      - name: Setup Traefik on remote host
+        uses: appleboy/ssh-action@v1.2.5
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           script: |
-            sudo mkdir -p /opt/atlasml
-            cat << EOF | sudo tee /opt/atlasml/.env > /dev/null
-            PYTHONPATH='${{ secrets.PYTHONPATH }}'
-            WEAVIATE_HOST='${{ secrets.WEAVIATE_HOST }}'
-            WEAVIATE_PORT='${{ secrets.WEAVIATE_PORT }}'
-            WEAVIATE_GRPC_PORT='${{ secrets.WEAVIATE_GRPC_PORT }}'
-            OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}'
-            OPENAI_API_URL='${{ secrets.OPENAI_API_URL }}'
-            ATLAS_API_KEYS='${{ secrets.ATLAS_API_KEYS }}'
-            SENTRY_DSN='${{ secrets.SENTRY_DSN }}'
-            ENV='${{ secrets.ENV }}'
-            EOF
-            sudo chmod 600 /opt/atlasml/.env
+            sudo mkdir -p /opt/atlasml/traefik
+            sudo touch /opt/atlasml/traefik/acme.json
+            sudo chmod 600 /opt/atlasml/traefik/acme.json
+
   deploy-atlasml:
     needs: provision-env
     if: ${{ inputs.deploy-atlasml }}
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
-      environment: 'AtlasML - Test 1'
-      docker-compose-file: './atlas/compose.atlas.yaml'
+      environment: 'Atlas - Test 1'
+      docker-compose-file: './atlas/docker-compose.prod.yml'
       main-image-name: ls1intum/edutelligence/atlasml
       image-tag: ${{ inputs.image-tag }}
       deployment-base-path: '/opt/atlasml'

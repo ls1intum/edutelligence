@@ -99,3 +99,9 @@ Desktop.ini
 # Python
 ######################
 **/__pycache__
+
+######################
+# Docker / Traefik
+######################
+# Traefik SSL certificates (Let's Encrypt)
+traefik/acme.json
