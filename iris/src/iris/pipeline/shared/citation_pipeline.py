@@ -1,6 +1,8 @@
+import concurrent.futures
 import os
 import json
 import re
+import threading
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
@@ -38,6 +40,7 @@ class CitationPipeline(SubPipeline):
 
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="citation_pipeline")
+        self._local = local
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
         with open(prompt_file_path, "r", encoding="utf-8") as file:
@@ -48,11 +51,17 @@ class CitationPipeline(SubPipeline):
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.faq_prompt_str = file.read()
         prompt_file_path = os.path.join(
-            dirname, "..", "prompts", "citation_keyword_summary_prompt.txt"
+            dirname, "..", "prompts", "citation_keyword_prompt.txt"
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
-            self.keyword_summary_prompt_str = file.read()
+            self.keyword_prompt_str = file.read()
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "citation_summary_prompt.txt"
+        )
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
+            self.summary_prompt_str = file.read()
         self.tokens = []
+        self._tokens_lock = threading.Lock()
         self.used_citation_numbers: list[int] = []
         self._last_citation_content_by_seq: dict[int, str] = {}
 
@@ -81,6 +90,14 @@ class CitationPipeline(SubPipeline):
         )
         self.llms["advanced"] = advanced_llm
         self.pipelines["advanced"] = advanced_llm | StrOutputParser()
+
+        # RequestHandler for keyword/summary (small models, separate instance per thread)
+        self._keyword_summary_request_handler = ModelVersionRequestHandler(
+            version="gemma3:27b" if local else "gpt-4.1-nano"
+        )
+        self._keyword_summary_completion_args = CompletionArguments(
+            temperature=0, max_tokens=500
+        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llms={list(self.llms.keys())})"
@@ -213,49 +230,113 @@ class CitationPipeline(SubPipeline):
         cleaned = value.replace(":", " -").replace("]", ")").replace("[", "(")
         return " ".join(cleaned.split())
 
-    def _parse_keyword_summary_response(self, raw: str) -> tuple[str, str]:
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return "", ""
-        keyword = self._sanitize_citation_field(str(data.get("keyword", "")).strip())
-        summary = self._sanitize_citation_field(str(data.get("summary", "")).strip())
-        return keyword, summary
-
-    def _build_keyword_summary_map(
+    def _generate_single_summary(
         self,
-        pipeline,
-        llm,
+        language_instruction: str,
+        num: int,
+    ) -> str:
+        """Generate a single summary for a citation number."""
+        # Create thread-local LLM instance to avoid race conditions
+        llm = IrisLangchainChatModel(
+            request_handler=self._keyword_summary_request_handler,
+            completion_args=self._keyword_summary_completion_args,
+        )
+        pipeline = llm | StrOutputParser()
+        paragraph = self._last_citation_content_by_seq[num]
+        summary_prompt = PromptTemplate(
+            template=language_instruction + self.summary_prompt_str,
+            input_variables=["Paragraph"],
+        )
+        raw = str((summary_prompt | pipeline).invoke({"Paragraph": paragraph})).strip()
+        with self._tokens_lock:
+            self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
+        return self._sanitize_citation_field(raw)
+
+    def _generate_keywords_sequential(
+        self,
         language_instruction: str,
         used_numbers: list[int],
-    ) -> dict[int, tuple[str, str]]:
-        summary_prompt = PromptTemplate(
-            template=language_instruction + self.keyword_summary_prompt_str,
+    ) -> dict[int, str]:
+        """Generate keywords sequentially to maintain deduplication."""
+        # Create thread-local LLM instance to avoid race conditions
+        llm = IrisLangchainChatModel(
+            request_handler=self._keyword_summary_request_handler,
+            completion_args=self._keyword_summary_completion_args,
+        )
+        pipeline = llm | StrOutputParser()
+        keyword_prompt = PromptTemplate(
+            template=language_instruction + self.keyword_prompt_str,
             input_variables=["Paragraph", "UsedKeywords"],
         )
-        summaries: dict[int, tuple[str, str]] = {}
-        seen: set[int] = set()
+        keywords: dict[int, str] = {}
         used_keywords: set[str] = set()
         for num in used_numbers:
-            if num in seen:
-                continue
-            seen.add(num)
-            paragraph = self._last_citation_content_by_seq.get(num, "")
-            if not paragraph.strip():
-                summaries[num] = ("", "")
-                continue
+            paragraph = self._last_citation_content_by_seq[num]
             used_keywords_str = ", ".join(sorted(used_keywords))
             raw = str(
-                (summary_prompt | pipeline).invoke(
+                (keyword_prompt | pipeline).invoke(
                     {"Paragraph": paragraph, "UsedKeywords": used_keywords_str}
                 )
             ).strip()
-            self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            keyword, summary = self._parse_keyword_summary_response(raw)
+            with self._tokens_lock:
+                self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
+            keyword = self._sanitize_citation_field(raw)
             if keyword:
                 used_keywords.add(keyword)
-            summaries[num] = (keyword, summary)
-        return summaries
+            keywords[num] = keyword
+        return keywords
+
+    def _build_keyword_summary_map(
+        self,
+        language_instruction: str,
+        used_numbers: list[int],
+    ) -> dict[int, tuple[str, str]]:
+        # Deduplicate used_numbers while preserving order
+        seen: set[int] = set()
+        unique_numbers: list[int] = []
+        for num in used_numbers:
+            if num not in seen:
+                seen.add(num)
+                unique_numbers.append(num)
+
+        # Filter out numbers with empty paragraphs
+        valid_numbers = [
+            num
+            for num in unique_numbers
+            if self._last_citation_content_by_seq.get(num, "").strip()
+        ]
+
+        if not valid_numbers:
+            return {num: ("", "") for num in unique_numbers}
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(valid_numbers) + 1
+        ) as executor:
+            keyword_future = executor.submit(
+                self._generate_keywords_sequential,
+                language_instruction,
+                valid_numbers,
+            )
+            summary_futures = {
+                executor.submit(
+                    self._generate_single_summary,
+                    language_instruction,
+                    num,
+                ): num
+                for num in valid_numbers
+            }
+            keywords = keyword_future.result()
+            summaries = {
+                summary_futures[f]: f.result()
+                for f in concurrent.futures.as_completed(summary_futures)
+            }
+        result: dict[int, tuple[str, str]] = {}
+        for num in unique_numbers:
+            if num in valid_numbers:
+                result[num] = (keywords.get(num, ""), summaries.get(num, ""))
+            else:
+                result[num] = ("", "")
+        return result
 
     def _replace_cite_blocks_with_keyword_summary(
         self, answer: str, summaries: dict[int, tuple[str, str]]
@@ -331,8 +412,6 @@ class CitationPipeline(SubPipeline):
             response_str = str(response)
             self.used_citation_numbers = self.extract_used_citation_numbers(response_str)
             summaries = self._build_keyword_summary_map(
-                pipeline=pipeline,
-                llm=llm,
                 language_instruction=language_instruction,
                 used_numbers=self.used_citation_numbers,
             )
