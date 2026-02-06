@@ -76,6 +76,10 @@ class SessionTitleGenerationPipeline(SubPipeline):
             session_title = (prompt | self.pipeline).invoke(
                 {"prompt_text": prompt_text}
             )
+            logger.info(
+                "Session title raw LLM output | output=%r",
+                str(session_title)[:500] if session_title is not None else None,
+            )
             self.tokens = self.llm.tokens
             self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
             return session_title
