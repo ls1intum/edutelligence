@@ -68,18 +68,49 @@ class SessionTitleGenerationPipeline(SubPipeline):
             recent_messages=recent_messages,
             user_language=user_language,
         )
-        # Keep the rendered text as data so `{}` inside message content is not
-        # interpreted as additional prompt template variables.
-        prompt = ChatPromptTemplate.from_messages([("system", "{prompt_text}")])
         try:
             logger.info("Running Session Title Generation Pipeline")
-            session_title = (prompt | self.pipeline).invoke(
+            # Keep the rendered text as data so `{}` inside message content is not
+            # interpreted as additional prompt template variables.
+            primary_prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", "{prompt_text}"),
+                    (
+                        "user",
+                        "Return EXACTLY one line: KEEP or UPDATE: <new title>.",
+                    ),
+                ]
+            )
+            session_title = (primary_prompt | self.pipeline).invoke(
                 {"prompt_text": prompt_text}
             )
             logger.info(
-                "Session title raw LLM output | output=%r",
+                "Session title raw LLM output (attempt=1) | output=%r",
                 str(session_title)[:500] if session_title is not None else None,
             )
+
+            if not str(session_title or "").strip():
+                logger.warning(
+                    "Session title model returned empty output on first attempt, retrying with fallback prompt"
+                )
+                fallback_prompt = ChatPromptTemplate.from_messages(
+                    [
+                        (
+                            "user",
+                            "{prompt_text}\n\n"
+                            "Output EXACTLY one non-empty line: "
+                            "KEEP or UPDATE: <new title>.",
+                        )
+                    ]
+                )
+                session_title = (fallback_prompt | self.pipeline).invoke(
+                    {"prompt_text": prompt_text}
+                )
+                logger.info(
+                    "Session title raw LLM output (attempt=2) | output=%r",
+                    str(session_title)[:500] if session_title is not None else None,
+                )
+
             self.tokens = self.llm.tokens
             self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
             return session_title
