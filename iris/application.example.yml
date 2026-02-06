@@ -10,6 +10,8 @@ memiris:
   enabled: true
   sleep_enabled: true
 
+local_llm_enabled: true # Set to false to disable local LLM support entirely
+
 langfuse:
   enabled: false # Set to true to enable LangFuse tracing
   public_key: "pk-lf-..." # Your LangFuse public key

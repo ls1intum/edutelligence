@@ -2,6 +2,7 @@ from typing import Type
 
 from fastapi import HTTPException, status
 
+from iris.config import settings as app_settings
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
 from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
@@ -25,6 +26,15 @@ def validate_pipeline_variant(
     Raises:
         HTTPException: If the variant is not available or required models are missing
     """
+    if settings.is_local() and not app_settings.local_llm_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "type": "local_llm_disabled",
+                "errorMessage": "Local LLM usage is disabled. Configure Artemis to use CLOUD_AI.",
+            },
+        )
+
     variant = settings.variant
 
     # Get all variants for the pipeline
