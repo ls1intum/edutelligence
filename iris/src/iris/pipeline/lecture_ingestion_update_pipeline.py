@@ -7,6 +7,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.lecture_ingestion_update_variant import (
     LectureIngestionUpdateVariant,
 )
@@ -53,11 +54,9 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 self.dto.lecture_unit.pdf_file_base64 is not None
                 and self.dto.lecture_unit.pdf_file_base64 != ""
             ):
-                for variant in LectureUnitPageIngestionPipeline.get_variants():
-                    if variant.id == variant_id:
-                        break
-                else:
-                    raise ValueError(f"Unknown variant: {variant_id}")
+                variant = find_variant(
+                    LectureUnitPageIngestionPipeline.get_variants(), variant_id
+                )
                 page_content_pipeline = LectureUnitPageIngestionPipeline(
                     client=client,
                     dto=self.dto,
