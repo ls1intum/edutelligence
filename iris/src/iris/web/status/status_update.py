@@ -260,6 +260,12 @@ class CourseChatStatusCallback(StatusCallback):
                 name="Extracting memories",
                 internal=True,
             ),
+            StageDTO(
+                weight=5,
+                state=StageStateEnum.NOT_STARTED,
+                name="Finalizing",
+                internal=True,
+            ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
@@ -439,6 +445,12 @@ class LectureChatCallback(StatusCallback):
                 weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Extracting memories",
+                internal=True,
+            ),
+            StageDTO(
+                weight=5,
+                state=StageStateEnum.NOT_STARTED,
+                name="Finalizing",
                 internal=True,
             ),
         ]

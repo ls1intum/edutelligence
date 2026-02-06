@@ -585,8 +585,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     "Memory creation finished.",
                     created_memories=state.memiris_memory_creation_storage,
                 )
-            else:
-                state.callback.done("No memory creation thread started.")
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info(
