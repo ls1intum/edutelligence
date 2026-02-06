@@ -34,30 +34,47 @@ export default function InteractiveZoomableChart({
   const selectionRef = useRef<SelectionState | null>(null);
   const containerRef = useRef<View | null>(null);
   const confirmAnim = useRef(new Animated.Value(0)).current;
-  const chartPadding = 50; // keep visual padding on the right so the line doesn't feel cut off
-  const chartWidth = Math.max(width - chartPadding, 0);
-  const containerWidth = Math.max(width, 0); // selection canvas spans the whole card area
+
+  // Chart layout constants - must match LineChart props
+  // Note: LineChart adds yAxisLabelWidth ON TOP of the width prop, so we subtract it
+  const yAxisLabelWidth = 35; // Space for y-axis labels on the left
+  const initialSpacing = 0; // No extra spacing at the start
+  const endSpacing = 0; // Keep at 0 - adjustToWidth doesn't work well with endSpacing
+  const rightPadding = 16; // Visual padding so the line doesn't feel cut off at the right edge
+  const chartLeftOffset = yAxisLabelWidth + initialSpacing; // Where the data area starts in container
+  const chartWidth = Math.max(width - yAxisLabelWidth - rightPadding, 0); // Width passed to LineChart
+  const dataAreaWidth = chartWidth - initialSpacing - endSpacing; // Actual plottable data area (= chartWidth)
+
   const MIN_SELECTION_PX = 14; // allow small selections, but avoid accidental taps
   const EDGE_SNAP_PX = 16; // snap to the right-most data when dragging near the chart edge
   const chartHeight = 250; // Match LineChart height
-  const clampSelectionX = useCallback(
-    (x: number) => Math.max(0, Math.min(containerWidth, x)),
-    [containerWidth]
+
+  // Clamp selection X to container bounds during dragging (allows overflow past data area)
+  const clampSelectionXDragging = useCallback(
+    (x: number) => Math.max(0, Math.min(width, x)),
+    [width]
   );
 
-  // Helper: Map x in chart-space to timestamp (anything beyond the drawn chart maps to the latest point)
+  // Clamp selection X to the actual data area (used on release for final position)
+  const clampSelectionXFinal = useCallback(
+    (x: number) => Math.max(chartLeftOffset, Math.min(chartLeftOffset + dataAreaWidth, x)),
+    [chartLeftOffset, dataAreaWidth]
+  );
+
+  // Helper: Map x in container-space to timestamp (accounts for y-axis offset)
   const getTimestampFromX = useCallback(
     (x: number) => {
       if (!totalLineData.length) return 0;
       const firstTs = totalLineData[0].timestamp;
       const lastTs = totalLineData[totalLineData.length - 1].timestamp;
       const duration = lastTs - firstTs;
-      if (chartWidth <= 0 || duration <= 0) return lastTs;
-      const usableX = Math.max(0, Math.min(x, chartWidth));
-      const pct = usableX / chartWidth;
+      if (dataAreaWidth <= 0 || duration <= 0) return lastTs;
+      // Convert container X to data-area-relative X
+      const dataX = Math.max(0, Math.min(x - chartLeftOffset, dataAreaWidth));
+      const pct = dataX / dataAreaWidth;
       return firstTs + pct * duration;
     },
-    [totalLineData, chartWidth]
+    [totalLineData, dataAreaWidth, chartLeftOffset]
   );
 
   const confirmSelection = useCallback(() => {
@@ -100,7 +117,7 @@ export default function InteractiveZoomableChart({
         onPanResponderGrant: (_evt, gestureState) => {
           // Measure relative to page to be robust against child targets (web issue)
           containerRef.current?.measure((_x, _y, _w, _h, pageX, _pageY) => {
-            const localStart = clampSelectionX(gestureState.x0 - pageX);
+            const localStart = clampSelectionXDragging(gestureState.x0 - pageX);
             const newSel: SelectionState = {
               start: localStart,
               end: localStart,
@@ -117,8 +134,8 @@ export default function InteractiveZoomableChart({
           const sel = selectionRef.current;
           if (!sel) return;
 
-          // Calculate new end based on moveX and captured pageX
-          let localEnd = clampSelectionX(gestureState.moveX - (sel.pageX || 0));
+          // Calculate new end based on moveX and captured pageX (allow dragging beyond data area)
+          let localEnd = clampSelectionXDragging(gestureState.moveX - (sel.pageX || 0));
 
           // update ref
           sel.end = localEnd;
@@ -137,10 +154,14 @@ export default function InteractiveZoomableChart({
 
           const rawStart = Math.min(sel.start, sel.end);
           const rawEnd = Math.max(sel.start, sel.end);
-          const hitRightEdge = rawEnd >= chartWidth - EDGE_SNAP_PX;
+          const dataAreaRight = chartLeftOffset + dataAreaWidth;
+          // Snap to edges if dragged beyond or near the data area bounds
+          const hitRightEdge = rawEnd >= dataAreaRight - EDGE_SNAP_PX;
+          const hitLeftEdge = rawStart <= chartLeftOffset + EDGE_SNAP_PX;
 
-          const startX = clampSelectionX(rawStart);
-          const endX = hitRightEdge ? chartWidth : clampSelectionX(rawEnd);
+          // Clamp to data area bounds on release (snaps overflow to min/max)
+          const startX = hitLeftEdge ? chartLeftOffset : clampSelectionXFinal(rawStart);
+          const endX = hitRightEdge ? dataAreaRight : clampSelectionXFinal(rawEnd);
           const finalStart = Math.min(startX, endX);
           const finalEnd = Math.max(startX, endX);
           const span = finalEnd - finalStart;
@@ -164,7 +185,7 @@ export default function InteractiveZoomableChart({
           selectionRef.current = null;
         },
       }),
-    [clampSelectionX, chartWidth]
+    [clampSelectionXDragging, clampSelectionXFinal, chartLeftOffset, dataAreaWidth]
   );
 
   return totalLineData.length ? (
@@ -252,7 +273,10 @@ export default function InteractiveZoomableChart({
           disableScroll
           adjustToWidth
           hideDataPoints
-          width={chartWidth} // Match selection math to the drawn chart width; selection canvas spans full container
+          width={chartWidth}
+          yAxisLabelWidth={yAxisLabelWidth}
+          initialSpacing={initialSpacing}
+          endSpacing={endSpacing}
           thickness={4}
           color1={colors.total}
           color2={colors.cloud}
