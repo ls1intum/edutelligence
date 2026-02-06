@@ -1,5 +1,3 @@
-from typing import List
-
 from sentry_sdk import capture_exception
 
 from iris.common.logging_config import get_logger
@@ -8,10 +6,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 )
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.abstract_variant import find_variant
-from iris.domain.variant.lecture_ingestion_update_variant import (
-    LectureIngestionUpdateVariant,
-)
-from iris.llm.llm_configuration import role_requirements
+from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -25,11 +20,25 @@ from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 logger = get_logger(__name__)
 
 
-class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
+class LectureIngestionUpdatePipeline(Pipeline):
     """Lecture Ingestion Update Pipeline to update or ingest lecture page chunks and lecture transcriptions at once"""
 
+    PIPELINE_ID = "lecture_ingestion_update_pipeline"
+    ROLES: set[str] = set()
+    VARIANT_DEFS = [
+        ("default", "Default", "Default lecture ingestion update variant."),
+        ("advanced", "Advanced", "Advanced lecture ingestion update variant."),
+    ]
+    DEPENDENCIES = [
+        Dep("lecture_unit_page_ingestion_pipeline", variant="same"),
+        Dep("transcription_ingestion_pipeline"),
+        Dep("lecture_unit_pipeline"),
+        Dep("lecture_unit_segment_summary_pipeline"),
+        Dep("lecture_unit_summary_pipeline"),
+    ]
+
     def __init__(self, dto: IngestionPipelineExecutionDto):
-        super().__init__(implementation_id="lecture_ingestion_update_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.dto = dto
 
     @observe(name="Lecture Ingestion Update Pipeline")
@@ -117,52 +126,3 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         except Exception as e:
             logger.error("Error in ingestion pipeline", exc_info=e)
             capture_exception(e)
-
-    @classmethod
-    def get_variants(cls) -> List[LectureIngestionUpdateVariant]:
-        """
-        Returns available variants for the LectureIngestionUpdatePipeline.
-
-        Returns:
-            List of LectureIngestionUpdateVariant objects representing available variants
-        """
-        variants: list[LectureIngestionUpdateVariant] = []
-        for variant_id, name, description in [
-            ("default", "Default", "Default lecture ingestion update variant."),
-            ("advanced", "Advanced", "Advanced lecture ingestion update variant."),
-        ]:
-            additional_required_models: set[str] = set()
-            additional_required_models |= role_requirements(
-                "lecture_unit_page_ingestion_pipeline", variant_id, "chat"
-            )
-            additional_required_models |= role_requirements(
-                "lecture_unit_page_ingestion_pipeline", variant_id, "embedding"
-            )
-            additional_required_models |= role_requirements(
-                "transcription_ingestion_pipeline", "default", "chat"
-            )
-            additional_required_models |= role_requirements(
-                "transcription_ingestion_pipeline", "default", "embedding"
-            )
-            additional_required_models |= role_requirements(
-                "lecture_unit_pipeline", "default", "embedding"
-            )
-            additional_required_models |= role_requirements(
-                "lecture_unit_segment_summary_pipeline", "default", "chat"
-            )
-            additional_required_models |= role_requirements(
-                "lecture_unit_segment_summary_pipeline", "default", "embedding"
-            )
-            additional_required_models |= role_requirements(
-                "lecture_unit_summary_pipeline", "default", "chat"
-            )
-            variants.append(
-                LectureIngestionUpdateVariant(
-                    variant_id=variant_id,
-                    name=name,
-                    description=description,
-                    additional_required_models=additional_required_models,
-                )
-            )
-
-        return variants

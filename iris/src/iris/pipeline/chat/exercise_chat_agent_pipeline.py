@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -20,13 +20,12 @@ from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.variant.exercise_chat_variant import ExerciseChatVariant
+from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
     LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
-from ...llm.llm_configuration import resolve_role_models, role_requirements
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -52,11 +51,28 @@ logger = get_logger(__name__)
 
 
 class ExerciseChatAgentPipeline(
-    AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, ExerciseChatVariant]
+    AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, Variant]
 ):
     """
     Exercise chat agent pipeline that answers exercises related questions from students.
     """
+
+    PIPELINE_ID = "exercise_chat_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Uses a smaller model for faster responses."),
+        ("advanced", "Advanced", "Uses a larger model, balancing speed and quality."),
+    ]
+    DEPENDENCIES = [
+        Dep("citation_pipeline", variant="same"),
+        Dep("session_title_generation_pipeline"),
+        Dep("interaction_suggestion_pipeline", variant="exercise"),
+        Dep("code_feedback_pipeline"),
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
 
     session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -70,7 +86,7 @@ class ExerciseChatAgentPipeline(
         """
         Initialize the exercise chat agent pipeline.
         """
-        super().__init__(implementation_id="exercise_chat_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
 
         # Create the pipelines
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
@@ -100,89 +116,9 @@ class ExerciseChatAgentPipeline(
     def __str__(self):
         return f"{self.__class__.__name__}()"
 
-    @classmethod
-    def get_variants(cls) -> List[ExerciseChatVariant]:  # type: ignore[override]
-        """
-        Get available variants for the exercise chat pipeline.
-
-        Returns:
-            List of ExerciseChatVariant instances.
-        """
-        pipeline_id = "exercise_chat_pipeline"
-        citation_pipeline_id = "citation_pipeline"
-        session_title_pipeline_id = "session_title_generation_pipeline"
-        suggestion_pipeline_id = "interaction_suggestion_pipeline"
-        code_feedback_pipeline_id = "code_feedback_pipeline"
-        lecture_retrieval_pipeline_ids = [
-            "lecture_retrieval_pipeline",
-            "lecture_unit_segment_retrieval_pipeline",
-            "lecture_transcriptions_retrieval_pipeline",
-        ]
-        faq_retrieval_pipeline_id = "faq_retrieval_pipeline"
-
-        variants: list[ExerciseChatVariant] = []
-        for variant_id, name, description in [
-            (
-                "default",
-                "Default",
-                "Uses a smaller model for faster and cost-efficient responses.",
-            ),
-            (
-                "advanced",
-                "Advanced",
-                "Uses a larger chat model, balancing speed and quality.",
-            ),
-        ]:
-            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
-            citation_models = resolve_role_models(
-                citation_pipeline_id, variant_id, "chat"
-            )
-            additional_required_models: set[str] = set()
-            additional_required_models |= role_requirements(
-                session_title_pipeline_id, "default", "chat"
-            )
-            additional_required_models |= role_requirements(
-                suggestion_pipeline_id, "exercise", "chat"
-            )
-            additional_required_models |= role_requirements(
-                code_feedback_pipeline_id, "default", "chat"
-            )
-            for retrieval_pipeline_id in lecture_retrieval_pipeline_ids:
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "chat"
-                )
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "embedding"
-                )
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "reranker"
-                )
-            additional_required_models |= role_requirements(
-                faq_retrieval_pipeline_id, "default", "chat"
-            )
-            additional_required_models |= role_requirements(
-                faq_retrieval_pipeline_id, "default", "embedding"
-            )
-            variants.append(
-                ExerciseChatVariant(
-                    variant_id=variant_id,
-                    name=name,
-                    description=description,
-                    cloud_agent_model=chat_models["cloud"],
-                    local_agent_model=chat_models["local"],
-                    cloud_citation_model=citation_models["cloud"],
-                    local_citation_model=citation_models["local"],
-                    additional_required_models=additional_required_models,
-                )
-            )
-
-        return variants
-
     def is_memiris_memory_creation_enabled(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> bool:
         """
         Return True if background memory creation should be enabled for this run.
@@ -233,9 +169,7 @@ class ExerciseChatAgentPipeline(
 
     def get_tools(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> list[Callable]:
         """
         Create and return tools for the agent.
@@ -310,9 +244,7 @@ class ExerciseChatAgentPipeline(
 
     def build_system_message(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Build the system message/prompt for the agent.
@@ -360,9 +292,7 @@ class ExerciseChatAgentPipeline(
 
     def on_agent_step(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         step: dict[str, Any],
     ) -> None:
         """
@@ -378,9 +308,7 @@ class ExerciseChatAgentPipeline(
 
     def post_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Process results after agent execution.
@@ -421,9 +349,7 @@ class ExerciseChatAgentPipeline(
     @observe(name="Response Refinement")
     def _refine_response(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Refine the agent response using the guide prompt.
@@ -445,11 +371,7 @@ class ExerciseChatAgentPipeline(
             )
 
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-            refinement_model = (
-                state.variant.local_agent_model
-                if state.local
-                else state.variant.cloud_agent_model
-            )
+            refinement_model = state.variant.model("chat", state.local)
             llm_small = IrisLangchainChatModel(
                 request_handler=LlmRequestHandler(model_id=refinement_model),
                 completion_args=completion_args,
@@ -480,9 +402,7 @@ class ExerciseChatAgentPipeline(
 
     def _add_citations(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         result: str,
     ) -> str:
         """
@@ -547,9 +467,7 @@ class ExerciseChatAgentPipeline(
 
     def _generate_suggestions(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         result: str,
     ) -> None:
         """
@@ -592,9 +510,7 @@ class ExerciseChatAgentPipeline(
 
     def _generate_session_title(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         output: str,
         dto: ExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
@@ -615,7 +531,7 @@ class ExerciseChatAgentPipeline(
     def __call__(
         self,
         dto: ExerciseChatPipelineExecutionDTO,
-        variant: ExerciseChatVariant,
+        variant: Variant,
         callback: ExerciseChatStatusCallback,
         event: str | None,
     ):

@@ -2,7 +2,7 @@ import base64
 import os
 import tempfile
 import threading
-from typing import List, Optional
+from typing import Optional
 
 import fitz
 from langchain_core.output_parsers import StrOutputParser
@@ -17,10 +17,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from iris.domain.variant.lecture_unit_page_ingestion_variant import (
-    LectureUnitPageIngestionVariant,
-)
-from iris.llm.llm_configuration import resolve_role_models
+from iris.domain.variant.variant import Variant
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -96,28 +93,40 @@ def create_page_data(
     ]
 
 
-class LectureUnitPageIngestionPipeline(
-    AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]
-):
+class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
     processing the content, and updating the vector database."""
+
+    PIPELINE_ID = "lecture_unit_page_ingestion_pipeline"
+    ROLES = {"chat", "embedding"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Default lecture ingestion variant using efficient models "
+            "for text processing and embeddings.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
+        ),
+    ]
 
     def __init__(
         self,
         client: WeaviateClient,
         dto: Optional[IngestionPipelineExecutionDto],
         callback: ingestion_status_callback,
-        variant: LectureUnitPageIngestionVariant,
+        variant: Variant,
         local: bool = False,
     ):
-        super().__init__(implementation_id="lecture_unit_page_ingestion_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
         self.callback = callback
-        chat_model = variant.local_chat_model if local else variant.cloud_chat_model
-        embedding_model = (
-            variant.local_embedding_model if local else variant.cloud_embedding_model
-        )
+        chat_model = variant.model("chat", local)
+        embedding_model = variant.model("embedding", local)
         self.llm_chat = LlmRequestHandler(chat_model)
         self.llm_embedding = LlmRequestHandler(embedding_model)
         request_handler = LlmRequestHandler(chat_model)
@@ -128,46 +137,6 @@ class LectureUnitPageIngestionPipeline(
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
-
-    @classmethod
-    def get_variants(cls) -> List[LectureUnitPageIngestionVariant]:
-        """
-        Returns available variants for the LectureUnitPageIngestionPipeline.
-
-        Returns:
-            List of LectureUnitPageIngestionVariant objects representing available variants
-        """
-        pipeline_id = "lecture_unit_page_ingestion_pipeline"
-
-        variants: list[LectureUnitPageIngestionVariant] = []
-        for variant_id, name, description in [
-            (
-                "default",
-                "Default",
-                "Default lecture ingestion variant using efficient models "
-                "for text processing and embeddings.",
-            ),
-            (
-                "advanced",
-                "Advanced",
-                "Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
-            ),
-        ]:
-            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
-            embedding_models = resolve_role_models(pipeline_id, variant_id, "embedding")
-            variants.append(
-                LectureUnitPageIngestionVariant(
-                    variant_id=variant_id,
-                    name=name,
-                    description=description,
-                    cloud_chat_model=chat_models["cloud"],
-                    local_chat_model=chat_models["local"],
-                    cloud_embedding_model=embedding_models["cloud"],
-                    local_embedding_model=embedding_models["local"],
-                )
-            )
-
-        return variants
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):

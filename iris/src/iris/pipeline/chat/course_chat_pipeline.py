@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -17,8 +17,7 @@ from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.variant.course_chat_variant import CourseChatVariant
-from ...llm.llm_configuration import resolve_role_models, role_requirements
+from ...domain.variant.variant import Dep, Variant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -61,11 +60,35 @@ logger = get_logger(__name__)
 
 
 class CourseChatPipeline(
-    AbstractAgentPipeline[CourseChatPipelineExecutionDTO, CourseChatVariant]
+    AbstractAgentPipeline[CourseChatPipelineExecutionDTO, Variant]
 ):
     """
     Course chat pipeline that answers course related questions from students.
     """
+
+    PIPELINE_ID = "course_chat_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Uses a smaller model for faster and cost-efficient responses.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Uses a larger chat model, balancing speed and quality.",
+        ),
+    ]
+    DEPENDENCIES = [
+        Dep("citation_pipeline", variant="same"),
+        Dep("session_title_generation_pipeline"),
+        Dep("interaction_suggestion_pipeline", variant="course"),
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
 
     session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -79,7 +102,7 @@ class CourseChatPipeline(
         """
         Initialize the course chat pipeline.
         """
-        super().__init__(implementation_id="course_chat_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
 
         # Initialize retrievers and pipelines (db will be created in abstract pipeline)
         self.lecture_retriever = None
@@ -115,9 +138,7 @@ class CourseChatPipeline(
 
     def is_memiris_memory_creation_enabled(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> bool:
         """
         Return True if background memory creation should be enabled for this run.
@@ -129,9 +150,7 @@ class CourseChatPipeline(
 
     def get_tools(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> list[Callable]:
         """
         Get the tools available for the agent pipeline.
@@ -269,9 +288,7 @@ class CourseChatPipeline(
 
     def build_system_message(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Return a system message for the chat prompt.
@@ -343,9 +360,7 @@ class CourseChatPipeline(
 
     def get_agent_params(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> dict[str, Any]:
         """
         Return the parameter dict passed to the agent executor.
@@ -416,9 +431,7 @@ class CourseChatPipeline(
 
     def on_agent_step(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         step: dict[str, Any],
     ) -> None:
         """
@@ -434,9 +447,7 @@ class CourseChatPipeline(
 
     def post_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """Post-processing after agent execution including citations, MCQ, and suggestions."""
         # Handle non-parallel MCQ placeholder and parallel MCQ thread joining
@@ -476,14 +487,12 @@ class CourseChatPipeline(
 
     def _process_citations(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
         dto: CourseChatPipelineExecutionDTO,
-        variant: CourseChatVariant,
+        variant: Variant,
     ) -> str:
         """
         Process citations for lecture content and FAQs.
@@ -533,9 +542,7 @@ class CourseChatPipeline(
 
     def _generate_suggestions(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         output: str,
         dto: CourseChatPipelineExecutionDTO,
     ) -> None:
@@ -584,9 +591,7 @@ class CourseChatPipeline(
 
     def _generate_session_title(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         output: str,
         dto: CourseChatPipelineExecutionDTO,
     ) -> Optional[str]:
@@ -607,7 +612,7 @@ class CourseChatPipeline(
     def __call__(
         self,
         dto: CourseChatPipelineExecutionDTO,
-        variant: CourseChatVariant,
+        variant: Variant,
         callback: CourseChatStatusCallback,
     ):
         """
@@ -634,77 +639,3 @@ class CourseChatPipeline(
                 "An error occurred while running the course chat pipeline.",
                 tokens=[],
             )
-
-    @classmethod
-    def get_variants(cls) -> List[CourseChatVariant]:  # type: ignore[override]
-        """
-        Get available variants for the course chat pipeline.
-
-        Returns:
-            List[CourseChatVariant]: List of available variants
-        """
-        pipeline_id = "course_chat_pipeline"
-        citation_pipeline_id = "citation_pipeline"
-        session_title_pipeline_id = "session_title_generation_pipeline"
-        suggestion_pipeline_id = "interaction_suggestion_pipeline"
-        lecture_retrieval_pipeline_ids = [
-            "lecture_retrieval_pipeline",
-            "lecture_unit_segment_retrieval_pipeline",
-            "lecture_transcriptions_retrieval_pipeline",
-        ]
-        faq_retrieval_pipeline_id = "faq_retrieval_pipeline"
-
-        variants: list[CourseChatVariant] = []
-        for variant_id, name, description in [
-            (
-                "default",
-                "Default",
-                "Uses a smaller model for faster and cost-efficient responses.",
-            ),
-            (
-                "advanced",
-                "Advanced",
-                "Uses a larger chat model, balancing speed and quality.",
-            ),
-        ]:
-            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
-            citation_models = resolve_role_models(
-                citation_pipeline_id, variant_id, "chat"
-            )
-            additional_required_models: set[str] = set()
-            additional_required_models |= role_requirements(
-                session_title_pipeline_id, "default", "chat"
-            )
-            additional_required_models |= role_requirements(
-                suggestion_pipeline_id, "course", "chat"
-            )
-            for retrieval_pipeline_id in lecture_retrieval_pipeline_ids:
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "chat"
-                )
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "embedding"
-                )
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "reranker"
-                )
-            additional_required_models |= role_requirements(
-                faq_retrieval_pipeline_id, "default", "chat"
-            )
-            additional_required_models |= role_requirements(
-                faq_retrieval_pipeline_id, "default", "embedding"
-            )
-            variants.append(
-                CourseChatVariant(
-                    variant_id=variant_id,
-                    name=name,
-                    description=description,
-                    cloud_agent_model=chat_models["cloud"],
-                    local_agent_model=chat_models["local"],
-                    cloud_citation_model=citation_models["cloud"],
-                    local_citation_model=citation_models["local"],
-                    additional_required_models=additional_required_models,
-                )
-            )
-
-        return variants

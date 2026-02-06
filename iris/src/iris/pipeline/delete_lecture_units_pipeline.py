@@ -5,7 +5,6 @@ from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
-from iris.domain.variant.lecture_unit_deletion_variant import LectureUnitDeletionVariant
 from iris.pipeline import Pipeline
 from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
@@ -31,9 +30,19 @@ from iris.web.status.lecture_deletion_status_callback import (
 logger = get_logger(__name__)
 
 
-class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
+class LectureUnitDeletionPipeline(Pipeline):
     """LectureUnitDeletionPipeline deletes weaviate entries from page chunks,
     transcriptions and lecture unit segments."""
+
+    PIPELINE_ID = "lecture_unit_deletion_pipeline"
+    ROLES: set[str] = set()
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Standard lecture unit deletion with no model requirements.",
+        ),
+    ]
 
     def __init__(
         self,
@@ -42,7 +51,7 @@ class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
         artemis_base_url: str,
         callback: LecturesDeletionStatusCallback,
     ):
-        super().__init__(implementation_id="lecture_unit_deletion_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
         self.lecture_unit_segment_summary_collection = init_lecture_unit_segment_schema(
@@ -145,13 +154,3 @@ class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
             lecture_unit,
             "Lecture units",
         )
-
-    @classmethod
-    def get_variants(cls) -> List[LectureUnitDeletionVariant]:
-        return [
-            LectureUnitDeletionVariant(
-                variant_id="default",
-                name="Default",
-                description="Standard lecture unit deletion with no model requirements.",
-            ),
-        ]

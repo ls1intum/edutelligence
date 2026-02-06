@@ -13,12 +13,11 @@ from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
-from iris.domain.variant.rewriting_variant import RewritingVariant
+from iris.domain.variant.variant import Variant
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
 )
-from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
@@ -34,13 +33,24 @@ from .prompts.faq_consistency_prompt import faq_consistency_prompt
 logger = get_logger(__name__)
 
 
-class RewritingPipeline(Pipeline[RewritingVariant]):
+class RewritingPipeline(Pipeline):
     """RewritingPipeline processes text rewriting requests by interfacing with a language model via a capability
      request handler.
 
     It formats the prompt according to the selected variant, processes the rewriting, and then notifies the callback
      when complete.
     """
+
+    PIPELINE_ID = "rewriting_pipeline"
+    ROLES = {"rewriting", "consistency"}
+    VARIANT_DEFS = [
+        ("faq", "Default FAQ Variant", "Default FAQ rewriting variant."),
+        (
+            "problem_statement",
+            "Default Variant",
+            "Default Problem statement rewriting variant.",
+        ),
+    ]
 
     callback: RewritingCallback
     rewriting_handler: LlmRequestHandler
@@ -51,21 +61,15 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
     def __init__(
         self,
         callback: RewritingCallback,
-        variant: RewritingVariant,
+        variant: Variant,
         local: bool = False,
     ):
-        super().__init__(implementation_id="rewriting_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.callback = callback
         self.db = VectorDatabase()
         self.variant_id = cast(Literal["faq", "problem_statement"], variant.variant_id)
-        rewriting_model = (
-            variant.local_rewriting_model if local else variant.cloud_rewriting_model
-        )
-        consistency_model = (
-            variant.local_consistency_model
-            if local
-            else variant.cloud_consistency_model
-        )
+        rewriting_model = variant.model("rewriting", local)
+        consistency_model = variant.model("consistency", local)
         self.rewriting_handler = LlmRequestHandler(model_id=rewriting_model)
         self.consistency_handler = LlmRequestHandler(model_id=consistency_model)
         self.tokens = []
@@ -180,43 +184,6 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             if key in data:
                 result_dict[key] = data[key]
         return result_dict
-
-    @classmethod
-    def get_variants(cls) -> List[RewritingVariant]:
-        """
-        Returns available variants for the RewritingPipeline.
-
-        Returns:
-            List of RewritingVariant objects representing available variants
-        """
-        pipeline_id = "rewriting_pipeline"
-
-        variants: list[RewritingVariant] = []
-        for variant_id, name, description in [
-            ("faq", "Default FAQ Variant", "Default FAQ rewriting variant."),
-            (
-                "problem_statement",
-                "Default Variant",
-                "Default Problem statement rewriting variant.",
-            ),
-        ]:
-            rewriting_models = resolve_role_models(pipeline_id, variant_id, "rewriting")
-            consistency_models = resolve_role_models(
-                pipeline_id, variant_id, "consistency"
-            )
-            variants.append(
-                RewritingVariant(
-                    variant_id=variant_id,
-                    name=name,
-                    description=description,
-                    cloud_rewriting_model=rewriting_models["cloud"],
-                    local_rewriting_model=rewriting_models["local"],
-                    cloud_consistency_model=consistency_models["cloud"],
-                    local_consistency_model=consistency_models["local"],
-                )
-            )
-
-        return variants
 
 
 def parse_faq_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
