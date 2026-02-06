@@ -4,6 +4,7 @@ Central Manager for all Database-related actions for Logos
 import datetime
 import os
 import secrets
+import threading
 from typing import Dict, Any, Optional, Tuple, Union, List, cast
 
 import sqlalchemy.exc
@@ -28,6 +29,45 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+_DB_URL = os.getenv("LOGOS_DB_URL", "postgresql://postgres:root@logos-db:5432/logosdb")
+_POOL_SIZE = int(os.getenv("LOGOS_DB_POOL_SIZE", "10"))
+_MAX_OVERFLOW = int(os.getenv("LOGOS_DB_MAX_OVERFLOW", "20"))
+_POOL_RECYCLE = int(os.getenv("LOGOS_DB_POOL_RECYCLE", "1800"))
+
+_ENGINE = None
+_SESSION_FACTORY = None
+_METADATA = MetaData()
+_METADATA_REFLECTED = False
+_ENGINE_LOCK = threading.Lock()
+_METADATA_LOCK = threading.Lock()
+
+
+def _init_engine():
+    global _ENGINE, _SESSION_FACTORY
+    if _ENGINE is None:
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
+                _ENGINE = create_engine(
+                    _DB_URL,
+                    pool_size=_POOL_SIZE,
+                    max_overflow=_MAX_OVERFLOW,
+                    pool_pre_ping=True,
+                    pool_recycle=_POOL_RECYCLE,
+                )
+                _SESSION_FACTORY = sessionmaker(bind=_ENGINE)
+    return _ENGINE
+
+
+def _ensure_metadata(engine):
+    global _METADATA_REFLECTED
+    if _METADATA_REFLECTED:
+        return
+    with _METADATA_LOCK:
+        if _METADATA_REFLECTED:
+            return
+        _METADATA.reflect(bind=engine)
+        _METADATA_REFLECTED = True
 
 
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
@@ -1866,6 +1906,7 @@ class DBManager:
                        timestamp_response = :timestamp,
                        policy_id        = COALESCE(:policy_id, policy_id),
                        classification_statistics = :classification_statistics,
+                       request_id = COALESCE(:request_id, request_id),
                        queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
                        utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
                    WHERE id = :log_id
@@ -1878,6 +1919,7 @@ class DBManager:
             "log_id": log_id,
             "policy_id": policy_id if policy_id != -1 else None,
             "classification_statistics": json.dumps(classified),
+            "request_id": kwargs.get("request_id"),
             "queue_depth": kwargs.get("queue_depth_at_arrival"),
             "utilization": kwargs.get("utilization_at_arrival")
         })
@@ -2005,17 +2047,21 @@ class DBManager:
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def __enter__(self):
-        # conf = load_postgres_env_vars_from_compose()    # {conf['port']}
-        db_url = f"postgresql://postgres:root@logos-db:5432/logosdb"
-        self.engine = create_engine(db_url)
-        self.metadata = MetaData()
-        self.metadata.reflect(bind=self.engine)
-        self.Session = sessionmaker(bind=self.engine)
+        self.engine = _init_engine()
+        _ensure_metadata(self.engine)
+        self.metadata = _METADATA
+        if _SESSION_FACTORY is None:
+            raise RuntimeError("Database session factory was not initialized.")
+        self.Session = _SESSION_FACTORY
         self.session = self.Session()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.session.close()
+        try:
+            if exc_type is not None:
+                self.session.rollback()
+        finally:
+            self.session.close()
 
 
 if __name__ == "__main__":
