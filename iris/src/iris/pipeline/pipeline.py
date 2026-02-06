@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from abc import ABCMeta, abstractmethod
 from typing import ClassVar, List
 
@@ -9,27 +8,31 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.config import settings
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.domain.variant.variant import Dep, Variant
-from iris.llm.llm_configuration import resolve_role_models, role_requirements
-
-logger = logging.getLogger(__name__)
+from iris.llm.llm_configuration import (
+    LlmConfigurationError,
+    resolve_role_models,
+    role_requirements,
+)
 
 
 def _get_dep_roles(pipeline_id: str, variant_id: str) -> set[str]:
-    """Discover a dependency pipeline's roles from the config."""
+    """Discover a dependency pipeline's roles from the config.
+
+    Raises LlmConfigurationError if the dependency pipeline or variant
+    is missing — a silent empty return would let required_models() be
+    incomplete, making health checks report false positives.
+    """
     pipeline_cfg = settings.llm_configuration.get(pipeline_id)
     if pipeline_cfg is None:
-        logger.warning(
-            "Dependency pipeline '%s' not found in llm_configuration", pipeline_id
+        raise LlmConfigurationError(
+            f"Dependency pipeline '{pipeline_id}' not found in llm_configuration"
         )
-        return set()
     variant_cfg = pipeline_cfg.get(variant_id)
     if variant_cfg is None:
-        logger.warning(
-            "Variant '%s' not found for dependency pipeline '%s' in llm_configuration",
-            variant_id,
-            pipeline_id,
+        raise LlmConfigurationError(
+            f"Variant '{variant_id}' not found for dependency pipeline "
+            f"'{pipeline_id}' in llm_configuration"
         )
-        return set()
     return set(variant_cfg.keys())
 
 
