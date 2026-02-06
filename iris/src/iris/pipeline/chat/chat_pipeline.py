@@ -4,6 +4,8 @@ from typing import Any, Callable, List, Optional
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from iris.common.memiris_setup import get_tenant_for_user
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain import ChatPipelineExecutionDTO
 from iris.domain.variant.chat_variant import ChatVariant
 from iris.pipeline.abstract_agent_pipeline import (
@@ -98,28 +100,110 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 "exercise_chat_guide_prompt.j2"
             )
 
+    def __repr__(self):
+        if self.context == ChatContext.COURSE:
+            return f"{self.__class__.__name__}(event={self.event})"
+        else:
+            return f"{self.__class__.__name__}()"
+
+    def __str__(self):
+        if self.context == ChatContext.COURSE:
+            return f"{self.__class__.__name__}(event={self.event})"
+        else:
+            return f"{self.__class__.__name__}()"
+
     @classmethod
     def get_variants(cls) -> List[ChatVariant]:
         # TODO: Instance method statt class method ? Parameter ? Alle 8 zurückgeben ?
         pass
 
-    def get_memiris_reference(self, dto: DTO):
-        pass
+    def get_memiris_reference(self, dto: ChatPipelineExecutionDTO):
+        """
+        Return the reference to use for the Memiris learnings created in a programming exercise chat.
+        It is simply the id of last user message in the chat history with a prefix.
 
-    def get_memiris_tenant(self, dto: DTO) -> str:
-        pass
+        Returns:
+            str: The reference identifier
+        """
+        last_message: Optional[PyrisMessage] = next(
+            (
+                m
+                for m in reversed(dto.chat_history or [])  # TODO: Check with Phoebe
+                if m.sender == IrisMessageRole.USER
+            ),
+            None,
+        )
+        return (
+            f"session-messages/{last_message.id}"
+            if last_message and last_message.id
+            else "session-messages/unknown"
+        )
+
+    def get_memiris_tenant(self, dto: ChatPipelineExecutionDTO) -> str:
+        """
+        Return the Memiris tenant identifier for the current user.
+
+        Args:
+            dto: The execution DTO containing user information.
+
+        Returns:
+            The tenant identifier string.
+        """
+        if not dto.user:
+            raise ValueError("User is required for memiris tenant")
+        return get_tenant_for_user(
+            dto.user.id
+        )  # TODO: Phoebe fragen für TextExercise case
 
     def build_system_message(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> str:
         pass
 
+    def on_agent_step(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        step: dict[str, Any],
+    ) -> None:
+        """
+        Handle each agent execution step.
+
+        Args:
+            state: The current pipeline execution state.
+            step: The current step information.
+        """
+        # Update progress
+        if step.get("intermediate_steps"):
+            state.callback.in_progress(
+                "Thinking ..."
+            )  # TODO: Text_Exercise= Thinking about your question...
+
     def get_tools(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
     ) -> list[Callable]:
         pass
 
     def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant]
     ) -> bool:
-        pass
+        """
+        Return True if background memory creation should be enabled for this run.
+
+        Args:
+            state: The current pipeline execution state.
+
+        Returns:
+            True if memory creation should be enabled, False otherwise.
+        """
+        match self.context:
+            case ChatContext.COURSE:
+                return bool(state.dto.user and state.dto.user.memiris_enabled)
+            case ChatContext.LECTURE:
+                return bool(state.dto.user and state.dto.user.memiris_enabled)
+            case ChatContext.EXERCISE:
+                return False
+            case ChatContext.TEXT_EXERCISE:
+                return False
+            case _:
+                return False
