@@ -9,7 +9,3 @@ def missing_llm_requirements(
     available_ids: set[str],
 ) -> set[str]:
     return {r for r in required if r not in available_ids}
-
-
-def format_llm_requirement(requirement: str) -> str:
-    return requirement

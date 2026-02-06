@@ -10,6 +10,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )
+from iris.domain.variant.abstract_variant import find_variant
 from iris.tracing import observe
 from iris.web.utils import validate_pipeline_variant
 
@@ -84,11 +85,7 @@ def run_faq_update_pipeline_worker(
             )
             db = VectorDatabase()
             client = db.get_client()
-            for variant in FaqIngestionPipeline.get_variants():
-                if variant.id == variant_id:
-                    break
-            else:
-                raise ValueError(f"Unknown variant: {variant_id}")
+            variant = find_variant(FaqIngestionPipeline.get_variants(), variant_id)
             is_local = bool(
                 dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
             )
@@ -104,8 +101,6 @@ def run_faq_update_pipeline_worker(
         except Exception as e:
             logger.error("Error in FAQ ingestion pipeline", exc_info=e)
             capture_exception(e)
-        finally:
-            semaphore.release()
 
 
 def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str):
@@ -122,11 +117,7 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
             )
             db = VectorDatabase()
             client = db.get_client()
-            for variant in FaqIngestionPipeline.get_variants():
-                if variant.id == variant_id:
-                    break
-            else:
-                raise ValueError(f"Unknown variant: {variant_id}")
+            variant = find_variant(FaqIngestionPipeline.get_variants(), variant_id)
             is_local = bool(
                 dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
             )
@@ -142,8 +133,6 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
         except Exception as e:
             logger.error("Error in FAQ deletion pipeline", exc_info=e)
             capture_exception(e)
-        finally:
-            semaphore.release()
 
 
 @router.post(

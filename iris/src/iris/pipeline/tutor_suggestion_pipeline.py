@@ -137,7 +137,7 @@ class TutorSuggestionPipeline(
         if allow_lecture_tools:
             self.lecture_retriever = LectureRetrieval(
                 state.db.client,
-                local=state.dto.settings.is_local(),
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
             )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
@@ -154,7 +154,7 @@ class TutorSuggestionPipeline(
         if allow_faq_tool:
             self.faq_retriever = FaqRetrieval(
                 state.db.client,
-                local=state.dto.settings.is_local(),
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
             )
             tool_list.append(
                 create_tool_faq_content_retrieval(

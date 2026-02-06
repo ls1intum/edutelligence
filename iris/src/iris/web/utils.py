@@ -4,9 +4,10 @@ from fastapi import HTTPException, status
 
 from iris.config import settings as app_settings
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
+from iris.domain.variant.abstract_variant import find_variant
 from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
-from iris.llm.llm_requirements import format_llm_requirement, missing_llm_requirements
+from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.pipeline import Pipeline
 
 
@@ -49,13 +50,9 @@ def validate_pipeline_variant(
             },
         ) from e
     # Find the requested variant
-    requested_variant = None
-    for v in all_variants:
-        if v.id == variant:
-            requested_variant = v
-            break
-    # Check if variant exists
-    if requested_variant is None:
+    try:
+        requested_variant = find_variant(all_variants, variant)
+    except ValueError as exc:
         available_variant_ids = [v.id for v in all_variants]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -64,7 +61,7 @@ def validate_pipeline_variant(
                 "errorMessage": f'Variant "{variant}" is not available. '
                 f'Available variants: {", ".join(available_variant_ids)}',
             },
-        )
+        ) from exc
     # Check if required models are available
     # For variants that have required_models method, check model availability
     if hasattr(requested_variant, "required_models"):
@@ -76,12 +73,8 @@ def validate_pipeline_variant(
             available_ids=available_ids,
         )
         if missing_models:
-            missing_display = ", ".join(
-                sorted(format_llm_requirement(m) for m in missing_models)
-            )
-            required_display = ", ".join(
-                sorted(format_llm_requirement(m) for m in required_models)
-            )
+            missing_display = ", ".join(sorted(missing_models))
+            required_display = ", ".join(sorted(required_models))
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={

@@ -25,7 +25,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
-from iris.domain.variant.abstract_variant import AbstractVariant
+from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
@@ -85,11 +85,7 @@ def run_exercise_chat_pipeline_worker(
         return
 
     try:
-        for variant in ExerciseChatAgentPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
+        variant = find_variant(ExerciseChatAgentPipeline.get_variants(), variant_id)
 
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
     except Exception as e:
@@ -125,11 +121,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in CourseChatPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
+        variant = find_variant(CourseChatPipeline.get_variants(), variant_id)
         is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
         pipeline = CourseChatPipeline(event=event, local=is_local)
     except Exception as e:
@@ -172,11 +164,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in TextExerciseChatPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
+        variant = find_variant(TextExerciseChatPipeline.get_variants(), variant_id)
         is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
         pipeline = TextExerciseChatPipeline(local=is_local)
     except Exception as e:
@@ -200,11 +188,7 @@ def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in LectureChatPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
+        variant = find_variant(LectureChatPipeline.get_variants(), variant_id)
         pipeline = LectureChatPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline", exc_info=e)
@@ -258,11 +242,7 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        for variant in CompetencyExtractionPipeline.get_variants():
-            if variant.id == _variant:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {_variant}")
+        variant = find_variant(CompetencyExtractionPipeline.get_variants(), _variant)
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
@@ -309,11 +289,7 @@ def run_rewriting_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        for v in RewritingPipeline.get_variants():
-            if v.id == variant:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant}")
+        v = find_variant(RewritingPipeline.get_variants(), variant)
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
@@ -359,11 +335,7 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        for variant in InconsistencyCheckPipeline.get_variants():
-            if variant.id == _variant:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {_variant}")
+        variant = find_variant(InconsistencyCheckPipeline.get_variants(), _variant)
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
@@ -411,11 +383,7 @@ def run_communication_tutor_suggestions_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in TutorSuggestionPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
+        variant = find_variant(TutorSuggestionPipeline.get_variants(), variant_id)
         pipeline = TutorSuggestionPipeline()
     except Exception as e:
         logger.error(

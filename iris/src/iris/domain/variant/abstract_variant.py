@@ -1,6 +1,24 @@
 from abc import ABC, abstractmethod
+from typing import TypeVar
 
 from ..feature_dto import FeatureDTO
+
+_V = TypeVar("_V", bound="AbstractVariant")
+
+
+def find_variant(variants: list[_V], variant_id: str) -> _V:
+    """Find a variant by ID from a list of variants.
+
+    Raises:
+        ValueError: If no variant matches the given ID.
+    """
+    for v in variants:
+        if v.id == variant_id:
+            return v
+    available = [v.id for v in variants]
+    raise ValueError(
+        f"Unknown variant: {variant_id}. Available: {", ".join(available)}"
+    )
 
 
 class AbstractVariant(ABC):
