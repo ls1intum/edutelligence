@@ -10,7 +10,7 @@ from iris.domain import InconsistencyCheckPipelineExecutionDTO
 from iris.domain.variant.inconsistency_check_variant import InconsistencyCheckVariant
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_role_models
@@ -59,11 +59,11 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         )
 
         self.solver_llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version=solver_model),
+            request_handler=LlmRequestHandler(model_id=solver_model),
             completion_args=completion_args,
         )
         self.prettify_llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version=prettify_model),
+            request_handler=LlmRequestHandler(model_id=prettify_model),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)

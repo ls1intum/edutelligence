@@ -16,7 +16,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
@@ -72,12 +72,12 @@ class LecturePageChunkRetrieval(SubPipeline):
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=local
         )
-        request_handler = ModelVersionRequestHandler(version=chat_model)
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
         self.cohere_client = RerankRequestHandler(reranker_id)
 

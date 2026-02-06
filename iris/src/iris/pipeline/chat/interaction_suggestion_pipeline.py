@@ -22,7 +22,7 @@ from ...common.message_converters import (
 from ...common.pyris_message import PyrisMessage
 from ...llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...llm.llm_configuration import resolve_model
@@ -68,7 +68,7 @@ class InteractionSuggestionPipeline(SubPipeline):
         pipeline_id = "interaction_suggestion_pipeline"
         model = resolve_model(pipeline_id, variant, "chat", local=local)
 
-        request_handler = ModelVersionRequestHandler(version=model)
+        request_handler = LlmRequestHandler(model_id=model)
 
         if local:
             completion_args = CompletionArguments(

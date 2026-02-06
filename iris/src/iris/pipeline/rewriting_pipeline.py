@@ -16,7 +16,7 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.variant.rewriting_variant import RewritingVariant
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline import Pipeline
@@ -43,8 +43,8 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
     """
 
     callback: RewritingCallback
-    rewriting_handler: ModelVersionRequestHandler
-    consistency_handler: ModelVersionRequestHandler
+    rewriting_handler: LlmRequestHandler
+    consistency_handler: LlmRequestHandler
     output_parser: PydanticOutputParser
     variant_id: Literal["faq", "problem_statement"]
 
@@ -66,8 +66,8 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             if local
             else variant.cloud_consistency_model
         )
-        self.rewriting_handler = ModelVersionRequestHandler(version=rewriting_model)
-        self.consistency_handler = ModelVersionRequestHandler(version=consistency_model)
+        self.rewriting_handler = LlmRequestHandler(model_id=rewriting_model)
+        self.consistency_handler = LlmRequestHandler(model_id=consistency_model)
         self.tokens = []
         self.faq_retriever = FaqRetrieval(self.db.client, local=local)
 

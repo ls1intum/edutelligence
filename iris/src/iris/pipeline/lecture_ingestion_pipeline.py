@@ -29,7 +29,7 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
@@ -118,9 +118,9 @@ class LectureUnitPageIngestionPipeline(
         embedding_model = (
             variant.local_embedding_model if local else variant.cloud_embedding_model
         )
-        self.llm_chat = ModelVersionRequestHandler(chat_model)
-        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
-        request_handler = ModelVersionRequestHandler(chat_model)
+        self.llm_chat = LlmRequestHandler(chat_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+        request_handler = LlmRequestHandler(chat_model)
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

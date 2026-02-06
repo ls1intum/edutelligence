@@ -21,46 +21,47 @@ langfuse:
 env_vars:
   SOME: "value"
 
+# Values are LLM entry IDs (the "id" field in llm_config.yml).
 llm_configuration:
   exercise_chat_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
     advanced:
       chat:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
 
   course_chat_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
     advanced:
       chat:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
 
   lecture_chat_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
     advanced:
       chat:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
 
   text_exercise_chat_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
     advanced:
       chat:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
 
   tutor_suggestion_pipeline:
     default:
@@ -76,7 +77,7 @@ llm_configuration:
     default:
       chat:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
 
   inconsistency_check_pipeline:
     default:
@@ -91,81 +92,81 @@ llm_configuration:
     faq:
       rewriting:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
       consistency:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
     problem_statement:
       rewriting:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
       consistency:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
 
   lecture_unit_page_ingestion_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
     advanced:
       chat:
         local: gpt-oss:120b
-        cloud: gpt-4.1
+        cloud: oai-gpt-41
       embedding:
-        local: text-embedding-3-large
-        cloud: text-embedding-3-large
+        local: azure-embedding-large
+        cloud: azure-embedding-large
 
   faq_ingestion_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
 
   transcription_ingestion_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
 
   lecture_unit_segment_summary_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
 
   lecture_unit_summary_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
 
   lecture_unit_pipeline:
     default:
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
 
   lecture_retrieval_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4o-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
       reranker:
         local: cohere
         cloud: cohere
@@ -174,10 +175,10 @@ llm_configuration:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
       reranker:
         local: cohere
         cloud: cohere
@@ -186,10 +187,10 @@ llm_configuration:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
       reranker:
         local: cohere
         cloud: cohere
@@ -198,42 +199,42 @@ llm_configuration:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
       embedding:
-        local: text-embedding-3-small
-        cloud: text-embedding-3-small
+        local: oai-embedding-small
+        cloud: oai-embedding-small
 
   citation_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-nano
+        cloud: oai-gpt-41-nano
     advanced:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
 
   interaction_suggestion_pipeline:
     course:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-nano
+        cloud: oai-gpt-41-nano
     exercise:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-nano
+        cloud: oai-gpt-41-nano
 
   session_title_generation_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-nano
+        cloud: oai-gpt-41-nano
 
   code_feedback_pipeline:
     default:
       chat:
         local: llama3.3:latest
-        cloud: gpt-4.1-mini
+        cloud: oai-gpt-41-mini
 
   summary_pipeline:
     default:
