@@ -58,8 +58,9 @@ class SessionTitleGenerationPipeline(SubPipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     @classmethod
-    def _format_recent_messages(cls, recent_messages: list[str]) -> str:
-        selected_messages = recent_messages[-cls.MAX_RECENT_MESSAGES :]
+    def format_recent_messages(cls, recent_messages: list[str]) -> str:
+        max_recent_messages = cls.MAX_RECENT_MESSAGES
+        selected_messages = recent_messages[-max_recent_messages:]
         if not selected_messages:
             return "(no recent messages)"
 
@@ -80,7 +81,7 @@ class SessionTitleGenerationPipeline(SubPipeline):
         **kwargs,
     ) -> Optional[str]:
         prompt_text = self.prompt_template.render(user_language=user_language)
-        formatted_recent_messages = self._format_recent_messages(recent_messages)
+        formatted_recent_messages = self.format_recent_messages(recent_messages)
         try:
             logger.info("Running Session Title Generation Pipeline")
             # Keep the rendered text as data so `{}` inside message content is not

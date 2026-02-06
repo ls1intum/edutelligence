@@ -36,7 +36,7 @@ def test_session_title_generation_handles_braces_in_recent_messages():
 
 def test_format_recent_messages_limits_and_truncates():
     recent_messages = [f"Message {i}: " + "x" * 500 for i in range(12)]
-    formatted = SessionTitleGenerationPipeline._format_recent_messages(recent_messages)
+    formatted = SessionTitleGenerationPipeline.format_recent_messages(recent_messages)
 
     lines = formatted.splitlines()
     assert len(lines) == SessionTitleGenerationPipeline.MAX_RECENT_MESSAGES
