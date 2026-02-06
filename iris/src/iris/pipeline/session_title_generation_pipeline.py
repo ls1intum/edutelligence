@@ -68,10 +68,14 @@ class SessionTitleGenerationPipeline(SubPipeline):
             recent_messages=recent_messages,
             user_language=user_language,
         )
-        prompt = ChatPromptTemplate.from_messages([("system", prompt_text)])
+        # Keep the rendered text as data so `{}` inside message content is not
+        # interpreted as additional prompt template variables.
+        prompt = ChatPromptTemplate.from_messages([("system", "{prompt_text}")])
         try:
             logger.info("Running Session Title Generation Pipeline")
-            session_title = (prompt | self.pipeline).invoke({})
+            session_title = (prompt | self.pipeline).invoke(
+                {"prompt_text": prompt_text}
+            )
             self.tokens = self.llm.tokens
             self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
             return session_title
