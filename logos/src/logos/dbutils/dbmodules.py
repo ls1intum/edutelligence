@@ -160,6 +160,7 @@ class LogEntry(Base):
     policy_id = Column(Integer, ForeignKey('policies.id', ondelete="SET NULL"))
 
     classification_statistics = Column(JSON)
+    request_id = Column(Text)
 
     usage_tokens = relationship("UsageTokens")
 

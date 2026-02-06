@@ -150,6 +150,7 @@ CREATE TABLE log_entry (
     classification_statistics JSONB,
 
     -- SDI: Scheduling and performance metrics
+    request_id TEXT,  -- Links to request_events for scheduler metrics
     priority VARCHAR(10) DEFAULT 'medium',
     queue_depth_at_arrival INTEGER,
     utilization_at_arrival REAL,
@@ -157,6 +158,8 @@ CREATE TABLE log_entry (
     was_cold_start BOOLEAN DEFAULT FALSE,
     load_duration_ms REAL
 );
+
+CREATE INDEX idx_log_entry_request_id ON log_entry(request_id);
 
 CREATE TABLE token_types (
     id SERIAL PRIMARY KEY,

@@ -377,6 +377,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
         error_message = None
         timed_out = False
         processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
+        ttft_recorded = False
 
         try:
             def process_headers(headers: dict):
@@ -401,6 +402,11 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         on_headers=process_headers,
                     ):
                         yield chunk
+                        if chunk and not ttft_recorded:
+                            if log_id:
+                                with DBManager() as db:
+                                    db.set_time_at_first_token(log_id)
+                            ttft_recorded = True
 
                         # Parse chunk for logging
                         line = chunk.decode().strip()
@@ -410,10 +416,6 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                                 last_chunk = blob  # Keep track of last chunk (may have usage)
                                 if first_chunk is None:
                                     first_chunk = blob
-                                    # Log time to first token
-                                    if log_id:
-                                        with DBManager() as db:
-                                            db.set_time_at_first_token(log_id)
                                 if "choices" in blob and blob["choices"]:
                                     delta = blob["choices"][0].get("delta", {})
                                     content = delta.get("content", "")
@@ -429,6 +431,11 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                     on_headers=process_headers,
                 ):
                     yield chunk
+                    if chunk and not ttft_recorded:
+                        if log_id:
+                            with DBManager() as db:
+                                db.set_time_at_first_token(log_id)
+                        ttft_recorded = True
 
                     # Parse chunk for logging
                     line = chunk.decode().strip()
@@ -438,10 +445,6 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                             last_chunk = blob  # Keep track of last chunk (may have usage)
                             if first_chunk is None:
                                 first_chunk = blob
-                                # Log time to first token
-                                if log_id:
-                                    with DBManager() as db:
-                                        db.set_time_at_first_token(log_id)
                             if "choices" in blob and blob["choices"]:
                                 delta = blob["choices"][0].get("delta", {})
                                 content = delta.get("content", "")
@@ -465,12 +468,22 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
 
                 # Build response payload
                 response_payload = {"content": full_text}
+                base_payload = None
                 if first_chunk:
-                    response_payload = first_chunk.copy()
+                    base_payload = first_chunk.copy()
+                if last_chunk:
+                    if base_payload is None:
+                        base_payload = last_chunk.copy()
+                    else:
+                        for key, value in last_chunk.items():
+                            if key not in base_payload:
+                                base_payload[key] = value
+                if base_payload:
+                    response_payload = base_payload
                     if "choices" in response_payload and response_payload["choices"]:
                         response_payload["choices"][0]["delta"] = {"content": full_text}
-                    if usage:
-                        response_payload["usage"] = usage
+                if usage:
+                    response_payload["usage"] = usage
 
                 with DBManager() as db:
                     db.set_response_payload(
@@ -481,6 +494,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         usage_tokens,
                         policy_id,
                         classification_stats,
+                        request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
                         queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
                         utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     )
@@ -578,6 +592,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     usage_tokens,
                     policy_id,
                     classification_stats,
+                    request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
                     queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
                     utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                 )
@@ -662,12 +677,22 @@ def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: di
                 usage_tokens = extract_token_usage(usage) if usage else {}
 
                 response_payload = {"content": full_text}
+                base_payload = None
                 if first_chunk:
-                    response_payload = first_chunk.copy()
+                    base_payload = first_chunk.copy()
+                if last_chunk:
+                    if base_payload is None:
+                        base_payload = last_chunk.copy()
+                    else:
+                        for key, value in last_chunk.items():
+                            if key not in base_payload:
+                                base_payload[key] = value
+                if base_payload:
+                    response_payload = base_payload
                     if "choices" in response_payload and response_payload["choices"]:
                         response_payload["choices"][0]["delta"] = {"content": full_text}
-                    if usage:
-                        response_payload["usage"] = usage
+                if usage:
+                    response_payload["usage"] = usage
 
                 with DBManager() as db:
                     if ttft is None:
