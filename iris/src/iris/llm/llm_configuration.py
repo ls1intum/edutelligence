@@ -130,7 +130,10 @@ def validate_llm_configuration(
                     )
                     continue
 
-                for env in ("local", "cloud"):
+                environments = (
+                    ("cloud",) if not settings.local_llm_enabled else ("local", "cloud")
+                )
+                for env in environments:
                     value = role_cfg.get(env)
                     if not value or not isinstance(value, str):
                         missing.append(
@@ -143,7 +146,14 @@ def validate_llm_configuration(
         )
 
 
+def is_local_llm_enabled() -> bool:
+    """Return whether local LLM support is enabled."""
+    return settings.local_llm_enabled
+
+
 def resolve_model(pipeline_id: str, variant_id: str, role: str, *, local: bool) -> str:
+    if local and not settings.local_llm_enabled:
+        local = False
     env: Environment = "local" if local else "cloud"
     try:
         role_cfg = settings.llm_configuration[pipeline_id][variant_id][role]
