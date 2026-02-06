@@ -1,3 +1,4 @@
+import re
 import time
 from abc import ABC, abstractmethod
 from threading import Thread
@@ -32,6 +33,11 @@ logger = get_logger(__name__)
 
 DTO = TypeVar("DTO")
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
+
+KEEP_DECISION_PATTERN = re.compile(r"^(KEEP|BEHALTEN)[.!]?$", re.IGNORECASE)
+UPDATE_DECISION_PATTERN = re.compile(
+    r"^(UPDATE|AKTUALISIEREN)\s*:?\s*(.+)$", re.IGNORECASE
+)
 
 
 class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
@@ -411,14 +417,48 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         llm_out = self._create_session_title(
             state, session_title, recent_messages, output
         )
+        return self._parse_session_title_decision(llm_out)
 
-        text = str(llm_out).strip()
+    @staticmethod
+    def _parse_session_title_decision(llm_out: Optional[str]) -> Optional[str]:
+        """
+        Parse title decisions from model output.
 
-        if text == "KEEP":
+        Local models tend to deviate slightly from the exact
+        `KEEP` / `UPDATE: <title>` format, so this parser accepts minor
+        variations in casing/spacing and also checks early lines.
+        """
+        text = str(llm_out or "").strip()
+        if not text:
             return None
-        if text.startswith("UPDATE: "):
-            new_title = text[len("UPDATE: ") :].strip()  # noqa: E203
-            return new_title
+
+        lines = [line.strip("` ").strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return None
+
+        for line in lines[:5]:
+            if KEEP_DECISION_PATTERN.fullmatch(line):
+                return None
+
+            update_match = UPDATE_DECISION_PATTERN.match(line)
+            if update_match:
+                title = update_match.group(2).strip().strip("\"'`“”")
+                if title:
+                    return title
+
+        for line in lines:
+            update_match = UPDATE_DECISION_PATTERN.match(line)
+            if update_match:
+                title = update_match.group(2).strip().strip("\"'`“”")
+                if title:
+                    return title
+            if KEEP_DECISION_PATTERN.fullmatch(line):
+                return None
+
+        logger.debug(
+            "Ignoring non-conforming session title decision output: %r",
+            text[:250],
+        )
         return None
 
     def _create_session_title(
