@@ -34,30 +34,12 @@ def test_session_title_generation_handles_braces_in_recent_messages():
     )
 
 
-def test_session_title_generation_retries_on_empty_output():
-    pipeline = SessionTitleGenerationPipeline.__new__(SessionTitleGenerationPipeline)
-    pipeline.prompt_template = Environment(autoescape=False).from_string(
-        "Current: {{ current_session_title }}\n"
-        "Messages: {{ recent_messages | safe }}\n"
-        "Language: {{ user_language }}"
-    )
-    invoke_count = 0
+def test_format_recent_messages_limits_and_truncates():
+    recent_messages = [f"Message {i}: " + "x" * 500 for i in range(12)]
+    formatted = SessionTitleGenerationPipeline._format_recent_messages(recent_messages)
 
-    def generate_title(_):
-        nonlocal invoke_count
-        invoke_count += 1
-        return "" if invoke_count == 1 else "UPDATE: Data Structures Overview"
-
-    pipeline.pipeline = RunnableLambda(generate_title)
-    pipeline.llm = SimpleNamespace(tokens=SimpleNamespace(pipeline=None))
-
-    title_decision = pipeline(
-        current_session_title="new chat",
-        recent_messages=["user: explain stacks and queues"],
-    )
-
-    assert title_decision == "UPDATE: Data Structures Overview"
-    assert invoke_count == 2
-    assert (
-        pipeline.tokens.pipeline == PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
-    )
+    lines = formatted.splitlines()
+    assert len(lines) == SessionTitleGenerationPipeline.MAX_RECENT_MESSAGES
+    assert lines[0].startswith("1. Message 2:")
+    assert lines[-1].startswith("10. Message 11:")
+    assert lines[0].endswith("...")
