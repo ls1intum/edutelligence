@@ -28,8 +28,8 @@ from iris.llm import (
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
-from iris.llm.request_handler.model_version_request_handler import (
-    ModelVersionRequestHandler,
+from iris.llm.request_handler.llm_request_handler import (
+    LlmRequestHandler,
 )
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
@@ -90,12 +90,12 @@ class LectureRetrieval(SubPipeline):
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=local
         )
-        request_handler = ModelVersionRequestHandler(version=chat_model)
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
         self.pipeline = self.llm | StrOutputParser()
 
         self.lecture_unit_collection = init_lecture_unit_schema(client)

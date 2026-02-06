@@ -14,7 +14,7 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractAgentVariant
-from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
@@ -542,7 +542,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 )
 
             state.llm = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version=selected_version),
+                request_handler=LlmRequestHandler(model_id=selected_version),
                 completion_args=completion_args,
             )
 

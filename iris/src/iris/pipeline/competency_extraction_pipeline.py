@@ -16,7 +16,7 @@ from iris.domain.variant.competency_extraction_variant import (
 )
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline import Pipeline
@@ -35,7 +35,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
     """
 
     callback: CompetencyExtractionCallback
-    request_handler: ModelVersionRequestHandler
+    request_handler: LlmRequestHandler
     output_parser: PydanticOutputParser
 
     def __init__(
@@ -49,7 +49,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
             raise ValueError("Variant is required for CompetencyExtractionPipeline")
         self.callback = callback
         model = variant.local_agent_model if local else variant.cloud_agent_model
-        self.request_handler = ModelVersionRequestHandler(version=model)
+        self.request_handler = LlmRequestHandler(model_id=model)
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 

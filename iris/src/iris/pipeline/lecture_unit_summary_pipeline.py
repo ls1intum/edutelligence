@@ -9,7 +9,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
@@ -43,7 +43,7 @@ class LectureUnitSummaryPipeline(SubPipeline):
 
         pipeline_id = "lecture_unit_summary_pipeline"
         chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
-        request_handler = ModelVersionRequestHandler(version=chat_model)
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         self.llm = IrisLangchainChatModel(

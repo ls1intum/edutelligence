@@ -69,12 +69,10 @@ def validate_pipeline_variant(
     # For variants that have required_models method, check model availability
     if hasattr(requested_variant, "required_models"):
         llm_manager = LlmManager()
-        available_models = {llm.model for llm in llm_manager.entries}
         available_ids = {llm.id for llm in llm_manager.entries}
         required_models = requested_variant.required_models()
         missing_models = missing_llm_requirements(
             required_models,
-            available_models=available_models,
             available_ids=available_ids,
         )
         if missing_models:

@@ -18,7 +18,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 )
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
@@ -67,9 +67,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
             pipeline_id, "default", "embedding", local=local
         )
         chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
-        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
 
-        request_handler = ModelVersionRequestHandler(version=chat_model)
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

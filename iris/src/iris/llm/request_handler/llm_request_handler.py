@@ -18,22 +18,22 @@ from iris.llm.request_handler.request_handler_interface import RequestHandler
 logger = get_logger(__name__)
 
 
-class ModelVersionRequestHandler(RequestHandler):
-    """Request handler that selects the first model with a matching version."""
+class LlmRequestHandler(RequestHandler):
+    """Request handler that selects the first model with a matching id."""
 
-    version: str
+    model_id: str
     llm_manager: LlmManager | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(
         self,
-        version: str,
+        model_id: str,
     ) -> None:
         super().__init__(
-            version=version,
+            model_id=model_id,
             llm_manager=None,
         )
-        self.version = version
+        self.model_id = model_id
         self.llm_manager = LlmManager()
 
     def complete(self, prompt: str, arguments: CompletionArguments) -> str:
@@ -82,26 +82,24 @@ class ModelVersionRequestHandler(RequestHandler):
         )
 
     def _select_model(self, type_filter: type) -> LanguageModel:
-        """Select the first model that matches the requested version"""
+        """Select the first model that matches the requested id"""
         # Get all LLMs from the manager
         all_llms = self.llm_manager.entries
 
-        # Filter LLMs by type and model name
+        # Filter LLMs by type and id
         matching_llms = [
             llm
             for llm in all_llms
-            if isinstance(llm, type_filter) and llm.model == self.version
+            if isinstance(llm, type_filter) and llm.id == self.model_id
         ]
 
         if not matching_llms:
-            raise ValueError(
-                f"No {type_filter.__name__} found with model name {self.version}"
-            )
+            raise ValueError(f"No {type_filter.__name__} found with id {self.model_id}")
 
         # Select the first matching LLM
         llm = matching_llms[0]
 
-        logger.debug("Selected model | model=%s", llm.description)
+        logger.debug("Selected model | id=%s", llm.id)
         return llm
 
     def bind_tools(
@@ -129,9 +127,7 @@ class ModelVersionRequestHandler(RequestHandler):
 
         llm = self._select_model(ChatModel)
         if not hasattr(llm, "bind_tools"):
-            raise TypeError(
-                f"Selected model {llm.description} doesn't support tool binding"
-            )
+            raise TypeError(f"Selected model {llm.id} doesn't support tool binding")
 
         llm.bind_tools(tools)
         return llm

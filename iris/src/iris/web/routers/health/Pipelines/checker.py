@@ -47,14 +47,11 @@ def _missing_from_llm_configuration_error(
     return frozenset({message})
 
 
-def evaluate_feature(
-    feature: Features, available_models: Set[str], available_ids: Set[str]
-) -> FeatureResult:
+def evaluate_feature(feature: Features, available_ids: Set[str]) -> FeatureResult:
     """
     Evaluate a feature based on configured variants and available LLMs.
 
-    `required_models()` can include requirements prefixed with `id:` which are checked against LLM IDs.
-    All other requirements are checked against LLM model names.
+    All requirements are matched against ``LanguageModel.id``.
     """
     pipeline_cls = PIPELINE_BY_FEATURE.get(feature)
     if pipeline_cls is None:
@@ -91,12 +88,10 @@ def evaluate_feature(
     all_required = required_default.union(required_advanced)
     all_missing = missing_llm_requirements(
         all_required,
-        available_models=set(available_models),
         available_ids=set(available_ids),
     )
     default_missing = missing_llm_requirements(
         required_default,
-        available_models=set(available_models),
         available_ids=set(available_ids),
     )
     default_available = not default_missing

@@ -534,14 +534,12 @@ def get_available_variants(
 
     :return: List of FeatureDTO objects for supported variants
     """
-    available_models = {llm.model for llm in available_llms}
     available_ids = {llm.id for llm in available_llms}
     return [
         variant.feature_dto()
         for variant in all_variants
         if not missing_llm_requirements(
             variant.required_models(),
-            available_models=available_models,
             available_ids=available_ids,
         )
     ]

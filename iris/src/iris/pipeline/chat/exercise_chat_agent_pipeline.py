@@ -23,7 +23,7 @@ from ...domain.chat.interaction_suggestion_dto import (
 from ...domain.variant.exercise_chat_variant import ExerciseChatVariant
 from ...llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...llm.llm_configuration import resolve_role_models, role_requirements
@@ -451,7 +451,7 @@ class ExerciseChatAgentPipeline(
                 else state.variant.cloud_agent_model
             )
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version=refinement_model),
+                request_handler=LlmRequestHandler(model_id=refinement_model),
                 completion_args=completion_args,
             )
 

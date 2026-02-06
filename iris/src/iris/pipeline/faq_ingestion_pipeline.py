@@ -14,7 +14,7 @@ from ..domain.variant.faq_ingestion_variant import FaqIngestionVariant
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
 from ..llm.llm_configuration import resolve_role_models
@@ -51,8 +51,8 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
             variant.local_embedding_model if local else variant.cloud_embedding_model
         )
         chat_model = variant.local_chat_model if local else variant.cloud_chat_model
-        self.llm_embedding = ModelVersionRequestHandler(embedding_model)
-        request_handler = ModelVersionRequestHandler(version=chat_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
