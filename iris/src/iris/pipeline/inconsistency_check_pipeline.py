@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
@@ -7,13 +7,12 @@ from langchain_core.runnables import Runnable
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
-from iris.domain.variant.inconsistency_check_variant import InconsistencyCheckVariant
+from iris.domain.variant.variant import Variant
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
-from iris.llm.llm_configuration import resolve_role_models
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
@@ -25,13 +24,23 @@ from iris.web.status.status_update import InconsistencyCheckCallback
 logger = get_logger(__name__)
 
 
-class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
+class InconsistencyCheckPipeline(Pipeline):
     """InconsistencyCheckPipeline checks for consistency issues within an exercise by evaluating files from template
      and solution repositories.
 
     It invokes a solver pipeline to identify potential inconsistencies, then uses a prettify pipeline to generate a
      summary report.
     """
+
+    PIPELINE_ID = "inconsistency_check_pipeline"
+    ROLES = {"solver", "prettify"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Standard inconsistency check implementation with efficient model usage",
+        ),
+    ]
 
     llm: IrisLangchainChatModel
     callback: InconsistencyCheckCallback
@@ -42,21 +51,17 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
     def __init__(
         self,
         callback: Optional[InconsistencyCheckCallback] = None,
-        variant: InconsistencyCheckVariant | None = None,
+        variant: Variant | None = None,
         local: bool = False,
     ):
-        super().__init__(implementation_id="inconsistency_check_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         if variant is None:
             raise ValueError("Variant is required for InconsistencyCheckPipeline")
 
         completion_args = CompletionArguments()
 
-        solver_model = (
-            variant.local_solver_model if local else variant.cloud_solver_model
-        )
-        prettify_model = (
-            variant.local_prettify_model if local else variant.cloud_prettify_model
-        )
+        solver_model = variant.model("solver", local)
+        prettify_model = variant.model("prettify", local)
 
         self.solver_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=solver_model),
@@ -150,26 +155,3 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
                 self.prettify_llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK
             )
         self.callback.done(final_result=result, tokens=self.tokens)
-
-    @classmethod
-    def get_variants(cls) -> List[InconsistencyCheckVariant]:
-        """
-        Returns available variants for the InconsistencyCheckPipeline.
-
-        Returns:
-            List of InconsistencyCheckVariant objects representing available variants
-        """
-        pipeline_id = "inconsistency_check_pipeline"
-        solver_models = resolve_role_models(pipeline_id, "default", "solver")
-        prettify_models = resolve_role_models(pipeline_id, "default", "prettify")
-        return [
-            InconsistencyCheckVariant(
-                variant_id="default",
-                name="Default",
-                description="Standard inconsistency check implementation with efficient model usage",
-                cloud_solver_model=solver_models["cloud"],
-                local_solver_model=solver_models["local"],
-                cloud_prettify_model=prettify_models["cloud"],
-                local_prettify_model=prettify_models["local"],
-            )
-        ]

@@ -188,7 +188,7 @@ their programming exercises on Artemis in a pedagogically meaningful way.
        - `api_key`: The API key for the model.
        - `description`: Additional information about the model.
        - `id`: Unique identifier for the model across all models.
-       - `model`: The official name of the model as used by the vendor, also used by ModelVersionRequestHandler for model selection (e.g., "gpt-4.1", "gpt-4.1-mini").
+       - `model`: The official name of the model as used by the vendor (e.g., "gpt-4.1", "gpt-4.1-mini").
        - `name`: A custom, human-readable name for the model.
        - `type`: The model type, used to select the appropriate client (e.g., `openai_chat`, `azure_chat`, `ollama`).
        - `endpoint`: The URL to connect to the model.

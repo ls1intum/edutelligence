@@ -12,8 +12,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
 from iris.domain.data.post_dto import PostDTO
-from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
-from iris.llm.llm_configuration import resolve_role_models, role_requirements
+from iris.domain.variant.variant import Dep, Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -43,17 +42,36 @@ logger = get_logger(__name__)
 
 
 class TutorSuggestionPipeline(
-    AbstractAgentPipeline[
-        CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
-    ]
+    AbstractAgentPipeline[CommunicationTutorSuggestionPipelineExecutionDTO, Variant]
 ):
     """
     The TutorSuggestionPipeline creates a tutor suggestion when called.
     It uses the post received as an argument to create a suggestion based on the conversation
     """
 
+    PIPELINE_ID = "tutor_suggestion_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
+        ),
+    ]
+    DEPENDENCIES = [
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
+
     def __init__(self):
-        super().__init__(implementation_id="tutor_suggestion_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
         self.faq_retriever = None
 
@@ -74,7 +92,7 @@ class TutorSuggestionPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> list[Callable]:
         allow_lecture_tools = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -177,7 +195,7 @@ class TutorSuggestionPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> str:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -209,7 +227,7 @@ class TutorSuggestionPipeline(
     def get_agent_params(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> dict[str, Any]:
         """
@@ -245,7 +263,7 @@ class TutorSuggestionPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> bool:
         return False
@@ -253,7 +271,7 @@ class TutorSuggestionPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> str:
         raw = state.result
@@ -318,7 +336,7 @@ class TutorSuggestionPipeline(
     def is_regeneration_by_user_requested(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> bool:
         """
@@ -359,7 +377,7 @@ class TutorSuggestionPipeline(
     def __call__(
         self,
         dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-        variant: TutorSuggestionVariant,
+        variant: Variant,
         callback: TutorSuggestionCallback,
     ):
         """
@@ -380,63 +398,3 @@ class TutorSuggestionPipeline(
                 "An error occurred while running the tutor suggestion pipeline.",
                 tokens=self.tokens,
             )
-
-    @classmethod
-    def get_variants(cls) -> List[TutorSuggestionVariant]:
-        """
-        Returns available variants for the TutorSuggestionPipeline.
-
-        Returns:
-            List of TutorSuggestionVariant objects representing available variants
-        """
-        pipeline_id = "tutor_suggestion_pipeline"
-        lecture_retrieval_pipeline_ids = [
-            "lecture_retrieval_pipeline",
-            "lecture_unit_segment_retrieval_pipeline",
-            "lecture_transcriptions_retrieval_pipeline",
-        ]
-        faq_retrieval_pipeline_id = "faq_retrieval_pipeline"
-
-        variants: list[TutorSuggestionVariant] = []
-        for variant_id, name, description in [
-            (
-                "default",
-                "Default",
-                "Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
-            ),
-            (
-                "advanced",
-                "Advanced",
-                "Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
-            ),
-        ]:
-            chat_models = resolve_role_models(pipeline_id, variant_id, "chat")
-            additional_required_models: set[str] = set()
-            for retrieval_pipeline_id in lecture_retrieval_pipeline_ids:
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "chat"
-                )
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "embedding"
-                )
-                additional_required_models |= role_requirements(
-                    retrieval_pipeline_id, "default", "reranker"
-                )
-            additional_required_models |= role_requirements(
-                faq_retrieval_pipeline_id, "default", "chat"
-            )
-            additional_required_models |= role_requirements(
-                faq_retrieval_pipeline_id, "default", "embedding"
-            )
-            variants.append(
-                TutorSuggestionVariant(
-                    variant_id=variant_id,
-                    name=name,
-                    description=description,
-                    cloud_agent_model=chat_models["cloud"],
-                    local_agent_model=chat_models["local"],
-                    additional_required_models=additional_required_models,
-                )
-            )
-
-        return variants

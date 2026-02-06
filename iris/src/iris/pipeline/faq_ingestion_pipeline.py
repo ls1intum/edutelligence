@@ -10,14 +10,13 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 )
 
 from ..domain.data.faq_dto import FaqDTO
-from ..domain.variant.faq_ingestion_variant import FaqIngestionVariant
+from ..domain.variant.variant import Variant
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
     LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
-from ..llm.llm_configuration import resolve_role_models
 from ..tracing import observe
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
@@ -27,30 +26,34 @@ from . import Pipeline
 logger = get_logger(__name__)
 
 
-class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
+class FaqIngestionPipeline(AbstractIngestion, Pipeline):
     """FaqIngestionPipeline handles the ingestion of FAQs into the database.
 
     It deletes old FAQs, processes new FAQ data using the language model pipeline,
     batches the updates, and reports the ingestion status via a callback.
     """
 
+    PIPELINE_ID = "faq_ingestion_pipeline"
+    ROLES = {"chat", "embedding"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Default FAQ ingestion variant using efficient models."),
+    ]
+
     def __init__(
         self,
         client: WeaviateClient,
         dto: Optional[FaqIngestionPipelineExecutionDto],
         callback: FaqIngestionStatus,
-        variant: FaqIngestionVariant,
+        variant: Variant,
         local: bool = False,
     ):
-        super().__init__(implementation_id="faq_ingestion_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.client = client
         self.collection = init_faq_schema(client)
         self.dto = dto
         self.callback = callback
-        embedding_model = (
-            variant.local_embedding_model if local else variant.cloud_embedding_model
-        )
-        chat_model = variant.local_chat_model if local else variant.cloud_chat_model
+        embedding_model = variant.model("embedding", local)
+        chat_model = variant.model("chat", local)
         self.llm_embedding = LlmRequestHandler(embedding_model)
         request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
@@ -59,29 +62,6 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
-
-    @classmethod
-    def get_variants(cls) -> List[FaqIngestionVariant]:
-        """
-        Returns available variants for the FaqIngestionPipeline.
-
-        Returns:
-            List of FaqIngestionVariant objects representing available variants
-        """
-        pipeline_id = "faq_ingestion_pipeline"
-        chat_models = resolve_role_models(pipeline_id, "default", "chat")
-        embedding_models = resolve_role_models(pipeline_id, "default", "embedding")
-        return [
-            FaqIngestionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default FAQ ingestion variant using efficient models.",
-                cloud_chat_model=chat_models["cloud"],
-                local_chat_model=chat_models["local"],
-                cloud_embedding_model=embedding_models["cloud"],
-                local_embedding_model=embedding_models["local"],
-            )
-        ]
 
     @observe(name="FAQ Ingestion Pipeline")
     def __call__(self) -> bool:

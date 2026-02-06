@@ -1,15 +1,45 @@
+from __future__ import annotations
+
+import logging
 from abc import ABCMeta, abstractmethod
-from typing import Generic, List, TypeVar
+from typing import ClassVar, List
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain.variant.abstract_variant import AbstractAgentVariant, AbstractVariant
+from iris.config import settings
+from iris.domain.variant.abstract_variant import AbstractVariant
+from iris.domain.variant.variant import Dep, Variant
+from iris.llm.llm_configuration import resolve_role_models, role_requirements
 
-VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
+logger = logging.getLogger(__name__)
 
 
-class Pipeline(Generic[VARIANT], metaclass=ABCMeta):
+def _get_dep_roles(pipeline_id: str, variant_id: str) -> set[str]:
+    """Discover a dependency pipeline's roles from the config."""
+    pipeline_cfg = settings.llm_configuration.get(pipeline_id)
+    if pipeline_cfg is None:
+        logger.warning(
+            "Dependency pipeline '%s' not found in llm_configuration", pipeline_id
+        )
+        return set()
+    variant_cfg = pipeline_cfg.get(variant_id)
+    if variant_cfg is None:
+        logger.warning(
+            "Variant '%s' not found for dependency pipeline '%s' in llm_configuration",
+            variant_id,
+            pipeline_id,
+        )
+        return set()
+    return set(variant_cfg.keys())
+
+
+class Pipeline(metaclass=ABCMeta):
     """Abstract class for all pipelines"""
+
+    PIPELINE_ID: ClassVar[str] = ""
+    ROLES: ClassVar[set[str]] = set()
+    VARIANT_DEFS: ClassVar[list[tuple[str, str, str]]] = []
+    DEPENDENCIES: ClassVar[list[Dep]] = []
 
     implementation_id: str
     tokens: List[TokenUsageDTO]
@@ -42,13 +72,43 @@ class Pipeline(Generic[VARIANT], metaclass=ABCMeta):
         self.tokens.append(tokens)
 
     @classmethod
-    @abstractmethod
     def get_variants(cls) -> List[AbstractVariant]:
         """
         Returns a list of all variants for this pipeline.
-        This method should be implemented by subclasses to provide specific variants.
 
-        Returns:
-            List of variants available for this pipeline.
+        Default implementation derives variants from PIPELINE_ID, ROLES,
+        VARIANT_DEFS, and DEPENDENCIES class attributes. Subclasses can
+        override for custom behaviour.
+
+        Pipelines with ROLES = set() (orchestrators) don't need their own
+        llm_configuration entry — they derive all required models from
+        DEPENDENCIES.
         """
-        raise NotImplementedError("Subclasses must implement the get_variants method.")
+        if not cls.VARIANT_DEFS:
+            return []
+
+        variants: list[Variant] = []
+        for vid, name, desc in cls.VARIANT_DEFS:
+            role_models: dict[str, dict[str, str]] = {}
+            for role in cls.ROLES:
+                role_models[role] = resolve_role_models(cls.PIPELINE_ID, vid, role)
+
+            required: set[str] = set()
+            for rm in role_models.values():
+                required |= set(rm.values())
+
+            for dep in cls.DEPENDENCIES:
+                dep_vid = vid if dep.variant == "same" else dep.variant
+                for dep_role in _get_dep_roles(dep.pipeline_id, dep_vid):
+                    required |= role_requirements(dep.pipeline_id, dep_vid, dep_role)
+
+            variants.append(
+                Variant(
+                    variant_id=vid,
+                    name=name,
+                    description=desc,
+                    role_models=role_models,
+                    required_model_ids=required,
+                )
+            )
+        return variants
