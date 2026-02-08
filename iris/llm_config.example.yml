@@ -45,3 +45,31 @@
   api_key:
   endpoint: "your_cohere-endpoint"
   cost_per_1k_requests: 2
+- id: gemma3
+  type: ollama
+  model: gemma3:27b
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: gpt-oss
+  type: ollama
+  model: gpt-oss:120b
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: mxbai-embed-large
+  type: ollama
+  model: mxbai-embed-large:latest
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: nomic-embed-text
+  type: ollama
+  model: nomic-embed-text:latest
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
