@@ -184,7 +184,7 @@ class CitationPipeline(SubPipeline):
             lecture_page_chunks + lecture_transcriptions,
             ensure_ascii=True,
         )
-        return formatted_string.replace("{", "{{").replace("}", "}}")
+        return formatted_string
 
     def create_formatted_faq_string(self, faqs):
         """
@@ -210,7 +210,7 @@ class CitationPipeline(SubPipeline):
             )
 
         formatted_string = json.dumps(formatted_faqs, ensure_ascii=True)
-        return formatted_string.replace("{", "{{").replace("}", "}}")
+        return formatted_string
 
     def extract_used_citation_numbers(self, answer: str) -> list[int]:
         """
