@@ -4,7 +4,7 @@ Rules:
 - Do NOT include ":" or "[" or "]" in the keyword.
 - The keyword must start with an uppercase letter.
 - Do NOT reuse any keyword from this list: {UsedKeywords}
-- Output ONLY the keyword, nothing else.
+- Output ONLY the keyword in plain text (no Markdown), nothing else.
 
 Paragraph:
 {Paragraph}
