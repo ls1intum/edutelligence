@@ -196,7 +196,7 @@ class StatusCallback(ABC):
         if hasattr(self.status, "confidence"):
             self.status.confidence = None
         if hasattr(self.status, "should_post_directly"):
-            self.status.should_post_directly = None
+            self.status.should_post_directly = False
 
     def error(
         self,
