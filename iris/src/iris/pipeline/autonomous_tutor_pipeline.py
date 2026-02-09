@@ -1,8 +1,6 @@
 import os
-from datetime import datetime
 from typing import Callable, List, cast
 
-import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from iris.common.logging_config import get_logger
@@ -14,7 +12,10 @@ from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
-from iris.pipeline.shared.utils import format_post_discussion
+from iris.pipeline.shared.utils import (
+    format_post_discussion,
+    get_current_utc_datetime_string,
+)
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -153,7 +154,7 @@ class AutonomousTutorPipeline(
         has_discussion = post.answers and len(post.answers) > 0
 
         template_context = {
-            "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            "current_date": get_current_utc_datetime_string(),
             "allow_lecture_tool": should_allow_lecture_tool(
                 state.db, state.dto.course.id
             ),

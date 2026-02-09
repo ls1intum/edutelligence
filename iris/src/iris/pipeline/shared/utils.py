@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Callable, List, Optional, Tuple
 
+import pytz
 from langchain_core.tools import StructuredTool
 
 from ...common.logging_config import get_logger
@@ -9,6 +10,9 @@ from ...domain.data.post_dto import PostDTO
 from ...llm.external.model import LanguageModel
 
 logger = get_logger(__name__)
+
+# Standard datetime format used across the codebase for prompt templates
+DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def generate_structured_tool_from_function(
@@ -97,6 +101,16 @@ Remember, always follow the additional instructions by the instructor.
     """
 
 
+def get_current_utc_datetime_string() -> str:
+    """
+    Get the current UTC datetime as a formatted string.
+
+    Returns:
+        Formatted datetime string 'YYYY-MM-DD HH:MM:SS' in UTC.
+    """
+    return datetime.now(tz=pytz.UTC).strftime(DATETIME_FORMAT)
+
+
 def datetime_to_string(dt: Optional[datetime]) -> str:
     """
     Convert a datetime to a formatted string.
@@ -110,7 +124,7 @@ def datetime_to_string(dt: Optional[datetime]) -> str:
     if dt is None:
         return "No date provided"
     else:
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        return dt.strftime(DATETIME_FORMAT)
 
 
 def format_post_discussion(post: PostDTO, include_user_ids: bool = False) -> str:
