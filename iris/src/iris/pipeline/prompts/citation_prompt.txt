@@ -7,9 +7,10 @@ Add citations to the answer by inserting the provided ids.
 - Step 1: Read the answer and find each sentence (or bullet) that uses information from the provided content.
 - Step 2: Immediately after that sentence, insert the matching id(s) from the JSON. If a sentence uses multiple paragraphs, include all relevant ids.
 - Step 3: Use ids exactly as given (including brackets like "[cite:...]"). Do not invent ids, modify them, or change their order.
-- Step 4: Include only ids for content that actually supports the sentence.
-- Step 5: If any part of the answer uses provided content, every such sentence must have at least one id.
-- Step 6: Do not change the answer text except for adding ids. Output only the answer with inline ids.
+- Step 4: When multiple ids are needed for a sentence, write each id in its own bracketed tag separated by spaces, e.g. "[cite:...!1] [cite:...!2] [cite:...!3]" (not "[cite:...!1, cite:...!2, cite:...!3]" or "[cite:...!1], [cite:...!2], [cite:...!3]").
+- Step 5: Include only ids for content that actually supports the sentence.
+- Step 6: If any part of the answer uses provided content, every such sentence must have at least one id.
+- Step 7: Do not change the answer text except for adding ids. Output only the answer with inline ids.
 
 Following information is provided
 
