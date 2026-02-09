@@ -14,7 +14,7 @@ from iris.domain import (
     InconsistencyCheckPipelineExecutionDTO,
 )
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
-    AutonomousTutorPipelineExecutionDto,
+    AutonomousTutorPipelineExecutionDTO,
 )
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
@@ -421,7 +421,7 @@ def run_communication_tutor_suggestions_pipeline(
 
 
 def run_autonomous_tutor_pipeline_worker(
-    dto: AutonomousTutorPipelineExecutionDto, variant_id: str, request_id: str
+    dto: AutonomousTutorPipelineExecutionDTO, variant_id: str, request_id: str
 ):
     set_request_id(request_id)
     logger.info("Autonomous tutor pipeline started")
@@ -454,7 +454,7 @@ def run_autonomous_tutor_pipeline_worker(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDto):
+def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, AutonomousTutorPipeline)
     request_id = get_request_id()
     thread = Thread(

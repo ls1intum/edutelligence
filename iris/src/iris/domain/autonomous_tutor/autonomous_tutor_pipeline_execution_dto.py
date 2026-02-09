@@ -11,7 +11,7 @@ from iris.domain.data.user_dto import UserDTO
 from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
 
 
-class AutonomousTutorPipelineExecutionDto(PipelineExecutionDTO):
+class AutonomousTutorPipelineExecutionDTO(PipelineExecutionDTO):
     course: CourseDTO
     post: PostDTO
     user: UserDTO

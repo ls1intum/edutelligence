@@ -7,7 +7,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from iris.common.logging_config import get_logger
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
-    AutonomousTutorPipelineExecutionDto,
+    AutonomousTutorPipelineExecutionDTO,
 )
 from iris.domain.variant.autonomous_tutor_variant import AutonomousTutorVariant
 from iris.pipeline.abstract_agent_pipeline import (
@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 
 class AutonomousTutorPipeline(
-    AbstractAgentPipeline[AutonomousTutorPipelineExecutionDto, AutonomousTutorVariant]
+    AbstractAgentPipeline[AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant]
 ):
     """
     The AutonomousTutorPipeline autonomously responds to student posts.
@@ -65,7 +65,7 @@ class AutonomousTutorPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDto, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
         ],
     ) -> list[Callable]:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -146,7 +146,7 @@ class AutonomousTutorPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDto, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
         ],
     ) -> str:
         post = state.dto.post
@@ -173,7 +173,7 @@ class AutonomousTutorPipeline(
         }
         return self.system_prompt_template.render(template_context)
 
-    def get_memiris_tenant(self, dto: AutonomousTutorPipelineExecutionDto) -> str:
+    def get_memiris_tenant(self, dto: AutonomousTutorPipelineExecutionDTO) -> str:
         """
         Return the Memiris tenant identifier for the current user.
 
@@ -182,7 +182,7 @@ class AutonomousTutorPipeline(
         """
         return ""
 
-    def get_memiris_reference(self, dto: AutonomousTutorPipelineExecutionDto) -> str:
+    def get_memiris_reference(self, dto: AutonomousTutorPipelineExecutionDTO) -> str:
         """
         Does not return any reference, as memory creation is currently disabled for this pipeline.
 
@@ -194,7 +194,7 @@ class AutonomousTutorPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDto, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
         ],
     ) -> bool:
         """Memory creation is disabled for autonomous tutor pipeline."""
@@ -203,7 +203,7 @@ class AutonomousTutorPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDto, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
         ],
     ) -> str:
         """Send the final response back to Artemis with confidence score."""
@@ -226,7 +226,7 @@ class AutonomousTutorPipeline(
     def _estimate_confidence(
         self,
         state: AgentPipelineExecutionState[  # pylint: disable=unused-argument
-            AutonomousTutorPipelineExecutionDto, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
         ],
     ) -> float:
         """
@@ -261,7 +261,7 @@ class AutonomousTutorPipeline(
     @observe(name="Autonomous Tutor Pipeline")
     def __call__(
         self,
-        dto: AutonomousTutorPipelineExecutionDto,
+        dto: AutonomousTutorPipelineExecutionDTO,
         variant: AutonomousTutorVariant,
         callback: AutonomousTutorCallback,
     ):
