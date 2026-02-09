@@ -169,9 +169,7 @@ class StatusCallback(ABC):
             self.status.artifact = artifact
         if hasattr(self.status, "confidence"):
             self.status.confidence = confidence
-        if should_post_directly is not None and hasattr(
-            self.status, "should_post_directly"
-        ):
+        if hasattr(self.status, "should_post_directly"):
             self.status.should_post_directly = should_post_directly
         next_stage = self.get_next_stage()
 
@@ -195,6 +193,10 @@ class StatusCallback(ABC):
             self.status.accessed_memories = None
         if hasattr(self.status, "created_memories"):
             self.status.created_memories = None
+        if hasattr(self.status, "confidence"):
+            self.status.confidence = None
+        if hasattr(self.status, "should_post_directly"):
+            self.status.should_post_directly = None
 
     def error(
         self,
