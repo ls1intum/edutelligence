@@ -328,7 +328,7 @@ class OllamaModel(
                     content = (
                         result
                         if isinstance(result, str)
-                        else json.dumps(result, ensure_ascii=False)
+                        else json.dumps(result, ensure_ascii=False, default=str)
                     )
 
                     ollama_messages.append(
