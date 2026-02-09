@@ -66,7 +66,7 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         # Set the langchain chat model
         # Use larger model for better quality suggestions
-        model = "llama3.3:latest" if local else "gpt-4.1-nano"
+        model = "gpt-oss:120b" if local else "gpt-4.1-nano"
 
         request_handler = ModelVersionRequestHandler(version=model)
 
