@@ -41,6 +41,13 @@ from iris.domain.status.text_exercise_chat_status_update_dto import (
 
 logger = get_logger(__name__)
 
+# Stage weight constants for progress bar visualization.
+# Weights represent relative proportions of the progress bar, not absolute time.
+STAGE_WEIGHT_THINKING_PRIMARY = 40  # Main thinking stage for complex pipelines
+STAGE_WEIGHT_THINKING = 30  # Standard thinking/processing stage
+STAGE_WEIGHT_RESPONDING = 20  # Response generation stage
+STAGE_WEIGHT_SECONDARY = 10  # Secondary stages (suggestions, memory extraction, etc.)
+
 
 class StatusCallback(ABC):
     """
@@ -258,15 +265,15 @@ class CourseChatStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=40,
+                weight=STAGE_WEIGHT_THINKING_PRIMARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
             # StageDTO(
-            #     weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+            #     weight=STAGE_WEIGHT_SECONDARY, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             # ),
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Extracting memories",
                 internal=True,
@@ -290,12 +297,14 @@ class ExerciseChatStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Checking available information",
             ),
             StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+                weight=STAGE_WEIGHT_SECONDARY,
+                state=StageStateEnum.NOT_STARTED,
+                name="Creating suggestions",
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
@@ -316,7 +325,7 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Generating response",
             ),
@@ -340,12 +349,12 @@ class TextExerciseChatCallback(StatusCallback):
         stage = len(stages)
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
             StageDTO(
-                weight=20,
+                weight=STAGE_WEIGHT_RESPONDING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Responding",
             ),
@@ -372,7 +381,7 @@ class CompetencyExtractionCallback(StatusCallback):
         stages = initial_stages or []
         stages.append(
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Generating Competencies",
             )
@@ -395,7 +404,7 @@ class RewritingCallback(StatusCallback):
         stages = initial_stages or []
         stages.append(
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Generating Rewritting",
             )
@@ -418,7 +427,7 @@ class InconsistencyCheckCallback(StatusCallback):
         stages = initial_stages or []
         stages.append(
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Checking for inconsistencies",
             )
@@ -442,12 +451,12 @@ class LectureChatCallback(StatusCallback):
         stage = len(stages)
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Extracting memories",
                 internal=True,
@@ -477,7 +486,7 @@ class TutorSuggestionCallback(StatusCallback):
         stage = len(stages)
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
@@ -505,7 +514,7 @@ class AutonomousTutorCallback(StatusCallback):
         stage = len(stages)
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
