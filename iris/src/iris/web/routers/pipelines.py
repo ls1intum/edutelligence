@@ -78,7 +78,8 @@ def run_exercise_chat_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = ExerciseChatAgentPipeline()
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = ExerciseChatAgentPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline", exc_info=e)
         capture_exception(e)
@@ -130,7 +131,8 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(event=event)
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = CourseChatPipeline(event=event, local=is_local)
     except Exception as e:
         logger.error("Error preparing course chat pipeline", exc_info=e)
         capture_exception(e)
@@ -176,7 +178,8 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TextExerciseChatPipeline()
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = TextExerciseChatPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline", exc_info=e)
         capture_exception(e)
@@ -192,6 +195,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
 def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
     set_request_id(request_id)
     try:
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
         callback = LectureChatCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
@@ -202,7 +206,7 @@ def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = LectureChatPipeline()
+        pipeline = LectureChatPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline", exc_info=e)
         capture_exception(e)
@@ -255,7 +259,11 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = CompetencyExtractionPipeline(callback=callback)
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
+        pipeline = CompetencyExtractionPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline", exc_info=e)
         capture_exception(e)
@@ -295,9 +303,17 @@ def run_rewriting_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
         match variant:
             case "faq" | "problem_statement":
-                pipeline = RewritingPipeline(callback=callback, variant=variant)
+                pipeline = RewritingPipeline(
+                    callback=callback,
+                    variant=variant,
+                    local=is_local,
+                )
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
@@ -340,7 +356,11 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = InconsistencyCheckPipeline(callback=callback)
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
+        pipeline = InconsistencyCheckPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline", exc_info=e)
         capture_exception(e)

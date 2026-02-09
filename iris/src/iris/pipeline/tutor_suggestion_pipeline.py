@@ -135,7 +135,8 @@ class TutorSuggestionPipeline(
                 create_tool_get_last_artifact(state.dto.chat_history, callback)
             )
         if allow_lecture_tools:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -149,7 +150,8 @@ class TutorSuggestionPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -340,7 +342,8 @@ class TutorSuggestionPipeline(
         try:
             logger.info("Running tutor suggestion pipeline...")
 
-            super().__call__(dto, variant, callback)
+            local = dto.settings is not None and dto.settings.is_local()
+            super().__call__(dto, variant, callback, local=local)
         except Exception as e:
             logger.error(
                 "An error occurred while running the tutor suggestion pipeline",
@@ -364,12 +367,14 @@ class TutorSuggestionPipeline(
                 variant_id="default",
                 name="Default",
                 description="Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
-                agent_model="gpt-oss:20b",
+                cloud_agent_model="gpt-oss:20b",
+                local_agent_model="gpt-oss:20b",
             ),
             TutorSuggestionVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
-                agent_model="gpt-oss:120b",
+                cloud_agent_model="gpt-oss:120b",
+                local_agent_model="gpt-oss:120b",
             ),
         ]
