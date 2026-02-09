@@ -208,7 +208,7 @@ class AutonomousTutorPipeline(
         ],
     ) -> str:
         """Send the final response back to Artemis with confidence score."""
-        # TODO: Extract confidence from model output or implement confidence estimation
+        # TODO(IRIS-22): Implement Confidence Evaluation
         # For now, use a placeholder confidence value
         confidence = self._estimate_confidence(state)
         should_post_directly = confidence >= self.DIRECT_POST_CONFIDENCE_THRESHOLD
