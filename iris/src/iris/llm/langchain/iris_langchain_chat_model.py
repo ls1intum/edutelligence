@@ -104,8 +104,8 @@ class IrisLangchainChatModel(BaseChatModel):
     @property
     def model_name(self) -> str:
         """Return the underlying model name for Langfuse tracing."""
-        if hasattr(self.request_handler, "version"):
-            return self.request_handler.version
+        if hasattr(self.request_handler, "model_id"):
+            return self.request_handler.model_id
         return "unknown"
 
     @property

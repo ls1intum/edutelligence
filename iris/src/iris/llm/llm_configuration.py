@@ -21,7 +21,7 @@ def validate_llm_configuration(
     each role has valid local (if enabled) and cloud model IDs.
     Raises LlmConfigurationError if anything is missing.
     """
-    cfg = config or settings.llm_configuration
+    cfg = config if config is not None else settings.llm_configuration
     missing: list[str] = []
 
     for pipeline_id, variants in cfg.items():
@@ -37,9 +37,17 @@ def validate_llm_configuration(
                 continue
 
             for role, role_cfg in roles.items():
+                # Flat string: single model for this role (e.g. embedding, reranker)
+                if isinstance(role_cfg, str):
+                    if not role_cfg:
+                        missing.append(
+                            f"llm_configuration.{pipeline_id}.{variant_id}.{role} (empty)"
+                        )
+                    continue
+
                 if not isinstance(role_cfg, dict):
                     missing.append(
-                        f"llm_configuration.{pipeline_id}.{variant_id}.{role} (not a mapping)"
+                        f"llm_configuration.{pipeline_id}.{variant_id}.{role} (not a mapping or string)"
                     )
                     continue
 
@@ -59,17 +67,27 @@ def validate_llm_configuration(
         )
 
 
-def is_local_llm_enabled() -> bool:
-    """Return whether local LLM support is enabled."""
-    return settings.local_llm_enabled
-
-
 def resolve_model(pipeline_id: str, variant_id: str, role: str, *, local: bool) -> str:
     if local and not settings.local_llm_enabled:
         local = False
     env: Environment = "local" if local else "cloud"
     try:
         role_cfg = settings.llm_configuration[pipeline_id][variant_id][role]
+    except KeyError as e:
+        raise LlmConfigurationError(
+            f"Missing llm_configuration.{pipeline_id}.{variant_id}.{role}"
+        ) from e
+
+    # Flat string: role has a single model (e.g. embedding, reranker)
+    if isinstance(role_cfg, str):
+        if not role_cfg:
+            raise LlmConfigurationError(
+                f"Empty llm_configuration.{pipeline_id}.{variant_id}.{role}"
+            )
+        return role_cfg
+
+    # Dict: role has local/cloud distinction
+    try:
         model = role_cfg[env]
     except KeyError as e:
         raise LlmConfigurationError(

@@ -118,43 +118,33 @@ llm_configuration:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
+      embedding: oai-embedding-small
     advanced:
       chat:
         local: oai-gpt-41
         cloud: oai-gpt-41
-      embedding:
-        local: azure-embedding-large
-        cloud: azure-embedding-large
+      embedding: azure-embedding-large
 
   faq_ingestion_pipeline:
     default:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
+      embedding: oai-embedding-small
 
   transcription_ingestion_pipeline:
     default:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
+      embedding: oai-embedding-small
 
   lecture_unit_segment_summary_pipeline:
     default:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
+      embedding: oai-embedding-small
 
   lecture_unit_summary_pipeline:
     default:
@@ -164,54 +154,38 @@ llm_configuration:
 
   lecture_unit_pipeline:
     default:
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
+      embedding: oai-embedding-small
 
   lecture_retrieval_pipeline:
     default:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
-      reranker:
-        local: cohere
-        cloud: cohere
+      embedding: oai-embedding-small
+      reranker: cohere
 
   lecture_unit_segment_retrieval_pipeline:
     default:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
-      reranker:
-        local: cohere
-        cloud: cohere
+      embedding: oai-embedding-small
+      reranker: cohere
 
   lecture_transcriptions_retrieval_pipeline:
     default:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
-      reranker:
-        local: cohere
-        cloud: cohere
+      embedding: oai-embedding-small
+      reranker: cohere
 
   faq_retrieval_pipeline:
     default:
       chat:
         local: oai-gpt-41-mini
         cloud: oai-gpt-41-mini
-      embedding:
-        local: oai-embedding-small
-        cloud: oai-embedding-small
+      embedding: oai-embedding-small
 
   citation_pipeline:
     default:

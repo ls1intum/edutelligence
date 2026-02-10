@@ -55,12 +55,12 @@ class TutorSuggestionPipeline(
         (
             "default",
             "Default",
-            "Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
+            "Uses a smaller model for faster and cost-efficient responses.",
         ),
         (
             "advanced",
             "Advanced",
-            "Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
+            "Uses a larger model, balancing speed and quality.",
         ),
     ]
     DEPENDENCIES = [

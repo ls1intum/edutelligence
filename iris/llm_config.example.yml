@@ -11,8 +11,8 @@
   type: openai_chat
   model: gpt-4.1
   api_key:
-  cost_per_million_input_token: 0.4
-  cost_per_million_output_token: 1.6
+  cost_per_million_input_token: 2.0
+  cost_per_million_output_token: 8.0
 - id: oai-gpt-41-mini
   type: openai_chat
   model: gpt-4.1-mini
@@ -23,13 +23,13 @@
   type: openai_chat
   model: gpt-4.1-nano
   api_key:
-  cost_per_million_input_token: 0.4
-  cost_per_million_output_token: 1.6
+  cost_per_million_input_token: 0.1
+  cost_per_million_output_token: 0.4
 - id: azure-embedding-large
   type: azure_embedding
   model: text-embedding-3-large
   api_key:
-  api_version: "2023-05-15T00:00:00.000Z"
+  api_version: "2023-05-15"
   azure_deployment: te-3-large
   endpoint: "<your-endpoint>"
   cost_per_million_input_token: 0.13
@@ -37,7 +37,6 @@
   type: openai_embedding
   model: text-embedding-3-small
   api_key:
-  api_version: 2024-02-15-preview
   cost_per_million_input_token: 0.02
 - id: cohere
   type: cohere_azure
