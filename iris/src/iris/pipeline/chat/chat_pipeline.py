@@ -1,9 +1,7 @@
 import os
-from datetime import datetime
-from enum import StrEnum, auto
-from typing import Any, Callable, List, Optional, cast
+from enum import Enum, StrEnum, auto
+from typing import Any, Callable, List, Optional
 
-import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
@@ -12,12 +10,21 @@ from langchain_core.prompts import ChatPromptTemplate
 from iris.common.logging_config import get_logger
 from iris.common.memiris_setup import get_tenant_for_user
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain import ChatPipelineExecutionDTO, ExerciseChatPipelineExecutionDTO
+from iris.domain import (
+    ChatPipelineExecutionDTO,
+    CourseChatPipelineExecutionDTO,
+    ExerciseChatPipelineExecutionDTO,
+)
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
+    LectureChatPipelineExecutionDTO,
+)
+from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
+    TextExerciseChatPipelineExecutionDTO,
+)
 from iris.domain.variant.chat_variant import ChatVariant
-from iris.domain.variant.exercise_chat_variant import ExerciseChatVariant
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.abstract_agent_pipeline import (
@@ -25,35 +32,45 @@ from iris.pipeline.abstract_agent_pipeline import (
     AgentPipelineExecutionState,
 )
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
+from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
+from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
 from iris.pipeline.chat.interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
+from iris.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
+from iris.pipeline.chat.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 from iris.pipeline.shared.citation_pipeline import CitationPipeline, InformationType
-from iris.pipeline.shared.utils import (
-    datetime_to_string,
-    format_custom_instructions,
-)
 from iris.retrieval.faq_retrieval import FaqRetrieval
-from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
-from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
-from iris.tools import (
-    create_tool_faq_content_retrieval,
-    create_tool_file_lookup,
-    create_tool_get_additional_exercise_details,
-    create_tool_get_build_logs_analysis,
-    create_tool_get_feedbacks,
-    create_tool_get_submission_details,
-    create_tool_lecture_content_retrieval,
-    create_tool_repository_files,
-)
 from iris.tracing import observe
-from iris.web.status.status_update import ExerciseChatStatusCallback, StatusCallback
+from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
+
+
+class ToolType(Enum):
+    """
+    Enum that defines all the available tools
+    """
+
+    COURSE_DETAILS = auto()
+    LECTURE_CONTENT = auto()
+    FAQ_CONTENT = auto()
+    EXERCISE_LIST = auto()
+    STUDENT_EXERCISE_METRICS = auto()
+    COMPETENCY_LIST = auto()
+    MEMORY_SEARCH = auto()
+    SUBMISSION_DETAILS = auto()
+    BUILD_LOGS_ANALYSIS = auto()
+    FEEDBACKS = auto()
+    REPOSITORY_FILES = auto()
+    FILE_LOOKUP = auto()
+    SCOPED_LECTURE_ID = auto()
+    ADDITIONAL_EXERCISE_DETAILS = auto()
+    EXERCISE_PROBLEM_STATEMENT = auto()
 
 
 class ChatContext(StrEnum):
@@ -62,11 +79,57 @@ class ChatContext(StrEnum):
     EXERCISE = auto()
     TEXT_EXERCISE = auto()
 
+    @property
+    def available_tools(self) -> list[ToolType]:
+        match self:
+            case ChatContext.COURSE:
+                return [
+                    ToolType.COURSE_DETAILS,
+                    ToolType.LECTURE_CONTENT,
+                    ToolType.FAQ_CONTENT,
+                    ToolType.EXERCISE_LIST,
+                    ToolType.STUDENT_EXERCISE_METRICS,
+                    ToolType.COMPETENCY_LIST,
+                    ToolType.MEMORY_SEARCH,
+                    ToolType.ADDITIONAL_EXERCISE_DETAILS,
+                    ToolType.EXERCISE_PROBLEM_STATEMENT,
+                ]
+            case ChatContext.LECTURE:
+                return [
+                    ToolType.COURSE_DETAILS,
+                    ToolType.LECTURE_CONTENT,
+                    ToolType.FAQ_CONTENT,
+                    ToolType.MEMORY_SEARCH,
+                    ToolType.SCOPED_LECTURE_ID,
+                ]
+            case ChatContext.EXERCISE:
+                return [
+                    ToolType.LECTURE_CONTENT,
+                    ToolType.FAQ_CONTENT,
+                    ToolType.SUBMISSION_DETAILS,
+                    ToolType.BUILD_LOGS_ANALYSIS,
+                    ToolType.FEEDBACKS,
+                    ToolType.REPOSITORY_FILES,
+                    ToolType.FILE_LOOKUP,
+                ]
+            case ChatContext.TEXT_EXERCISE:
+                return [
+                    ToolType.COURSE_DETAILS,
+                    ToolType.LECTURE_CONTENT,
+                    ToolType.FAQ_CONTENT,
+                ]
+
 
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant]):
     """
     Replaces CourseChatPipeline / ExerciseChatPipeline / TextExerciseChatPipeline / LectureChatPipeline
     """
+
+    # Just for now -> See get_tools & build_message
+    exercise_pipeline: ExerciseChatAgentPipeline
+    course_pipeline: CourseChatPipeline
+    text_exercise_pipeline: TextExerciseChatPipeline
+    lecture_pipeline: LectureChatPipeline
 
     # Shared
     context: ChatContext
@@ -92,7 +155,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
         self.context = context
 
-        self.event = None
+        self.event = event  # TODO: Was hat es mit dem Event auf sich ?
+
+        # Just for now -> See get_tools & build_message
+        self.exercise_pipeline = ExerciseChatAgentPipeline()
+        self.course_pipeline = CourseChatPipeline(event=event)
+        self.text_exercise_pipeline = TextExerciseChatPipeline()
+        self.lecture_pipeline = LectureChatPipeline()
 
         # Initialize pipelines & retrievers
         self.session_title_pipeline = SessionTitleGenerationPipeline()
@@ -109,9 +178,28 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         self.jinja_env = Environment(
             loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["j2"])
         )
-        self.system_prompt_template = self.jinja_env.get_template(
-            "exercise_chat_system_prompt.j2"
-        )
+        # Setup system prompt
+        # Just for now
+        match self.context:
+            case ChatContext.COURSE:
+                self.system_prompt_template = self.jinja_env.get_template(
+                    "course_chat_system_prompt.j2"
+                )
+            case ChatContext.LECTURE:
+                self.system_prompt_template = self.jinja_env.get_template(
+                    "lecture_chat_system_prompt.j2"
+                )
+            case ChatContext.EXERCISE:
+                self.system_prompt_template = self.jinja_env.get_template(
+                    "exercise_chat_system_prompt.j2"
+                )
+            case ChatContext.TEXT_EXERCISE:
+                self.system_prompt_template = self.jinja_env.get_template(
+                    "text_exercise_chat_system_prompt.j2"
+                )
+        # self.system_prompt_template = self.jinja_env.get_template(
+        #    "chat_system_prompt.j2" TODO: Prompts überarbeiten
+        # )
         self.guide_prompt_template = None
 
         # Setup context-specific components
@@ -119,7 +207,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             self.suggestion_pipeline = InteractionSuggestionPipeline(
                 variant=self.context
             )
-            self.event = event
 
         elif self.context == ChatContext.EXERCISE:
             self.suggestion_pipeline = InteractionSuggestionPipeline(
@@ -143,7 +230,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             return f"{self.__class__.__name__}()"
 
     @classmethod
-    def get_variants(cls, context: Optional[ChatContext] = None) -> List[ChatVariant]:
+    def get_variants(
+        cls, context: Optional[ChatContext] = None
+    ) -> List[ChatVariant]:  # TODO: Nur 2 Varianten für die Pipeline oder pro Kontext ?
         """
         Get available variants for the chat pipeline.
 
@@ -154,7 +243,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             List[ChatVariant]: List of available variants
         """
-        # For now, if no context specified, default to EXERCISE (backwards compatibility)
+        # For now, if no context specified, default to EXERCISE
         if context is None:
             context = ChatContext.EXERCISE
 
@@ -164,14 +253,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 ChatVariant(
                     variant_id="default",
                     name="Default",
-                    description="Uses a smaller model for faster and cost-efficient course responses.",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
                     agent_model="gpt-4.1-mini",
                     citation_model="gpt-4.1-mini",
                 ),
                 ChatVariant(
                     variant_id="advanced",
                     name="Advanced",
-                    description="Uses a larger chat model for course responses.",
+                    description="Uses a larger chat model, balancing speed and quality.",
                     agent_model="gpt-4.1",
                     citation_model="gpt-4.1-mini",
                 ),
@@ -196,14 +285,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 ChatVariant(
                     variant_id="default",
                     name="Default",
-                    description="Uses a smaller model for faster lecture responses.",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
                     agent_model="gpt-4.1-mini",
-                    citation_model="gpt-4.1-mini",
+                    citation_model="gpt-4.1-nano",
                 ),
                 ChatVariant(
                     variant_id="advanced",
                     name="Advanced",
-                    description="Uses a larger model for better lecture explanations.",
+                    description="Uses a larger chat model, balancing speed and quality.",
                     agent_model="gpt-4.1",
                     citation_model="gpt-4.1-mini",
                 ),
@@ -212,16 +301,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 ChatVariant(
                     variant_id="default",
                     name="Default",
-                    description="Uses a smaller model for faster text exercise responses.",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
                     agent_model="gpt-4.1-mini",
-                    citation_model="gpt-4.1-mini",
                 ),
                 ChatVariant(
                     variant_id="advanced",
                     name="Advanced",
-                    description="Uses a larger model for better text exercise feedback.",
+                    description="Uses a larger chat model, balancing speed and quality.",
                     agent_model="gpt-4.1",
-                    citation_model="gpt-4.1-mini",
                 ),
             ],
         }
@@ -239,7 +326,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         last_message: Optional[PyrisMessage] = next(
             (
                 m
-                for m in reversed(dto.chat_history or [])  # TODO: Check with Phoebe
+                for m in reversed(dto.chat_history or [])
                 if m.sender == IrisMessageRole.USER
             ),
             None,
@@ -262,9 +349,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         """
         if not dto.user:
             raise ValueError("User is required for memiris tenant")
-        return get_tenant_for_user(
-            dto.user.id
-        )  # TODO: Phoebe fragen für TextExercise case
+        return get_tenant_for_user(dto.user.id)
 
     def on_agent_step(
         self,
@@ -280,9 +365,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         """
         # Update progress
         if step.get("intermediate_steps"):
-            state.callback.in_progress(
-                "Thinking ..."
-            )  # TODO: Text_Exercise= Thinking about your question...
+            state.callback.in_progress("Thinking ...")
 
     def post_agent_hook(
         self,
@@ -321,13 +404,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                     if self.context in [ChatContext.COURSE, ChatContext.LECTURE]
                     else None
                 ),
-            )  # TODO: Memiris ?
+            )  # TODO: Memiris: Exercise? Text Exercise?
 
             # Generate and send suggestions separately (async from user's perspective)
             if self.context in [
                 ChatContext.COURSE,
                 ChatContext.EXERCISE,
-            ]:  # TODO: Text_Exercise? Lecture?
+            ]:  # TODO: Suggestions: Text_Exercise? Lecture?
                 self._generate_suggestions(state, result)
 
             return result
@@ -337,11 +420,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             state.callback.error("Error in processing response")
             return state.result
 
-    def get_tools(
+    def get_tools(  # TODO: Überarbeiten
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
     ) -> list[Callable]:
         """
         Create and return tools for the agent.
@@ -352,71 +433,32 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             List of tool functions for the agent.
         """
-        query_text = self.get_text_of_latest_user_message(state)
-        callback = cast(ExerciseChatStatusCallback, state.callback)
-        dto = state.dto
+        if (
+            isinstance(state.dto, ExerciseChatPipelineExecutionDTO)
+            and self.context == ChatContext.EXERCISE
+        ):
+            return self.exercise_pipeline.get_tools(state)
+        elif (
+            isinstance(state.dto, TextExerciseChatPipelineExecutionDTO)
+            and self.context == ChatContext.TEXT_EXERCISE
+        ):
+            return self.text_exercise_pipeline.get_tools(state)
+        elif (
+            isinstance(state.dto, LectureChatPipelineExecutionDTO)
+            and self.context == ChatContext.LECTURE
+        ):
+            return self.lecture_pipeline.get_tools(state)
+        elif (
+            isinstance(state.dto, CourseChatPipelineExecutionDTO)
+            and self.context == ChatContext.COURSE
+        ):
+            return self.course_pipeline.get_tools(state)
+        else:
+            return []
 
-        # Initialize storage for shared data between tools
-        if not hasattr(state, "lecture_content_storage"):
-            setattr(state, "lecture_content_storage", {})
-        if not hasattr(state, "faq_storage"):
-            setattr(state, "faq_storage", {})
-
-        lecture_content_storage = getattr(state, "lecture_content_storage")
-        faq_storage = getattr(state, "faq_storage")
-
-        # Build tool list based on available data and permissions
-        tool_list: list[Callable] = [
-            create_tool_get_submission_details(dto.submission, callback),
-            create_tool_get_additional_exercise_details(dto.exercise, callback),
-            create_tool_get_build_logs_analysis(dto.submission, callback),
-            create_tool_get_feedbacks(dto.submission, callback),
-            create_tool_repository_files(
-                dto.submission.repository if dto.submission else None, callback
-            ),
-            create_tool_file_lookup(
-                dto.submission.repository if dto.submission else None, callback
-            ),
-        ]
-
-        # Add lecture content retrieval if available
-        if should_allow_lecture_tool(state.db, dto.course.id):
-            lecture_retriever = LectureRetrieval(state.db.client)
-            tool_list.append(
-                create_tool_lecture_content_retrieval(
-                    lecture_retriever,
-                    dto.course.id,
-                    dto.settings.artemis_base_url if dto.settings else "",
-                    callback,
-                    query_text,
-                    state.message_history,
-                    lecture_content_storage,
-                )
-            )
-
-        # Add FAQ retrieval if available
-        if should_allow_faq_tool(state.db, dto.course.id):
-            faq_retriever = FaqRetrieval(state.db.client)
-            tool_list.append(
-                create_tool_faq_content_retrieval(
-                    faq_retriever,
-                    dto.course.id,
-                    dto.course.name,
-                    dto.settings.artemis_base_url if dto.settings else "",
-                    callback,
-                    query_text,
-                    state.message_history,
-                    faq_storage,
-                )
-            )
-
-        return tool_list
-
-    def build_system_message(
+    def build_system_message(  # TODO: Überarbeiten
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
     ) -> str:
         """
         Build the system message/prompt for the agent.
@@ -427,40 +469,28 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             The system prompt string.
         """
-        dto = state.dto
-        query = self.get_latest_user_message(state)
-
-        # Extract user language with fallback
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
-
-        problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
-        exercise_title: str = dto.exercise.name if dto.exercise else ""
-        programming_language = (
-            dto.exercise.programming_language.lower()
-            if dto.exercise and dto.exercise.programming_language
-            else ""
-        )
-
-        custom_instructions = format_custom_instructions(
-            custom_instructions=dto.custom_instructions or ""
-        )
-
-        # Build system prompt using Jinja2 template
-        template_context = {
-            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
-            "user_language": user_language,
-            "exercise_title": exercise_title,
-            "problem_statement": problem_statement,
-            "programming_language": programming_language,
-            "event": self.event,
-            "has_query": query is not None,
-            "has_chat_history": len(state.message_history) > 0,
-            "custom_instructions": custom_instructions,
-        }
-
-        return self.system_prompt_template.render(template_context)
+        if (
+            isinstance(state.dto, ExerciseChatPipelineExecutionDTO)
+            and self.context == ChatContext.EXERCISE
+        ):
+            return self.exercise_pipeline.build_system_message(state)
+        elif (
+            isinstance(state.dto, TextExerciseChatPipelineExecutionDTO)
+            and self.context == ChatContext.TEXT_EXERCISE
+        ):
+            return self.text_exercise_pipeline.build_system_message(state)
+        elif (
+            isinstance(state.dto, LectureChatPipelineExecutionDTO)
+            and self.context == ChatContext.LECTURE
+        ):
+            return self.lecture_pipeline.build_system_message(state)
+        elif (
+            isinstance(state.dto, CourseChatPipelineExecutionDTO)
+            and self.context == ChatContext.COURSE
+        ):
+            return self.course_pipeline.build_system_message(state)
+        else:
+            return []
 
     def is_memiris_memory_creation_enabled(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant]
@@ -482,8 +512,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             case ChatContext.EXERCISE:
                 return False
             case ChatContext.TEXT_EXERCISE:
-                return False
-            case _:
                 return False
 
     def _add_citations(
@@ -580,7 +608,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         ],
     ) -> str:
         """
-        Refine the agent response using the guide prompt.
+        Refine the agent response using the guide prompt. This is only available for programming exercises.
 
         Args:
             state: The current pipeline execution state.
@@ -589,6 +617,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             The refined response.
         """
         try:
+            # Don't do anything if not programming exercise
+            if self.context is not ChatContext.EXERCISE:
+                return state.result
+
             state.callback.in_progress("Refining response ...")
 
             problem_statement = (
@@ -671,13 +703,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             logger.error("Error generating suggestions", exc_info=e)
             state.callback.error("Generating interaction suggestions failed.")
 
-    @observe(name="Exercise Chat Agent Pipeline")
+    @observe(name="Chat Pipeline")
     def __call__(
         self,
         dto: ChatPipelineExecutionDTO,
         variant: ChatVariant,
         callback: StatusCallback,
-        event: str | None,
+        event: str | None,  # TODO: Nötig?
     ):
         """
         Execute the pipeline with the provided arguments.
@@ -688,15 +720,27 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             callback: Status callback for progress updates.
         """
         try:
-            logger.info("Running exercise chat pipeline...")
+            logger.info("Running chat pipeline...")
 
-            self.event = event
+            if self.context == ChatContext.EXERCISE and event:
+                self.event = event
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
 
         except Exception as e:
-            logger.error("Error in exercise chat pipeline", exc_info=e)
-            callback.error(
-                "An error occurred while running the exercise chat pipeline."
+            logger.error(
+                "An error occurred while running the chat pipeline.", exc_info=e
             )
+            callback.error(
+                "An error occurred while running the chat pipeline.",
+                tokens=(
+                    []
+                    if self.context in [ChatContext.COURSE, ChatContext.LECTURE]
+                    else None
+                ),
+            )  # TODO: Tokens?
+
+    # TODO: Folgende Methoden in TextExercisePipeline anschauen
+    # get_recent_history_from_dto()
+    # get_text_of_latest_user_message()

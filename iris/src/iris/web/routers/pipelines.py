@@ -28,12 +28,7 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
-from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
-from iris.pipeline.chat.exercise_chat_agent_pipeline import (
-    ExerciseChatAgentPipeline,
-)
-from iris.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
-from iris.pipeline.chat.text_exercise_chat_pipeline import TextExerciseChatPipeline
+from iris.pipeline.chat.chat_pipeline import ChatContext, ChatPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
@@ -73,14 +68,14 @@ def run_exercise_chat_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = ExerciseChatAgentPipeline()
+        pipeline = ChatPipeline(context=ChatContext.EXERCISE)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
-        for variant in ExerciseChatAgentPipeline.get_variants():
+        for variant in ChatPipeline.get_variants(ChatContext.EXERCISE):
             if variant.id == variant_id:
                 break
         else:
@@ -103,7 +98,8 @@ def run_exercise_chat_pipeline(
         description="Exercise Chat Pipeline Execution DTO"
     ),
 ):
-    variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
+    # variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
+    variant = validate_pipeline_variant(dto.settings, ChatPipeline)
     request_id = get_request_id()
     thread = Thread(
         target=run_exercise_chat_pipeline_worker,
@@ -120,12 +116,12 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in CourseChatPipeline.get_variants():
+        for variant in ChatPipeline.get_variants():
             if variant.id == variant_id:
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(event=event)
+        pipeline = ChatPipeline(context=ChatContext.COURSE, event=event)
     except Exception as e:
         logger.error("Error preparing course chat pipeline", exc_info=e)
         capture_exception(e)
@@ -149,7 +145,7 @@ def run_course_chat_pipeline(
         description="Course Chat Pipeline Execution DTO"
     ),
 ):
-    variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
+    variant = validate_pipeline_variant(dto.settings, ChatPipeline)
     request_id = get_request_id()
     thread = Thread(
         target=run_course_chat_pipeline_worker,
@@ -166,12 +162,12 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in TextExerciseChatPipeline.get_variants():
+        for variant in ChatPipeline.get_variants():
             if variant.id == variant_id:
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TextExerciseChatPipeline()
+        pipeline = ChatPipeline(context=ChatContext.TEXT_EXERCISE)
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline", exc_info=e)
         capture_exception(e)
@@ -192,12 +188,12 @@ def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in LectureChatPipeline.get_variants():
+        for variant in ChatPipeline.get_variants():
             if variant.id == variant_id:
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = LectureChatPipeline()
+        pipeline = ChatPipeline(context=ChatContext.LECTURE)
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline", exc_info=e)
         capture_exception(e)
@@ -216,7 +212,7 @@ def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
     dependencies=[Depends(TokenValidator())],
 )
 def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
-    variant = validate_pipeline_variant(dto.settings, TextExerciseChatPipeline)
+    variant = validate_pipeline_variant(dto.settings, ChatPipeline)
     request_id = get_request_id()
     thread = Thread(
         target=run_text_exercise_chat_pipeline_worker,
@@ -231,7 +227,7 @@ def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
     dependencies=[Depends(TokenValidator())],
 )
 def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
-    variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
+    variant = validate_pipeline_variant(dto.settings, ChatPipeline)
     request_id = get_request_id()
     thread = Thread(
         target=run_lecture_chat_pipeline_worker,
@@ -426,29 +422,25 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
 
     match feature:
         case "CHAT":
+            # ExerciseChatAgentPipeline.get_variants(), available_llms
             return get_available_variants(
-                ExerciseChatAgentPipeline.get_variants(), available_llms
+                ChatPipeline.get_variants(ChatContext.EXERCISE), available_llms
             )
         case "PROGRAMMING_EXERCISE_CHAT":
+            # ExerciseChatAgentPipeline.get_variants(), available_llms
             return get_available_variants(
-                ExerciseChatAgentPipeline.get_variants(), available_llms
+                ChatPipeline.get_variants(ChatContext.EXERCISE), available_llms
             )
         case "TEXT_EXERCISE_CHAT":
-            return get_available_variants(
-                TextExerciseChatPipeline.get_variants(), available_llms
-            )
+            return get_available_variants(ChatPipeline.get_variants(), available_llms)
         case "COURSE_CHAT":
-            return get_available_variants(
-                CourseChatPipeline.get_variants(), available_llms
-            )
+            return get_available_variants(ChatPipeline.get_variants(), available_llms)
         case "COMPETENCY_GENERATION":
             return get_available_variants(
                 CompetencyExtractionPipeline.get_variants(), available_llms
             )
         case "LECTURE_CHAT":
-            return get_available_variants(
-                LectureChatPipeline.get_variants(), available_llms
-            )
+            return get_available_variants(ChatPipeline.get_variants(), available_llms)
         case "INCONSISTENCY_CHECK":
             return get_available_variants(
                 InconsistencyCheckPipeline.get_variants(), available_llms
