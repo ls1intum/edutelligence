@@ -42,7 +42,6 @@
   type: openai_embedding
   model: text-embedding-3-small
   api_key:
-  api_version: 2024-02-15-preview
   cost_per_million_input_token: 0.02
 
 # ── Reranker ─────────────────────────────────────────────────────────────────
@@ -52,6 +51,8 @@
   api_key:
   endpoint: "your_cohere-endpoint"
   cost_per_1k_requests: 2
+
+# ── Ollama models (local) ───────────────────────────────────────────────────
 - id: gemma3
   type: ollama
   model: gemma3:27b

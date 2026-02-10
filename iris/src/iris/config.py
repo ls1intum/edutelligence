@@ -75,7 +75,9 @@ class LangfuseSettings(BaseModel):
         return self
 
 
-LlmRoleConfiguration = dict[str, dict[str, str]]  # role -> {local/cloud -> model_id}
+LlmRoleConfiguration = dict[
+    str, dict[str, str] | str
+]  # role -> {local/cloud -> model_id} or role -> model_id (for roles like embedding/reranker)
 LlmVariantConfiguration = dict[str, LlmRoleConfiguration]  # variant_id -> role config
 
 

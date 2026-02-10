@@ -41,7 +41,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
         pipeline_id = "lecture_transcriptions_retrieval_pipeline"
         chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         embedding_model = resolve_model(
-            pipeline_id, "default", "embedding", local=local
+            pipeline_id, "default", "embedding", local=False
         )
         request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
@@ -52,7 +52,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_transcription_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
+        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
 
