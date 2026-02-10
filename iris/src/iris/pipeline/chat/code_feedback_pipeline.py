@@ -67,7 +67,7 @@ class CodeFeedbackPipeline(SubPipeline):
             if variant == "advanced":
                 model = "gpt-oss:120b"
             else:
-                model = "llama3.3:latest"
+                model = "gpt-oss:120b"
         else:
             if variant == "advanced":
                 model = "gpt-4.1"

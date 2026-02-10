@@ -119,7 +119,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 description="Default lecture ingestion update variant using efficient models "
                 "for processing and embeddings.",
                 cloud_chat_model="gpt-4.1-mini",
-                local_chat_model="llama3.3:latest",
+                local_chat_model="gpt-oss:120b",
                 embedding_model="text-embedding-3-small",
             ),
             LectureIngestionUpdateVariant(
