@@ -66,7 +66,7 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         # Set the langchain chat model
         # Use larger model for better quality suggestions
-        model = "llama3.3:latest" if local else "gpt-4.1-nano"
+        model = "gpt-oss:120b" if local else "gpt-4.1-nano"
 
         request_handler = ModelVersionRequestHandler(version=model)
 
@@ -134,12 +134,6 @@ class InteractionSuggestionPipeline(SubPipeline):
         try:
             logger.info("Running interaction suggestion pipeline...")
 
-            # Skip suggestions for local models for this PR
-            if self.local:
-                logger.info("Skipping interaction suggestions for local model")
-                self.tokens = None
-                return []
-
             history: List[PyrisMessage] = dto.chat_history or []
 
             # Add the conversation to the prompt
@@ -163,7 +157,7 @@ class InteractionSuggestionPipeline(SubPipeline):
                             + language_instruction,
                         ),
                         *chat_history_messages,
-                        ("system", chat_begin_prompt),
+                        ("human", chat_begin_prompt),
                     ]
                 )
 

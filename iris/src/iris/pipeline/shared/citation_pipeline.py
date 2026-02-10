@@ -54,7 +54,7 @@ class CitationPipeline(SubPipeline):
 
         # Default variant
         default_request_handler = ModelVersionRequestHandler(
-            version="llama3.3:latest" if local else "gpt-4.1-nano"
+            version="gpt-oss:120b" if local else "gpt-4.1-nano"
         )
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
@@ -65,7 +65,7 @@ class CitationPipeline(SubPipeline):
 
         # Advanced variant
         advanced_request_handler = ModelVersionRequestHandler(
-            version="llama3.3:latest" if local else "gpt-4.1-mini"
+            version="gpt-oss:120b" if local else "gpt-4.1-mini"
         )
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,

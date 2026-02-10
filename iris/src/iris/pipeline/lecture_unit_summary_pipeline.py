@@ -41,7 +41,7 @@ class LectureUnitSummaryPipeline(SubPipeline):
         self.lecture_unit_segment_summaries = lecture_unit_segment_summaries
 
         request_handler = ModelVersionRequestHandler(
-            version="llama3.3:latest" if local else "gpt-4.1-mini"
+            version="gpt-oss:120b" if local else "gpt-4.1-mini"
         )
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
