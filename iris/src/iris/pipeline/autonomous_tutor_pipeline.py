@@ -287,7 +287,7 @@ class AutonomousTutorPipeline(
             AutonomousTutorVariant(
                 variant_id="default",
                 name="Default",
-                description="Default autonomous tutor variant using the OpenAI GPT-OSS latest model.",
+                description="Default autonomous tutor variant using the OpenAI GPT-OSS 20B model.",
                 agent_model="gpt-oss:latest",
             ),
         ]
