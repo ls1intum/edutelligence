@@ -629,9 +629,9 @@ def get_evaluation_files(data_dir: str) -> tuple[list[str], list[str]]:
 
     files = os.listdir(data_dir)
     for file in files:
-        if file.startswith("evaluation_config_"):
+        if file.startswith("evaluation_config_") and file.endswith(".json"):
             evaluation_config_files.append(os.path.join(data_dir, file))
-        elif file.startswith("evaluation_progress_"):
+        elif file.startswith("evaluation_progress_") and file.endswith(".json"):
             evaluation_progress_files.append(os.path.join(data_dir, file))
 
     return evaluation_config_files, evaluation_progress_files
@@ -679,6 +679,12 @@ def create_common_config(evaluation_config_files: list[str]) -> dict:
         feedback_types = set(mappings.values())
         intersection = pseudonyms.intersection(feedback_types)
         iterations += 1
+
+    if len(intersection) > 0:
+        raise ValueError(
+            f"Could not resolve all transitive mappings after {max_iterations} iterations. "
+            f"Unresolved pseudonyms: {intersection}"
+        )
 
     for config_file in evaluation_config_files:
         with open(config_file, "r") as file:
@@ -731,20 +737,21 @@ def resolve_feedback_types_and_metric_titles(
         with open(progress_file, "r") as file:
             progress_data = json.load(file)
             # De-pseudonymize feedbacks in progress file
-            for _, submission in progress_data.get("selected_values", {}).items():
-                for submission_id, feedback in submission.items():
+            for exercise_id, submissions_data in progress_data.get("selected_values", {}).items():
+                resolved_submissions = {}
+                for submission_id, feedback_types in submissions_data.items():
                     resolved_feedback = {}
-                    for feedback_id, ratings in feedback.items():
-                        if feedback_id not in pseudonym_to_feedback_type:
-                            raise ValueError(f"Pseudonym {feedback_id} not found in mappings.")
+                    for pseudonym, ratings in feedback_types.items():
+                        if pseudonym not in pseudonym_to_feedback_type:
+                            raise ValueError(f"Pseudonym {pseudonym} not found in mappings.")
                         resolved_ratings = {}
                         for metric_id, score in ratings.items():
                             if metric_id not in metric_ids_to_titles:
                                 raise ValueError(f"Metric ID {metric_id} not found in metrics.")
-                            title = metric_ids_to_titles[metric_id]
-                            resolved_ratings[title] = score
-                        resolved_feedback[pseudonym_to_feedback_type[feedback_id]] = resolved_ratings
-                    submission[submission_id] = resolved_feedback
+                            resolved_ratings[metric_ids_to_titles[metric_id]] = score
+                        resolved_feedback[pseudonym_to_feedback_type[pseudonym]] = resolved_ratings
+                    resolved_submissions[submission_id] = resolved_feedback
+                progress_data["selected_values"][exercise_id] = resolved_submissions
         progress[progress_file] = progress_data
     return progress
 
@@ -798,8 +805,12 @@ def load_evaluation_progress(
     df = pd.DataFrame.from_records(records)
     if df.empty:
         return pd.DataFrame({
-            'exercise_id': pd.Series(dtype='int64'),
-            'submission_id': pd.Series(dtype='int64'),
+            "expert_id": pd.Series(dtype="object"),
+            "exercise_id": pd.Series(dtype="int64"),
+            "submission_id": pd.Series(dtype="int64"),
+            "feedback_type": pd.Series(dtype="object"),
+            "metric": pd.Series(dtype="object"),
+            "score": pd.Series(dtype="float64"),
         })
     return df.astype({
             'exercise_id': 'int64',
