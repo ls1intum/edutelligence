@@ -3,7 +3,6 @@ import zipfile
 import os
 import re
 from typing import Dict, List, Optional, Union
-import os.path
 import uuid
 import datetime
 
@@ -631,9 +630,9 @@ def get_evaluation_files(data_dir: str) -> tuple[list[str], list[str]]:
     files = os.listdir(data_dir)
     for file in files:
         if file.startswith("evaluation_config_"):
-            evaluation_config_files.append(f"{data_dir}/{file}")
+            evaluation_config_files.append(os.path.join(data_dir, file))
         elif file.startswith("evaluation_progress_"):
-            evaluation_progress_files.append(f"{data_dir}/{file}")
+            evaluation_progress_files.append(os.path.join(data_dir, file))
 
     return evaluation_config_files, evaluation_progress_files
 
@@ -713,13 +712,19 @@ def create_common_config(evaluation_config_files: list[str]) -> dict:
     return common_evaluation_config
 
 
-def resolve_feedback_types_and_metric_titles(evaluation_progress_files: list[str], metric_ids_to_titles: dict[str, str], pseudonym_to_feedback_type: dict[str, str]) -> dict[str, dict]:
+def resolve_feedback_types_and_metric_titles(
+    evaluation_progress_files: list[str],
+    metric_ids_to_titles: dict[str, str],
+    pseudonym_to_feedback_type: dict[str, str],
+) -> dict[str, dict]:
     """
     Resolves feedback types and metric titles in evaluation progress files.
     Args:
         evaluation_progress_files (list[str]): List of paths to evaluation progress files.
         metric_ids_to_titles (dict[str, str]): Mapping from metric IDs to their titles.
         pseudonym_to_feedback_type (dict[str, str]): Mapping from pseudonyms to feedback types.
+    Returns:
+        dict[str, dict]: Mapping from progress file paths to resolved progress data.
     """
     progress = {}
     for progress_file in evaluation_progress_files:
@@ -744,12 +749,16 @@ def resolve_feedback_types_and_metric_titles(evaluation_progress_files: list[str
     return progress
 
 
-def load_evaluation_progress(evaluation_progress_path: str, llm_evaluation_progress_path: str | None = None) -> pd.DataFrame:
+def load_evaluation_progress(
+    evaluation_progress_path: str, llm_evaluation_progress_path: Optional[str] = None
+) -> pd.DataFrame:
     """
     Loads evaluation progress from expert and optional LLM evaluation progress files into a DataFrame.
     Args:
         evaluation_progress_path (str): The directory containing expert evaluation progress files.
-        llm_evaluation_progress_path (str | None): The path to the LLM evaluation progress file, if available.
+        llm_evaluation_progress_path (Optional[str]): The path to the LLM evaluation progress file, if available.
+    Returns:
+        pd.DataFrame: A DataFrame containing all evaluation progress records.
     """
     # Load expert evaluation progress files
     evaluations = {}
