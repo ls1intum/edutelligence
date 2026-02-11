@@ -1,4 +1,3 @@
-import concurrent.futures
 from enum import Enum
 from typing import List
 
@@ -53,7 +52,7 @@ from iris.retrieval.lecture.lecture_transcription_retrieval import (
 from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -337,7 +336,7 @@ class LectureRetrieval(SubPipeline):
         Run the rewrite tasks in parallel.
         """
         if problem_statement:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with TracedThreadPoolExecutor() as executor:
                 # Schedule the rewrite tasks to run in parallel
                 rewritten_lecture_pages_query_future = executor.submit(
                     self.rewrite_student_query_with_exercise_context,
@@ -396,7 +395,7 @@ class LectureRetrieval(SubPipeline):
                     hypothetical_lecture_transcriptions_answer_query_future.result()
                 )
         else:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with TracedThreadPoolExecutor() as executor:
                 # Schedule the rewrite tasks to run in parallel
                 rewritten_lecture_pages_query_future = executor.submit(
                     self.rewrite_student_query,
@@ -682,7 +681,7 @@ class LectureRetrieval(SubPipeline):
         """
         Call the different pipelines for lecture content retrieval.
         """
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             lecture_unit_segments_future = executor.submit(
                 self.lecture_unit_segment_pipeline,
                 student_query,
