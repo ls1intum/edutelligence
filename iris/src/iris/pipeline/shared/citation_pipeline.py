@@ -1,8 +1,8 @@
-import concurrent.futures
-import os
 import json
+import os
 import re
 import threading
+from concurrent.futures import as_completed
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
@@ -19,7 +19,7 @@ from iris.llm import (
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.faq_schema import FaqSchema
 
 logger = get_logger(__name__)
@@ -309,7 +309,7 @@ class CitationPipeline(SubPipeline):
         if not valid_numbers:
             return {num: ("", "") for num in unique_numbers}
 
-        with concurrent.futures.ThreadPoolExecutor(
+        with TracedThreadPoolExecutor(
             max_workers=len(valid_numbers) + 1
         ) as executor:
             keyword_future = executor.submit(
@@ -328,7 +328,7 @@ class CitationPipeline(SubPipeline):
             keywords = keyword_future.result()
             summaries = {
                 summary_futures[f]: f.result()
-                for f in concurrent.futures.as_completed(summary_futures)
+                for f in as_completed(summary_futures)
             }
         result: dict[int, tuple[str, str]] = {}
         for num in unique_numbers:
