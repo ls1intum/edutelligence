@@ -1,4 +1,3 @@
-import concurrent.futures
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -18,8 +17,7 @@ from iris.llm import (
     LlmRequestHandler,
 )
 from iris.llm.llm_configuration import resolve_model
-from iris.tracing import observe
-
+from iris.tracing import TracedThreadPoolExecutor, observe
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -224,7 +222,7 @@ class BaseRetrieval(SubPipeline, ABC):
         """
         Run the rewrite tasks in parallel.
         """
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             rewritten_query_future = executor.submit(
                 self.rewrite_student_query,
                 chat_history,
@@ -249,7 +247,7 @@ class BaseRetrieval(SubPipeline, ABC):
             rewritten_query = rewritten_query_future.result()
             hypothetical_answer_query = hypothetical_answer_query_future.result()
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             response_future = executor.submit(
                 self.search_in_db,
                 query=rewritten_query,
