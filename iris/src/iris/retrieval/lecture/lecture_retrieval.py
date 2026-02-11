@@ -611,7 +611,7 @@ class LectureRetrieval(SubPipeline):
 
         if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
             write_hypothetical_answer_prompt = (
-                write_hypothetical_lecture_pages_answer_prompt
+                write_hypothetical_lecture_transcriptions_answer_prompt
             )
         else:
             write_hypothetical_answer_prompt = (
