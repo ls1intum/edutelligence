@@ -618,10 +618,11 @@ def get_evaluation_files(data_dir: str) -> tuple[list[str], list[str]]:
     for file in files:
         if file.endswith(".zip"):
             with zipfile.ZipFile(os.path.join(data_dir, file), "r") as zip_ref:
+                base_path = os.path.abspath(data_dir) + os.sep
                 for member in zip_ref.infolist():
                     # Securely extract to prevent ZipSlip (path traversal)
                     target_path = os.path.abspath(os.path.join(data_dir, member.filename))
-                    if target_path.startswith(os.path.abspath(data_dir)):
+                    if target_path.startswith(base_path):
                         zip_ref.extract(member, data_dir)
 
     evaluation_config_files = []
@@ -785,7 +786,13 @@ def load_evaluation_progress(evaluation_progress_path: str, llm_evaluation_progr
                         }
                         records.append(record)
 
-    return pd.DataFrame.from_records(records).astype({
+    df = pd.DataFrame.from_records(records)
+    if df.empty:
+        return pd.DataFrame({
+            'exercise_id': pd.Series(dtype='int64'),
+            'submission_id': pd.Series(dtype='int64'),
+        })
+    return df.astype({
             'exercise_id': 'int64',
             'submission_id': 'int64',
         })
