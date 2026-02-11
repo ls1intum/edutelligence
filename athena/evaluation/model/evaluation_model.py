@@ -1,5 +1,3 @@
-from typing import List
-
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
 
@@ -22,7 +20,7 @@ class MetricEvaluations(BaseModel):
 
 
 class MetricEvaluationRequest(BaseModel):
-    prompt: List[BaseMessage] = Field(
+    prompt: list[BaseMessage] = Field(
         ..., description="The prompt to evaluate the metrics."
     )
     exercise_id: int = Field(..., description="The ID of the exercise.")

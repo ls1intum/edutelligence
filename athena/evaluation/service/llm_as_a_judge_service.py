@@ -86,10 +86,16 @@ def process_feedback_evaluations(
 
     for request in progress_bar:
         evaluation_progress["has_started_evaluating"] = True
-        with get_openai_callback() as cb:
-            metric_evaluations = model.with_structured_output(MetricEvaluations).invoke(
-                request.prompt, max_tokens=100, temperature=0
-            )
+        try:
+            with get_openai_callback() as cb:
+                metric_evaluations = model.with_structured_output(MetricEvaluations).invoke(
+                    request.prompt, max_tokens=100, temperature=0
+                )
+        except Exception as e:
+            print(f"Error processing request {request.exercise_id}/{request.submission_id}: {e}")
+            evaluation_progress["is_finished_evaluating"] = False
+            continue
+        
         total_cost += cb.total_cost
         progress_bar.set_postfix({"Current Cost Estimate (USD)": f"{total_cost:.6f}"})
 
@@ -144,6 +150,6 @@ def process_feedback_evaluations(
 
     print("\nSummary of Evaluation:")
     print(f"Total evaluated exercises: {len(selected_values)}")
-    print(f"Total evaluated submissions: {len([sub for ex in selected_values.values() for sub in ex.values()])}")
-    print(f"Total evaluated feedbacks: {len([fb for ex in selected_values.values() for sub in ex.values() for fb in sub.values()])}")
+    print(f"Total evaluated submissions: {sum(len(ex) for ex in selected_values.values())}")
+    print(f"Total evaluated feedbacks: {sum(len(sub) for ex in selected_values.values() for sub in ex.values())}")
     print(f"Total cost: ${total_cost:.6f} USD")

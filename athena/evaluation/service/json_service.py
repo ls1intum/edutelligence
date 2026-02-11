@@ -648,9 +648,12 @@ def create_common_config(evaluation_config_files: list[str]) -> dict:
     expert_ids = set()
     mappings = dict()
 
+    parsed_configs = []
+
     for config_file in evaluation_config_files:
         with open(config_file, "r") as file:
             config_data = json.load(file)
+            parsed_configs.append(config_data)
             # Collect metrics
             for metric in config_data.get("metrics", []):
                 metric["title"] = ''.join(c for c in metric.get("title", "") if c.isalnum() or c.isspace()).strip()
@@ -668,7 +671,7 @@ def create_common_config(evaluation_config_files: list[str]) -> dict:
     max_iterations = len(mappings)
     iterations = 0
     while len(intersection) > 0 and iterations < max_iterations:
-        for key, value in mappings.items():
+        for key, value in list(mappings.items()):
             if value in intersection:
                 mappings[key] = mappings[value]
         # Prevent infinite loops from self-referential or cyclic mappings
@@ -686,22 +689,20 @@ def create_common_config(evaluation_config_files: list[str]) -> dict:
             f"Unresolved pseudonyms: {intersection}"
         )
 
-    for config_file in evaluation_config_files:
-        with open(config_file, "r") as file:
-            config_data = json.load(file)
-            # Collect exercises
-            for exercise in config_data.get("exercises", []):
-                for submission in exercise.get("submissions", []):
-                    feedbacks = {}
-                    # De-pseudonymize feedbacks
-                    for pseudonym, feedback in submission.get("feedbacks", {}).items():
-                        if pseudonym not in mappings:
-                            raise ValueError(f"Pseudonym {pseudonym} not found in mappings.")
-                        feedbacks[mappings[pseudonym]] = feedback
-                    submission["feedbacks"] = feedbacks
-                exercise["submissions"].sort(key=lambda x: x["id"])
-                if exercise not in exercises:
-                    exercises.append(exercise)
+    for config_data in parsed_configs:
+        # Collect exercises
+        for exercise in config_data.get("exercises", []):
+            for submission in exercise.get("submissions", []):
+                feedbacks = {}
+                # De-pseudonymize feedbacks
+                for pseudonym, feedback in submission.get("feedbacks", {}).items():
+                    if pseudonym not in mappings:
+                        raise ValueError(f"Pseudonym {pseudonym} not found in mappings.")
+                    feedbacks[mappings[pseudonym]] = feedback
+                submission["feedbacks"] = feedbacks
+            exercise["submissions"].sort(key=lambda x: x["id"])
+            if exercise not in exercises:
+                exercises.append(exercise)
 
     common_evaluation_config = {
         "type": "evaluation_config",
@@ -801,6 +802,9 @@ def load_evaluation_progress(
                             "score": score,
                         }
                         records.append(record)
+    
+    if not records:
+        raise ValueError("No valid evaluation progress records found.")
 
     df = pd.DataFrame.from_records(records)
     if df.empty:
@@ -842,5 +846,8 @@ def load_common_evaluation_config(evaluation_config_path: str) -> pd.DataFrame:
                         'feedback': raw_feedback,
                     }
                     records.append(record)
+
+        if not records:
+            raise ValueError("No valid evaluation configuration records found.")
 
         return pd.DataFrame.from_records(records)
