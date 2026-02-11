@@ -18,9 +18,10 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 )
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
@@ -54,15 +55,21 @@ class TranscriptionIngestionPipeline(SubPipeline):
         client: WeaviateClient,
         dto: Optional[IngestionPipelineExecutionDto],
         callback: IngestionStatusCallback,
+        local: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(implementation_id="transcription_ingestion_pipeline")
         self.client = client
         self.dto = dto
         self.callback = callback
         self.collection = init_lecture_transcription_schema(client)
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        pipeline_id = "transcription_ingestion_pipeline"
+        embedding_model = resolve_model(
+            pipeline_id, "default", "embedding", local=local
+        )
+        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
 
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

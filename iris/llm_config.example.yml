@@ -1,61 +1,74 @@
-- api_key:
+- id: azure-gpt-41-mini
+  type: azure_chat
+  model: gpt-4.1-mini
+  api_key:
   api_version: 2024-05-01-preview
   azure_deployment: gpt-41-mini
-  description: GPT 4.1 Mini on Azure
   endpoint: "<your-endpoint>"
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
-  id: azure-gpt-41-mini
-  model: gpt-4.1-mini
-  name: GPT 4.1 Mini
-  type: azure_chat
-- api_key:
-  description: GPT 4.1
-  cost_per_million_input_token: 0.4
-  cost_per_million_output_token: 1.6
-  id: oai-gpt-41
+- id: oai-gpt-41
+  type: openai_chat
   model: gpt-4.1
-  name: GPT 4.1
+  api_key:
+  cost_per_million_input_token: 2.0
+  cost_per_million_output_token: 8.0
+- id: oai-gpt-41-mini
   type: openai_chat
-- api_key:
-  description: GPT 4.1 Mini
-  cost_per_million_input_token: 0.4
-  cost_per_million_output_token: 1.6
-  id: oai-gpt-41-mini
   model: gpt-4.1-mini
-  name: GPT 4.1 Mini
-  type: openai_chat
-- api_key:
-  description: GPT 4.1 Nano
+  api_key:
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
-  id: oai-gpt-41-nano
-  model: gpt-4.1-nano
-  name: GPT 4.1 Nano
+- id: oai-gpt-41-nano
   type: openai_chat
-- api_key:
-  api_version: "2023-05-15T00:00:00.000Z"
+  model: gpt-4.1-nano
+  api_key:
+  cost_per_million_input_token: 0.1
+  cost_per_million_output_token: 0.4
+- id: azure-embedding-large
+  type: azure_embedding
+  model: text-embedding-3-large
+  api_key:
+  api_version: "2023-05-15"
   azure_deployment: te-3-large
-  description: Embedding Large 8k Azure
   endpoint: "<your-endpoint>"
   cost_per_million_input_token: 0.13
-  id: azure-embedding-large
-  model: text-embedding-3-large
-  name: Embedding Large
-  type: azure_embedding
-- api_key:
-  api_version: 2024-02-15-preview
-  description: Embedding Small 8k
-  cost_per_million_input_token: 0.02
-  id: oai-embedding-small
-  model: text-embedding-3-small
-  name: Embedding Small
+- id: oai-embedding-small
   type: openai_embedding
-- api_key:
-  description: Cohere V2 client
-  endpoint: "your_cohere-endpoint"
-  model: "rerank-multilingual-v3.5"
-  cost_per_1k_requests: 2
-  id: cohere
-  name: Cohere Client V2
+  model: text-embedding-3-small
+  api_key:
+  cost_per_million_input_token: 0.02
+- id: cohere
   type: cohere_azure
+  model: "rerank-multilingual-v3.5"
+  api_key:
+  endpoint: "your_cohere-endpoint"
+  cost_per_1k_requests: 2
+- id: gemma3
+  type: ollama
+  model: gemma3:27b
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: gpt-oss
+  type: ollama
+  model: gpt-oss:120b
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: mxbai-embed-large
+  type: ollama
+  model: mxbai-embed-large:latest
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+- id: nomic-embed-text
+  type: ollama
+  model: nomic-embed-text:latest
+  host: https://gpu.aet.cit.tum.de/ollama
+  api_key: ""
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0

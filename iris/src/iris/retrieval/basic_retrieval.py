@@ -14,10 +14,10 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
+from iris.llm.llm_configuration import resolve_model
 from iris.tracing import TracedThreadPoolExecutor, observe
-
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -84,14 +84,17 @@ class BaseRetrieval(SubPipeline, ABC):
         super().__init__(
             implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
         )
-        request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-mini"
+        pipeline_id = self.implementation_id or "base_retrieval_pipeline"
+        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
+        embedding_model = resolve_model(
+            pipeline_id, "default", "embedding", local=False
         )
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = LlmRequestHandler(embedding_model)
         self.pipeline = self.llm | StrOutputParser()
         self.collection = schema_init_func(client)
         self.tokens = []

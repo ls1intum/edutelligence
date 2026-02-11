@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, cast
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -13,10 +13,10 @@ from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
-from iris.domain.variant.rewriting_variant import RewritingVariant
+from iris.domain.variant.variant import Variant
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.rewriting_prompts import (
@@ -33,7 +33,7 @@ from .prompts.faq_consistency_prompt import faq_consistency_prompt
 logger = get_logger(__name__)
 
 
-class RewritingPipeline(Pipeline[RewritingVariant]):
+class RewritingPipeline(Pipeline):
     """RewritingPipeline processes text rewriting requests by interfacing with a language model via a capability
      request handler.
 
@@ -41,25 +41,38 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
      when complete.
     """
 
+    PIPELINE_ID = "rewriting_pipeline"
+    ROLES = {"rewriting", "consistency"}
+    VARIANT_DEFS = [
+        ("faq", "Default FAQ Variant", "Default FAQ rewriting variant."),
+        (
+            "problem_statement",
+            "Default Variant",
+            "Default Problem statement rewriting variant.",
+        ),
+    ]
+
     callback: RewritingCallback
-    request_handler: ModelVersionRequestHandler
+    rewriting_handler: LlmRequestHandler
+    consistency_handler: LlmRequestHandler
     output_parser: PydanticOutputParser
-    variant: Literal["faq", "problem_statement"]
+    variant_id: Literal["faq", "problem_statement"]
 
     def __init__(
         self,
         callback: RewritingCallback,
-        variant: Literal["faq", "problem_statement"],
+        variant: Variant,
         local: bool = False,
     ):
-        super().__init__(implementation_id="rewriting_pipeline_reference_impl")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.callback = callback
         self.db = VectorDatabase()
-        self.request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1"
-        )
+        self.variant_id = cast(Literal["faq", "problem_statement"], variant.variant_id)
+        rewriting_model = variant.model("rewriting", local)
+        consistency_model = variant.model("consistency", local)
+        self.rewriting_handler = LlmRequestHandler(model_id=rewriting_model)
+        self.consistency_handler = LlmRequestHandler(model_id=consistency_model)
         self.tokens = []
-        self.variant = variant
         self.faq_retriever = FaqRetrieval(self.db.client, local=local)
 
     @observe(name="Rewriting Pipeline")
@@ -76,7 +89,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             "faq": system_prompt_faq,
             "problem_statement": system_prompt_problem_statement,
         }
-        prompt = variant_prompts[self.variant].format(
+        prompt = variant_prompts[self.variant_id].format(
             rewritten_text=dto.to_be_rewritten,
         )
         prompt = PyrisMessage(
@@ -84,7 +97,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
 
-        response = self.request_handler.chat(
+        response = self.rewriting_handler.chat(
             [prompt], CompletionArguments(temperature=0.4), tools=None
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
@@ -102,7 +115,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         improvement = ""
         suggestions = []
 
-        if self.variant == "faq":
+        if self.variant_id == "faq":
             faqs = self.faq_retriever.get_faqs_from_db(
                 course_id=dto.course_id, search_text=response, result_limit=10
             )
@@ -151,7 +164,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             contents=[TextMessageContentDTO(text_content=consistency_prompt)],
         )
 
-        response = self.request_handler.chat(
+        response = self.consistency_handler.chat(
             [prompt], CompletionArguments(temperature=0.0), tools=None
         )
 
@@ -171,33 +184,6 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
             if key in data:
                 result_dict[key] = data[key]
         return result_dict
-
-    @classmethod
-    def get_variants(cls) -> List[RewritingVariant]:
-        """
-        Returns available variants for the RewritingPipeline.
-
-        Returns:
-            List of RewritingVariant objects representing available variants
-        """
-        return [
-            RewritingVariant(
-                variant_id="faq",
-                name="Default FAQ Variant",
-                description="Default FAQ rewriting variant.",
-                cloud_rewriting_model="gpt-4.1",
-                cloud_consistency_model="gpt-4.1",
-                local_rewriting_model="gpt-oss:120b",
-                local_consistency_model="gpt-oss:120b",
-            ),
-            RewritingVariant(
-                variant_id="problem_statement",
-                name="Default Variant",
-                description="Default Problem statement rewriting variant.",
-                cloud_rewriting_model="gpt-4.1",
-                local_rewriting_model="gpt-oss:120b",
-            ),
-        ]
 
 
 def parse_faq_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:

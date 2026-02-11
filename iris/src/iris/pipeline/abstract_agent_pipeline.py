@@ -13,8 +13,8 @@ from iris.common.message_converters import convert_iris_message_to_langchain_mes
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.domain.variant.abstract_variant import AbstractAgentVariant
-from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.domain.variant.abstract_variant import AbstractVariant
+from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
@@ -31,7 +31,7 @@ from iris.web.status.status_update import StatusCallback
 logger = get_logger(__name__)
 
 DTO = TypeVar("DTO")
-VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
+VARIANT = TypeVar("VARIANT", bound=AbstractVariant)
 
 
 class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
@@ -544,23 +544,15 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             # Create LLM from variant's model selection (local/cloud)
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
 
-            if local and hasattr(state.variant, "local_agent_model"):
-                selected_version = state.variant.local_agent_model
-            elif (not local) and hasattr(state.variant, "cloud_agent_model"):
-                selected_version = state.variant.cloud_agent_model
-            else:
-                raise AttributeError(
-                    f"Variant {state.variant.id} is missing "
-                    f"{"local_agent_model" if local else "cloud_agent_model"}"
-                )
+            selected_version = state.variant.model("chat", local)
             if not selected_version:
+                env = "local" if local else "cloud"
                 raise ValueError(
-                    f"Variant {state.variant.id} has empty "
-                    f"{"local_agent_model" if local else "cloud_agent_model"}"
+                    f"Variant {state.variant.id} has empty chat model for {env}"
                 )
 
             state.llm = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version=selected_version),
+                request_handler=LlmRequestHandler(model_id=selected_version),
                 completion_args=completion_args,
             )
 

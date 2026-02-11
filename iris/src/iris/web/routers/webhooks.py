@@ -10,6 +10,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )
+from iris.domain.variant.abstract_variant import find_variant
 from iris.tracing import observe
 from iris.web.utils import validate_pipeline_variant
 
@@ -43,7 +44,6 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
     with semaphore:
         lecture_ingestion_update_pipeline = LectureIngestionUpdatePipeline(dto)
         lecture_ingestion_update_pipeline()
-        semaphore.release()
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
@@ -69,7 +69,9 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         logger.error("Error while deleting lectures", exc_info=e)
 
 
-def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
+def run_faq_update_pipeline_worker(
+    dto: FaqIngestionPipelineExecutionDto, variant_id: str
+):
     """
     Run the exercise chat pipeline in a separate thread
     """
@@ -83,17 +85,25 @@ def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            pipeline = FaqIngestionPipeline(client=client, dto=dto, callback=callback)
+            variant = find_variant(FaqIngestionPipeline.get_variants(), variant_id)
+            is_local = bool(
+                dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+            )
+            pipeline = FaqIngestionPipeline(
+                client=client,
+                dto=dto,
+                callback=callback,
+                variant=variant,
+                local=is_local,
+            )
             pipeline()
 
         except Exception as e:
             logger.error("Error in FAQ ingestion pipeline", exc_info=e)
             capture_exception(e)
-        finally:
-            semaphore.release()
 
 
-def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
+def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str):
     """
     Run the faq deletion in a separate thread
     """
@@ -107,14 +117,22 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            pipeline = FaqIngestionPipeline(client=client, dto=None, callback=callback)
+            variant = find_variant(FaqIngestionPipeline.get_variants(), variant_id)
+            is_local = bool(
+                dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+            )
+            pipeline = FaqIngestionPipeline(
+                client=client,
+                dto=None,
+                callback=callback,
+                variant=variant,
+                local=is_local,
+            )
             pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
 
         except Exception as e:
             logger.error("Error in FAQ deletion pipeline", exc_info=e)
             capture_exception(e)
-        finally:
-            semaphore.release()
 
 
 @router.post(
@@ -164,9 +182,9 @@ def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
     """
     Webhook endpoint to trigger the faq ingestion pipeline
     """
-    validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
+    variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
-    thread = Thread(target=run_faq_update_pipeline_worker, args=(dto,))
+    thread = Thread(target=run_faq_update_pipeline_worker, args=(dto, variant))
     thread.start()
     return
 
@@ -181,8 +199,8 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     """
     Webhook endpoint to trigger the faq deletion pipeline
     """
-    validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
+    variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
-    thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
+    thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto, variant))
     thread.start()
     return

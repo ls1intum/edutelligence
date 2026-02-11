@@ -147,8 +147,10 @@ app.include_router(webhooks_router)
 app.include_router(ingestion_status_router)
 app.include_router(memiris_router)
 
-# Initialize the LLM manager
+# Initialize the LLM manager and validate configuration
 # Import here to avoid circular imports
+from iris.llm.llm_configuration import validate_llm_configuration  # noqa: E402
 from iris.llm.llm_manager import LlmManager  # noqa: E402
 
 LlmManager()
+validate_llm_configuration()

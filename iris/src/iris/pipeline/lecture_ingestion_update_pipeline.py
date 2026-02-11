@@ -1,5 +1,3 @@
-from typing import List
-
 from sentry_sdk import capture_exception
 
 from iris.common.logging_config import get_logger
@@ -7,9 +5,8 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from iris.domain.variant.lecture_ingestion_update_variant import (
-    LectureIngestionUpdateVariant,
-)
+from iris.domain.variant.abstract_variant import find_variant
+from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -23,11 +20,25 @@ from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 logger = get_logger(__name__)
 
 
-class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
+class LectureIngestionUpdatePipeline(Pipeline):
     """Lecture Ingestion Update Pipeline to update or ingest lecture page chunks and lecture transcriptions at once"""
 
+    PIPELINE_ID = "lecture_ingestion_update_pipeline"
+    ROLES: set[str] = set()
+    VARIANT_DEFS = [
+        ("default", "Default", "Default lecture ingestion update variant."),
+        ("advanced", "Advanced", "Advanced lecture ingestion update variant."),
+    ]
+    DEPENDENCIES = [
+        Dep("lecture_unit_page_ingestion_pipeline", variant="same"),
+        Dep("transcription_ingestion_pipeline"),
+        Dep("lecture_unit_pipeline"),
+        Dep("lecture_unit_segment_summary_pipeline"),
+        Dep("lecture_unit_summary_pipeline"),
+    ]
+
     def __init__(self, dto: IngestionPipelineExecutionDto):
-        super().__init__()
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.dto = dto
 
     @observe(name="Lecture Ingestion Update Pipeline")
@@ -43,12 +54,24 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             client = db.get_client()
             language = ""
             tokens = []
+            variant_id = self.dto.settings.variant if self.dto.settings else "default"
+            is_local = bool(
+                self.dto.settings
+                and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
+            )
             if (
                 self.dto.lecture_unit.pdf_file_base64 is not None
                 and self.dto.lecture_unit.pdf_file_base64 != ""
             ):
+                variant = find_variant(
+                    LectureUnitPageIngestionPipeline.get_variants(), variant_id
+                )
                 page_content_pipeline = LectureUnitPageIngestionPipeline(
-                    client=client, dto=self.dto, callback=callback
+                    client=client,
+                    dto=self.dto,
+                    callback=callback,
+                    variant=variant,
+                    local=is_local,
                 )
                 language, tokens_page_content_pipeline = page_content_pipeline()
                 tokens += tokens_page_content_pipeline
@@ -64,7 +87,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 and self.dto.lecture_unit.transcription.segments is not None
             ):
                 transcription_pipeline = TranscriptionIngestionPipeline(
-                    client=client, dto=self.dto, callback=callback
+                    client=client, dto=self.dto, callback=callback, local=is_local
                 )
                 language, tokens_transcription_pipeline = transcription_pipeline()
                 tokens += tokens_transcription_pipeline
@@ -103,32 +126,3 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         except Exception as e:
             logger.error("Error in ingestion pipeline", exc_info=e)
             capture_exception(e)
-
-    @classmethod
-    def get_variants(cls) -> List[LectureIngestionUpdateVariant]:
-        """
-        Returns available variants for the LectureIngestionUpdatePipeline.
-
-        Returns:
-            List of LectureIngestionUpdateVariant objects representing available variants
-        """
-        return [
-            LectureIngestionUpdateVariant(
-                variant_id="default",
-                name="Default",
-                description="Default lecture ingestion update variant using efficient models "
-                "for processing and embeddings.",
-                cloud_chat_model="gpt-4.1-mini",
-                local_chat_model="gpt-oss:120b",
-                embedding_model="text-embedding-3-small",
-            ),
-            LectureIngestionUpdateVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced lecture ingestion update variant using higher-quality models "
-                "for improved accuracy.",
-                cloud_chat_model="gpt-4.1",
-                local_chat_model="gpt-oss:120b",
-                embedding_model="text-embedding-3-large",
-            ),
-        ]

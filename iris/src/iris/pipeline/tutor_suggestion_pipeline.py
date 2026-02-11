@@ -12,7 +12,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
 from iris.domain.data.post_dto import PostDTO
-from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
+from iris.domain.variant.variant import Dep, Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -42,17 +42,36 @@ logger = get_logger(__name__)
 
 
 class TutorSuggestionPipeline(
-    AbstractAgentPipeline[
-        CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
-    ]
+    AbstractAgentPipeline[CommunicationTutorSuggestionPipelineExecutionDTO, Variant]
 ):
     """
     The TutorSuggestionPipeline creates a tutor suggestion when called.
     It uses the post received as an argument to create a suggestion based on the conversation
     """
 
+    PIPELINE_ID = "tutor_suggestion_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Uses a smaller model for faster and cost-efficient responses.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Uses a larger model, balancing speed and quality.",
+        ),
+    ]
+    DEPENDENCIES = [
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
+
     def __init__(self):
-        super().__init__(implementation_id="tutor_suggestion_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
         self.faq_retriever = None
 
@@ -73,7 +92,7 @@ class TutorSuggestionPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> list[Callable]:
         allow_lecture_tools = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -134,8 +153,10 @@ class TutorSuggestionPipeline(
                 create_tool_get_last_artifact(state.dto.chat_history, callback)
             )
         if allow_lecture_tools:
-            is_local = state.dto.settings is not None and state.dto.settings.is_local()
-            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
+            self.lecture_retriever = LectureRetrieval(
+                state.db.client,
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
+            )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -149,8 +170,10 @@ class TutorSuggestionPipeline(
             )
 
         if allow_faq_tool:
-            is_local = state.dto.settings is not None and state.dto.settings.is_local()
-            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
+            self.faq_retriever = FaqRetrieval(
+                state.db.client,
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
+            )
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -172,7 +195,7 @@ class TutorSuggestionPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> str:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -204,7 +227,7 @@ class TutorSuggestionPipeline(
     def get_agent_params(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> dict[str, Any]:
         """
@@ -240,7 +263,7 @@ class TutorSuggestionPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> bool:
         return False
@@ -248,7 +271,7 @@ class TutorSuggestionPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> str:
         raw = state.result
@@ -313,7 +336,7 @@ class TutorSuggestionPipeline(
     def is_regeneration_by_user_requested(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
         ],
     ) -> bool:
         """
@@ -354,7 +377,7 @@ class TutorSuggestionPipeline(
     def __call__(
         self,
         dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-        variant: TutorSuggestionVariant,
+        variant: Variant,
         callback: TutorSuggestionCallback,
     ):
         """
@@ -375,28 +398,3 @@ class TutorSuggestionPipeline(
                 "An error occurred while running the tutor suggestion pipeline.",
                 tokens=self.tokens,
             )
-
-    @classmethod
-    def get_variants(cls) -> List[TutorSuggestionVariant]:
-        """
-        Returns available variants for the TutorSuggestionPipeline.
-
-        Returns:
-            List of TutorSuggestionVariant objects representing available variants
-        """
-        return [
-            TutorSuggestionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
-                cloud_agent_model="gpt-oss:20b",
-                local_agent_model="gpt-oss:20b",
-            ),
-            TutorSuggestionVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
-                cloud_agent_model="gpt-oss:120b",
-                local_agent_model="gpt-oss:120b",
-            ),
-        ]

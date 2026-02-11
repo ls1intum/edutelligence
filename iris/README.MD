@@ -188,7 +188,7 @@ their programming exercises on Artemis in a pedagogically meaningful way.
        - `api_key`: The API key for the model.
        - `description`: Additional information about the model.
        - `id`: Unique identifier for the model across all models.
-       - `model`: The official name of the model as used by the vendor, also used by ModelVersionRequestHandler for model selection (e.g., "gpt-4.1", "gpt-4.1-mini").
+       - `model`: The official name of the model as used by the vendor (e.g., "gpt-4.1", "gpt-4.1-mini").
        - `name`: A custom, human-readable name for the model.
        - `type`: The model type, used to select the appropriate client (e.g., `openai_chat`, `azure_chat`, `ollama`).
        - `endpoint`: The URL to connect to the model.
@@ -381,6 +381,45 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
   Modify configuration files as needed:
   - **Pyris Configuration**: Update `application.yml` and `llm_config.yml`.
+    - `application.yml` must include an `llm_configuration` section that maps pipeline `implementation_id`s to variant IDs and roles with `local`/`cloud` model names. Use `application.example.yml` as a template.
+    - Bulk-replace a model name across all `llm_configuration` entries:
+
+      ```bash
+      # adjust these three values
+      APP_YML=application.yml
+      OLD_MODEL=gpt-4.1-mini
+      NEW_MODEL=gpt-4o-mini
+
+      python - <<'PY'
+      import os
+      import pathlib
+      import yaml
+
+      path = pathlib.Path(os.environ["APP_YML"])
+      old = os.environ["OLD_MODEL"]
+      new = os.environ["NEW_MODEL"]
+
+      data = yaml.safe_load(path.read_text(encoding="utf-8"))
+      llm_cfg = data.get("llm_configuration", {})
+
+      def walk(node):
+          if isinstance(node, dict):
+              return {k: walk(v) for k, v in node.items()}
+          if isinstance(node, list):
+              return [walk(v) for v in node]
+          if isinstance(node, str) and node == old:
+              return new
+          return node
+
+      data["llm_configuration"] = walk(llm_cfg)
+      path.write_text(
+          yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+          encoding="utf-8",
+      )
+      print(f"Replaced {old} -> {new} in {path}")
+      PY
+      ```
+
   - **Weaviate Configuration**: Adjust settings in `weaviate.yml`.
   - **Nginx Configuration**: Modify Nginx settings in `nginx.yml` and related config files.
 

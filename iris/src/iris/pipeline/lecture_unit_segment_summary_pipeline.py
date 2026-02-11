@@ -10,9 +10,10 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
@@ -50,7 +51,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         lecture_unit_dto: LectureUnitDTO,
         local: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(implementation_id="lecture_unit_segment_summary_pipeline")
         self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
 
@@ -62,11 +63,15 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             client
         )
 
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-
-        request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-mini"
+        pipeline_id = "lecture_unit_segment_summary_pipeline"
+        embedding_model = resolve_model(
+            pipeline_id, "default", "embedding", local=local
         )
+        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
+
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

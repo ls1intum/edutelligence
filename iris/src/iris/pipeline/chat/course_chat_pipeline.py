@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -20,7 +20,7 @@ from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
-from ...domain.variant.course_chat_variant import CourseChatVariant
+from ...domain.variant.variant import Dep, Variant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -54,11 +54,35 @@ logger = get_logger(__name__)
 
 
 class CourseChatPipeline(
-    AbstractAgentPipeline[CourseChatPipelineExecutionDTO, CourseChatVariant]
+    AbstractAgentPipeline[CourseChatPipelineExecutionDTO, Variant]
 ):
     """
     Course chat pipeline that answers course related questions from students.
     """
+
+    PIPELINE_ID = "course_chat_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Uses a smaller model for faster and cost-efficient responses.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Uses a larger chat model, balancing speed and quality.",
+        ),
+    ]
+    DEPENDENCIES = [
+        Dep("citation_pipeline", variant="same"),
+        Dep("session_title_generation_pipeline"),
+        Dep("interaction_suggestion_pipeline", variant="course"),
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
 
     session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -76,7 +100,7 @@ class CourseChatPipeline(
         Args:
             event: Optional event type
         """
-        super().__init__(implementation_id="course_chat_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
 
         self.event = event
 
@@ -113,9 +137,7 @@ class CourseChatPipeline(
 
     def is_memiris_memory_creation_enabled(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> bool:
         """
         Return True if background memory creation should be enabled for this run.
@@ -127,9 +149,7 @@ class CourseChatPipeline(
 
     def get_tools(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> list[Callable]:
         """
         Get the tools available for the agent pipeline.
@@ -242,9 +262,7 @@ class CourseChatPipeline(
 
     def build_system_message(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Return a system message for the chat prompt.
@@ -335,9 +353,7 @@ class CourseChatPipeline(
 
     def get_agent_params(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> dict[str, Any]:
         """
         Return the parameter dict passed to the agent executor.
@@ -386,9 +402,7 @@ class CourseChatPipeline(
 
     def on_agent_step(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         step: dict[str, Any],
     ) -> None:
         """
@@ -404,9 +418,7 @@ class CourseChatPipeline(
 
     def post_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Post-processing after agent execution including citations and suggestions.
@@ -448,14 +460,12 @@ class CourseChatPipeline(
 
     def _process_citations(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
         dto: CourseChatPipelineExecutionDTO,
-        variant: CourseChatVariant,
+        variant: Variant,
     ) -> str:
         """
         Process citations for lecture content and FAQs.
@@ -505,9 +515,7 @@ class CourseChatPipeline(
 
     def _generate_suggestions(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         output: str,
         dto: CourseChatPipelineExecutionDTO,
     ) -> None:
@@ -556,9 +564,7 @@ class CourseChatPipeline(
 
     def _generate_session_title(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
         output: str,
         dto: CourseChatPipelineExecutionDTO,
     ) -> Optional[str]:
@@ -579,7 +585,7 @@ class CourseChatPipeline(
     def __call__(
         self,
         dto: CourseChatPipelineExecutionDTO,
-        variant: CourseChatVariant,
+        variant: Variant,
         callback: CourseChatStatusCallback,
     ):
         """
@@ -606,32 +612,3 @@ class CourseChatPipeline(
                 "An error occurred while running the course chat pipeline.",
                 tokens=[],
             )
-
-    @classmethod
-    def get_variants(cls) -> List[CourseChatVariant]:  # type: ignore[override]
-        """
-        Get available variants for the course chat pipeline.
-
-        Returns:
-            List[CourseChatVariant]: List of available variants
-        """
-        return [
-            CourseChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-            CourseChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-        ]

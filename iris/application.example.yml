@@ -9,6 +9,17 @@ weaviate:
 memiris:
   enabled: true
   sleep_enabled: true
+  llm_configuration:
+    embeddings:
+      - mxbai-embed-large
+      - nomic-embed-text
+    learning_extractor: gemma3
+    learning_deduplicator: gemma3
+    memory_creator: gpt-oss
+    sleep_tool_llm: gpt-oss
+    sleep_json_llm: gemma3
+
+local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:
   enabled: false # Set to true to enable LangFuse tracing
@@ -18,3 +29,198 @@ langfuse:
 
 env_vars:
   SOME: "value"
+
+# Values are LLM entry IDs (the "id" field in llm_config.yml).
+llm_configuration:
+  exercise_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+    advanced:
+      chat:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+
+  course_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+    advanced:
+      chat:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+
+  lecture_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+    advanced:
+      chat:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+
+  text_exercise_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+    advanced:
+      chat:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+
+  tutor_suggestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+    advanced:
+      chat:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+
+  competency_extraction_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+
+  inconsistency_check_pipeline:
+    default:
+      solver:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      prettify:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+
+  rewriting_pipeline:
+    faq:
+      rewriting:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+      consistency:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+    problem_statement:
+      rewriting:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+      consistency:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+
+  lecture_unit_page_ingestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+    advanced:
+      chat:
+        local: oai-gpt-41
+        cloud: oai-gpt-41
+      embedding: azure-embedding-large
+
+  faq_ingestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+
+  transcription_ingestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+
+  lecture_unit_segment_summary_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+
+  lecture_unit_summary_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+
+  lecture_unit_pipeline:
+    default:
+      embedding: oai-embedding-small
+
+  lecture_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+      reranker: cohere
+
+  lecture_unit_segment_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+      reranker: cohere
+
+  lecture_transcriptions_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+      reranker: cohere
+
+  faq_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+      embedding: oai-embedding-small
+
+  citation_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-nano
+    advanced:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+
+  interaction_suggestion_pipeline:
+    course:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-nano
+    exercise:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-nano
+
+  session_title_generation_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-nano
+
+  code_feedback_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-mini
+
+  summary_pipeline:
+    default:
+      chat:
+        local: oai-gpt-41-mini
+        cloud: oai-gpt-41-nano

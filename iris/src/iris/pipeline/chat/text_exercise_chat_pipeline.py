@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Optional
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -16,7 +16,7 @@ from iris.tracing import observe
 
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
-from ...domain.variant.text_exercise_chat_variant import TextExerciseChatVariant
+from ...domain.variant.variant import Dep, Variant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -35,12 +35,35 @@ logger = get_logger(__name__)
 
 
 class TextExerciseChatPipeline(
-    AbstractAgentPipeline[TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant]
+    AbstractAgentPipeline[TextExerciseChatPipelineExecutionDTO, Variant]
 ):
     """
     Text exercise chat pipeline that answers text exercise related questions from students.
     Uses an agent-based approach with tools for accessing course content, lectures, and FAQs.
     """
+
+    PIPELINE_ID = "text_exercise_chat_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Uses a smaller model for faster and cost-efficient responses.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Uses a larger chat model, balancing speed and quality.",
+        ),
+    ]
+    DEPENDENCIES = [
+        Dep("citation_pipeline", variant="same"),
+        Dep("session_title_generation_pipeline"),
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
 
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
@@ -51,7 +74,7 @@ class TextExerciseChatPipeline(
         """
         Initialize the text exercise chat pipeline.
         """
-        super().__init__(implementation_id="text_exercise_chat_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.local = local
 
         # Initialize pipelines
@@ -76,35 +99,10 @@ class TextExerciseChatPipeline(
     def __str__(self):
         return f"{self.__class__.__name__}()"
 
-    @classmethod
-    def get_variants(cls) -> List[TextExerciseChatVariant]:  # type: ignore[override]
-        """
-        Get available variants for the text exercise chat pipeline.
-
-        Returns:
-            List of TextExerciseChatVariant instances.
-        """
-        return [
-            TextExerciseChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
-                local_agent_model="gpt-oss:120b",
-            ),
-            TextExerciseChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
-                local_agent_model="gpt-oss:120b",
-            ),
-        ]
-
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
     ) -> bool:
         """
@@ -157,7 +155,7 @@ class TextExerciseChatPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
     ) -> list[Callable]:
         """
@@ -236,7 +234,7 @@ class TextExerciseChatPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
     ) -> str:
         """
@@ -295,7 +293,7 @@ class TextExerciseChatPipeline(
     def get_recent_history_from_dto(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
         limit: int | None = None,
     ) -> list[PyrisMessage]:
@@ -317,7 +315,7 @@ class TextExerciseChatPipeline(
     def get_text_of_latest_user_message(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
     ) -> str:
         """
@@ -343,7 +341,7 @@ class TextExerciseChatPipeline(
     def on_agent_step(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
         step: dict[str, Any],
     ) -> None:
@@ -361,7 +359,7 @@ class TextExerciseChatPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
     ) -> str:
         """
@@ -400,7 +398,7 @@ class TextExerciseChatPipeline(
     def _add_citations(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
         result: str,
     ) -> str:
@@ -469,7 +467,7 @@ class TextExerciseChatPipeline(
     def _generate_session_title(
         self,
         state: AgentPipelineExecutionState[
-            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+            TextExerciseChatPipelineExecutionDTO, Variant
         ],
         output: str,
         dto: TextExerciseChatPipelineExecutionDTO,
@@ -491,7 +489,7 @@ class TextExerciseChatPipeline(
     def __call__(
         self,
         dto: TextExerciseChatPipelineExecutionDTO,
-        variant: TextExerciseChatVariant,
+        variant: Variant,
         callback: TextExerciseChatCallback,
         **kwargs,
     ):
