@@ -74,9 +74,18 @@ def process_feedback_evaluations(
     selected_values = {}
     total_cost = 0.0
 
+    evaluation_progress = {
+        "current_submission_index": None,
+        "current_exercise_index": None,
+        "selected_values": selected_values,
+        "has_started_evaluating": False,
+        "is_finished_evaluating": True,
+    }
+
     progress_bar = tqdm(requests, desc="Processing")
 
     for request in progress_bar:
+        evaluation_progress["has_started_evaluating"] = True
         with get_openai_callback() as cb:
             metric_evaluations = model.with_structured_output(MetricEvaluations).invoke(
                 request.prompt, max_tokens=100, temperature=0
@@ -93,12 +102,14 @@ def process_feedback_evaluations(
                 print(
                     f"Evaluated metrics do not match expected metrics. Expected: {expected_metric_titles}, Got: {evaluated_metric_titles}, Given: {request}"
                 )
-                break
+                evaluation_progress["is_finished_evaluating"] = False
+                continue
         else:
             print(
                 f"The LLM returned an unexpected format given this request: {request}"
             )
-            break
+            evaluation_progress["is_finished_evaluating"] = False
+            continue
 
         if request.exercise_id not in selected_values:
             selected_values[request.exercise_id] = {}
@@ -126,20 +137,12 @@ def process_feedback_evaluations(
             "cost": cb.total_cost,
         }
 
-        evaluation_progress = {
-            "current_submission_index": None,
-            "current_exercise_index": None,
-            "selected_values": selected_values,
-            "has_started_evaluating": True,
-            "is_finished_evaluating": True,
-        }
-
     os.makedirs(output_path, exist_ok=True)
-    file_path = os.path.join(output_path, f"evaluation_progress_llm-as-a-judge.json")
+    file_path = os.path.join(output_path, "evaluation_progress_llm-as-a-judge.json")
     with open(file_path, "w", encoding="utf-8") as file:
         json.dump(evaluation_progress, file, indent=4)
 
-    print(f"\nSummary of Evaluation:")
+    print("\nSummary of Evaluation:")
     print(f"Total evaluated exercises: {len(selected_values)}")
     print(f"Total evaluated submissions: {len([sub for ex in selected_values.values() for sub in ex.values()])}")
     print(f"Total evaluated feedbacks: {len([fb for ex in selected_values.values() for sub in ex.values() for fb in sub.values()])}")

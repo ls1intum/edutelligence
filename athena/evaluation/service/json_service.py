@@ -617,8 +617,12 @@ def get_evaluation_files(data_dir: str) -> tuple[list[str], list[str]]:
     files = os.listdir(data_dir)
     for file in files:
         if file.endswith(".zip"):
-            with zipfile.ZipFile(f"{data_dir}/{file}", 'r') as zip_ref:
-                zip_ref.extractall(data_dir)
+            with zipfile.ZipFile(os.path.join(data_dir, file), "r") as zip_ref:
+                for member in zip_ref.infolist():
+                    # Securely extract to prevent ZipSlip (path traversal)
+                    target_path = os.path.abspath(os.path.join(data_dir, member.filename))
+                    if target_path.startswith(os.path.abspath(data_dir)):
+                        zip_ref.extract(member, data_dir)
 
     evaluation_config_files = []
     evaluation_progress_files = []
@@ -661,13 +665,20 @@ def create_common_config(evaluation_config_files: list[str]) -> dict:
     pseudonyms = set(mappings.keys())
     feedback_types = set(mappings.values())
     intersection = pseudonyms.intersection(feedback_types)
-    while len(intersection) > 0:
-        for key,value in mappings.items():
+    max_iterations = len(mappings)
+    iterations = 0
+    while len(intersection) > 0 and iterations < max_iterations:
+        for key, value in mappings.items():
             if value in intersection:
                 mappings[key] = mappings[value]
+        # Prevent infinite loops from self-referential or cyclic mappings
+        for key in list(mappings.keys()):
+            if mappings[key] == key:
+                del mappings[key]
         pseudonyms = set(mappings.keys())
         feedback_types = set(mappings.values())
         intersection = pseudonyms.intersection(feedback_types)
+        iterations += 1
 
     for config_file in evaluation_config_files:
         with open(config_file, "r") as file:
