@@ -57,6 +57,22 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     tracing_context: Optional[TracingContext]
 
 
+def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
+    """Filter out messages with no meaningful content before handing them to pipelines."""
+    filtered: list[PyrisMessage] = []
+    for msg in messages:
+        if not msg.contents:
+            continue
+        content = msg.contents[0]
+        if (
+            isinstance(content, TextMessageContentDTO)
+            and not content.text_content.strip()
+        ):
+            continue
+        filtered.append(msg)
+    return filtered
+
+
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     """
     Abstract base class for agent pipelines.
@@ -520,7 +536,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         try:
             # 1. Prepare message history, user query, LLM, prompt and tools
-            state.message_history = self.get_recent_history_from_dto(state)
+            state.message_history = _filter_empty_messages(
+                self.get_recent_history_from_dto(state)
+            )
             user_query = self.get_text_of_latest_user_message(state)
 
             # Create LLM from variant's model selection (local/cloud)

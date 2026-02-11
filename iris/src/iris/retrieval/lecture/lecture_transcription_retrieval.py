@@ -38,7 +38,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
     def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
         request_handler = ModelVersionRequestHandler(
-            version="llama3.3:latest" if local else "gpt-4.1-mini"
+            version="gpt-oss:120b" if local else "gpt-4.1-mini"
         )
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(

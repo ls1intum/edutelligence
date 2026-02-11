@@ -90,7 +90,7 @@ class TextExerciseChatPipeline(
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 cloud_agent_model="gpt-4.1-mini",
-                local_agent_model="llama3.3:latest",
+                local_agent_model="gpt-oss:120b",
             ),
             TextExerciseChatVariant(
                 variant_id="advanced",

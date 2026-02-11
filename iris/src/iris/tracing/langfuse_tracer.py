@@ -6,8 +6,11 @@ Provides:
 - TracingContext for rich metadata propagation
 - LangChain CallbackHandler integration
 - Proper nesting of sub-pipelines and tool calls
+- TracedThreadPoolExecutor for correct trace nesting in threaded code
 """
 
+import concurrent.futures
+import contextvars
 import logging
 import os
 import threading
@@ -383,6 +386,23 @@ def observe(
         return wrapper  # type: ignore
 
     return decorator
+
+
+class TracedThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
+    """ThreadPoolExecutor that propagates contextvars to child threads.
+
+    The Langfuse SDK stores its observation stack in a ContextVar.
+    Standard ThreadPoolExecutor does NOT copy contextvars to child threads,
+    which causes @observe-decorated functions in those threads to create
+    orphaned top-level traces instead of nesting under the parent.
+
+    This executor copies the calling thread's context so that child threads
+    inherit the Langfuse observation stack and produce properly nested traces.
+    """
+
+    def submit(self, fn, /, *args, **kwargs):
+        ctx = contextvars.copy_context()
+        return super().submit(ctx.run, fn, *args, **kwargs)
 
 
 # LangChain run names to filter out from traces (internal implementation noise)
