@@ -22,21 +22,9 @@ def generate_evaluation_requests(
 
     for exercise in exercises:
         for submission in exercise.submissions:
-            if submission.feedbacks is None:
-                prompt = get_formatted_prompt(exercise, submission, [], metrics)
-                requests.append(
-                    MetricEvaluationRequest(
-                        prompt=prompt,
-                        exercise_id=exercise.id,
-                        submission_id=submission.id,
-                        feedback_type="default",
-                        metrics=metrics,
-                    )
-                )
-            elif isinstance(submission.feedbacks, list):
-                prompt = get_formatted_prompt(
-                    exercise, submission, submission.feedbacks, metrics
-                )
+            if submission.feedbacks is None or isinstance(submission.feedbacks, list):
+                feedbacks = submission.feedbacks or []
+                prompt = get_formatted_prompt(exercise, submission, feedbacks, metrics)
                 requests.append(
                     MetricEvaluationRequest(
                         prompt=prompt,

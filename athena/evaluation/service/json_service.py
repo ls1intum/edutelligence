@@ -807,15 +807,6 @@ def load_evaluation_progress(
         raise ValueError("No valid evaluation progress records found.")
 
     df = pd.DataFrame.from_records(records)
-    if df.empty:
-        return pd.DataFrame({
-            "expert_id": pd.Series(dtype="object"),
-            "exercise_id": pd.Series(dtype="int64"),
-            "submission_id": pd.Series(dtype="int64"),
-            "feedback_type": pd.Series(dtype="object"),
-            "metric": pd.Series(dtype="object"),
-            "score": pd.Series(dtype="float64"),
-        })
     return df.astype({
             'exercise_id': 'int64',
             'submission_id': 'int64',
