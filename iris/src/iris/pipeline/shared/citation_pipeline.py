@@ -35,6 +35,13 @@ CITATION_BLOCK_WITH_SEQUENCE_PATTERN = re.compile(
     r"\[cite:([LF]):([^:\]]*):([^:\]]*):([^:\]]*):([^:\]]*)!(\d+)\]"
 )
 
+INDEX_CITE_TYPE = 1
+INDEX_ENTITY_ID = 2
+INDEX_PAGE = 3
+INDEX_START = 4
+INDEX_END = 5
+INDEX_SEQUENCE_NUMBER = 6
+
 
 class InformationType(str, Enum):
     PARAGRAPHS = "PARAGRAPHS"
@@ -375,12 +382,12 @@ class CitationPipeline(SubPipeline):
         self, answer: str, summaries: dict[int, tuple[str, str]]
     ) -> str:
         def _replace(citation_match: re.Match) -> str:
-            cite_type = citation_match.group(1)
-            entity_id = citation_match.group(2)
-            page = citation_match.group(3)
-            start = citation_match.group(4)
-            end = citation_match.group(5)
-            num = int(citation_match.group(6))
+            cite_type = citation_match.group(INDEX_CITE_TYPE)
+            entity_id = citation_match.group(INDEX_ENTITY_ID)
+            page = citation_match.group(INDEX_PAGE)
+            start = citation_match.group(INDEX_START)
+            end = citation_match.group(INDEX_END)
+            num = int(citation_match.group(INDEX_SEQUENCE_NUMBER))
             keyword, summary = summaries.get(num, ("", ""))
             return (
                 f"[cite:{cite_type}:{entity_id}:{page}:{start}:{end}:"
