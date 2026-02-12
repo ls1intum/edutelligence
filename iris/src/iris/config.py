@@ -39,6 +39,55 @@ class LangfuseSettings(BaseModel):
         return self
 
 
+class WhisperSettings(BaseModel):
+    """Settings for Whisper API configuration."""
+
+    type: str = Field(
+        default="openai_whisper",
+        description="Whisper provider type: 'azure_whisper' or 'openai_whisper'",
+    )
+    api_key: str = Field(description="API key for Whisper service")
+    endpoint: Optional[str] = Field(
+        default=None, description="API endpoint (required for Azure)"
+    )
+    api_version: Optional[str] = Field(
+        default=None, description="API version (Azure only)"
+    )
+    model: Optional[str] = Field(
+        default="whisper-1", description="Model name (e.g., 'whisper-1')"
+    )
+    azure_deployment: Optional[str] = Field(
+        default=None, description="Azure deployment name (Azure only)"
+    )
+
+    @model_validator(mode="after")
+    def validate_azure_fields(self):
+        """Validate that Azure-specific fields are provided when type is azure_whisper."""
+        if self.type == "azure_whisper":
+            if not self.endpoint:
+                raise ValueError("endpoint is required when type='azure_whisper'")
+            if not self.api_version:
+                raise ValueError("api_version is required when type='azure_whisper'")
+        return self
+
+
+class TranscriptionSettings(BaseModel):
+    """Settings for video transcription pipeline."""
+
+    enabled: bool = Field(default=False, description="Enable video transcription")
+    temp_dir: str = Field(
+        default="tmp/transcription",
+        description="Directory for temporary video/audio files",
+    )
+    chunk_duration_seconds: int = Field(
+        default=900, description="Audio chunk duration in seconds (default: 15 min)"
+    )
+    whisper: WhisperSettings = Field(
+        default_factory=WhisperSettings,
+        description="Whisper API configuration",
+    )
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -47,6 +96,7 @@ class Settings(BaseModel):
     weaviate: WeaviateSettings
     memiris: MemirisSettings
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
+    transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
 
     @classmethod
     def get_settings(cls):
