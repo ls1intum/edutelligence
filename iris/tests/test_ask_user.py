@@ -8,7 +8,10 @@ from iris.domain.data.result_dto import ResultDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.variant.prompt_user_variant import PromptUserVariant
 from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
+from test_data import LLM_EVALUATION_PROMPT
+
 from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
+from .llm_evaluation import evaluate
 
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
@@ -133,6 +136,12 @@ class TestAskUser(unittest.TestCase):
         ]
         num_terms = sum(1 for k in key_terms if k in self.question.lower())
         assert num_terms <= 4
+
+
+    def test_LLM_evaluation(self):
+        voting_result = evaluate(LLM_EVALUATION_PROMPT, 5, self.question)
+
+        assert voting_result > 0.75
 
 
 if __name__ == "__main__":
