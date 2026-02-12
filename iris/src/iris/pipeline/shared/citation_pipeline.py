@@ -282,7 +282,9 @@ class CitationPipeline(SubPipeline):
             completion_args=self._keyword_summary_completion_args,
         )
         pipeline = llm | StrOutputParser()
-        paragraph = self._last_citation_content_by_seq[num]
+        paragraph = self._last_citation_content_by_seq.get(num, "")
+        if not paragraph.strip():
+            return ""
         summary_prompt = PromptTemplate(
             template=language_instruction + self.summary_prompt_str,
             input_variables=["Paragraph"],
@@ -311,7 +313,10 @@ class CitationPipeline(SubPipeline):
         keywords: dict[int, str] = {}
         used_keywords: set[str] = set()
         for num in used_numbers:
-            paragraph = self._last_citation_content_by_seq[num]
+            paragraph = self._last_citation_content_by_seq.get(num, "")
+            if not paragraph.strip():
+                keywords[num] = ""
+                continue
             used_keywords_str = ", ".join(sorted(used_keywords))
             raw = str(
                 (keyword_prompt | pipeline).invoke(
@@ -365,11 +370,26 @@ class CitationPipeline(SubPipeline):
                 ): num
                 for num in valid_numbers
             }
-            keywords = keyword_future.result()
-            summaries = {
-                summary_futures[f]: f.result()
-                for f in as_completed(summary_futures)
-            }
+            try:
+                keywords = keyword_future.result()
+            except Exception as keyword_error:
+                logger.error(
+                    "Citation keyword generation failed for numbers=%s",
+                    valid_numbers,
+                    exc_info=keyword_error,
+                )
+                keywords = {}
+            summaries = {}
+            for summary_future in as_completed(summary_futures):
+                citation_number = summary_futures[summary_future]
+                try:
+                    summaries[citation_number] = summary_future.result()
+                except Exception as summary_error:
+                    logger.error(
+                        "Citation summary generation failed for number=%s",
+                        citation_number,
+                        exc_info=summary_error,
+                    )
         result: dict[int, tuple[str, str]] = {}
         for num in unique_numbers:
             if num in valid_numbers:
@@ -447,13 +467,19 @@ class CitationPipeline(SubPipeline):
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             response_str = str(response)
             self.used_citation_numbers = self.extract_used_citation_numbers(response_str)
-            summaries = self._build_keyword_summary_map(
-                language_instruction=language_instruction,
-                used_numbers=self.used_citation_numbers,
-            )
-            response_str = self._replace_cite_blocks_with_keyword_summary(
-                response_str, summaries
-            )
+            try:
+                summaries = self._build_keyword_summary_map(
+                    language_instruction=language_instruction,
+                    used_numbers=self.used_citation_numbers,
+                )
+                response_str = self._replace_cite_blocks_with_keyword_summary(
+                    response_str, summaries
+                )
+            except Exception as enrichment_error:
+                logger.error(
+                    "Citation enrichment failed, returning citations without keyword/summary",
+                    exc_info=enrichment_error,
+                )
             return response_str
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
