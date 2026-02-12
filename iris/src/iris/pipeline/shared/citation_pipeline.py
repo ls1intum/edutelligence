@@ -24,6 +24,17 @@ from iris.vector_database.faq_schema import FaqSchema
 
 logger = get_logger(__name__)
 
+# Matches citation blocks with fixed positional fields:
+# `[cite:<type>:<entity_id>:<page>:<start>:<end>!<sequence_number>]`
+# where:
+# - `<type>` is `L` (lecture) or `F` (faq)
+# - `<entity_id>` is the lecture unit id or faq id
+# - `<page>`, `<start>`, `<end>` may be empty (`""`) if not applicable
+# - `<sequence_number>` is required and is used to make the citation unique and to resolve keyword/summary enrichment
+CITATION_BLOCK_WITH_SEQUENCE_PATTERN = re.compile(
+    r"\[cite:([LF]):([^:\]]*):([^:\]]*):([^:\]]*):([^:\]]*)!(\d+)\]"
+)
+
 
 class InformationType(str, Enum):
     PARAGRAPHS = "PARAGRAPHS"
@@ -109,15 +120,33 @@ class CitationPipeline(SubPipeline):
         self, lecture_retrieval_dto: LectureRetrievalDTO
     ):
         """
-        Create a formatted string from the data
+        Build the serialized lecture context for the citation prompt.
+
+        The output is a JSON array containing all usable page chunks and transcript
+        segments. Each entry includes:
+        - `content`: the raw text shown to the citation model
+        - `id`: a structured citation id in the `[cite:L:...!<sequence_number>]` format
+
+        The numeric suffix after `!` is a unique citation sequence number per
+        request and is also used as lookup key in
+        `_last_citation_content_by_seq` for later keyword/summary generation.
         """
         def build_citation_id(
             lecture_unit_id,
             page_number=None,
             start_time_sec=None,
             end_time_sec=None,
-            seq=None,
+            citation_sequence_number=None,
         ):
+            """
+            Create a lecture citation id with stable source metadata and lookup key.
+
+            Target format:
+            `[cite:L:<lecture_unit_id>:<page_number>:<start_time_sec>:<end_time_sec>!<citation_sequence_number>]`
+
+            The `citation_sequence_number` is the per-request running number that links a
+            citation in the final answer back to its original source text.
+            """
             def format_part(value):
                 return "" if value is None else str(value)
 
@@ -127,17 +156,19 @@ class CitationPipeline(SubPipeline):
                 f"{format_part(page_number)}:"
                 f"{format_part(start_time_sec)}:"
                 f"{format_part(end_time_sec)}"
-                f"!{format_part(seq)}]"
+                f"!{format_part(citation_sequence_number)}]"
             )
 
-        seq = 0
+        citation_sequence_number = 0
         self._last_citation_content_by_seq = {}
         lecture_page_chunks = []
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
                 continue
-            seq += 1
-            self._last_citation_content_by_seq[seq] = paragraph.page_text_content
+            citation_sequence_number += 1
+            self._last_citation_content_by_seq[citation_sequence_number] = (
+                paragraph.page_text_content
+            )
             lecture_page_chunks.append(
                 {
                     "id": build_citation_id(
@@ -145,7 +176,7 @@ class CitationPipeline(SubPipeline):
                         paragraph.page_number,
                         None,
                         None,
-                        seq,
+                        citation_sequence_number,
                     ),
                     "content": paragraph.page_text_content,
                 }
@@ -165,8 +196,8 @@ class CitationPipeline(SubPipeline):
                 if paragraph.segment_end_time is not None
                 else None
             )
-            seq += 1
-            self._last_citation_content_by_seq[seq] = paragraph.segment_text
+            citation_sequence_number += 1
+            self._last_citation_content_by_seq[citation_sequence_number] = paragraph.segment_text
             lecture_transcriptions.append(
                 {
                     "id": build_citation_id(
@@ -174,7 +205,7 @@ class CitationPipeline(SubPipeline):
                         paragraph.page_number,
                         start_time_sec,
                         end_time_sec,
-                        seq,
+                        citation_sequence_number,
                     ),
                     "content": paragraph.segment_text,
                 }
@@ -214,14 +245,16 @@ class CitationPipeline(SubPipeline):
 
     def extract_used_citation_numbers(self, answer: str) -> list[int]:
         """
-        Extracts the numeric suffix after '!' from citation blocks in the answer.
-        Example block: [cite:L/F:entityid:page:start:end!number]
+        Extracts the sequence numbers after '!' from citation blocks in the answer.
+        Example matches:
+        - [cite:L:lecture-id:12:0:120!3]
+        - [cite:F:faq-id:::!9]
         """
         if not answer:
             return []
         numbers = []
-        for match in re.finditer(r"\[cite:[LF]:[^]]*?!(\d+)\]", answer):
-            numbers.append(int(match.group(1)))
+        for match in CITATION_BLOCK_WITH_SEQUENCE_PATTERN.finditer(answer):
+            numbers.append(int(match.group(6)))
         return numbers
 
     def _sanitize_citation_field(self, value: str) -> str:
@@ -341,24 +374,20 @@ class CitationPipeline(SubPipeline):
     def _replace_cite_blocks_with_keyword_summary(
         self, answer: str, summaries: dict[int, tuple[str, str]]
     ) -> str:
-        def _replace(m: re.Match) -> str:
-            cite_type = m.group(1)
-            entity_id = m.group(2)
-            page = m.group(3)
-            start = m.group(4)
-            end = m.group(5)
-            num = int(m.group(7))
+        def _replace(citation_match: re.Match) -> str:
+            cite_type = citation_match.group(1)
+            entity_id = citation_match.group(2)
+            page = citation_match.group(3)
+            start = citation_match.group(4)
+            end = citation_match.group(5)
+            num = int(citation_match.group(6))
             keyword, summary = summaries.get(num, ("", ""))
             return (
                 f"[cite:{cite_type}:{entity_id}:{page}:{start}:{end}:"
                 f"{keyword}:{summary}]"
             )
 
-        return re.sub(
-            r"\[cite:([LF]):([^:\]]*):([^:\]]*):([^:\]]*):([^:\]]*)(?::([^!\]]*))?!(\d+)\]",
-            _replace,
-            answer,
-        )
+        return CITATION_BLOCK_WITH_SEQUENCE_PATTERN.sub(_replace, answer)
 
     @observe(name="Citation Pipeline")
     def __call__(
