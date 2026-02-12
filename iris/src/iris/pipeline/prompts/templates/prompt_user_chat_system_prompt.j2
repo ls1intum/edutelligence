@@ -70,7 +70,7 @@ Use the tools to look up information (the given template code, the students subm
 {% endif %}
 
 {% set generation_rules %}
-Now generate a question. Here are the rules:
+
 
 ### 1. The question must be about the student’s own code
 
@@ -122,6 +122,7 @@ Now generate a question. Here are the rules:
     {# write instructions for warning about defocusing, timer and to start prompting when they are ready to make points count #}
 {% elif event == "user_initiates_prompting" %}
     {# write special instructions for generating first question #}
+    Now generate a question. Here are the rules:
     {{ generation_rules }}
 {% elif event == "prompting_finished" %}
     {# write instructions for thanking user for answers and give feedback #}
@@ -141,5 +142,6 @@ Now generate a question. Here are the rules:
 {% else %}
     The last answer by the student was marked as sufficient.
     Now, continue the prompting by asking the student another question.
+    Here are the rules:
     {{ generation_rules }}
 {% endif %}

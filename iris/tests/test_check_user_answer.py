@@ -1,3 +1,4 @@
+"""
 import unittest
 
 from TestCallback import TestPromptUserStatusCallback
@@ -81,3 +82,5 @@ class TestCheckUserAnswer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+"""

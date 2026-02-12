@@ -4,7 +4,12 @@ from datetime import datetime
 from typing import Any, Callable, List
 
 import pytz
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm.langchain import IrisLangchainChatModel
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
 
 from ...common.memiris_setup import get_tenant_for_user
@@ -39,6 +44,7 @@ class PromptUserAgentPipeline(
     # assess_user_answer_pipeline: AssessUserAnswerPipeline
     jinja_env: Environment
     system_prompt_template: Any
+    guide_prompt_template: Any
 
     def __init__(self):
         """
@@ -58,6 +64,9 @@ class PromptUserAgentPipeline(
         )
         self.system_prompt_template = self.jinja_env.get_template(
             "prompt_user_chat_system_prompt.j2"
+        )
+        self.guide_prompt_template = self.jinja_env.get_template(
+            "prompt_user_chat_guide_prompt.j2"
         )
 
     def __repr__(self):
@@ -281,9 +290,83 @@ class PromptUserAgentPipeline(
             The processed result string.
         """
 
-        state.callback.done("Done!", final_result=state.result, tokens=state.tokens)
+        try:
+            # Refine response using guide prompt
+            result = self._refine_response(state)
 
-        return state.result
+            state.callback.done("Done!", final_result=result, tokens=state.tokens)
+
+            return result
+
+        except Exception as e:
+            logger.error("Error in post agent hook", exc_info=e)
+            state.callback.error("Error in processing response")
+            return state.result
+
+
+    def _refine_response(
+            self,
+            state: AgentPipelineExecutionState[
+                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+            ],
+    ) -> str:
+        """
+        Refine the agent response using the guide prompt.
+
+        Args:
+            state: The current pipeline execution state.
+
+        Returns:
+            The refined response.
+        """
+        try:
+            state.callback.in_progress("Refining response ...")
+
+            dto = state.dto
+
+            problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
+            programming_language = (
+                dto.exercise.programming_language.lower()
+                if dto.exercise and dto.exercise.programming_language
+                else ""
+            )
+
+            template_context = {
+                "problem_statement": problem_statement,
+                "programming_language": programming_language
+            }
+
+            guide_prompt_rendered = self.guide_prompt_template.render(template_context)
+
+            # Create small LLM for refinement
+            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            llm_small = IrisLangchainChatModel(
+                request_handler=ModelVersionRequestHandler(version="gpt-4.1-mini"),
+                completion_args=completion_args,
+            )
+
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    SystemMessage(content=guide_prompt_rendered),
+                    HumanMessage(content=state.result),
+                ]
+            )
+
+            guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
+
+            self._track_tokens(state, llm_small.tokens)
+
+            if "!ok!" in guide_response:
+                logger.info("Question is ok and not rewritten")
+                return state.result
+            else:
+                logger.info("Question is rewritten")
+                return guide_response
+
+        except Exception as e:
+            logger.error("Error in refining question", exc_info=e)
+            state.callback.error("Error in refining question")
+            return state.result
 
 
 
