@@ -196,18 +196,30 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
 
 # Video Transcription Pipeline
 
-transcription_job_handler = IngestionJobHandler()
-
 
 def run_video_transcription_worker(dto: VideoTranscriptionPipelineExecutionDto):
     """
-    Run the video transcription pipeline in a separate process.
+    Run the video transcription pipeline in a separate thread.
     """
+    logger.info(
+        "[Lecture %d] Video transcription worker started",
+        dto.lecture_unit_id,
+    )
+
     try:
         pipeline = VideoTranscriptionPipeline(dto)
         pipeline()
+        logger.info(
+            "[Lecture %d] Video transcription completed successfully",
+            dto.lecture_unit_id,
+        )
     except Exception as e:
-        logger.error("Video transcription pipeline failed", exc_info=e)
+        logger.error(
+            "[Lecture %d] Transcription pipeline failed: %s",
+            dto.lecture_unit_id,
+            str(e),
+            exc_info=True,
+        )
         capture_exception(e)
 
 
@@ -225,10 +237,11 @@ def video_transcription_webhook(dto: VideoTranscriptionPipelineExecutionDto):
     the video asynchronously. Status updates are sent back to Artemis
     via callbacks at each stage.
     """
-    process = Process(target=run_video_transcription_worker, args=(dto,))
-    transcription_job_handler.add_job(
-        process=process,
-        course_id=dto.course_id,
-        lecture_id=dto.lecture_id,
-        lecture_unit_id=dto.lecture_unit_id,
+    logger.info(
+        "Received transcription webhook: lecture_unit=%d, video_url=%s",
+        dto.lecture_unit_id,
+        dto.video_url,
     )
+
+    thread = Thread(target=run_video_transcription_worker, args=(dto,))
+    thread.start()

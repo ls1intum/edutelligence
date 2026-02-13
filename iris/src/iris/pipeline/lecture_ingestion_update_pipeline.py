@@ -32,6 +32,11 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
 
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
+        lecture_unit_id = self.dto.lecture_unit.lecture_unit_id
+        logger.info(
+            "[Lecture %d] Starting ingestion pipeline",
+            lecture_unit_id,
+        )
         try:
             callback = IngestionStatusCallback(
                 run_id=self.dto.settings.authentication_token,
@@ -43,32 +48,60 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             client = db.get_client()
             language = ""
             tokens = []
-            if (
+
+            has_pdf = (
                 self.dto.lecture_unit.pdf_file_base64 is not None
                 and self.dto.lecture_unit.pdf_file_base64 != ""
-            ):
+            )
+            has_transcription = (
+                self.dto.lecture_unit.transcription is not None
+                and self.dto.lecture_unit.transcription.segments is not None
+            )
+
+            logger.info(
+                "[Lecture %d] Ingestion content: has_pdf=%s, has_transcription=%s (segments=%d)",
+                lecture_unit_id,
+                has_pdf,
+                has_transcription,
+                (
+                    len(self.dto.lecture_unit.transcription.segments)
+                    if has_transcription
+                    else 0
+                ),
+            )
+
+            if has_pdf:
+                logger.info("[Lecture %d] Processing PDF slides...", lecture_unit_id)
                 page_content_pipeline = LectureUnitPageIngestionPipeline(
                     client=client, dto=self.dto, callback=callback
                 )
                 language, tokens_page_content_pipeline = page_content_pipeline()
                 tokens += tokens_page_content_pipeline
+                logger.info("[Lecture %d] PDF slides processed", lecture_unit_id)
             else:
+                logger.info(
+                    "[Lecture %d] No PDF - skipping slide ingestion", lecture_unit_id
+                )
                 callback.in_progress("skipping slide removal")
                 callback.done()
                 callback.in_progress("skipping slide interpretation")
                 callback.done()
                 callback.in_progress("skipping slide ingestion")
                 callback.done()
-            if (
-                self.dto.lecture_unit.transcription is not None
-                and self.dto.lecture_unit.transcription.segments is not None
-            ):
+
+            if has_transcription:
+                logger.info("[Lecture %d] Processing transcription...", lecture_unit_id)
                 transcription_pipeline = TranscriptionIngestionPipeline(
                     client=client, dto=self.dto, callback=callback
                 )
                 language, tokens_transcription_pipeline = transcription_pipeline()
                 tokens += tokens_transcription_pipeline
+                logger.info("[Lecture %d] Transcription processed", lecture_unit_id)
             else:
+                logger.info(
+                    "[Lecture %d] No transcription - skipping transcription ingestion",
+                    lecture_unit_id,
+                )
                 callback.in_progress("skipping transcription removal")
                 callback.done()
                 callback.in_progress("skipping transcription chunking")
@@ -100,8 +133,18 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 tokens=tokens,
             )
 
+            logger.info(
+                "[Lecture %d] Ingestion pipeline complete",
+                lecture_unit_id,
+            )
+
         except Exception as e:
-            logger.error("Error in ingestion pipeline", exc_info=e)
+            logger.error(
+                "[Lecture %d] Error in ingestion pipeline: %s",
+                lecture_unit_id,
+                str(e),
+                exc_info=True,
+            )
             capture_exception(e)
 
     @classmethod

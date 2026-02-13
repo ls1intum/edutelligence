@@ -39,40 +39,13 @@ class LangfuseSettings(BaseModel):
         return self
 
 
-class WhisperSettings(BaseModel):
-    """Settings for Whisper API configuration."""
-
-    type: str = Field(
-        default="openai_whisper",
-        description="Whisper provider type: 'azure_whisper' or 'openai_whisper'",
-    )
-    api_key: str = Field(description="API key for Whisper service")
-    endpoint: Optional[str] = Field(
-        default=None, description="API endpoint (required for Azure)"
-    )
-    api_version: Optional[str] = Field(
-        default=None, description="API version (Azure only)"
-    )
-    model: Optional[str] = Field(
-        default="whisper-1", description="Model name (e.g., 'whisper-1')"
-    )
-    azure_deployment: Optional[str] = Field(
-        default=None, description="Azure deployment name (Azure only)"
-    )
-
-    @model_validator(mode="after")
-    def validate_azure_fields(self):
-        """Validate that Azure-specific fields are provided when type is azure_whisper."""
-        if self.type == "azure_whisper":
-            if not self.endpoint:
-                raise ValueError("endpoint is required when type='azure_whisper'")
-            if not self.api_version:
-                raise ValueError("api_version is required when type='azure_whisper'")
-        return self
-
-
 class TranscriptionSettings(BaseModel):
-    """Settings for video transcription pipeline."""
+    """Settings for video transcription pipeline.
+
+    Note: Whisper API configuration is loaded from llm_config.yml,
+    not from application.yml. Add a whisper entry to llm_config.yml
+    with type 'azure_whisper' or 'openai_whisper'.
+    """
 
     enabled: bool = Field(default=False, description="Enable video transcription")
     temp_dir: str = Field(
@@ -82,9 +55,9 @@ class TranscriptionSettings(BaseModel):
     chunk_duration_seconds: int = Field(
         default=900, description="Audio chunk duration in seconds (default: 15 min)"
     )
-    whisper: WhisperSettings = Field(
-        default_factory=WhisperSettings,
-        description="Whisper API configuration",
+    whisper_model: str = Field(
+        default="whisper",
+        description="Model ID to look up in llm_config.yml",
     )
 
 
@@ -123,6 +96,42 @@ class Settings(BaseModel):
         """Set environment variables from the settings."""
         for key, value in self.env_vars.items():
             os.environ[key] = value
+
+
+def load_whisper_config(model: str = "whisper") -> dict:
+    """
+    Load Whisper configuration from llm_config.yml.
+
+    Args:
+        model: The model ID to look up in llm_config.yml.
+
+    Returns:
+        Dict containing the Whisper configuration.
+
+    Raises:
+        ValueError: If LLM_CONFIG_PATH is not set or model not found.
+        FileNotFoundError: If the config file doesn't exist.
+    """
+    llm_config_path = os.environ.get("LLM_CONFIG_PATH")
+    if not llm_config_path:
+        raise ValueError("LLM_CONFIG_PATH environment variable is not set.")
+
+    file_path = Path(llm_config_path)
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            llm_configs = yaml.safe_load(file)
+
+        # Find the whisper config by id
+        for config in llm_configs:
+            if config.get("id") == model:
+                return config
+
+        raise ValueError(f"Whisper model '{model}' not found in {file_path}")
+
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"LLM config file not found at {file_path}.") from e
+    except yaml.YAMLError as e:
+        raise yaml.YAMLError(f"Error parsing YAML file at {file_path}.") from e
 
 
 settings = Settings.get_settings()

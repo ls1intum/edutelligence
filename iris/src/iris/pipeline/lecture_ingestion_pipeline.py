@@ -235,10 +235,18 @@ class LectureUnitPageIngestionPipeline(
         This method is thread-safe and can only be executed by one thread at a time.
         Weaviate limitation.
         """
+        total_chunks = len(chunks)
+        logger.info("Ingesting %d chunks into Weaviate...", total_chunks)
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
-                    for _, chunk in enumerate(chunks):
+                    for idx, chunk in enumerate(chunks):
+                        if (idx + 1) % 10 == 0 or idx == total_chunks - 1:
+                            logger.info(
+                                "Embedding and ingesting chunk %d/%d",
+                                idx + 1,
+                                total_chunks,
+                            )
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
@@ -250,6 +258,7 @@ class LectureUnitPageIngestionPipeline(
                         exception=e,
                         tokens=self.tokens,
                     )
+        logger.info("Finished ingesting %d chunks into Weaviate", total_chunks)
 
     def chunk_data(
         self,
@@ -268,11 +277,25 @@ class LectureUnitPageIngestionPipeline(
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
         )
+        total_pages = doc.page_count
+        logger.info(
+            "[Lecture %d] Processing %d pages...",
+            lecture_unit_slide_dto.lecture_unit_id,
+            total_pages,
+        )
         old_page_text = ""
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            if page.get_images(full=False):
+            has_images = bool(page.get_images(full=False))
+            logger.info(
+                "[Lecture %d] Processing page %d/%d (has_images=%s)",
+                lecture_unit_slide_dto.lecture_unit_id,
+                page_num + 1,
+                total_pages,
+                has_images,
+            )
+            if has_images:
                 # more pixels thus more details and better quality
                 matrix = fitz.Matrix(5, 5)
                 pix = page.get_pixmap(matrix=matrix)
@@ -298,6 +321,12 @@ class LectureUnitPageIngestionPipeline(
                 )
             )
             old_page_text = page_text
+        logger.info(
+            "[Lecture %d] Finished processing %d pages, created %d chunks",
+            lecture_unit_slide_dto.lecture_unit_id,
+            total_pages,
+            len(data),
+        )
         return data
 
     def interpret_image(
@@ -352,7 +381,6 @@ class LectureUnitPageIngestionPipeline(
             "content_image_interpretation_merge_prompt.txt",
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
-            logger.info("Loading ingestion prompt...")
             lecture_ingestion_prompt = file.read()
         prompt = ChatPromptTemplate.from_messages(
             [
