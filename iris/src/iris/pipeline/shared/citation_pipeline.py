@@ -261,7 +261,7 @@ class CitationPipeline(SubPipeline):
             return []
         numbers = []
         for match in CITATION_BLOCK_WITH_SEQUENCE_PATTERN.finditer(answer):
-            numbers.append(int(match.group(6)))
+            numbers.append(int(match.group(INDEX_SEQUENCE_NUMBER)))
         return numbers
 
     def _sanitize_citation_field(self, value: str) -> str:
