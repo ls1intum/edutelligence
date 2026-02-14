@@ -8,7 +8,7 @@ from iris.domain.data.result_dto import ResultDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.variant.prompt_user_variant import PromptUserVariant
 from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
-from test_data import LLM_EVALUATION_PROMPT
+from test_data import LLM_GENERATION_EVALUATION_PROMPT
 
 from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
 from .llm_evaluation import evaluate
@@ -66,8 +66,12 @@ class TestAskUser(unittest.TestCase):
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
-        cls.keywords_code = extract_keywords("\n".join(cls.template.values()), "\n".join(cls.code.values()))
-        cls.keywords_task = extract_keywords("\n".join(cls.template.values()), cls.task)
+
+        cls.template_concatenated = "\n".join(cls.template.values())
+        cls.code_concatenated = "\n".join(cls.code.values())
+
+        cls.keywords_code = extract_keywords(cls.template_concatenated, cls.code_concatenated)
+        cls.keywords_task = extract_keywords(cls.template_concatenated, cls.task)
 
         # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
         # For this to happen, ResultDTO would have to be extended with feedback and the test data with a test repository
@@ -139,9 +143,9 @@ class TestAskUser(unittest.TestCase):
 
 
     def test_LLM_evaluation(self):
-        voting_result = evaluate(LLM_EVALUATION_PROMPT, 5, self.question)
+        voting_result = evaluate(LLM_GENERATION_EVALUATION_PROMPT, 5, self.question, self.task, self.template_concatenated, self.code_concatenated)
 
-        assert voting_result > 0.75
+        assert voting_result > 0.9
 
 
 if __name__ == "__main__":
