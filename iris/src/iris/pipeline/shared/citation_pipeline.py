@@ -138,6 +138,7 @@ class CitationPipeline(SubPipeline):
         request and is also used as lookup key in
         `_last_citation_content_by_seq` for later keyword/summary generation.
         """
+
         def build_citation_id(
             lecture_unit_id,
             page_number=None,
@@ -154,6 +155,7 @@ class CitationPipeline(SubPipeline):
             The `citation_sequence_number` is the per-request running number that links a
             citation in the final answer back to its original source text.
             """
+
             def format_part(value):
                 return "" if value is None else str(value)
 
@@ -204,7 +206,9 @@ class CitationPipeline(SubPipeline):
                 else None
             )
             citation_sequence_number += 1
-            self._last_citation_content_by_seq[citation_sequence_number] = paragraph.segment_text
+            self._last_citation_content_by_seq[citation_sequence_number] = (
+                paragraph.segment_text
+            )
             lecture_transcriptions.append(
                 {
                     "id": build_citation_id(
@@ -354,9 +358,7 @@ class CitationPipeline(SubPipeline):
         if not valid_numbers:
             return {num: ("", "") for num in unique_numbers}
 
-        with TracedThreadPoolExecutor(
-            max_workers=len(valid_numbers) + 1
-        ) as executor:
+        with TracedThreadPoolExecutor(max_workers=len(valid_numbers) + 1) as executor:
             keyword_future = executor.submit(
                 self._generate_keywords_sequential,
                 language_instruction,
@@ -466,7 +468,9 @@ class CitationPipeline(SubPipeline):
             )
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             response_str = str(response)
-            self.used_citation_numbers = self.extract_used_citation_numbers(response_str)
+            self.used_citation_numbers = self.extract_used_citation_numbers(
+                response_str
+            )
             try:
                 summaries = self._build_keyword_summary_map(
                     language_instruction=language_instruction,
