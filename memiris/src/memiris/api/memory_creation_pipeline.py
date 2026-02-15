@@ -526,6 +526,9 @@ class MemoryCreationPipeline:
         Returns:
             list[Memory]: A list of Memory objects created from the extracted and deduplicated learnings.
         """
+        if content is None or content.strip() == "":
+            return []
+
         learnings = []
         for extractor in self._learning_extractors:
             learnings.extend(extractor.extract(content, **kwargs))
