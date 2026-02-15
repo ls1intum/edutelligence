@@ -64,7 +64,10 @@ def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
         if not msg.contents:
             continue
         content = msg.contents[0]
-        if isinstance(content, TextMessageContentDTO) and not content.text_content.strip():
+        if (
+            isinstance(content, TextMessageContentDTO)
+            and not content.text_content.strip()
+        ):
             continue
         filtered.append(msg)
     return filtered
