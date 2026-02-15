@@ -190,7 +190,7 @@ class TracingContext:
             ctx.session_id = getattr(dto.settings, "authentication_token", None)
             ctx.artemis_base_url = getattr(dto.settings, "artemis_base_url", None)
 
-        # Extract course info (handles both CourseDTO and ExtendedCourseDTO)
+        # Extract course info from CourseDTO
         if hasattr(dto, "course") and dto.course:
             ctx.course_id = getattr(dto.course, "id", None)
             ctx.course_name = getattr(dto.course, "name", None)
