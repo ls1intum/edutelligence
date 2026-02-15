@@ -190,10 +190,12 @@ class MemoryCreatorLangChain(MemoryCreator):
             logger.debug("Primary parse failed, attempting regex extraction: %s", exc)
             match = re.search(r"\[\s*\{[\s\S]*}\s*]", text)
             if match:
-                try:
-                    return parse_and_convert(match.group(0))
-                except Exception as exc2:  # noqa: BLE001
-                    logger.debug("Regex parse failed: %s", exc2)
+                for i, group in enumerate(match.groups()):
+                    logger.debug("Regex group %d: %s", i, group[:1000])  # Log truncated
+                    try:
+                        return parse_and_convert(match.group(0))
+                    except Exception as exc2:  # noqa: BLE001
+                        logger.debug("Regex parse failed: %s", exc2)
             logger.error(
                 "Could not parse agent output into MemoryCreationDLO array. Truncated preview: %s",
                 text[:2000],
