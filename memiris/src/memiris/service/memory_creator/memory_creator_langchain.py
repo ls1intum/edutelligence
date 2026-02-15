@@ -187,15 +187,15 @@ class MemoryCreatorLangChain(MemoryCreator):
         try:
             return parse_and_convert(text)
         except Exception as exc:  # noqa: BLE001 - parsing may raise pydantic errors
-            logger.debug("Primary parse failed, attempting regex extraction: %s", exc)
+            logger.info("Primary parse failed, attempting regex extraction: %s", exc)
             match = re.search(r"\[\s*\{[\s\S]*}\s*]", text)
             if match:
                 for i, group in enumerate(match.groups()):
-                    logger.debug("Regex group %d: %s", i, group[:1000])  # Log truncated
+                    logger.info("Regex group %d: %s", i, group[:1000])
                     try:
-                        return parse_and_convert(match.group(0))
-                    except Exception as exc2:  # noqa: BLE001
-                        logger.debug("Regex parse failed: %s", exc2)
+                        return parse_and_convert(group)
+                    except Exception as exc_inner:
+                        logger.info("Parse failed for regex group %d: %s", i, exc_inner)
             logger.error(
                 "Could not parse agent output into MemoryCreationDLO array. Truncated preview: %s",
                 text[:2000],
