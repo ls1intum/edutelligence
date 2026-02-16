@@ -293,7 +293,7 @@ class PromptUserAgentPipeline(
             The processed result string.
         """
 
-        try: # TODO: only run refinement pipeline when actually a question was generated (e.g. don't when verdict was suspicious or unsuspicious or event is build_with_points/timer/tab)
+        try: # TODO: only run refinement pipeline when actually a new question was generated (e.g. don't when verdict was suspicious/unsuspicious/clarify or event is build_with_points/timer/tab)
             # Refine response using guide prompt
             result = self._refine_response(state)
 
