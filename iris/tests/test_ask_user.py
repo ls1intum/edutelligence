@@ -58,7 +58,7 @@ def extract_keywords(task_template: str, code: str, top_n: int = 10):
     return keywords
 
 # This class only tests the quality of the question generation.
-# It assumes the case where the student already answered an assessment question sufficiently and is asked another one (so no introductory text is generated).
+# It assumes the case where the student just started the assessment mode and is asked the first question.
 class TestAskUser(unittest.TestCase):
 
     @classmethod
@@ -74,14 +74,14 @@ class TestAskUser(unittest.TestCase):
         cls.keywords_task = extract_keywords(cls.template_concatenated, cls.task)
 
         # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
-        # For this to happen, ResultDTO would have to be extended with feedback and the test data with a test repository
+        # For this to happen, ResultDTO literal would have to be extended with feedback and the test data with a test repository
 
         cls.dto = PromptUserChatPipelineExecutionDTO(
             submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=cls.code, isPractice=False, buildFailed=False,
                                                 latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
             exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
             course=CourseDTO(id=1,name="Intro to Programming", description=None),
-            eventPayload=PyrisEventDTO(eventType="", event="sufficient_answer"), settings=None,
+            eventPayload=PyrisEventDTO(eventType=None, event=None), settings=None,
             user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False))
 
         cls.variant = PromptUserVariant(
@@ -92,7 +92,7 @@ class TestAskUser(unittest.TestCase):
         cls.callback = TestPromptUserStatusCallback()
 
         cls.pipeline = PromptUserAgentPipeline()
-        cls.pipeline(cls.dto, cls.variant, cls.callback, None)
+        cls.pipeline(cls.dto, cls.variant, cls.callback, event="user_initiates_prompting")
 
         cls.question = cls.callback.final_result
 

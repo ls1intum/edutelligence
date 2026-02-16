@@ -121,16 +121,15 @@ Use the tools to look up information (the given template code, the students subm
 {% if event == "build_with_points" %}
     {# write instructions for warning about defocusing, timer and to start prompting when they are ready to make points count #}
 {% elif event == "user_initiates_prompting" %}
-    {# write special instructions for generating first question #}
     Now generate a question. Here are the rules:
     {{ generation_rules }}
-{% elif event == "prompting_finished" %}
-    {# write instructions for thanking user for answers and give feedback #}
 {% elif event == "timer_ran_out" %}
     {# write instructions for informing user about consequences of time running out #}
 {% elif event == "tab_defocus" %}
     {# write instructions for informing user about consequences of tab defocusing #}
-{% elif insufficient_answer %}
+{% elif verdict == "suspicious" or verdict == "unsuspicious" %}
+    {# write instructions for thanking user for answers and give feedback #}
+{% elif verdict == "clarify" %}
     The last answer by the student was marked as insufficient because it was either too vague or maybe the student asked about the meaning of your question.
     Now, ask a follow-up question by looking at the chat history or answer to students question if this clarifies the meaning of your initial question.
     Politely tell the student to answer your question, if they changed the topic.
@@ -139,7 +138,7 @@ Use the tools to look up information (the given template code, the students subm
     Your messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
     Maintain your role.
     Use tools if useful, e.g. to look at the task or to look at the submitted code and compare it to the given exercise template.
-{% else %}
+{% elif verdict == "follow_up" %}
     The last answer by the student was marked as sufficient.
     Now, continue the prompting by asking the student another question.
     Here are the rules:

@@ -11,30 +11,36 @@ assess_user_answer_prompt = """
 * **`conversation_history`**: All previously asked questions and answers, including the last one for you to assess: {chat_history}
 * **`min_questions`**: Minimum number of questions to be asked per submission: {min_questions}
 * **`max_questions`**: Maximum number of questions to be asked per submission: {max_questions}
+* **`questions_asked`**: number of questions already asked: {questions_asked}
 
 ## Rules
 
 ### 1. Evaluate sufficiency
 
-* Determine whether the student’s answer is sufficient to decide if the submission is self-written.
-* If the answer is clear and demonstrates understanding of the student-written code, it may be marked as sufficient.
-* If the answer is obviously demonstrates a lack of understanding, it may be marked as insufficient.
-* If the answer is ambiguous or incomplete, a follow-up question may be needed.
+* Determine whether the student’s answers are sufficient to decide if the submission is self-written.
+* If the latest answer is ambiguous or incomplete, a clarifying question or explanation may be needed.
+* If the answers are clear and demonstrate understanding of the student-written code, it may be marked as unsuspicious.
+* If the answers obviously demonstrate a lack of understanding, it may be marked as suspicious.
+* If the given answers are not sufficient for a verdict yet, a follow-up question may be needed.
 
 ### 2. Decide if follow-up questions are needed
 
-* Consider the number of questions already asked (`conversation_history`).
+* Consider the number of questions already asked (`questions_asked`).
 * Ensure that the total number of questions remains between `min_questions` and `max_questions`.
-* If insufficient and questions are still allowed, return `follow_up_question`
-* If amount of questions asked is still below `min_questions`, return `follow_up_question`
-* If the amount of questions is already at `max_questions`, decide between `sufficient` and `insufficient` in your verdict.
+* Consider the conversation history (`conversation_history`) to decide whether the given answers are sufficient for a verdict.
+* If the latest answer is vague or the student asked a question, return `clarify` (in this case disregard the question limits).
+* If amount of questions asked is still below `min_questions`, return `follow_up`.
+* If insufficient and questions are still allowed, return `follow_up`.
+* If the amount of questions is already at `max_questions`, decide between `suspicious` and `unsuspicious` in your verdict.
+* If the amount of questions is between `min_questions` and `max_questions`, return `suspicious` or `unsuspicious` if the answers are sufficient.
+
 
 ### 3. Provide clear assessment
 
-* For each answer, return a structured assessment including:
+* Return a structured assessment including:
 
-  * **`verdict`**: one of `suspicious`, `unsuspicious` or `follow_up_question`
-  * **`reasoning`**: optional brief explanation of why the answer is sufficient or why follow-up is needed (max 1–2 sentences)
+  * **`verdict`**: one of `suspicious`, `unsuspicious`, `follow_up` or `clarify`
+  * **`reasoning`**: brief explanation of why the answer is sufficient or why follow-up or clarifying is needed (max 1–2 sentences)
 
 ### 4. Constraints
 
@@ -47,7 +53,7 @@ Return a JSON object with the following structure:
 
 ```json
 {
-  "verdict": "suspicious" | "unsuspicious" | "follow_up_question",
+  "verdict": "suspicious" | "unsuspicious" | "follow_up_question" | "clarify",
   "reasoning": "<max 1-2 sentences>"
 }
 ```

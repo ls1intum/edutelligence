@@ -221,7 +221,7 @@ class PromptUserAgentPipeline(
             "programming_language": programming_language,
             "event": self.event,
             "has_chat_history": len(state.message_history) > 0,
-            "insufficient_answer": False
+            "verdict": "" # TODO: replace this with verdict of assessment sub-pipeline
         }
 
         return self.system_prompt_template.render(template_context)
@@ -259,7 +259,10 @@ class PromptUserAgentPipeline(
         Returns:
             The processed result string.
         """
-        # TODO: run assess_answer subpipeline (only if previous answer exists) in pre-hook and give verdict as input for agent pipeline (set 'insufficient_answer' value like in build_system_message(...) corresponding to assessment result in state.prompt)
+        # TODO: run assess_answer sub-pipeline (only if event says nothing else (e.g. build with points/user initiates prompting/timer ran out/tab defocus)) in pre-hook and give verdict as input for agent pipeline (set 'verdict' value to "follow_up" or "clarify" like in build_system_message(...) corresponding to assessment result in state.prompt)
+        # TODO: also send verdict and reasoning to artemis via callback
+
+
         """try:
             # Assess previous answer of user if existing
             self._assess_answer(state, result)
@@ -290,7 +293,7 @@ class PromptUserAgentPipeline(
             The processed result string.
         """
 
-        try:
+        try: # TODO: only run refinement pipeline when actually a question was generated (e.g. don't when verdict was suspicious or unsuspicious or event is build_with_points/timer/tab)
             # Refine response using guide prompt
             result = self._refine_response(state)
 
@@ -370,7 +373,7 @@ class PromptUserAgentPipeline(
 
 
 
-    def _assess_answer( # TODO: check if previous answer exists, if so, assess answer and return verdict by using already existing prompt
+    def _assess_answer( #TODO: run sub-pipeline
             self,
             state: AgentPipelineExecutionState[
                 PromptUserChatPipelineExecutionDTO, PromptUserVariant
@@ -432,9 +435,6 @@ class PromptUserAgentPipeline(
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
-
-            # TODO: if event says prompting is finished -> trigger assessment sub-pipeline one last time
-
 
 
         except Exception as e:

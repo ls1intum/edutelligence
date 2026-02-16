@@ -87,7 +87,8 @@ class AssessUserAnswerPipeline(SubPipeline):
             chat_history: List[PyrisMessage],
             problem_statement: str,
             min_questions: int,
-            max_questions: int
+            max_questions: int,
+            questions_asked: int
     ) -> str:
         """
         Runs the pipeline
@@ -120,7 +121,8 @@ class AssessUserAnswerPipeline(SubPipeline):
                     "files": submission_file_list,
                     "chat_history": chat_history_list,
                     "min_questions": min_questions,
-                    "max_questions": max_questions
+                    "max_questions": max_questions,
+                    "questions_asked": questions_asked
                 }
             )
         )
