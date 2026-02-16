@@ -15,7 +15,7 @@ from iris.tracing import observe
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
-from ...domain import CourseChatPipelineExecutionDTO
+from ...domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
@@ -54,7 +54,7 @@ logger = get_logger(__name__)
 
 
 class CourseChatPipeline(
-    AbstractAgentPipeline[CourseChatPipelineExecutionDTO, CourseChatVariant]
+    AbstractAgentPipeline[ChatPipelineExecutionDTO, CourseChatVariant]
 ):
     """
     Course chat pipeline that answers course related questions from students.
@@ -114,9 +114,7 @@ class CourseChatPipeline(
 
     def is_memiris_memory_creation_enabled(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
     ) -> bool:
         """
         Return True if background memory creation should be enabled for this run.
@@ -128,9 +126,7 @@ class CourseChatPipeline(
 
     def get_tools(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
     ) -> list[Callable]:
         """
         Get the tools available for the agent pipeline.
@@ -241,9 +237,7 @@ class CourseChatPipeline(
 
     def build_system_message(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
     ) -> str:
         """
         Return a system message for the chat prompt.
@@ -334,9 +328,7 @@ class CourseChatPipeline(
 
     def get_agent_params(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
     ) -> dict[str, Any]:
         """
         Return the parameter dict passed to the agent executor.
@@ -346,7 +338,7 @@ class CourseChatPipeline(
         """
         return {}
 
-    def get_memiris_tenant(self, dto: CourseChatPipelineExecutionDTO) -> str:
+    def get_memiris_tenant(self, dto: ChatPipelineExecutionDTO) -> str:
         """
         Return the Memiris tenant identifier for the current user.
 
@@ -357,7 +349,7 @@ class CourseChatPipeline(
             raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
 
-    def get_memiris_reference(self, dto: CourseChatPipelineExecutionDTO):
+    def get_memiris_reference(self, dto: ChatPipelineExecutionDTO):
         """
         Return the reference to use for the Memiris learnings created in a course chat.
         It is simply the id of last user message in the chat history with a prefix.
@@ -385,9 +377,7 @@ class CourseChatPipeline(
 
     def on_agent_step(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
         step: dict[str, Any],
     ) -> None:
         """
@@ -403,9 +393,7 @@ class CourseChatPipeline(
 
     def post_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
     ) -> str:
         """
         Post-processing after agent execution including citations and suggestions.
@@ -447,13 +435,11 @@ class CourseChatPipeline(
 
     def _process_citations(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
-        dto: CourseChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
         variant: CourseChatVariant,
     ) -> str:
         """
@@ -504,11 +490,9 @@ class CourseChatPipeline(
 
     def _generate_suggestions(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
         output: str,
-        dto: CourseChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
     ) -> None:
         """
         Generate interaction suggestions based on the output and send them via callback.
@@ -555,11 +539,9 @@ class CourseChatPipeline(
 
     def _generate_session_title(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, CourseChatVariant],
         output: str,
-        dto: CourseChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
         Generate a session title from the conversation history.
@@ -577,7 +559,7 @@ class CourseChatPipeline(
     @observe(name="Course Chat Pipeline")
     def __call__(
         self,
-        dto: CourseChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
         variant: CourseChatVariant,
         callback: CourseChatStatusCallback,
     ):

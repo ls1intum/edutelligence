@@ -10,19 +10,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from iris.common.logging_config import get_logger
 from iris.common.memiris_setup import get_tenant_for_user
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain import (
-    ChatPipelineExecutionDTO,
-    CourseChatPipelineExecutionDTO,
-    ExerciseChatPipelineExecutionDTO,
-)
+from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
-)
-from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
-    LectureChatPipelineExecutionDTO,
-)
-from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
-    TextExerciseChatPipelineExecutionDTO,
 )
 from iris.domain.variant.chat_variant import ChatVariant
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
@@ -433,25 +423,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             List of tool functions for the agent.
         """
-        if (
-            isinstance(state.dto, ExerciseChatPipelineExecutionDTO)
-            and self.context == ChatContext.EXERCISE
-        ):
+        if self.context == ChatContext.EXERCISE:
             return self.exercise_pipeline.get_tools(state)
-        elif (
-            isinstance(state.dto, TextExerciseChatPipelineExecutionDTO)
-            and self.context == ChatContext.TEXT_EXERCISE
-        ):
+        elif self.context == ChatContext.TEXT_EXERCISE:
             return self.text_exercise_pipeline.get_tools(state)
-        elif (
-            isinstance(state.dto, LectureChatPipelineExecutionDTO)
-            and self.context == ChatContext.LECTURE
-        ):
+        elif self.context == ChatContext.LECTURE:
             return self.lecture_pipeline.get_tools(state)
-        elif (
-            isinstance(state.dto, CourseChatPipelineExecutionDTO)
-            and self.context == ChatContext.COURSE
-        ):
+        elif self.context == ChatContext.COURSE:
             return self.course_pipeline.get_tools(state)
         else:
             return []
@@ -469,25 +447,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             The system prompt string.
         """
-        if (
-            isinstance(state.dto, ExerciseChatPipelineExecutionDTO)
-            and self.context == ChatContext.EXERCISE
-        ):
+        if self.context == ChatContext.EXERCISE:
             return self.exercise_pipeline.build_system_message(state)
-        elif (
-            isinstance(state.dto, TextExerciseChatPipelineExecutionDTO)
-            and self.context == ChatContext.TEXT_EXERCISE
-        ):
+        elif self.context == ChatContext.TEXT_EXERCISE:
             return self.text_exercise_pipeline.build_system_message(state)
-        elif (
-            isinstance(state.dto, LectureChatPipelineExecutionDTO)
-            and self.context == ChatContext.LECTURE
-        ):
+        elif self.context == ChatContext.LECTURE:
             return self.lecture_pipeline.build_system_message(state)
-        elif (
-            isinstance(state.dto, CourseChatPipelineExecutionDTO)
-            and self.context == ChatContext.COURSE
-        ):
+        elif self.context == ChatContext.COURSE:
             return self.course_pipeline.build_system_message(state)
         else:
             return []
@@ -603,9 +569,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     @observe(name="Response Refinement")
     def _refine_response(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ChatVariant
-        ],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
     ) -> str:
         """
         Refine the agent response using the guide prompt. This is only available for programming exercises.

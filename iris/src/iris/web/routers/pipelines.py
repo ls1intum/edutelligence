@@ -7,17 +7,10 @@ from sentry_sdk import capture_exception
 from iris.common.logging_config import get_logger, get_request_id, set_request_id
 from iris.dependencies import TokenValidator
 from iris.domain import (
+    ChatPipelineExecutionDTO,
     CompetencyExtractionPipelineExecutionDTO,
-    CourseChatPipelineExecutionDTO,
-    ExerciseChatPipelineExecutionDTO,
     FeatureDTO,
     InconsistencyCheckPipelineExecutionDTO,
-)
-from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
-    LectureChatPipelineExecutionDTO,
-)
-from iris.domain.chat.text_exercise_chat.text_exercise_chat_pipeline_execution_dto import (
-    TextExerciseChatPipelineExecutionDTO,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -56,7 +49,7 @@ logger = get_logger(__name__)
 
 
 def run_exercise_chat_pipeline_worker(
-    dto: ExerciseChatPipelineExecutionDTO,
+    dto: ChatPipelineExecutionDTO,
     variant_id: str,
     event: str | None,
     request_id: str,
@@ -94,7 +87,7 @@ def run_exercise_chat_pipeline_worker(
 )
 def run_exercise_chat_pipeline(
     event: str | None = Query(None, description="Event query parameter"),
-    dto: ExerciseChatPipelineExecutionDTO = Body(
+    dto: ChatPipelineExecutionDTO = Body(
         description="Exercise Chat Pipeline Execution DTO"
     ),
 ):
@@ -141,7 +134,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
 )
 def run_course_chat_pipeline(
     event: str | None = Query(None, description="Event query parameter"),
-    dto: CourseChatPipelineExecutionDTO = Body(
+    dto: ChatPipelineExecutionDTO = Body(
         description="Course Chat Pipeline Execution DTO"
     ),
 ):
@@ -211,7 +204,7 @@ def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
+def run_text_exercise_chat_pipeline(dto: ChatPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, ChatPipeline)
     request_id = get_request_id()
     thread = Thread(
@@ -226,7 +219,7 @@ def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
+def run_lecture_chat_pipeline(dto: ChatPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, ChatPipeline)
     request_id = get_request_id()
     thread = Thread(

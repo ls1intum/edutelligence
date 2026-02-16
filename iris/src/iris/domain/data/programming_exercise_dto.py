@@ -1,8 +1,9 @@
-from datetime import datetime
 from enum import Enum
 from typing import Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from iris.domain.data.exercise_dto import ExerciseDTO
 
 
 class ProgrammingLanguage(str, Enum):
@@ -18,24 +19,19 @@ class ProgrammingLanguage(str, Enum):
     EMPTY = "EMPTY"
 
 
-class ProgrammingExerciseDTO(BaseModel):
+class ProgrammingExerciseDTO(ExerciseDTO):
     """Data Transfer Object for representing programming exercises.
     This DTO includes properties such as the programming language, repositories
     for templates, solutions, and tests, as well as the problem statement, start and end dates,
     maximum points, and recent changes (e.g., Git diffs).
     """
 
-    id: int
-    name: str
     programming_language: Optional[str] = Field(
         alias="programmingLanguage", default=None
     )
     template_repository: Dict[str, str] = Field(alias="templateRepository", default={})
     solution_repository: Dict[str, str] = Field(alias="solutionRepository", default={})
     test_repository: Dict[str, str] = Field(alias="testRepository", default={})
-    problem_statement: str = Field(alias="problemStatement", default=None)
-    start_date: Optional[datetime] = Field(alias="startDate", default=None)
-    end_date: Optional[datetime] = Field(alias="endDate", default=None)
     max_points: Optional[float] = Field(alias="maxPoints", default=None)
     recent_changes: Optional[str] = Field(
         alias="recentChanges",

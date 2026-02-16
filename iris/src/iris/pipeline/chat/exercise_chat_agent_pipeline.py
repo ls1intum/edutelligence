@@ -16,7 +16,7 @@ from iris.tracing import observe
 
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
-from ...domain import ExerciseChatPipelineExecutionDTO
+from ...domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
@@ -51,7 +51,7 @@ logger = get_logger(__name__)
 
 
 class ExerciseChatAgentPipeline(
-    AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, ExerciseChatVariant]
+    AbstractAgentPipeline[ChatPipelineExecutionDTO, ExerciseChatVariant]
 ):
     """
     Exercise chat agent pipeline that answers exercises related questions from students.
@@ -125,7 +125,7 @@ class ExerciseChatAgentPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
     ) -> bool:
         """
@@ -139,7 +139,7 @@ class ExerciseChatAgentPipeline(
         """
         return False
 
-    def get_memiris_tenant(self, dto: ExerciseChatPipelineExecutionDTO) -> str:
+    def get_memiris_tenant(self, dto: ChatPipelineExecutionDTO) -> str:
         """
         Return the Memiris tenant identifier for the current user.
 
@@ -153,7 +153,7 @@ class ExerciseChatAgentPipeline(
             raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
 
-    def get_memiris_reference(self, dto: ExerciseChatPipelineExecutionDTO):
+    def get_memiris_reference(self, dto: ChatPipelineExecutionDTO):
         """
         Return the reference to use for the Memiris learnings created in a programming exercise chat.
         It is simply the id of last user message in the chat history with a prefix.
@@ -178,7 +178,7 @@ class ExerciseChatAgentPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
     ) -> list[Callable]:
         """
@@ -253,7 +253,7 @@ class ExerciseChatAgentPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
     ) -> str:
         """
@@ -303,7 +303,7 @@ class ExerciseChatAgentPipeline(
     def on_agent_step(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
         step: dict[str, Any],
     ) -> None:
@@ -321,7 +321,7 @@ class ExerciseChatAgentPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
     ) -> str:
         """
@@ -364,7 +364,7 @@ class ExerciseChatAgentPipeline(
     def _refine_response(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
     ) -> str:
         """
@@ -419,7 +419,7 @@ class ExerciseChatAgentPipeline(
     def _add_citations(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
         result: str,
     ) -> str:
@@ -486,7 +486,7 @@ class ExerciseChatAgentPipeline(
     def _generate_suggestions(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
         result: str,
     ) -> None:
@@ -531,10 +531,10 @@ class ExerciseChatAgentPipeline(
     def _generate_session_title(
         self,
         state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
+            ChatPipelineExecutionDTO, ExerciseChatVariant
         ],
         output: str,
-        dto: ExerciseChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
         Generate a session title from the latest user prompt and the model output.
@@ -552,7 +552,7 @@ class ExerciseChatAgentPipeline(
     @observe(name="Exercise Chat Agent Pipeline")
     def __call__(
         self,
-        dto: ExerciseChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
         variant: ExerciseChatVariant,
         callback: ExerciseChatStatusCallback,
         event: str | None,

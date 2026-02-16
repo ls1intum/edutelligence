@@ -13,9 +13,7 @@ from iris.tracing import observe
 
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
-from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
-    LectureChatPipelineExecutionDTO,
-)
+from ...domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from ...domain.variant.lecture_chat_variant import LectureChatVariant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
@@ -35,7 +33,7 @@ logger = get_logger(__name__)
 
 
 class LectureChatPipeline(
-    AbstractAgentPipeline[LectureChatPipelineExecutionDTO, LectureChatVariant]
+    AbstractAgentPipeline[ChatPipelineExecutionDTO, LectureChatVariant]
 ):
     """
     Lecture chat pipeline that answers course related questions from students.
@@ -76,7 +74,7 @@ class LectureChatPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
+            ChatPipelineExecutionDTO, LectureChatVariant
         ],
     ) -> bool:
         """
@@ -90,7 +88,7 @@ class LectureChatPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
+            ChatPipelineExecutionDTO, LectureChatVariant
         ],
     ) -> list[Callable]:
         """
@@ -172,7 +170,7 @@ class LectureChatPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
+            ChatPipelineExecutionDTO, LectureChatVariant
         ],
     ) -> str:
         """
@@ -212,7 +210,7 @@ class LectureChatPipeline(
 
         return self.system_prompt_template.render(template_context)
 
-    def get_memiris_tenant(self, dto: LectureChatPipelineExecutionDTO) -> str:
+    def get_memiris_tenant(self, dto: ChatPipelineExecutionDTO) -> str:
         """
         Return the Memiris tenant identifier for the current user.
 
@@ -223,7 +221,7 @@ class LectureChatPipeline(
             raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
 
-    def get_memiris_reference(self, dto: LectureChatPipelineExecutionDTO):
+    def get_memiris_reference(self, dto: ChatPipelineExecutionDTO):
         """
         Return the reference to use for the Memiris learnings created in a lecture chat.
         It is simply the id of last user message in the chat history with a prefix.
@@ -248,7 +246,7 @@ class LectureChatPipeline(
     def on_agent_step(
         self,
         state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
+            ChatPipelineExecutionDTO, LectureChatVariant
         ],
         step: dict[str, Any],
     ) -> None:
@@ -265,7 +263,7 @@ class LectureChatPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
+            ChatPipelineExecutionDTO, LectureChatVariant
         ],
     ) -> str:
         """
@@ -299,12 +297,12 @@ class LectureChatPipeline(
     def _process_citations(
         self,
         state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
+            ChatPipelineExecutionDTO, LectureChatVariant
         ],
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
-        dto: LectureChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
         variant: LectureChatVariant,
     ) -> str:
         """
@@ -356,10 +354,10 @@ class LectureChatPipeline(
     def _generate_session_title(
         self,
         state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
+            ChatPipelineExecutionDTO, LectureChatVariant
         ],
         output: str,
-        dto: LectureChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
     ) -> Optional[str]:
         """
         Generate a session title from the latest user prompt and the model output.
@@ -377,7 +375,7 @@ class LectureChatPipeline(
     @observe(name="Lecture Chat Pipeline")
     def __call__(
         self,
-        dto: LectureChatPipelineExecutionDTO,
+        dto: ChatPipelineExecutionDTO,
         variant: LectureChatVariant,
         # course: CourseChatStatusCallback -> maybe adapt arcitecture later
         callback: LectureChatCallback,
