@@ -1,8 +1,5 @@
 from iris.domain.feature_dto import FeatureDTO
 
-from .chat.chat_pipeline_execution_base_data_dto import (
-    ChatPipelineExecutionBaseDataDTO,
-)
 from .chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from .competency_extraction_pipeline_execution_dto import (
     CompetencyExtractionPipelineExecutionDTO,
@@ -17,7 +14,6 @@ from .pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
 
 __all__ = [
     "FeatureDTO",
-    "ChatPipelineExecutionBaseDataDTO",
     "ChatPipelineExecutionDTO",
     "CompetencyExtractionPipelineExecutionDTO",
     "image_message_content_dto",

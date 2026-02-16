@@ -23,17 +23,20 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
     user: Optional[UserDTO]
 
-    # Context-specific fields (all Optional with defaults)
-    course: Optional[CourseDTO] = None
-    exercise: Optional[Union[ProgrammingExerciseDTO, TextExerciseDTO]] = (
-        None  # TODO: Keine Union?
-    )
+    # Context-specific fields
     metrics: Optional[StudentMetricsDTO] = None
     event_payload: Optional[PyrisEventDTO[Any]] = Field(None, alias="eventPayload")
     custom_instructions: Optional[str] = Field(default="", alias="customInstructions")
+
+    course: Optional[CourseDTO] = None
+    exercise: Optional[Union[ProgrammingExerciseDTO, TextExerciseDTO]] = None
+
     lecture: Optional[PyrisLectureDTO] = None
-    submission: Optional[ProgrammingSubmissionDTO] = None
-    current_submission: str = Field(alias="currentSubmission", default="")
-    lecture_unit_id: Optional[int] = Field(
-        alias="lectureUnitId", default=None
-    )  # TODO: überprüfen
+    lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
+
+    programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = (
+        None  # TODO:changed
+    )
+    text_exercise_submission: str = Field(
+        alias="textExerciseSubmission", default=""
+    )  # TODO:changed

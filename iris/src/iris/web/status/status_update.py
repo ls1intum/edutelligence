@@ -8,23 +8,15 @@ from sentry_sdk import capture_exception, capture_message
 
 from iris.common.logging_config import get_logger
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain.chat.course_chat.course_chat_status_update_dto import (
-    CourseChatStatusUpdateDTO,
-)
-from iris.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
-    ExerciseChatStatusUpdateDTO,
-)
 from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
     TutorSuggestionStatusUpdateDTO,
 )
+from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
 from iris.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
-)
-from iris.domain.status.lecture_chat_status_update_dto import (
-    LectureChatStatusUpdateDTO,
 )
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
@@ -32,9 +24,6 @@ from iris.domain.status.rewriting_status_update_dto import (
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
-from iris.domain.status.text_exercise_chat_status_update_dto import (
-    TextExerciseChatStatusUpdateDTO,
-)
 
 logger = get_logger(__name__)
 
@@ -261,7 +250,7 @@ class CourseChatStatusCallback(StatusCallback):
                 internal=True,
             ),
         ]
-        status = CourseChatStatusUpdateDTO(stages=stages)
+        status = ChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
 
@@ -287,7 +276,7 @@ class ExerciseChatStatusCallback(StatusCallback):
                 weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             ),
         ]
-        status = ExerciseChatStatusUpdateDTO(stages=stages)
+        status = ChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
 
@@ -310,7 +299,7 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
                 name="Generating response",
             ),
         ]
-        status = ExerciseChatStatusUpdateDTO(stages=stages)
+        status = ChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
 
@@ -342,7 +331,7 @@ class TextExerciseChatCallback(StatusCallback):
         super().__init__(
             url,
             run_id,
-            TextExerciseChatStatusUpdateDTO(stages=stages),
+            ChatStatusUpdateDTO(stages=stages),
             stages[stage],
             stage,
         )
@@ -446,7 +435,7 @@ class LectureChatCallback(StatusCallback):
             url,
             run_id,
             # result should not be "" by default since empty done messages are sent but should not be shown as message
-            LectureChatStatusUpdateDTO(stages=stages),
+            ChatStatusUpdateDTO(stages=stages),
             stages[stage],
             stage,
         )
