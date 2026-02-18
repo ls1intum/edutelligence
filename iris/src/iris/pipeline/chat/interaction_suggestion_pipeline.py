@@ -54,20 +54,31 @@ class InteractionSuggestionPipeline(SubPipeline):
     pipeline: Runnable
     prompt: ChatPromptTemplate
     variant: str
-    tokens: TokenUsageDTO
+    tokens: TokenUsageDTO | None
+    local: bool
 
-    def __init__(self, variant: str = "default"):
+    def __init__(self, variant: str = "default", local: bool = False):
         super().__init__(implementation_id="interaction_suggestion_pipeline")
 
         self.variant = variant
+        self.local = local
+        self.tokens = None
 
         # Set the langchain chat model
-        model = "gpt-4.1-nano"  # Default model for all variants
+        # Use larger model for better quality suggestions
+        model = "gpt-oss:120b" if local else "gpt-4.1-nano"
 
         request_handler = ModelVersionRequestHandler(version=model)
-        completion_args = CompletionArguments(
-            temperature=0.6, max_tokens=2000, response_format="JSON"
-        )
+
+        if local:
+            completion_args = CompletionArguments(
+                temperature=0.3, max_tokens=500, response_format="JSON"
+            )
+        else:
+            completion_args = CompletionArguments(
+                temperature=0.6, max_tokens=2000, response_format="JSON"
+            )
+
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -76,10 +87,10 @@ class InteractionSuggestionPipeline(SubPipeline):
         self.pipeline = self.llm | JsonOutputParser(pydantic_object=Questions)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llm={self.llm}, local={self.local})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llm={self.llm}, local={self.local})"
 
     @observe(name="Interaction Suggestion Pipeline")
     def __call__(
@@ -121,7 +132,7 @@ class InteractionSuggestionPipeline(SubPipeline):
             language_instruction = "\nGenerate questions in English."
 
         try:
-            logger.info("Running course interaction suggestion pipeline...")
+            logger.info("Running interaction suggestion pipeline...")
 
             history: List[PyrisMessage] = dto.chat_history or []
 
@@ -130,6 +141,7 @@ class InteractionSuggestionPipeline(SubPipeline):
                 convert_iris_message_to_langchain_message(message)
                 for message in history[-4:]
             ]
+
             if dto.last_message:
                 last_message = AIMessage(
                     content=dto.last_message.replace("{", "{{").replace("}", "}}"),
@@ -145,7 +157,7 @@ class InteractionSuggestionPipeline(SubPipeline):
                             + language_instruction,
                         ),
                         *chat_history_messages,
-                        ("system", chat_begin_prompt),
+                        ("human", chat_begin_prompt),
                     ]
                 )
 
@@ -154,14 +166,19 @@ class InteractionSuggestionPipeline(SubPipeline):
                 self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 
                 response: dict = (self.prompt | self.pipeline).invoke({})
-                self.tokens = self.llm.tokens
-                self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
+
+                # Track tokens if available
+                if hasattr(self.llm, "tokens") and self.llm.tokens:
+                    self.tokens = self.llm.tokens
+                    self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
+
                 return response["questions"]
             else:
                 raise ValueError("No last message provided")
+
         except Exception as e:
             logger.error(
-                "An error occurred while running the interaction suggestion chat pipeline",
+                "An error occurred while running the interaction suggestion pipeline",
                 exc_info=e,
             )
             return []

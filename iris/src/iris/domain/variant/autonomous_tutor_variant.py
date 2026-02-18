@@ -1,8 +1,8 @@
 from .abstract_variant import AbstractAgentVariant
 
 
-class ExerciseChatVariant(AbstractAgentVariant):
-    """Variant configuration for the ExerciseChatPipeline."""
+class AutonomousTutorVariant(AbstractAgentVariant):
+    """Variant configuration for the AutonomousTutorPipeline."""
 
     def __init__(
         self,
@@ -10,9 +10,7 @@ class ExerciseChatVariant(AbstractAgentVariant):
         name: str,
         description: str,
         cloud_agent_model: str,
-        cloud_citation_model: str,
         local_agent_model: str,
-        local_citation_model: str,
     ):
         super().__init__(
             variant_id=variant_id,
@@ -21,13 +19,6 @@ class ExerciseChatVariant(AbstractAgentVariant):
             cloud_agent_model=cloud_agent_model,
             local_agent_model=local_agent_model,
         )
-        self.cloud_citation_model = cloud_citation_model
-        self.local_citation_model = local_citation_model
 
     def required_models(self) -> set[str]:
-        return {
-            self.cloud_agent_model,
-            self.local_agent_model,
-            self.cloud_citation_model,
-            self.local_citation_model,
-        }
+        return {self.cloud_agent_model, self.local_agent_model}
