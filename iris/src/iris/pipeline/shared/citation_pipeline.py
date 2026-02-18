@@ -4,6 +4,7 @@ import re
 import threading
 from concurrent.futures import as_completed
 from enum import Enum
+from functools import partial
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
@@ -49,7 +50,7 @@ class InformationType(str, Enum):
 
 
 class CitationPipeline(SubPipeline):
-    """A generic reranker pipeline that can be used to rerank a list of documents based on a question"""
+    """Formats answers with structured citations based on retrieved content used during answer generation."""
 
     llms: dict
     pipelines: dict
@@ -123,6 +124,35 @@ class CitationPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llms={list(self.llms.keys())})"
 
+    def _format_citation_part(self, value) -> str:
+        return "" if value is None else str(value)
+
+    def _build_lecture_citation_id(
+        self,
+        lecture_unit_id,
+        page_number=None,
+        start_time_sec=None,
+        end_time_sec=None,
+        citation_sequence_number=None,
+    ) -> str:
+        """
+        Create a lecture citation id with stable source metadata and lookup key.
+
+        Target format:
+        `[cite:L:<lecture_unit_id>:<page_number>:<start_time_sec>:<end_time_sec>!<citation_sequence_number>]`
+
+        The `citation_sequence_number` is the per-request running number that links a
+        citation in the final answer back to its original source text.
+        """
+        return (
+            "[cite:L:"
+            f"{self._format_citation_part(lecture_unit_id)}:"
+            f"{self._format_citation_part(page_number)}:"
+            f"{self._format_citation_part(start_time_sec)}:"
+            f"{self._format_citation_part(end_time_sec)}"
+            f"!{self._format_citation_part(citation_sequence_number)}]"
+        )
+
     def create_formatted_lecture_string(
         self, lecture_retrieval_dto: LectureRetrievalDTO
     ):
@@ -139,35 +169,6 @@ class CitationPipeline(SubPipeline):
         `_last_citation_content_by_seq` for later keyword/summary generation.
         """
 
-        def build_citation_id(
-            lecture_unit_id,
-            page_number=None,
-            start_time_sec=None,
-            end_time_sec=None,
-            citation_sequence_number=None,
-        ):
-            """
-            Create a lecture citation id with stable source metadata and lookup key.
-
-            Target format:
-            `[cite:L:<lecture_unit_id>:<page_number>:<start_time_sec>:<end_time_sec>!<citation_sequence_number>]`
-
-            The `citation_sequence_number` is the per-request running number that links a
-            citation in the final answer back to its original source text.
-            """
-
-            def format_part(value):
-                return "" if value is None else str(value)
-
-            return (
-                "[cite:L:"
-                f"{format_part(lecture_unit_id)}:"
-                f"{format_part(page_number)}:"
-                f"{format_part(start_time_sec)}:"
-                f"{format_part(end_time_sec)}"
-                f"!{format_part(citation_sequence_number)}]"
-            )
-
         citation_sequence_number = 0
         self._last_citation_content_by_seq = {}
         lecture_page_chunks = []
@@ -180,7 +181,7 @@ class CitationPipeline(SubPipeline):
             )
             lecture_page_chunks.append(
                 {
-                    "id": build_citation_id(
+                    "id": self._build_lecture_citation_id(
                         paragraph.lecture_unit_id,
                         paragraph.page_number,
                         None,
@@ -211,7 +212,7 @@ class CitationPipeline(SubPipeline):
             )
             lecture_transcriptions.append(
                 {
-                    "id": build_citation_id(
+                    "id": self._build_lecture_citation_id(
                         paragraph.lecture_unit_id,
                         paragraph.page_number,
                         start_time_sec,
@@ -403,20 +404,27 @@ class CitationPipeline(SubPipeline):
     def _replace_cite_blocks_with_keyword_summary(
         self, answer: str, summaries: dict[int, tuple[str, str]]
     ) -> str:
-        def _replace(citation_match: re.Match) -> str:
-            cite_type = citation_match.group(INDEX_CITE_TYPE)
-            entity_id = citation_match.group(INDEX_ENTITY_ID)
-            page = citation_match.group(INDEX_PAGE)
-            start = citation_match.group(INDEX_START)
-            end = citation_match.group(INDEX_END)
-            num = int(citation_match.group(INDEX_SEQUENCE_NUMBER))
-            keyword, summary = summaries.get(num, ("", ""))
-            return (
-                f"[cite:{cite_type}:{entity_id}:{page}:{start}:{end}:"
-                f"{keyword}:{summary}]"
-            )
+        replace_handler = partial(
+            self._replace_citation_with_keyword_summary,
+            summaries=summaries,
+        )
+        return CITATION_BLOCK_WITH_SEQUENCE_PATTERN.sub(replace_handler, answer)
 
-        return CITATION_BLOCK_WITH_SEQUENCE_PATTERN.sub(_replace, answer)
+    def _replace_citation_with_keyword_summary(
+        self,
+        citation_match: re.Match,
+        summaries: dict[int, tuple[str, str]],
+    ) -> str:
+        cite_type = citation_match.group(INDEX_CITE_TYPE)
+        entity_id = citation_match.group(INDEX_ENTITY_ID)
+        page = citation_match.group(INDEX_PAGE)
+        start = citation_match.group(INDEX_START)
+        end = citation_match.group(INDEX_END)
+        num = int(citation_match.group(INDEX_SEQUENCE_NUMBER))
+        keyword, summary = summaries.get(num, ("", ""))
+        return (
+            f"[cite:{cite_type}:{entity_id}:{page}:{start}:{end}:{keyword}:{summary}]"
+        )
 
     @observe(name="Citation Pipeline")
     def __call__(

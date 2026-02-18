@@ -4,12 +4,12 @@ Your task:
 
 Add citations to the answer by inserting the provided ids.
 
-- Step 1: Read the answer and find each sentence (or bullet) that uses information from the FAQs.
-- Step 2: Immediately after that sentence, insert the matching id(s) from the JSON. If a sentence uses multiple FAQs, include all relevant ids.
-- Step 3: Use ids exactly as given (including brackets like "[cite:...]"). Do not invent ids, modify them, or change their order.
-- Step 4: Include only ids for FAQs that actually support the sentence.
-- Step 5: If any part of the answer uses FAQ information, every such sentence must have at least one id.
-- Step 6: Do not change the answer text except for adding ids. Output only the answer with inline ids.
+- Read the answer and find each sentence (or bullet) that uses information from the FAQs.
+- Immediately after that sentence, insert the matching id(s) from the JSON. If a sentence uses multiple FAQs, include all relevant ids.
+- Use ids exactly as given (including brackets like "[cite:...]"). Do not invent ids, modify them, or change their order.
+- Include only ids for FAQs that actually support the sentence.
+- If any part of the answer uses FAQ information, every such sentence must have at least one id.
+- Do not change the answer text except for adding ids. Output only the answer with inline ids.
 
 Here are the answer and the FAQs:
 
