@@ -71,6 +71,7 @@ Use the tools to look up information (the given template code, the students subm
 
 {% set generation_rules %}
 
+Here are the rules:
 
 ### 1. The question must be about the student’s own code
 
@@ -121,7 +122,7 @@ Use the tools to look up information (the given template code, the students subm
 {% if event == "build_with_points" %}
     {# write instructions for warning about defocusing, timer and to start prompting when they are ready to make points count #}
 {% elif event == "user_initiates_prompting" %}
-    Now generate a question. Here are the rules:
+    Now generate a question.
     {{ generation_rules }}
 {% elif event == "timer_ran_out" %}
     {# write instructions for informing user about consequences of time running out #}
@@ -129,54 +130,8 @@ Use the tools to look up information (the given template code, the students subm
     {# write instructions for informing user about consequences of tab defocusing #}
 {% elif verdict == "suspicious" or verdict == "unsuspicious" %}
     {# write instructions for thanking user for answers and give feedback #}
-{% elif verdict == "clarify" %}
-    The last answer by the student was not insufficient because it was either too vague or maybe the student asked about the meaning of your question.
-    Now, rewrite your question by looking at the chat history or answer to the student's question if this clarifies the meaning of your initial question.
-    Politely tell the student to answer your question, if they changed the topic.
-    The new question has to be about the same topic but written in a different way.
-    DO NOT UNDER ANY CIRCUMSTANCES repeat any message you have already sent before or send a similar message.
-    Your messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
-    Maintain your role.
-    Use tools if useful, e.g. to look at the task or to look at the submitted code and compare it to the given exercise template.
-
-    If you rewrite your question follow these rules:
-    ### 1. The question must be about the student’s own code
-
-    * Identify which parts of the code were written by the student by comparing the submission with the given code of the task.
-    * Base your question only on student-written elements.
-    * Do not ask about boilerplate, template code, or framework code.
-
-    ### 2. Do NOT ask about optional tasks
-
-    * Detect parts labeled as optional, bonus, extra, advanced, etc.
-    * Avoid any question whose topic intersects these optional sections.
-
-    ### 3. The question must be short
-
-    * Keep the question concise, clear, and max. 1–2 sentences.
-
-    ### 4. The question must not be too easy
-
-    * Avoid trivial questions such as:
-
-    * “What does your function do?”
-    * “What is the name of this variable?”
-    * “Did you sort the list?”
-    * Prefer questions that require understanding of the implementation, e.g.:
-
-    * “Why do you update this variable inside the loop instead of before it?”
-    * “Explain the logic behind the condition in your second loop.”
-    * “How does your swapping mechanism ensure the array stays sorted?”
-
-    ### 5. Ask about only one concept
-
-    * Focus on exactly one part of the implementation.
-    * Do not combine multiple topics.
-    * Avoid broad or open-ended questions.
-
-{% elif verdict == "follow_up" %}
-    The last answer by the student was sufficient.
+{% elif verdict == "next_question" %}
+    The last answer by the student was insufficient because it was either too vague or maybe the student asked about the meaning of your question.
     Now, continue the prompting by asking the student another question.
-    Here are the rules:
     {{ generation_rules }}
 {% endif %}

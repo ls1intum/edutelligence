@@ -259,7 +259,7 @@ class PromptUserAgentPipeline(
         Returns:
             The processed result string.
         """
-        # TODO: run assess_answer sub-pipeline (only if event says nothing else (e.g. build with points/user initiates prompting/timer ran out/tab defocus)) in pre-hook and give verdict as input for agent pipeline (set 'verdict' value to "follow_up" or "clarify" like in build_system_message(...) corresponding to assessment result in state.prompt)
+        # TODO: run assess_answer sub-pipeline (only if event says nothing else (e.g. build with points/user initiates prompting/timer ran out/tab defocus)) in pre-hook and give verdict as input for agent pipeline (set 'verdict' value to "next_question" like in build_system_message(...) corresponding to assessment result in state.prompt)
         # TODO: also send verdict and reasoning to artemis via callback
 
 
