@@ -71,16 +71,15 @@ class ConnectModelApiRequest(LogosKeyModel):
     model_id: int
     provider_id: int
     api_key: str
+    endpoint: str = ""
 
 
 class AddModelRequest(LogosKeyModel):
     name: str
-    endpoint: str
 
 
 class AddFullModelRequest(LogosKeyModel):
     name: str
-    endpoint: str
     weight_privacy: str
     worse_accuracy: Union[int, None]
     worse_quality: Union[int, None]

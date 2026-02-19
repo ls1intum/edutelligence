@@ -1,10 +1,4 @@
 import { Platform } from "react-native";
-import { buildMockRows, MAX_MOCK_ROWS } from "@/lib/utils/mockData";
-import type { RequestEventResponse } from "./types";
-
-export const MOCK_RESPONSE: RequestEventResponse = {
-  rows: buildMockRows(MAX_MOCK_ROWS, 30), // 30 days
-};
 
 export const API_BASE =
   Platform.OS === "web"
@@ -21,8 +15,6 @@ export const CHART_PALETTE = {
   textLight: "#64748B", // Slate-500 (readable on light)
   textDark: "#94A3B8", // Slate-400 (readable on dark)
 };
-
-export const VRAM_HOUR_SPACING_PX = 91; // ~30% more horizontal breathing room
 
 export const PROVIDER_COLORS = [
   CHART_PALETTE.provider1,
