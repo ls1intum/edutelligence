@@ -208,7 +208,7 @@ class LecturePageChunkRetrieval(SubPipeline):
                 ],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
                 lecture_unit_id=lecture_page_chunk[
-                    LectureUnitPageChunkSchema.LECTURE_ID.value
+                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                 ],
                 lecture_unit_name=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_NAME.value

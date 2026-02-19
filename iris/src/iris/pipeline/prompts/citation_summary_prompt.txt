@@ -1,0 +1,9 @@
+You are given a paragraph. Create a brief summary (1-2 sentences).
+
+Rules:
+- Do NOT include ":" or "[" or "]" in the summary.
+- The summary must be content-only; do NOT mention the paragraph/section.
+- Output ONLY the summary in plain text (no Markdown), nothing else.
+
+Paragraph:
+{Paragraph}
