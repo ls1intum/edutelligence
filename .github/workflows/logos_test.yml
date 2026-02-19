@@ -1,0 +1,59 @@
+---
+name: Logos - Test
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "logos/**"
+      - "shared/**"
+      - ".github/workflows/logos_test.yml"
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - "logos/**"
+      - "shared/**"
+      - ".github/workflows/logos_test.yml"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          poetry config virtualenvs.create true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Link shared dependency
+        run: ln -s ../shared logos/shared
+
+      - name: Install Dependencies
+        run: poetry install
+        working-directory: logos
+
+      - name: Clean old coverage data
+        run: |
+          rm -f .coverage
+          rm -f coverage.xml
+        working-directory: logos
+
+      - name: Run Tests
+        run: poetry run coverage run -m pytest
+        working-directory: logos
+
+      - name: Generate Coverage Report
+        run: poetry run coverage xml
+        working-directory: logos
