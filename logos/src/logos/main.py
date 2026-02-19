@@ -1,9 +1,12 @@
 import asyncio
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Set, Tuple, Optional
 import grpc
+
+_SERVER_START_TIME = int(time.time())
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -1546,6 +1549,75 @@ async def get_ollama_vram_stats_options():
             "Access-Control-Allow-Headers": "Content-Type, logos_key",
         }
     )
+
+
+# ============================================================================
+# OPENAI-COMPATIBLE MODEL LISTING
+# ============================================================================
+
+@app.get("/v1/models")
+async def list_models(request: Request):
+    """
+    List models accessible to the authenticated user (OpenAI-compatible).
+
+    Returns an OpenAI-compatible response listing all models the user's
+    current profile has access to via profile_model_permissions.
+
+    Returns:
+        JSONResponse matching the OpenAI GET /v1/models spec.
+    """
+    from logos.auth import authenticate_with_profile
+    auth = authenticate_with_profile(dict(request.headers))
+
+    with DBManager() as db:
+        models = db.get_models_for_profile(auth.profile_id)
+
+    data = [
+        {
+            "id": model["name"],
+            "object": "model",
+            "created": _SERVER_START_TIME,
+            "owned_by": "logos",
+        }
+        for model in models
+    ]
+
+    return JSONResponse(content={"object": "list", "data": data})
+
+
+@app.get("/v1/models/{model_id:path}")
+async def retrieve_model(model_id: str, request: Request):
+    """
+    Retrieve a single model by name (OpenAI-compatible).
+
+    Verifies the authenticated user has access to the requested model
+    through their profile's model permissions.
+
+    Params:
+        model_id: The model name (used as the OpenAI-style model id).
+        request: Incoming request.
+
+    Returns:
+        JSONResponse matching the OpenAI GET /v1/models/{model} spec.
+
+    Raises:
+        HTTPException(404): Model not found or user lacks access.
+    """
+    from logos.auth import authenticate_with_profile
+    auth = authenticate_with_profile(dict(request.headers))
+
+    with DBManager() as db:
+        model = db.get_model_for_profile(auth.profile_id, model_id)
+
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found or access denied")
+
+    return JSONResponse(content={
+        "id": model["name"],
+        "object": "model",
+        "created": _SERVER_START_TIME,
+        "owned_by": "logos",
+    })
 
 
 # ============================================================================
