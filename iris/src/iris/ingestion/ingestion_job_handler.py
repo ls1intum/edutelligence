@@ -1,4 +1,4 @@
-from asyncio import Semaphore
+from threading import Semaphore
 
 from iris.common.logging_config import get_logger
 

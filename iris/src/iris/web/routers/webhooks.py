@@ -10,6 +10,9 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )
+from iris.domain.transcription.video_transcription_execution_dto import (
+    VideoTranscriptionPipelineExecutionDto,
+)
 from iris.tracing import observe
 from iris.web.utils import validate_pipeline_variant
 
@@ -21,6 +24,9 @@ from ...ingestion.ingestion_job_handler import IngestionJobHandler
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
+from ...pipeline.transcription.video_transcription_pipeline import (
+    VideoTranscriptionPipeline,
+)
 from ...vector_database.database import VectorDatabase
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.lecture_deletion_status_callback import (
@@ -186,3 +192,56 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
     thread.start()
     return
+
+
+# Video Transcription Pipeline
+
+
+def run_video_transcription_worker(dto: VideoTranscriptionPipelineExecutionDto):
+    """
+    Run the video transcription pipeline in a separate thread.
+    """
+    logger.info(
+        "[Lecture %d] Video transcription worker started",
+        dto.lecture_unit_id,
+    )
+
+    try:
+        pipeline = VideoTranscriptionPipeline(dto)
+        pipeline()
+        logger.info(
+            "[Lecture %d] Video transcription completed successfully",
+            dto.lecture_unit_id,
+        )
+    except Exception as e:
+        logger.error(
+            "[Lecture %d] Transcription pipeline failed: %s",
+            dto.lecture_unit_id,
+            str(e),
+            exc_info=True,
+        )
+        capture_exception(e)
+
+
+@router.post(
+    "/transcription/video",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+@observe(name="POST /webhooks/transcription/video")
+def video_transcription_webhook(dto: VideoTranscriptionPipelineExecutionDto):
+    """
+    Webhook endpoint to trigger video transcription.
+
+    Accepts a video URL and lecture unit information, then processes
+    the video asynchronously. Status updates are sent back to Artemis
+    via callbacks at each stage.
+    """
+    logger.info(
+        "Received transcription webhook: lecture_unit=%d, video_url=%s",
+        dto.lecture_unit_id,
+        dto.video_url,
+    )
+
+    thread = Thread(target=run_video_transcription_worker, args=(dto,))
+    thread.start()
