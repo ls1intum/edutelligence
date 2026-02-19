@@ -64,6 +64,7 @@ class TempProviderRegistry:
     """
 
     _instance: Optional["TempProviderRegistry"] = None
+    _singleton_lock = threading.Lock()
     _lock_cls = threading.RLock  # overridable for testing
 
     def __init__(self) -> None:
@@ -74,7 +75,9 @@ class TempProviderRegistry:
 
     def __new__(cls) -> "TempProviderRegistry":
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with cls._singleton_lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
         return cls._instance
 
     # ------------------------------------------------------------------

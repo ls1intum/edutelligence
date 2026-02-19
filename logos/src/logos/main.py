@@ -740,24 +740,48 @@ async def _execute_temp_provider_request(
     if prov.auth_key:
         fwd_headers["Authorization"] = f"Bearer {prov.auth_key}"
 
-    payload = {**body, "stream": False}
+    payload = {**body}
+    if "stream" not in payload:
+        payload["stream"] = False
 
     try:
         async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=10, read=120, write=10, pool=10)) as client:
             resp = await client.post(forward_url, headers=fwd_headers, json=payload)
             resp.raise_for_status()
             result = resp.json()
-    except Exception as exc:
+            status_code = resp.status_code
+    except _httpx.HTTPStatusError as exc:
+        # Upstream returned a non-2xx HTTP response — forward it without marking unhealthy.
+        upstream_resp = exc.response
+        status_code = upstream_resp.status_code
+        try:
+            result = upstream_resp.json()
+        except ValueError:
+            result = {"error": upstream_resp.text}
+        logger.info(
+            "Temp provider %s (%s) returned HTTP %s",
+            prov.id, prov.name, status_code,
+        )
+    except _httpx.RequestError as exc:
+        # Transport-level error (connect/timeout/DNS) — mark unhealthy.
         logger.warning("Temp provider %s (%s) request failed: %s", prov.id, prov.name, exc)
         TempProviderRegistry().mark_unhealthy(prov.id)
-        error_payload = {"error": f"Temp provider '{prov.name}' is unreachable: {exc}"}
+        error_payload = {"error": f"Temp provider '{prov.name}' is unreachable"}
+        if is_async_job:
+            return {"status_code": 503, "data": error_payload}
+        raise HTTPException(status_code=503, detail=error_payload["error"])
+    except Exception as exc:
+        # Unexpected error — mark unhealthy.
+        logger.exception("Unexpected error calling temp provider %s (%s)", prov.id, prov.name)
+        TempProviderRegistry().mark_unhealthy(prov.id)
+        error_payload = {"error": f"Temp provider '{prov.name}' is unreachable"}
         if is_async_job:
             return {"status_code": 503, "data": error_payload}
         raise HTTPException(status_code=503, detail=error_payload["error"])
 
     if is_async_job:
-        return {"status_code": 200, "data": result}
-    return JSONResponse(content=result, status_code=200)
+        return {"status_code": status_code, "data": result}
+    return JSONResponse(content=result, status_code=status_code)
 
 
 async def _execute_proxy_mode(

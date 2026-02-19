@@ -53,7 +53,7 @@ class HealthMonitor:
     Usage::
 
         monitor = HealthMonitor(interval_s=30, auto_remove_after_s=300)
-        await monitor.start()
+        monitor.start()
         ...
         await monitor.stop()
     """

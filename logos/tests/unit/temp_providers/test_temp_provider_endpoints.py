@@ -7,7 +7,7 @@ import pytest
 
 import logos.main as main
 from logos.temp_providers.discovery import DiscoveredModel
-from logos.temp_providers.registry import TempProviderRegistry, TempProvider
+from logos.temp_providers.registry import TempProviderRegistry
 
 
 @pytest.fixture(autouse=True)

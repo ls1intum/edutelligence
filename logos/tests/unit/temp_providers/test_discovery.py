@@ -1,7 +1,5 @@
 """Tests for model auto-discovery from OpenAI-compatible and Ollama APIs."""
 
-import json
-
 import httpx
 import pytest
 
@@ -156,8 +154,6 @@ async def test_discover_models_openai_first(monkeypatch):
     openai_payload = {"data": [{"id": "mymodel", "owned_by": "x"}]}
 
     call_log = []
-
-    original_get = None
 
     class TrackingClient:
         async def __aenter__(self):
