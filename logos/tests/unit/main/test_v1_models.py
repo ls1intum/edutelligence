@@ -17,7 +17,10 @@ import logos.main as main
 def _make_request(headers: dict | None = None):
     """Create a mock FastAPI Request with the given headers."""
     req = MagicMock()
-    req.headers = headers or {"authorization": "Bearer test-key"}
+    if headers is None:
+        req.headers = {"authorization": "Bearer test-key"}
+    else:
+        req.headers = headers
     return req
 
 
@@ -33,10 +36,10 @@ class DummyDB:
     def __exit__(self, *args):
         return False
 
-    def get_models_for_profile(self, profile_id: int):
+    def get_models_for_profile(self, _profile_id: int):
         return self._models
 
-    def get_model_for_profile(self, profile_id: int, model_name: str):
+    def get_model_for_profile(self, _profile_id: int, model_name: str):
         return next((m for m in self._models if m["name"] == model_name), None)
 
 

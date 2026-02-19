@@ -3,10 +3,9 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Set, Tuple, Optional
+from typing import Any, Dict, Set, Optional
 import grpc
 
-_SERVER_START_TIME = int(time.time())
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -35,6 +34,8 @@ from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.monitoring.ollama_monitor import OllamaProviderMonitor
 from scripts import setup_proxy
+
+_SERVER_START_TIME = int(time.time())
 
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None

@@ -1642,6 +1642,7 @@ class DBManager:
                 JOIN profile_model_permissions pmp ON m.id = pmp.model_id
             WHERE pmp.profile_id = :profile_id
               AND m.name = :name
+            ORDER BY m.id LIMIT 1
         """)
         row = self.session.execute(
             sql, {"profile_id": int(profile_id), "name": model_name}
