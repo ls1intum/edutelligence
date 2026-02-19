@@ -2088,6 +2088,311 @@ class DBManager:
                             """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
+    # ====================================================================
+    # iPraktikum batch user provisioning
+    # ====================================================================
+
+    def batch_create_users(
+        self,
+        logos_key: str,
+        emails: List[str],
+        model_ids: List[int],
+        rate_limit_rpm: int = 60,
+        rate_limit_tpm: int = 100000,
+    ) -> Tuple[dict, int]:
+        """
+        Batch create users for iPraktikum.
+
+        For each email:
+        1. Create user (username = full email)
+        2. Create process with unique logos_key and rate limit settings
+        3. Create profile
+        4. Grant model access via profile_model_permissions
+
+        Returns:
+            Tuple of (result dict, status code)
+        """
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+
+        if not emails:
+            return {"error": "No emails provided."}, 400
+
+        # Validate model_ids exist
+        for mid in model_ids:
+            model = self.get_model(mid)
+            if model is None:
+                return {"error": f"Model ID {mid} not found."}, 400
+
+        results = []
+        for email in emails:
+            email = email.strip().lower()
+            if not email:
+                continue
+
+            # Check for duplicate email
+            existing = self.session.execute(
+                text("SELECT id FROM users WHERE email = :email"),
+                {"email": email}
+            ).fetchone()
+            if existing:
+                # Skip duplicates - record as already existing
+                # Find their existing process + key
+                proc = self.session.execute(
+                    text("SELECT id, logos_key FROM process WHERE user_id = :uid"),
+                    {"uid": existing[0]}
+                ).fetchone()
+                results.append({
+                    "email": email,
+                    "logos_key": proc[1] if proc else None,
+                    "user_id": existing[0],
+                    "process_id": proc[0] if proc else None,
+                    "profile_id": None,
+                    "status": "already_exists",
+                })
+                continue
+
+            # 1. Create user
+            username = email
+            user_id = self.insert("users", {
+                "username": username,
+                "prename": "",
+                "name": username,
+                "email": email,
+            })
+
+            # 2. Create process with rate limit settings
+            api_key = generate_logos_api_key(username)
+            settings = {
+                "rate_limit_rpm": rate_limit_rpm,
+                "rate_limit_tpm": rate_limit_tpm,
+                "email": email,
+            }
+            process_id = self.insert("process", {
+                "logos_key": api_key,
+                "user_id": user_id,
+                "name": username,
+                "settings": json.dumps(settings),
+            })
+
+            # 3. Create profile
+            profile_id = self.insert("profiles", {
+                "name": f"{username}-default",
+                "process_id": process_id,
+            })
+
+            # 4. Grant model access
+            for mid in model_ids:
+                # Check for existing permission
+                exists = self.session.execute(
+                    text("""
+                        SELECT 1 FROM profile_model_permissions
+                        WHERE profile_id = :pid AND model_id = :mid
+                    """),
+                    {"pid": profile_id, "mid": mid}
+                ).fetchone()
+                if not exists:
+                    self.insert("profile_model_permissions", {
+                        "profile_id": profile_id,
+                        "model_id": mid,
+                    })
+
+            results.append({
+                "email": email,
+                "logos_key": api_key,
+                "user_id": user_id,
+                "process_id": process_id,
+                "profile_id": profile_id,
+                "status": "created",
+            })
+
+        return {"result": results}, 200
+
+    def get_all_user_keys(self, logos_key: str) -> Tuple[list, int]:
+        """
+        Get email-to-key mapping for all provisioned users.
+
+        Args:
+            logos_key: Root API key for authorization
+
+        Returns:
+            Tuple of (list of {email, logos_key} dicts, status code)
+        """
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+
+        sql = """
+            SELECT u.email, p.logos_key
+            FROM users u
+            JOIN process p ON p.user_id = u.id
+            WHERE u.email IS NOT NULL
+        """
+
+        rows = self.session.execute(text(sql), {}).fetchall()
+        result = [{"email": r[0], "logos_key": r[1]} for r in rows]
+        return result, 200
+
+    def get_rate_limits(self, process_id: int) -> dict:
+        """
+        Read rate limits from process settings JSONB field.
+
+        Returns:
+            Dict with rate_limit_rpm and rate_limit_tpm (may be None if not set)
+        """
+        sql = text("SELECT settings FROM process WHERE id = :pid")
+        row = self.session.execute(sql, {"pid": process_id}).fetchone()
+        if not row or not row[0]:
+            return {"rate_limit_rpm": None, "rate_limit_tpm": None}
+
+        settings = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        return {
+            "rate_limit_rpm": settings.get("rate_limit_rpm"),
+            "rate_limit_tpm": settings.get("rate_limit_tpm"),
+        }
+
+    def update_rate_limit_settings(self, process_id: int, rpm: int, tpm: int) -> Tuple[dict, int]:
+        """
+        Update rate limits in process settings JSONB.
+        """
+        sql = text("SELECT settings FROM process WHERE id = :pid")
+        row = self.session.execute(sql, {"pid": process_id}).fetchone()
+        settings = {}
+        if row and row[0]:
+            settings = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
+        settings["rate_limit_rpm"] = rpm
+        settings["rate_limit_tpm"] = tpm
+
+        update_sql = text("UPDATE process SET settings = :settings WHERE id = :pid")
+        self.session.execute(update_sql, {"settings": json.dumps(settings), "pid": process_id})
+        self.session.commit()
+        return {"result": "Rate limits updated"}, 200
+
+    def get_user_usage_stats(self, process_id: int) -> Tuple[dict, int]:
+        """
+        Get usage statistics for a single process (user).
+        Returns only the authenticated user's data.
+
+        Returns aggregated stats by model, by day, and totals.
+        """
+        # Total tokens
+        total_sql = text("""
+            SELECT COALESCE(SUM(ut.token_count), 0) as total_tokens
+            FROM usage_tokens ut
+            JOIN log_entry le ON ut.log_entry_id = le.id
+            WHERE le.process_id = :pid
+        """)
+        total_row = self.session.execute(total_sql, {"pid": process_id}).fetchone()
+        total_tokens = int(total_row[0]) if total_row else 0
+
+        # By model
+        by_model_sql = text("""
+            SELECT
+                COALESCE(m.name, 'unknown') as model_name,
+                tt.name as token_type,
+                COALESCE(SUM(ut.token_count), 0) as token_count
+            FROM usage_tokens ut
+            JOIN log_entry le ON ut.log_entry_id = le.id
+            LEFT JOIN models m ON le.model_id = m.id
+            JOIN token_types tt ON ut.type_id = tt.id
+            WHERE le.process_id = :pid
+            GROUP BY m.name, tt.name
+            ORDER BY m.name, tt.name
+        """)
+        by_model_rows = self.session.execute(by_model_sql, {"pid": process_id}).fetchall()
+        by_model = {}
+        for r in by_model_rows:
+            model_name = r[0]
+            if model_name not in by_model:
+                by_model[model_name] = {"model_name": model_name, "tokens": {}}
+            by_model[model_name]["tokens"][r[1]] = int(r[2])
+
+        # By day
+        by_day_sql = text("""
+            SELECT
+                DATE(le.timestamp_request) as day,
+                COALESCE(SUM(ut.token_count), 0) as token_count
+            FROM usage_tokens ut
+            JOIN log_entry le ON ut.log_entry_id = le.id
+            WHERE le.process_id = :pid
+            GROUP BY DATE(le.timestamp_request)
+            ORDER BY day DESC
+            LIMIT 30
+        """)
+        by_day_rows = self.session.execute(by_day_sql, {"pid": process_id}).fetchall()
+        by_day = [{"day": str(r[0]), "token_count": int(r[1])} for r in by_day_rows]
+
+        # Total cost
+        cost_sql = text("""
+            SELECT COALESCE(SUM(
+                ut.token_count * tp.price_per_k_token / 1000.0
+            ), 0) as total_cost
+            FROM usage_tokens ut
+            JOIN log_entry le ON ut.log_entry_id = le.id
+            JOIN token_types tt ON ut.type_id = tt.id
+            LEFT JOIN LATERAL (
+                SELECT price_per_k_token
+                FROM token_prices
+                WHERE type_id = tt.id
+                  AND valid_from <= le.timestamp_request
+                ORDER BY valid_from DESC
+                LIMIT 1
+            ) tp ON true
+            WHERE le.process_id = :pid
+        """)
+        cost_row = self.session.execute(cost_sql, {"pid": process_id}).fetchone()
+        total_cost = float(cost_row[0]) if cost_row and cost_row[0] else 0.0
+
+        # Request count for this user
+        request_count_sql = text("""
+            SELECT COUNT(*) FROM log_entry WHERE process_id = :pid
+        """)
+        request_count = self.session.execute(
+            request_count_sql, {"pid": process_id}
+        ).scalar() or 0
+
+        # Rate limits
+        rate_limits = self.get_rate_limits(process_id)
+
+        return {
+            "total_tokens": total_tokens,
+            "total_cost": total_cost,
+            "total_requests": int(request_count),
+            "by_model": list(by_model.values()),
+            "by_day": by_day,
+            "rate_limits": rate_limits,
+        }, 200
+
+    def get_user_accessible_models(self, process_id: int) -> Tuple[list, int]:
+        """
+        Get models accessible by a user's process (via their profiles).
+        Returns simplified model info (name + description only).
+        """
+        sql = text("""
+            SELECT DISTINCT m.id, m.name, m.description, m.endpoint
+            FROM models m
+            JOIN profile_model_permissions pmp ON pmp.model_id = m.id
+            JOIN profiles pr ON pr.id = pmp.profile_id
+            WHERE pr.process_id = :pid
+            ORDER BY m.name
+        """)
+        rows = self.session.execute(sql, {"pid": process_id}).fetchall()
+        models = [{
+            "id": r[0],
+            "name": r[1],
+            "description": r[2],
+            "endpoint": r[3],
+        } for r in rows]
+        return models, 200
+
+    def get_process_settings(self, process_id: int) -> Optional[dict]:
+        """Get the settings JSONB for a process."""
+        sql = text("SELECT settings FROM process WHERE id = :pid")
+        row = self.session.execute(sql, {"pid": process_id}).fetchone()
+        if not row or not row[0]:
+            return None
+        return row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
     def user_authorization(self, logos_key: str):
         sql = text("""
                                 SELECT *

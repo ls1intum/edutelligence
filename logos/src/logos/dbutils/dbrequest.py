@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -156,3 +156,10 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+
+
+class BatchCreateUsersRequest(LogosKeyModel):
+    emails: List[str]
+    model_ids: List[int]
+    rate_limit_rpm: int = 60
+    rate_limit_tpm: int = 100000
