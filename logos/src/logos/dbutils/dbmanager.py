@@ -2166,7 +2166,6 @@ class DBManager:
             settings = {
                 "rate_limit_rpm": rate_limit_rpm,
                 "rate_limit_tpm": rate_limit_tpm,
-                "email": email,
             }
             process_id = self.insert("process", {
                 "logos_key": api_key,
@@ -2208,7 +2207,7 @@ class DBManager:
 
         return {"result": results}, 200
 
-    def get_all_user_keys(self, logos_key: str) -> Tuple[list, int]:
+    def get_all_user_keys(self, logos_key: str) -> Tuple[Union[list, dict], int]:
         """
         Get email-to-key mapping for all provisioned users.
 

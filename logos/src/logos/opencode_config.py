@@ -36,18 +36,14 @@ def generate_opencode_config(
     if not default_model and model_names:
         default_model = model_names[0]
 
-    # opencode uses LOCAL_ENDPOINT for self-hosted providers
-    # The config references models as "local.<model_name>"
-    # Build model name for opencode (local provider prefix)
-    default_model_ref = f"local.{default_model}" if default_model else None
-
     config = {
         "$schema": "https://raw.githubusercontent.com/opencode-ai/opencode/main/opencode-schema.json",
-        "providers": {
+        "provider": {
             "openai": {
-                "apiKey": logos_key,
-                "baseURL": f"{base_url}/v1",
-                "disabled": False,
+                "options": {
+                    "apiKey": logos_key,
+                    "baseURL": f"{base_url}/v1",
+                },
             },
         },
         "agents": {},
@@ -58,17 +54,17 @@ def generate_opencode_config(
         },
     }
 
-    if default_model_ref:
+    if default_model:
         config["agents"]["coder"] = {
-            "model": default_model,
+            "model": f"openai/{default_model}",
             "maxTokens": 8192,
         }
         config["agents"]["task"] = {
-            "model": default_model,
+            "model": f"openai/{default_model}",
             "maxTokens": 8192,
         }
         config["agents"]["title"] = {
-            "model": default_model,
+            "model": f"openai/{default_model}",
             "maxTokens": 80,
         }
 

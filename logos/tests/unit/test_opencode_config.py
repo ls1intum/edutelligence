@@ -2,8 +2,6 @@
 
 import json
 
-import pytest
-
 from logos.opencode_config import generate_opencode_config, generate_opencode_config_json
 
 
@@ -26,7 +24,7 @@ class TestGenerateOpencodeConfig:
             available_models=[{"name": "gpt-4"}],
         )
         # Provider should point to Logos /v1 endpoint
-        assert config["providers"]["openai"]["baseURL"] == "https://logos.example.com/v1"
+        assert config["provider"]["openai"]["options"]["baseURL"] == "https://logos.example.com/v1"
 
     def test_contains_correct_key(self):
         config = generate_opencode_config(
@@ -34,7 +32,7 @@ class TestGenerateOpencodeConfig:
             logos_key="lg-user-abc123",
             available_models=[{"name": "gpt-4"}],
         )
-        assert config["providers"]["openai"]["apiKey"] == "lg-user-abc123"
+        assert config["provider"]["openai"]["options"]["apiKey"] == "lg-user-abc123"
 
     def test_includes_available_models(self):
         models = [
@@ -60,7 +58,7 @@ class TestGenerateOpencodeConfig:
             available_models=models,
         )
         # Default model should be first available
-        assert config["agents"]["coder"]["model"] == "gpt-4"
+        assert config["agents"]["coder"]["model"] == "openai/gpt-4"
 
     def test_explicit_default_model(self):
         config = generate_opencode_config(
@@ -69,7 +67,7 @@ class TestGenerateOpencodeConfig:
             available_models=[{"name": "gpt-4"}, {"name": "llama-3"}],
             default_model="llama-3",
         )
-        assert config["agents"]["coder"]["model"] == "llama-3"
+        assert config["agents"]["coder"]["model"] == "openai/llama-3"
 
     def test_empty_models(self):
         config = generate_opencode_config(
@@ -87,7 +85,7 @@ class TestGenerateOpencodeConfig:
             logos_key="lg-user-abc",
             available_models=[{"name": "gpt-4"}],
         )
-        assert config["providers"]["openai"]["baseURL"] == "https://logos.example.com/v1"
+        assert config["provider"]["openai"]["options"]["baseURL"] == "https://logos.example.com/v1"
         assert config["logos"]["baseUrl"] == "https://logos.example.com"
 
     def test_schema_present(self):
@@ -97,14 +95,6 @@ class TestGenerateOpencodeConfig:
             available_models=[{"name": "gpt-4"}],
         )
         assert "$schema" in config
-
-    def test_provider_not_disabled(self):
-        config = generate_opencode_config(
-            logos_base_url="https://logos.example.com",
-            logos_key="lg-user-abc",
-            available_models=[{"name": "gpt-4"}],
-        )
-        assert config["providers"]["openai"]["disabled"] is False
 
     def test_config_json_is_pretty(self):
         config_str = generate_opencode_config_json(

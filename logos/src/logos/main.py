@@ -1000,7 +1000,7 @@ async def handle_sync_request(path: str, request: Request):
     tpm_limit = rate_limits.get("rate_limit_tpm")
 
     limiter = get_rate_limiter()
-    rl_result = limiter.check_rate_limit(auth.process_id, rpm_limit, tpm_limit)
+    rl_result = limiter.check_and_record(auth.process_id, rpm_limit, tpm_limit)
 
     if not rl_result.allowed:
         rl_headers = rl_result.get_headers()
@@ -1009,9 +1009,6 @@ async def handle_sync_request(path: str, request: Request):
             detail="Rate limit exceeded",
             headers=rl_headers,
         )
-
-    # Record the request for RPM tracking
-    limiter.record_request(auth.process_id)
 
     # Route and execute request with profile context
     response = await route_and_execute(
@@ -1476,11 +1473,15 @@ async def export_user_keys(request: Request):
     if isinstance(data, dict) and "error" in data:
         raise HTTPException(status_code=status, detail=data["error"])
 
-    # Build CSV
-    lines = ["email,logos_key"]
+    # Build CSV using stdlib to properly handle escaping
+    import csv as csv_module
+    import io
+    output = io.StringIO()
+    writer = csv_module.writer(output)
+    writer.writerow(["email", "logos_key"])
     for row in data:
-        lines.append(f"{row['email']},{row['logos_key']}")
-    csv_content = "\n".join(lines) + "\n"
+        writer.writerow([row["email"], row["logos_key"]])
+    csv_content = output.getvalue()
 
     return PlainTextResponse(
         content=csv_content,
@@ -1503,10 +1504,7 @@ async def get_opencode_config(request: Request):
     logos_key, process_id = authenticate_logos_key(headers)
 
     # Determine Logos base URL from request
-    forwarded_host = (
-        request.headers.get("x-forwarded-host")
-        or request.headers.get("x-forwarded-for")
-    )
+    forwarded_host = request.headers.get("x-forwarded-host")
     scheme = request.headers.get("x-forwarded-proto", "http")
     if forwarded_host:
         logos_base_url = f"{scheme}://{forwarded_host}"
@@ -1515,7 +1513,7 @@ async def get_opencode_config(request: Request):
 
     # Get user's accessible models
     with DBManager() as db:
-        models, status = db.get_user_accessible_models(process_id)
+        models, _status = db.get_user_accessible_models(process_id)
 
     config = generate_opencode_config(
         logos_base_url=logos_base_url,

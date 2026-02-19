@@ -9,7 +9,7 @@ import time
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 
 @dataclass
@@ -28,6 +28,7 @@ class SlidingWindow:
         """Add count to the window."""
         now = timestamp or time.time()
         with self._lock:
+            self._cleanup(now)
             self._entries.append((now, count))
 
     def get_total(self, timestamp: Optional[float] = None) -> int:
@@ -162,6 +163,69 @@ class RateLimiter:
             tpm_remaining=tpm_remaining,
             reset_time=reset_time_val,
         )
+
+    def check_and_record(
+        self,
+        process_id: int,
+        rpm_limit: Optional[int] = None,
+        tpm_limit: Optional[int] = None,
+    ) -> RateLimitResult:
+        """
+        Atomically check rate limits and record the request if allowed.
+
+        Preferred over separate check_rate_limit() + record_request() calls
+        to avoid TOCTOU race conditions at the rate limit boundary.
+        """
+        if rpm_limit is None and tpm_limit is None:
+            return RateLimitResult(allowed=True)
+
+        now = time.time()
+
+        with self._lock:
+            rpm_window = self._rpm_windows[process_id]
+            tpm_window = self._tpm_windows[process_id]
+
+            current_rpm = rpm_window.get_total(now)
+            current_tpm = tpm_window.get_total(now)
+
+            rpm_remaining = (rpm_limit - current_rpm) if rpm_limit is not None else None
+            tpm_remaining = (tpm_limit - current_tpm) if tpm_limit is not None else None
+
+            rpm_exceeded = rpm_limit is not None and current_rpm >= rpm_limit
+            tpm_exceeded = tpm_limit is not None and current_tpm >= tpm_limit
+
+            if rpm_exceeded or tpm_exceeded:
+                retry_after = max(
+                    rpm_window.get_reset_time(now) if rpm_exceeded else 0.0,
+                    tpm_window.get_reset_time(now) if tpm_exceeded else 0.0,
+                )
+                reset_time = now + retry_after
+                return RateLimitResult(
+                    allowed=False,
+                    rpm_limit=rpm_limit,
+                    rpm_remaining=rpm_remaining,
+                    tpm_limit=tpm_limit,
+                    tpm_remaining=tpm_remaining,
+                    retry_after=retry_after,
+                    reset_time=reset_time,
+                )
+
+            # Allowed — record immediately under the same lock
+            rpm_window.add(1, now)
+
+            reset_time_val = now + max(
+                rpm_window.get_reset_time(now),
+                tpm_window.get_reset_time(now),
+            )
+
+            return RateLimitResult(
+                allowed=True,
+                rpm_limit=rpm_limit,
+                rpm_remaining=(rpm_remaining - 1) if rpm_remaining is not None else None,
+                tpm_limit=tpm_limit,
+                tpm_remaining=tpm_remaining,
+                reset_time=reset_time_val,
+            )
 
     def record_request(self, process_id: int) -> None:
         """Record a new request for RPM tracking."""

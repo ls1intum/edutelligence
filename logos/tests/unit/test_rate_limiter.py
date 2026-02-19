@@ -1,9 +1,6 @@
 """Tests for the per-user rate limiter."""
 
 import time
-from unittest.mock import patch
-
-import pytest
 
 from logos.rate_limiter import RateLimiter, SlidingWindow, RateLimitResult
 

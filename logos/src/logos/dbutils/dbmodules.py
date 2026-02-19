@@ -33,7 +33,7 @@ class User(Base):
     username = Column(String, nullable=False)
     prename = Column(String)
     name = Column(String)
-    email = Column(String)
+    email = Column(String, unique=True)
 
 
 class Service(Base):

@@ -3,32 +3,9 @@
 import csv
 import io
 import json
-from unittest.mock import MagicMock, patch, PropertyMock
-
-import pytest
+from unittest.mock import MagicMock
 
 from logos.dbutils.dbrequest import BatchCreateUsersRequest
-
-
-class FakeSession:
-    """Minimal mock for a SQLAlchemy session."""
-
-    def __init__(self):
-        self._data = {}
-        self._next_id = 1
-        self._execute_results = []
-
-    def execute(self, stmt, params=None):
-        return MagicMock(fetchone=MagicMock(return_value=None), fetchall=MagicMock(return_value=[]), scalar=MagicMock(return_value=None))
-
-    def add(self, obj):
-        pass
-
-    def commit(self):
-        pass
-
-    def close(self):
-        pass
 
 
 class TestBatchCreateUsersRequest:
@@ -189,7 +166,7 @@ class TestBatchCreateUsers:
 
     def test_batch_create_rate_limits_in_settings(self):
         db = self._make_db_manager()
-        result, status = db.batch_create_users(
+        _result, status = db.batch_create_users(
             logos_key="lg-root-key",
             emails=["user@test.com"],
             model_ids=[1],
@@ -206,7 +183,7 @@ class TestBatchCreateUsers:
 
     def test_batch_create_email_stored(self):
         db = self._make_db_manager()
-        result, status = db.batch_create_users(
+        _result, status = db.batch_create_users(
             logos_key="lg-root-key",
             emails=["user@test.com"],
             model_ids=[1],
