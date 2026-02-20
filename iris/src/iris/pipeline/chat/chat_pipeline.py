@@ -1,5 +1,4 @@
 import os
-from enum import Enum, StrEnum, auto
 from typing import Any, Callable, List, Optional
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -21,6 +20,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
+from iris.pipeline.chat.chat_context import ChatContext
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
 from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
@@ -35,79 +35,15 @@ from iris.pipeline.session_title_generation_pipeline import (
 from iris.pipeline.shared.citation_pipeline import CitationPipeline, InformationType
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
+from iris.tools.chat_tool_providers import (
+    CHAT_TOOL_PROVIDERS,
+    provide_faq_retrieval,
+    provide_lecture_retrieval,
+)
 from iris.tracing import observe
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
-
-
-class ToolType(Enum):
-    """
-    Enum that defines all the available tools
-    """
-
-    COURSE_DETAILS = auto()
-    LECTURE_CONTENT = auto()
-    FAQ_CONTENT = auto()
-    EXERCISE_LIST = auto()
-    STUDENT_EXERCISE_METRICS = auto()
-    COMPETENCY_LIST = auto()
-    MEMORY_SEARCH = auto()
-    SUBMISSION_DETAILS = auto()
-    BUILD_LOGS_ANALYSIS = auto()
-    FEEDBACKS = auto()
-    REPOSITORY_FILES = auto()
-    FILE_LOOKUP = auto()
-    SCOPED_LECTURE_ID = auto()
-    ADDITIONAL_EXERCISE_DETAILS = auto()
-    EXERCISE_PROBLEM_STATEMENT = auto()
-
-
-class ChatContext(StrEnum):
-    COURSE = auto()
-    LECTURE = auto()
-    EXERCISE = auto()
-    TEXT_EXERCISE = auto()
-
-    @property
-    def available_tools(self) -> list[ToolType]:
-        match self:
-            case ChatContext.COURSE:
-                return [
-                    ToolType.COURSE_DETAILS,
-                    ToolType.LECTURE_CONTENT,
-                    ToolType.FAQ_CONTENT,
-                    ToolType.EXERCISE_LIST,
-                    ToolType.STUDENT_EXERCISE_METRICS,
-                    ToolType.COMPETENCY_LIST,
-                    ToolType.MEMORY_SEARCH,
-                    ToolType.ADDITIONAL_EXERCISE_DETAILS,
-                    ToolType.EXERCISE_PROBLEM_STATEMENT,
-                ]
-            case ChatContext.LECTURE:
-                return [
-                    ToolType.COURSE_DETAILS,
-                    ToolType.LECTURE_CONTENT,
-                    ToolType.FAQ_CONTENT,
-                    ToolType.MEMORY_SEARCH,
-                    ToolType.SCOPED_LECTURE_ID,
-                ]
-            case ChatContext.EXERCISE:
-                return [
-                    ToolType.LECTURE_CONTENT,
-                    ToolType.FAQ_CONTENT,
-                    ToolType.SUBMISSION_DETAILS,
-                    ToolType.BUILD_LOGS_ANALYSIS,
-                    ToolType.FEEDBACKS,
-                    ToolType.REPOSITORY_FILES,
-                    ToolType.FILE_LOOKUP,
-                ]
-            case ChatContext.TEXT_EXERCISE:
-                return [
-                    ToolType.COURSE_DETAILS,
-                    ToolType.LECTURE_CONTENT,
-                    ToolType.FAQ_CONTENT,
-                ]
 
 
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant]):
@@ -115,7 +51,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     Replaces CourseChatPipeline / ExerciseChatPipeline / TextExerciseChatPipeline / LectureChatPipeline
     """
 
-    # Just for now -> See get_tools & build_message
+    # Just for now -> See build_message
     exercise_pipeline: ExerciseChatAgentPipeline
     course_pipeline: CourseChatPipeline
     text_exercise_pipeline: TextExerciseChatPipeline
@@ -147,7 +83,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
         self.event = event  # TODO: Was hat es mit dem Event auf sich ?
 
-        # Just for now -> See get_tools & build_message
+        # Just for now -> See build_message
         self.exercise_pipeline = ExerciseChatAgentPipeline()
         self.course_pipeline = CourseChatPipeline(event=event)
         self.text_exercise_pipeline = TextExerciseChatPipeline()
@@ -410,12 +346,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             state.callback.error("Error in processing response")
             return state.result
 
-    def get_tools(  # TODO: Überarbeiten
+    def get_tools(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
     ) -> list[Callable]:
         """
         Create and return tools for the agent.
+
+        Iterates over all registered tool providers and collects the ones
+        that are applicable for the current context and state.
 
         Args:
             state: The current pipeline execution state.
@@ -423,16 +362,30 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             List of tool functions for the agent.
         """
-        if self.context == ChatContext.EXERCISE:
-            return self.exercise_pipeline.get_tools(state)
-        elif self.context == ChatContext.TEXT_EXERCISE:
-            return self.text_exercise_pipeline.get_tools(state)
-        elif self.context == ChatContext.LECTURE:
-            return self.lecture_pipeline.get_tools(state)
-        elif self.context == ChatContext.COURSE:
-            return self.course_pipeline.get_tools(state)
-        else:
-            return []
+        # Initialize shared storage on state
+        if not hasattr(state, "lecture_content_storage"):
+            setattr(state, "lecture_content_storage", {})
+        if not hasattr(state, "faq_storage"):
+            setattr(state, "faq_storage", {})
+        if not hasattr(state, "accessed_memory_storage"):
+            setattr(state, "accessed_memory_storage", [])
+        query_text = self.get_text_of_latest_user_message(state)
+
+        tools: list[Callable] = []
+
+        lecture_retrieval = provide_lecture_retrieval(state, query_text)
+        if lecture_retrieval:
+            tools.append(lecture_retrieval)
+
+        faq_retrieval = provide_faq_retrieval(state, query_text)
+        if faq_retrieval:
+            tools.append(faq_retrieval)
+
+        for provider in CHAT_TOOL_PROVIDERS:
+            tool = provider(state, self.context)
+            if tool is not None:
+                tools.append(tool)
+        return tools
 
     def build_system_message(  # TODO: Überarbeiten
         self,
@@ -696,15 +649,4 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             logger.error(
                 "An error occurred while running the chat pipeline.", exc_info=e
             )
-            callback.error(
-                "An error occurred while running the chat pipeline.",
-                tokens=(
-                    []
-                    if self.context in [ChatContext.COURSE, ChatContext.LECTURE]
-                    else None
-                ),
-            )  # TODO: Tokens?
-
-    # TODO: Folgende Methoden in TextExercisePipeline anschauen
-    # get_recent_history_from_dto()
-    # get_text_of_latest_user_message()
+            callback.error("An error occurred while running the chat pipeline.")
