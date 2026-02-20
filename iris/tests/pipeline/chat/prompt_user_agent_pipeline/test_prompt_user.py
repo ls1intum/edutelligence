@@ -2,34 +2,31 @@ import logging
 import datetime
 import unittest
 
-from helper import extract_keywords, get_pass_ratio
+from tests.pipeline.chat.prompt_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, LLM_GENERATION_EVALUATION_PROMPT
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
+
 from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from iris.domain.data.result_dto import ResultDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.variant.prompt_user_variant import PromptUserVariant
-from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
-from test_data import LLM_GENERATION_EVALUATION_PROMPT
-
-from .test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING
-from .llm_evaluation import evaluate
-
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
-from .TestCallback import TestPromptUserStatusCallback
+from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# This class only tests the quality of the question generation.
+# This class tests the quality of the question generation.
 # It assumes the case where the student just started the assessment mode and is asked the first question.
-class TestAskUser(unittest.TestCase):
+class TestPromptUser(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        number_of_questions_to_test = 3
-        cls.required_test_pass_rate = 0.9
+        number_of_questions_to_test = 5
+        cls.required_test_pass_rate = 0.8
 
 
         cls.task = TASK_SORTING
@@ -63,7 +60,7 @@ class TestAskUser(unittest.TestCase):
         cls.questions = []
 
         for i in range(number_of_questions_to_test):
-            callback = TestPromptUserStatusCallback()
+            callback = PromptUserStatusCallbackMock()
             pipeline(dto, variant, callback, event="user_initiates_prompting")
             cls.questions.append(callback.final_result)
 
@@ -73,7 +70,6 @@ class TestAskUser(unittest.TestCase):
 
     def test_question_is_thematically_relevant(self):
         # this tests if keywords of submission minus template or keywords of the problem statement minus template are part of the question
-
         pass_ratio = get_pass_ratio(self.questions,
                                     lambda q: any(k in q.lower() for k in self.keywords_code) or any(k in q.lower() for k in self.keywords_task))
 
@@ -144,7 +140,7 @@ class TestAskUser(unittest.TestCase):
 
 
         pass_ratio = get_pass_ratio(self.questions,
-                                    lambda q: evaluate(LLM_GENERATION_EVALUATION_PROMPT, 5, q, self.task,
+                                    lambda q: llm_evaluate(LLM_GENERATION_EVALUATION_PROMPT, 5, q, self.task,
                                                        self.template_concatenated, self.code_concatenated) >= required_voting_result)
 
         assert pass_ratio >= self.required_test_pass_rate

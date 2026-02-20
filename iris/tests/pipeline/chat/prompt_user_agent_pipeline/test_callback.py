@@ -1,12 +1,10 @@
 from typing import List, Optional
 
-from iris.domain.status.stage_dto import StageDTO
-from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.web.status.status_update import ExerciseChatStatusCallback, PromptUserStatusCallback
+from iris.web.status.status_update import PromptUserStatusCallback
 
 
-class TestPromptUserStatusCallback(PromptUserStatusCallback):
+class PromptUserStatusCallbackMock(PromptUserStatusCallback):
     """
     Test callback.
 

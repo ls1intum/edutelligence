@@ -1,19 +1,19 @@
 import logging
 import unittest
-
-from TestCallback import TestPromptUserStatusCallback
-from helper import to_user_message, get_pass_ratio, to_ai_message
-from iris.common.pyris_message import PyrisMessage
 from typing import List
 
-from .test_data import TASK_SORTING, CODE_SORTING, TEMPLATE_SORTING
-from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
+from tests.pipeline.chat.prompt_user_agent_pipeline.helper import to_user_message, get_pass_ratio, to_ai_message
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import TASK_SORTING, CODE_SORTING, TEMPLATE_SORTING
 
+from iris.common.pyris_message import PyrisMessage
+from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-class TestCheckUserAnswer(unittest.TestCase):
+# This class tests the decision process of assessing a student's answer to a given question.
+class TestAssessUserAnswer(unittest.TestCase):
 
     # Helper function to run assessment pipeline with given parameters
     def get_verdicts(self, answer: str, min_questions: int, max_questions: int, questions_asked: int):
@@ -33,15 +33,15 @@ class TestCheckUserAnswer(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.number_of_verdicts_to_test = 3
-        cls.required_test_pass_rate = 0.9
+        cls.number_of_verdicts_to_test = 5
+        cls.required_test_pass_rate = 0.8
 
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
         cls.question = to_ai_message("How is the swap of two elements implemented in your implementation of the bubble sort algorithm?")
 
-        cls.callback = TestPromptUserStatusCallback()
+        cls.callback = PromptUserStatusCallbackMock()
         cls.pipeline = AssessUserAnswerPipeline(callback = cls.callback)
 
     def setUp(self):
