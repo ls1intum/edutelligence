@@ -9,7 +9,8 @@ from pydantic import BaseModel
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from ..prompts.assess_user_answer_prompt import assess_user_answer_prompt
+from ..prompts.assess_user_answer_prompt import assess_user_answer_prompt, under_min_questions_rules, \
+    over_equal_max_questions_rules, between_min_max_questions_rules
 
 from ...common.pyris_message import PyrisMessage
 from ...llm import (
@@ -74,7 +75,7 @@ class AssessUserAnswerPipeline(SubPipeline):
         # Create the prompt
         self.default_prompt = PromptTemplate(
             template=prompt_str,
-            input_variables=["template", "task", "files", "chat_history", "min_questions", "max_questions"]
+            input_variables=["template", "task", "files", "chat_history", "decision_rules"]
         )
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
@@ -92,7 +93,7 @@ class AssessUserAnswerPipeline(SubPipeline):
     ) -> str:
         """
         Runs the pipeline
-            :return: Selected file content
+            :return: Assessment result
         """
         logger.info("Running assess user answer pipeline...")
 
@@ -111,6 +112,13 @@ class AssessUserAnswerPipeline(SubPipeline):
             and message.contents[0].text_content
         )
 
+        if questions_asked < min_questions:
+            rules = under_min_questions_rules
+        elif questions_asked >= max_questions:
+            rules = over_equal_max_questions_rules
+        else:
+            rules = between_min_max_questions_rules
+
         response = (
             (self.default_prompt | self.pipeline)
             .with_config({"run_name": "Assess User Answer Pipeline"})
@@ -120,9 +128,7 @@ class AssessUserAnswerPipeline(SubPipeline):
                     "task": problem_statement,
                     "files": submission_file_list,
                     "chat_history": chat_history_list,
-                    "min_questions": min_questions,
-                    "max_questions": max_questions,
-                    "questions_asked": questions_asked
+                    "decision_rules": rules
                 }
             )
         )

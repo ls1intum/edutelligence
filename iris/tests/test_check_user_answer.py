@@ -54,7 +54,7 @@ class TestCheckUserAnswer(unittest.TestCase):
         self.callback = TestPromptUserStatusCallback()
         self.pipeline = AssessUserAnswerPipeline(callback = self.callback)
 
-# TODO: make all tests pass (something with min_questions limit is off in prompt interpretation, weirdly only for correct answer?)
+        
 
     def test_answer_correct_between_min_max(self):
         self.chat_history.append(to_user_message("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp."))
