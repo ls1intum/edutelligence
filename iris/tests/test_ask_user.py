@@ -1,8 +1,8 @@
+import logging
 import datetime
 import unittest
-import re
-from collections import Counter
 
+from helper import extract_keywords, get_pass_ratio
 from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from iris.domain.data.result_dto import ResultDTO
 from iris.domain.data.user_dto import UserDTO
@@ -19,43 +19,8 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from .TestCallback import TestPromptUserStatusCallback
 
-# Helper function to extract keywords from code input, that are less often used in exercise template
-def extract_keywords(task_template: str, code: str, top_n: int = 10):
-    """
-    Extract keywords that represent the conceptual difference between task and code.
-    This focuses on tokens that appear significantly more often in the code than in the task text.
-    """
-    # Normalize text
-    task_text = task_template.lower()
-    code_text = code.lower()
-
-
-    # Tokenization (simple words and identifiers)
-    token_pattern = r"[a-zA-Z_][a-zA-Z0-9_]*"
-
-
-    task_tokens = re.findall(token_pattern, task_text)
-    code_tokens = re.findall(token_pattern, code_text)
-
-
-    task_counts = Counter(task_tokens)
-    code_counts = Counter(code_tokens)
-
-
-    # Compute difference: code tokens that are more characteristic in code
-    diff_scores = {}
-    for token, count in code_counts.items():
-        task_count = task_counts.get(token, 0)
-        # Only consider tokens that appear more often in code
-        if count > task_count:
-            diff_scores[token] = count - task_count
-
-
-    # Select most relevant tokens
-    keywords = [token for token, _ in Counter(diff_scores).most_common(top_n)]
-
-
-    return keywords
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 # This class only tests the quality of the question generation.
 # It assumes the case where the student just started the assessment mode and is asked the first question.
@@ -63,6 +28,10 @@ class TestAskUser(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        number_of_questions_to_test = 3
+        cls.required_test_pass_rate = 0.9
+
+
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
@@ -76,7 +45,7 @@ class TestAskUser(unittest.TestCase):
         # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
         # For this to happen, ResultDTO literal would have to be extended with feedback and the test data with a test repository
 
-        cls.dto = PromptUserChatPipelineExecutionDTO(
+        dto = PromptUserChatPipelineExecutionDTO(
             submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=cls.code, isPractice=False, buildFailed=False,
                                                 latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
             exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
@@ -84,34 +53,49 @@ class TestAskUser(unittest.TestCase):
             eventPayload=PyrisEventDTO(eventType=None, event=None), settings=None,
             user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False))
 
-        cls.variant = PromptUserVariant(
+        variant = PromptUserVariant(
             variant_id="prompt_user_v1", name="Prompt User",
             description="Variant for assessing user understanding",
             agent_model="gpt-4o-mini")
 
-        cls.callback = TestPromptUserStatusCallback()
+        pipeline = PromptUserAgentPipeline()
 
-        cls.pipeline = PromptUserAgentPipeline()
-        cls.pipeline(cls.dto, cls.variant, cls.callback, event="user_initiates_prompting")
+        cls.questions = []
 
-        cls.question = cls.callback.final_result
+        for i in range(number_of_questions_to_test):
+            callback = TestPromptUserStatusCallback()
+            pipeline(dto, variant, callback, event="user_initiates_prompting")
+            cls.questions.append(callback.final_result)
 
-        print(f"Pipeline result:\n{cls.question}")
+        logger.info("Pipeline results:")
+        logger.info("\n".join(cls.questions))
 
 
     def test_question_is_thematically_relevant(self):
         # this tests if keywords of submission minus template or keywords of the problem statement minus template are part of the question
-        assert (any(k in self.question.lower() for k in self.keywords_code) or any(k in self.question.lower() for k in self.keywords_task))
+
+        pass_ratio = get_pass_ratio(self.questions,
+                                    lambda q: any(k in q.lower() for k in self.keywords_code) or any(k in q.lower() for k in self.keywords_task))
+
+        assert pass_ratio >= self.required_test_pass_rate
 
 
     def test_question_not_too_easy(self):
-        assert len(self.question) > 20
+        min_length = 20
         difficulty_words = ["why", "how", "what", "explain", "describe", "elaborate", "tell"]
-        assert any(w in self.question.lower() for w in difficulty_words)
+
+        pass_ratio = get_pass_ratio(self.questions,
+                                    lambda q: len(q) > min_length and any(w in q.lower() for w in difficulty_words))
+
+        assert pass_ratio >= self.required_test_pass_rate
 
 
     def test_question_not_too_difficult_length(self):
-        assert len(self.question) < 220
+        max_length = 220
+
+        pass_ratio = get_pass_ratio(self.questions, lambda q: len(q) < max_length)
+
+        assert pass_ratio >= self.required_test_pass_rate
 
 
     def test_question_requires_reasonable_answer(self):
@@ -126,7 +110,11 @@ class TestAskUser(unittest.TestCase):
             "explain fully",
             "full explanation"
         ]
-        assert not any(p in self.question.lower() for p in forbidden_phrases)
+
+        pass_ratio = get_pass_ratio(self.questions,
+                                    lambda q: not any(p in q.lower() for p in forbidden_phrases))
+
+        assert pass_ratio >= self.required_test_pass_rate
 
 
     def test_question_single_concept_focus(self):
@@ -138,14 +126,28 @@ class TestAskUser(unittest.TestCase):
             "recursion", "base case", "edge case", "input", "output", "pointer",
             "memory", "data", "structure"
         ]
-        num_terms = sum(1 for k in key_terms if k in self.question.lower())
-        assert num_terms <= 4
+        max_allowed_terms = 4
+
+        pass_ratio = get_pass_ratio(self.questions,
+                                    lambda q: sum(1 for k in key_terms if k in q.lower()) <= max_allowed_terms)
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+
 
 
     def test_LLM_evaluation(self):
-        voting_result = evaluate(LLM_GENERATION_EVALUATION_PROMPT, 5, self.question, self.task, self.template_concatenated, self.code_concatenated)
+        # required voting result for a question
+        required_voting_result = 0.9
+        # number of LLM instances to evaluate a question
+        instances = 5
 
-        assert voting_result > 0.9
+
+        pass_ratio = get_pass_ratio(self.questions,
+                                    lambda q: evaluate(LLM_GENERATION_EVALUATION_PROMPT, 5, q, self.task,
+                                                       self.template_concatenated, self.code_concatenated) >= required_voting_result)
+
+        assert pass_ratio >= self.required_test_pass_rate
 
 
 if __name__ == "__main__":

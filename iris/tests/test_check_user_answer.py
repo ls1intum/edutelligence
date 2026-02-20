@@ -1,127 +1,137 @@
-import datetime
+import logging
 import unittest
 
 from TestCallback import TestPromptUserStatusCallback
-from iris.common.pyris_message import PyrisMessage, IrisMessageRole, PyrisAIMessage
+from helper import to_user_message, get_pass_ratio, to_ai_message
+from iris.common.pyris_message import PyrisMessage
 from typing import List
-
-from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 
 from .test_data import TASK_SORTING, CODE_SORTING, TEMPLATE_SORTING
 from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
 
 
-# Helper function to convert string into PyrisMessage object sent by USER
-def to_user_message(message: str):
-    return PyrisMessage(
-        sender=IrisMessageRole.USER,
-        sentAt=datetime.datetime(2026, 1, 10),
-        contents=[
-            TextMessageContentDTO(textContent=message)
-        ]
-    )
-
-# Helper function to convert string into PyrisMessage object sent by AI
-def to_ai_message(message: str):
-    return PyrisAIMessage(
-        sentAt=datetime.datetime(2026, 1, 10),
-        contents=[
-            TextMessageContentDTO(textContent=message)
-        ],
-        toolCalls=None
-    )
-
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 class TestCheckUserAnswer(unittest.TestCase):
 
+    # Helper function to run assessment pipeline with given parameters
+    def get_verdicts(self, answer: str, min_questions: int, max_questions: int, questions_asked: int):
+        self.chat_history.append(to_user_message(answer))
+
+        verdicts = []
+
+        for i in range(self.number_of_verdicts_to_test):
+            verdicts.append(self.pipeline(self.template, self.code, self.chat_history, self.task,
+                                          min_questions=min_questions, max_questions=max_questions, questions_asked=questions_asked))
+
+        logger.info("Pipeline results:")
+        logger.info("\n".join(verdicts))
+
+        return verdicts
+
+
     @classmethod
     def setUpClass(cls):
+        cls.number_of_verdicts_to_test = 3
+        cls.required_test_pass_rate = 0.9
+
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
-        cls.question = "How is the swap of two elements implemented in your implementation of the bubble sort algorithm?"
+        cls.question = to_ai_message("How is the swap of two elements implemented in your implementation of the bubble sort algorithm?")
 
+        cls.callback = TestPromptUserStatusCallback()
+        cls.pipeline = AssessUserAnswerPipeline(callback = cls.callback)
 
     def setUp(self):
-        self.chat_history: List[PyrisMessage] = [
-            PyrisAIMessage(
-                sentAt=datetime.datetime(2026, 1, 10),
-                contents=[TextMessageContentDTO(textContent=self.question)],
-                toolCalls=None
-            )
-        ]
+        self.chat_history: List[PyrisMessage] = [self.question]
 
-        self.callback = TestPromptUserStatusCallback()
-        self.pipeline = AssessUserAnswerPipeline(callback = self.callback)
-
-        
 
     def test_answer_correct_between_min_max(self):
-        self.chat_history.append(to_user_message("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp."))
+        verdicts = self.get_verdicts("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp.",
+                                    min_questions=1, max_questions=2, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=1, max_questions=2, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"unsuspicious\""))
 
-        assert result.__contains__("\"verdict\": \"unsuspicious\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
     def test_answer_wrong_between_min_max(self):
-        self.chat_history.append(to_user_message("The compiler handles the swap automatically."))
+        verdicts = self.get_verdicts("The compiler handles the swap automatically.",
+                                     min_questions=1, max_questions=2, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=1, max_questions=2, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"suspicious\""))
 
-        assert result.__contains__("\"verdict\": \"suspicious\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
     def test_answer_vague_between_min_max(self):
-        self.chat_history.append(to_user_message("I follow the definition of the bubble sort algorithm."))
+        verdicts = self.get_verdicts("I follow the definition of the bubble sort algorithm.",
+                                     min_questions=1, max_questions=2, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=1, max_questions=2, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
 
-        assert result.__contains__("\"verdict\": \"next_question\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
 
 
     def test_answer_correct_over_max(self):
-        self.chat_history.append(to_user_message("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp."))
+        verdicts = self.get_verdicts("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp.",
+                                     min_questions=1, max_questions=1, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=1, max_questions=1, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"unsuspicious\""))
 
-        assert result.__contains__("\"verdict\": \"unsuspicious\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
     def test_answer_wrong_over_max(self):
-        self.chat_history.append(to_user_message("The compiler handles the swap automatically."))
+        verdicts = self.get_verdicts("The compiler handles the swap automatically.",
+                                     min_questions=1, max_questions=1, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=1, max_questions=1, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"suspicious\""))
 
-        assert result.__contains__("\"verdict\": \"suspicious\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
     def test_answer_vague_over_max(self):
-        self.chat_history.append(to_user_message("I follow the definition of the bubble sort algorithm."))
+        verdicts = self.get_verdicts("I follow the definition of the bubble sort algorithm.",
+                                     min_questions=1, max_questions=1, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=1, max_questions=1, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"suspicious\"") or v.__contains__("\"verdict\": \"unsuspicious\""))
 
-        assert (result.__contains__("\"verdict\": \"suspicious\"") or result.__contains__("\"verdict\": \"unsuspicious\""))
+        assert pass_ratio >= self.required_test_pass_rate
 
 
 
     def test_answer_correct_under_min(self):
-        self.chat_history.append(to_user_message("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp."))
+        verdicts = self.get_verdicts("I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp.",
+                                     min_questions=2, max_questions=2, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=2, max_questions=2, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
 
-        assert result.__contains__("\"verdict\": \"next_question\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
     def test_answer_wrong_under_min(self):
-        self.chat_history.append(to_user_message("The compiler handles the swap automatically."))
+        verdicts = self.get_verdicts("The compiler handles the swap automatically.",
+                                     min_questions=2, max_questions=2, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=2, max_questions=2, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
 
-        assert result.__contains__("\"verdict\": \"next_question\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
     def test_answer_vague_under_min(self):
-        self.chat_history.append(to_user_message("I follow the definition of the bubble sort algorithm."))
+        verdicts = self.get_verdicts("I follow the definition of the bubble sort algorithm.",
+                                     min_questions=2, max_questions=2, questions_asked=1)
 
-        result = self.pipeline(template_repository=self.template, submission_repository=self.code, chat_history=self.chat_history, problem_statement=self.task, min_questions=2, max_questions=2, questions_asked=1)
+        pass_ratio = get_pass_ratio(verdicts,
+                                    lambda v: v.__contains__("\"verdict\": \"next_question\""))
 
-        assert result.__contains__("\"verdict\": \"next_question\"")
+        assert pass_ratio >= self.required_test_pass_rate
 
 
 if __name__ == "__main__":

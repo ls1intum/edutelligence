@@ -8,7 +8,7 @@ from iris.web.status.status_update import ExerciseChatStatusCallback, PromptUser
 
 class TestPromptUserStatusCallback(PromptUserStatusCallback):
     """
-    Test callback for PromptUserAgentPipeline.
+    Test callback.
 
     - Prevents HTTP calls
     - Captures final result, suggestions and token usage
