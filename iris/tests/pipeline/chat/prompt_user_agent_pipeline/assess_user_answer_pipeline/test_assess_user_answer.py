@@ -2,9 +2,10 @@ import logging
 import unittest
 from typing import List
 
+from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
 from tests.pipeline.chat.prompt_user_agent_pipeline.helper import to_user_message, get_pass_ratio, to_ai_message
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import TASK_SORTING, CODE_SORTING, TEMPLATE_SORTING
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import TASK_SORTING, CODE_SORTING, TEMPLATE_SORTING, dto
 
 from iris.common.pyris_message import PyrisMessage
 from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
@@ -19,11 +20,14 @@ class TestAssessUserAnswer(unittest.TestCase):
     def get_verdicts(self, answer: str, min_questions: int, max_questions: int, questions_asked: int):
         self.chat_history.append(to_user_message(answer))
 
+        dto.min_questions=min_questions
+        dto.max_questions=max_questions
+        dto.questions_asked=questions_asked
+
         verdicts = []
 
         for i in range(self.number_of_verdicts_to_test):
-            verdicts.append(self.pipeline(self.template, self.code, self.chat_history, self.task,
-                                          min_questions=min_questions, max_questions=max_questions, questions_asked=questions_asked))
+            verdicts.append(self.pipeline(dto))
 
         logger.info("Pipeline results:")
         logger.info("\n".join(verdicts))

@@ -3,7 +3,8 @@ import datetime
 import unittest
 
 from tests.pipeline.chat.prompt_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, LLM_GENERATION_EVALUATION_PROMPT
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, \
+    LLM_GENERATION_EVALUATION_PROMPT, dto, variant
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
 
 from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
@@ -21,6 +22,8 @@ logger.setLevel(logging.INFO)
 
 # This class tests the quality of the question generation.
 # It assumes the case where the student just started the assessment mode and is asked the first question.
+# Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
+# For this to happen, ResultDTO literal in dto would have to be extended with feedback and the test data with a test repository
 class TestPromptUser(unittest.TestCase):
 
     @classmethod
@@ -38,22 +41,6 @@ class TestPromptUser(unittest.TestCase):
 
         cls.keywords_code = extract_keywords(cls.template_concatenated, cls.code_concatenated)
         cls.keywords_task = extract_keywords(cls.template_concatenated, cls.task)
-
-        # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
-        # For this to happen, ResultDTO literal would have to be extended with feedback and the test data with a test repository
-
-        dto = PromptUserChatPipelineExecutionDTO(
-            submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=cls.code, isPractice=False, buildFailed=False,
-                                                latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
-            exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=cls.template, problemStatement=cls.task),
-            course=CourseDTO(id=1,name="Intro to Programming", description=None),
-            eventPayload=PyrisEventDTO(eventType=None, event=None), settings=None,
-            user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False))
-
-        variant = PromptUserVariant(
-            variant_id="prompt_user_v1", name="Prompt User",
-            description="Variant for assessing user understanding",
-            agent_model="gpt-4o-mini")
 
         pipeline = PromptUserAgentPipeline()
 

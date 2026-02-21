@@ -1,5 +1,15 @@
 # Example task descriptions and corresponding correct code submissions
 # Templates are taken from Artemis: https://github.com/ls1intum/Artemis
+import datetime
+
+from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
+from iris.domain.data.course_dto import CourseDTO
+from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
+from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
+from iris.domain.data.result_dto import ResultDTO
+from iris.domain.data.user_dto import UserDTO
+from iris.domain.event.pyris_event_dto import PyrisEventDTO
+from iris.domain.variant.prompt_user_variant import PromptUserVariant
 
 TASK_SORTING = """
 # Sorting with the Strategy Pattern
@@ -526,3 +536,16 @@ OR
 """
 
 LLM_ASSESSMENT_EVALUATION_PROMPT = ""
+
+dto = PromptUserChatPipelineExecutionDTO(
+    submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=CODE_SORTING, isPractice=False, buildFailed=False,
+                                        latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
+    exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=TEMPLATE_SORTING, problemStatement=TASK_SORTING),
+    course=CourseDTO(id=1,name="Intro to Programming", description=None),
+    eventPayload=PyrisEventDTO(eventType=None, event=None), settings=None,
+    user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False), minQuestions=0, maxQuestions=0, questionsAsked=0)
+
+variant = PromptUserVariant(
+    variant_id="prompt_user_v1", name="Prompt User",
+    description="Variant for assessing user understanding",
+    agent_model="gpt-4o-mini")
