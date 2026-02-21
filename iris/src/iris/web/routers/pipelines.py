@@ -34,13 +34,10 @@ from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPip
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
+    ChatStatusCallback,
     CompetencyExtractionCallback,
-    CourseChatStatusCallback,
-    ExerciseChatStatusCallback,
     InconsistencyCheckCallback,
-    LectureChatCallback,
     RewritingCallback,
-    TextExerciseChatCallback,
     TutorSuggestionCallback,
 )
 from iris.web.utils import validate_pipeline_variant
@@ -57,9 +54,10 @@ def run_exercise_chat_pipeline_worker(
 ):
     set_request_id(request_id)
     try:
-        callback = ExerciseChatStatusCallback(
+        callback = ChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
+            context=ChatContext.EXERCISE,
             initial_stages=dto.initial_stages,
         )
         pipeline = ChatPipeline(context=ChatContext.EXERCISE)
@@ -105,9 +103,10 @@ def run_exercise_chat_pipeline(
 def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
     set_request_id(request_id)
     try:
-        callback = CourseChatStatusCallback(
+        callback = ChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
+            context=ChatContext.COURSE,
             initial_stages=dto.initial_stages,
         )
         for variant in ChatPipeline.get_variants():
@@ -151,9 +150,10 @@ def run_course_chat_pipeline(
 def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
     set_request_id(request_id)
     try:
-        callback = TextExerciseChatCallback(
+        callback = ChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
+            context=ChatContext.TEXT_EXERCISE,
             initial_stages=dto.initial_stages,
         )
         for variant in ChatPipeline.get_variants():
@@ -177,9 +177,10 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
 def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
     set_request_id(request_id)
     try:
-        callback = LectureChatCallback(
+        callback = ChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
+            context=ChatContext.LECTURE,
             initial_stages=dto.initial_stages,
         )
         for variant in ChatPipeline.get_variants():

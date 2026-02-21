@@ -68,7 +68,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     suggestion_pipeline: Optional[InteractionSuggestionPipeline]
     event: Optional[str]
     code_feedback_pipeline: Optional[CodeFeedbackPipeline]
-    guide_prompt_template: Any  # TODO: Remove ?
+    guide_prompt_template: Any
 
     def __init__(
         self,
@@ -99,7 +99,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         self.system_prompt_template = self.jinja_env.get_template(
             "chat_system_prompt.j2"
         )
-        self.guide_prompt_template = None
+        self.guide_prompt_template = self.jinja_env.get_template(
+            "exercise_chat_guide_prompt.j2"
+        )
 
         # Setup context-specific components
         if self.context == ChatContext.COURSE:

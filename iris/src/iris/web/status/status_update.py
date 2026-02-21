@@ -24,6 +24,7 @@ from iris.domain.status.rewriting_status_update_dto import (
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.pipeline.chat.chat_context import ChatContext
 
 logger = get_logger(__name__)
 
@@ -223,6 +224,80 @@ class StatusCallback(ABC):
             if start_next_stage:
                 self.stage.state = StageStateEnum.IN_PROGRESS
         self.on_status_update()
+
+
+_CHAT_CONTEXT_STAGES: dict[ChatContext, list[StageDTO]] = {
+    ChatContext.COURSE: [
+        StageDTO(
+            weight=40,
+            state=StageStateEnum.NOT_STARTED,
+            name="Thinking",
+        ),
+        StageDTO(
+            weight=10,
+            state=StageStateEnum.NOT_STARTED,
+            name="Extracting memories",
+            internal=True,
+        ),
+    ],
+    ChatContext.EXERCISE: [
+        StageDTO(
+            weight=30,
+            state=StageStateEnum.NOT_STARTED,
+            name="Checking available information",
+        ),
+        StageDTO(
+            weight=10,
+            state=StageStateEnum.NOT_STARTED,
+            name="Creating suggestions",
+        ),
+    ],
+    ChatContext.TEXT_EXERCISE: [
+        StageDTO(
+            weight=30,
+            state=StageStateEnum.NOT_STARTED,
+            name="Thinking",
+        ),
+        StageDTO(
+            weight=20,
+            state=StageStateEnum.NOT_STARTED,
+            name="Responding",
+        ),
+    ],
+    ChatContext.LECTURE: [
+        StageDTO(
+            weight=30,
+            state=StageStateEnum.NOT_STARTED,
+            name="Thinking",
+        ),
+        StageDTO(
+            weight=10,
+            state=StageStateEnum.NOT_STARTED,
+            name="Extracting memories",
+            internal=True,
+        ),
+    ],
+}
+
+
+class ChatStatusCallback(StatusCallback):
+    """Unified status callback for all chat pipelines."""
+
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        context: ChatContext,
+        initial_stages: List[StageDTO] = None,
+    ):
+        url = f"{base_url}/{self.api_url}/chat/runs/{run_id}/status"
+        stages = initial_stages or []
+        current_stage_index = len(stages)
+        stages += [stage.model_copy() for stage in _CHAT_CONTEXT_STAGES[context]]
+        status = ChatStatusUpdateDTO(stages=stages)
+        super().__init__(
+            url, run_id, status, stages[current_stage_index], current_stage_index
+        )
 
 
 class CourseChatStatusCallback(StatusCallback):

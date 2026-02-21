@@ -34,9 +34,5 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     lecture: Optional[PyrisLectureDTO] = None
     lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
 
-    programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = (
-        None  # TODO:changed
-    )
-    text_exercise_submission: str = Field(
-        alias="textExerciseSubmission", default=""
-    )  # TODO:changed
+    programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = None
+    text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")
