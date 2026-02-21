@@ -69,7 +69,7 @@ def run_exercise_chat_pipeline_worker(
         return
 
     try:
-        for variant in ChatPipeline.get_variants(ChatContext.EXERCISE):
+        for variant in ChatPipeline.get_variants():
             if variant.id == variant_id:
                 break
         else:
@@ -115,14 +115,14 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = ChatPipeline(context=ChatContext.COURSE, event=event)
+        pipeline = ChatPipeline(context=ChatContext.COURSE)
     except Exception as e:
         logger.error("Error preparing course chat pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
-        pipeline(dto=dto, callback=callback, variant=variant)
+        pipeline(dto=dto, callback=callback, variant=variant, event=event)
     except Exception as e:
         logger.error("Error running course chat pipeline", exc_info=e)
         callback.error("Fatal error.", exception=e)
@@ -417,14 +417,10 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
     match feature:
         case "CHAT":
             # ExerciseChatAgentPipeline.get_variants(), available_llms
-            return get_available_variants(
-                ChatPipeline.get_variants(ChatContext.EXERCISE), available_llms
-            )
+            return get_available_variants(ChatPipeline.get_variants(), available_llms)
         case "PROGRAMMING_EXERCISE_CHAT":
             # ExerciseChatAgentPipeline.get_variants(), available_llms
-            return get_available_variants(
-                ChatPipeline.get_variants(ChatContext.EXERCISE), available_llms
-            )
+            return get_available_variants(ChatPipeline.get_variants(), available_llms)
         case "TEXT_EXERCISE_CHAT":
             return get_available_variants(ChatPipeline.get_variants(), available_llms)
         case "COURSE_CHAT":

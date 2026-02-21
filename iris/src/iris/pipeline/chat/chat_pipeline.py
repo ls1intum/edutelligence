@@ -73,13 +73,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     def __init__(
         self,
         context: ChatContext,
-        event: Optional[str] = None,
     ):
         super().__init__(implementation_id="chat_pipeline")
 
         self.context = context
 
-        self.event = event
+        self.event = None
 
         # Initialize pipelines & retrievers
         self.session_title_pipeline = SessionTitleGenerationPipeline()
@@ -118,102 +117,27 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             )
 
     def __repr__(self):
-        if self.context == ChatContext.COURSE:
-            return f"{self.__class__.__name__}(event={self.event})"
-        else:
-            return f"{self.__class__.__name__}()"
+        return f"{self.__class__.__name__}(context={self.context.value})"
 
     def __str__(self):
-        if self.context == ChatContext.COURSE:
-            return f"{self.__class__.__name__}(event={self.event})"
-        else:
-            return f"{self.__class__.__name__}()"
+        return f"{self.__class__.__name__}(context={self.context.value})"
 
     @classmethod
-    def get_variants(
-        cls, context: Optional[ChatContext] = None
-    ) -> List[ChatVariant]:  # TODO: Nur 2 Varianten für die Pipeline oder pro Kontext ?
-        """
-        Get available variants for the chat pipeline.
-
-        Args:
-            context: If provided, only return variants for this context.
-                     If None, returns variants for Exercise context (default for now).
-
-        Returns:
-            List[ChatVariant]: List of available variants
-        """
-        # For now, if no context specified, default to EXERCISE
-        if context is None:
-            context = ChatContext.EXERCISE
-
-        # Define all variants
-        all_variants = {
-            ChatContext.COURSE: [
-                ChatVariant(
-                    variant_id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                    agent_model="gpt-4.1-mini",
-                    citation_model="gpt-4.1-mini",
-                ),
-                ChatVariant(
-                    variant_id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                    agent_model="gpt-4.1",
-                    citation_model="gpt-4.1-mini",
-                ),
-            ],
-            ChatContext.EXERCISE: [
-                ChatVariant(
-                    variant_id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                    agent_model="gpt-4.1-mini",
-                    citation_model="gpt-4.1-mini",
-                ),
-                ChatVariant(
-                    variant_id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                    agent_model="gpt-4.1",
-                    citation_model="gpt-4.1-mini",
-                ),
-            ],
-            ChatContext.LECTURE: [
-                ChatVariant(
-                    variant_id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                    agent_model="gpt-4.1-mini",
-                    citation_model="gpt-4.1-nano",
-                ),
-                ChatVariant(
-                    variant_id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                    agent_model="gpt-4.1",
-                    citation_model="gpt-4.1-mini",
-                ),
-            ],
-            ChatContext.TEXT_EXERCISE: [
-                ChatVariant(
-                    variant_id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                    agent_model="gpt-4.1-mini",
-                ),
-                ChatVariant(
-                    variant_id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                    agent_model="gpt-4.1",
-                ),
-            ],
-        }
-
-        return all_variants.get(context, [])
+    def get_variants(cls) -> List[ChatVariant]:
+        return [
+            ChatVariant(
+                variant_id="default",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gpt-4.1-mini",
+            ),
+            ChatVariant(
+                variant_id="advanced",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-4.1",
+            ),
+        ]
 
     def get_memiris_reference(self, dto: ChatPipelineExecutionDTO):
         """
@@ -513,15 +437,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             True if memory creation should be enabled, False otherwise.
         """
-        match self.context:
-            case ChatContext.COURSE:
-                return bool(state.dto.user and state.dto.user.memiris_enabled)
-            case ChatContext.LECTURE:
-                return bool(state.dto.user and state.dto.user.memiris_enabled)
-            case ChatContext.EXERCISE:
-                return False
-            case ChatContext.TEXT_EXERCISE:
-                return False
+        if self.context in {ChatContext.COURSE, ChatContext.LECTURE}:
+            return bool(state.dto.user and state.dto.user.memiris_enabled)
+        else:
+            return False
 
     def _add_citations(
         self,
@@ -716,7 +635,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         dto: ChatPipelineExecutionDTO,
         variant: ChatVariant,
         callback: StatusCallback,
-        event: str | None,  # TODO: Nötig?
+        event: str | None = None,
     ):
         """
         Execute the pipeline with the provided arguments.
@@ -725,12 +644,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             dto: Execution data transfer object.
             variant: The variant configuration to use.
             callback: Status callback for progress updates.
+            event: Optional event identifier (e.g. "jol").
         """
         try:
             logger.info("Running chat pipeline...")
 
-            if self.context == ChatContext.EXERCISE and event:
-                self.event = event
+            self.event = event
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
