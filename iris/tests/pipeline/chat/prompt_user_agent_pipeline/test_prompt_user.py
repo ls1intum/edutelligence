@@ -1,20 +1,13 @@
+import copy
 import logging
 import datetime
 import unittest
 
 from tests.pipeline.chat.prompt_user_agent_pipeline.helper import extract_keywords, get_pass_ratio, llm_evaluate
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import CODE_SORTING, TASK_SORTING, TEMPLATE_SORTING, \
-    LLM_GENERATION_EVALUATION_PROMPT, dto, variant
+    LLM_GENERATION_EVALUATION_PROMPT, DTO, VARIANT
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
 
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
-from iris.domain.data.result_dto import ResultDTO
-from iris.domain.data.user_dto import UserDTO
-from iris.domain.variant.prompt_user_variant import PromptUserVariant
-from iris.domain.data.course_dto import CourseDTO
-from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
-from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
-from iris.domain.event.pyris_event_dto import PyrisEventDTO
 from iris.pipeline.chat.prompt_user_agent_pipeline import PromptUserAgentPipeline
 
 logger = logging.getLogger()
@@ -23,7 +16,7 @@ logger.setLevel(logging.INFO)
 # This class tests the quality of the question generation.
 # It assumes the case where the student just started the assessment mode and is asked the first question.
 # Note: Feedback of submission is not part of test inputs, could be interesting to check if generated questions are only about correct parts of submission
-# For this to happen, ResultDTO literal in dto would have to be extended with feedback and the test data with a test repository
+# For this to happen, ResultDTO literal in DTO would have to be extended with feedback and the test data with a test repository
 class TestPromptUser(unittest.TestCase):
 
     @classmethod
@@ -46,9 +39,11 @@ class TestPromptUser(unittest.TestCase):
 
         cls.questions = []
 
+        cls.dto = copy.deepcopy(DTO)
+
         for i in range(number_of_questions_to_test):
             callback = PromptUserStatusCallbackMock()
-            pipeline(dto, variant, callback, event="user_initiates_prompting")
+            pipeline(cls.dto, VARIANT, callback, event="user_initiates_prompting")
             cls.questions.append(callback.final_result)
 
         logger.info("Pipeline results:")

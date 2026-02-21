@@ -537,7 +537,7 @@ OR
 
 LLM_ASSESSMENT_EVALUATION_PROMPT = ""
 
-dto = PromptUserChatPipelineExecutionDTO(
+DTO = PromptUserChatPipelineExecutionDTO(
     submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=CODE_SORTING, isPractice=False, buildFailed=False,
                                         latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
     exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=TEMPLATE_SORTING, problemStatement=TASK_SORTING),
@@ -545,7 +545,7 @@ dto = PromptUserChatPipelineExecutionDTO(
     eventPayload=PyrisEventDTO(eventType=None, event=None), settings=None,
     user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False), minQuestions=0, maxQuestions=0, questionsAsked=0)
 
-variant = PromptUserVariant(
+VARIANT = PromptUserVariant(
     variant_id="prompt_user_v1", name="Prompt User",
     description="Variant for assessing user understanding",
     agent_model="gpt-4o-mini")

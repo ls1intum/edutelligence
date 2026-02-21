@@ -1,13 +1,11 @@
 import logging
 import unittest
-from typing import List
+import copy
 
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from tests.pipeline.chat.prompt_user_agent_pipeline.test_callback import PromptUserStatusCallbackMock
 from tests.pipeline.chat.prompt_user_agent_pipeline.helper import to_user_message, get_pass_ratio, to_ai_message
-from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import TASK_SORTING, CODE_SORTING, TEMPLATE_SORTING, dto
+from tests.pipeline.chat.prompt_user_agent_pipeline.test_data import DTO
 
-from iris.common.pyris_message import PyrisMessage
 from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
 
 logger = logging.getLogger()
@@ -18,16 +16,15 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     # Helper function to run assessment pipeline with given parameters
     def get_verdicts(self, answer: str, min_questions: int, max_questions: int, questions_asked: int):
-        self.chat_history.append(to_user_message(answer))
-
-        dto.min_questions=min_questions
-        dto.max_questions=max_questions
-        dto.questions_asked=questions_asked
+        self.dto.chat_history.append(to_user_message(answer))
+        self.dto.min_questions=min_questions
+        self.dto.max_questions=max_questions
+        self.dto.questions_asked=questions_asked
 
         verdicts = []
 
         for i in range(self.number_of_verdicts_to_test):
-            verdicts.append(self.pipeline(dto))
+            verdicts.append(self.pipeline(self.dto))
 
         logger.info("Pipeline results:")
         logger.info("\n".join(verdicts))
@@ -40,16 +37,15 @@ class TestAssessUserAnswer(unittest.TestCase):
         cls.number_of_verdicts_to_test = 5
         cls.required_test_pass_rate = 0.8
 
-        cls.task = TASK_SORTING
-        cls.template = TEMPLATE_SORTING
-        cls.code = CODE_SORTING
         cls.question = to_ai_message("How is the swap of two elements implemented in your implementation of the bubble sort algorithm?")
 
         cls.callback = PromptUserStatusCallbackMock()
         cls.pipeline = AssessUserAnswerPipeline(callback = cls.callback)
 
+        cls.dto = copy.deepcopy(DTO)
+
     def setUp(self):
-        self.chat_history: List[PyrisMessage] = [self.question]
+        self.dto.chat_history = [self.question]
 
 
     def test_answer_correct_between_min_max(self):
