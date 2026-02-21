@@ -120,7 +120,7 @@ class AssessUserAnswerPipeline(SubPipeline):
             .invoke(
                 {
                     "template": template_file_list,
-                    "task": dto.problem_statement,
+                    "task": dto.exercise.problem_statement,
                     "files": submission_file_list,
                     "chat_history": chat_history_list,
                     "decision_rules": rules
