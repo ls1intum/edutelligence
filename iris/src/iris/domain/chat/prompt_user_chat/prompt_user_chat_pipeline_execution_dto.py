@@ -18,3 +18,6 @@ class PromptUserChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
     exercise: ProgrammingExerciseDTO
     course: CourseDTO
     event_payload: Optional[PyrisEventDTO[Any]] = Field(None, alias="eventPayload")
+    min_questions: int = Field(alias="minQuestions")
+    max_questions: int = Field(alias="maxQuestions")
+    questions_asked: int = Field(alias="questionsAsked")

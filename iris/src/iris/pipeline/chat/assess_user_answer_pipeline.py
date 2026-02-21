@@ -13,6 +13,7 @@ from ..prompts.assess_user_answer_prompt import assess_user_answer_prompt, under
     over_equal_max_questions_rules, between_min_max_questions_rules
 
 from ...common.pyris_message import PyrisMessage
+from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -83,13 +84,7 @@ class AssessUserAnswerPipeline(SubPipeline):
     @traceable(name="Assess User Answer Pipeline")
     def __call__(
             self,
-            template_repository: Dict[str, str],
-            submission_repository: Dict[str, str],
-            chat_history: List[PyrisMessage],
-            problem_statement: str,
-            min_questions: int,
-            max_questions: int,
-            questions_asked: int
+            dto: PromptUserChatPipelineExecutionDTO
     ) -> str:
         """
         Runs the pipeline
@@ -98,23 +93,23 @@ class AssessUserAnswerPipeline(SubPipeline):
         logger.info("Running assess user answer pipeline...")
 
         submission_file_list = "\n------------\n".join(
-            [f"{file_name}:\n{code}" for file_name, code in submission_repository.items()]
+            [f"{file_name}:\n{code}" for file_name, code in dto.submission.repository.items()]
         )
         template_file_list = "\n------------\n".join(
-            [f"{file_name}:\n{code}" for file_name, code in template_repository.items()]
+            [f"{file_name}:\n{code}" for file_name, code in dto.exercise.template_repository.items()]
         )
 
         chat_history_list = "\n".join(
             f"{message.sender}: {message.contents[0].text_content}"
-            for message in chat_history
+            for message in dto.chat_history
             if message.contents
             and len(message.contents) > 0
             and message.contents[0].text_content
         )
 
-        if questions_asked < min_questions:
+        if dto.questions_asked < dto.min_questions:
             rules = under_min_questions_rules
-        elif questions_asked >= max_questions:
+        elif dto.questions_asked >= dto.max_questions:
             rules = over_equal_max_questions_rules
         else:
             rules = between_min_max_questions_rules
@@ -125,7 +120,7 @@ class AssessUserAnswerPipeline(SubPipeline):
             .invoke(
                 {
                     "template": template_file_list,
-                    "task": problem_statement,
+                    "task": dto.problem_statement,
                     "files": submission_file_list,
                     "chat_history": chat_history_list,
                     "decision_rules": rules

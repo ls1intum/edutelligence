@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from datetime import datetime
@@ -12,8 +13,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
 
+from .assess_user_answer_pipeline import AssessUserAnswerPipeline
 from ...common.memiris_setup import get_tenant_for_user
 from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
+from ...domain.data.verdict_dto import VerdictDTO
 from ...domain.variant.prompt_user_variant import PromptUserVariant
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
@@ -41,10 +44,11 @@ class PromptUserAgentPipeline(
     Exercise chat agent pipeline that assesses the authenticity of user submissions by generating questions and assessing the answers by the user.
     """
 
-    # assess_user_answer_pipeline: AssessUserAnswerPipeline
+    assess_user_answer_pipeline: AssessUserAnswerPipeline
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
+    verdict_dependent_template: Any
 
     def __init__(self):
         """
@@ -52,12 +56,12 @@ class PromptUserAgentPipeline(
         """
         super().__init__(implementation_id="prompt_user_chat_pipeline")
 
-        # Create the pipelines
-        # self.assess_user_answer_pipeline = AssessUserAnswerPipeline()
+        # Create the assessment pipeline
+        self.assess_user_answer_pipeline = AssessUserAnswerPipeline()
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
-            os.path.dirname(__file__), "..", "prompts", "templates"
+            os.path.dirname(__file__), "..", "prompts", "templates", "prompt_user"
         )
         self.jinja_env = Environment(
             loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["j2"])
@@ -67,6 +71,9 @@ class PromptUserAgentPipeline(
         )
         self.guide_prompt_template = self.jinja_env.get_template(
             "prompt_user_chat_guide_prompt.j2"
+        )
+        self.verdict_dependent_template = self.jinja_env.get_template(
+            "verdict_dependent.j2"
         )
 
     def __repr__(self):
@@ -213,15 +220,14 @@ class PromptUserAgentPipeline(
             else ""
         )
 
-        # Build system prompt using Jinja2 template
+        # Build system prompt using Jinja2 template (VERDICT_DEPENDENT is set in pre_agent_hook)
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "exercise_title": exercise_title,
             "problem_statement": problem_statement,
             "programming_language": programming_language,
             "event": self.event,
-            "has_chat_history": len(state.message_history) > 0,
-            "verdict": "" # TODO: replace this with verdict of assessment sub-pipeline
+            "has_chat_history": len(state.message_history) > 0
         }
 
         return self.system_prompt_template.render(template_context)
@@ -249,9 +255,9 @@ class PromptUserAgentPipeline(
             state: AgentPipelineExecutionState[
                 PromptUserChatPipelineExecutionDTO, PromptUserVariant
             ],
-    ) -> str:
+    ):
         """
-        Process results before agent execution.
+        Process answer before agent execution.
 
         Args:
             state: The current pipeline execution state.
@@ -259,23 +265,14 @@ class PromptUserAgentPipeline(
         Returns:
             The processed result string.
         """
-        # TODO: run assess_answer sub-pipeline (only if event says nothing else (e.g. build with points/user initiates prompting/timer ran out/tab defocus)) in pre-hook and give verdict as input for agent pipeline (set 'verdict' value to "next_question" like in build_system_message(...) corresponding to assessment result in state.prompt)
-        # TODO: also send verdict and reasoning to artemis via callback
-
-
-        """try:
-            # Assess previous answer of user if existing
-            self._assess_answer(state, result)
-
-            state.callback.done("Done!", final_result=result, tokens=state.tokens)
-
-            return result
+        try:
+            # Assess previous answer of user if no special event happened (e.g. prompting just initiated or timer ran out)
+            if self.event is None:
+                self._assess_answer(state)
 
         except Exception as e:
             logger.error("Error in pre agent hook", exc_info=e)
             state.callback.error("Error in processing response")
-            return state.result"""
-        pass
 
 
     def post_agent_hook(
@@ -373,43 +370,40 @@ class PromptUserAgentPipeline(
 
 
 
-    def _assess_answer( #TODO: run sub-pipeline
+    def _assess_answer(
             self,
             state: AgentPipelineExecutionState[
                 PromptUserChatPipelineExecutionDTO, PromptUserVariant
-            ],
-            result: str,
+            ]
     ) -> None:
         """
-        Generate interaction suggestions.
+        Assesses the last answer given by the user.
 
         Args:
             state: The current pipeline execution state.
-            result: The final result string.
         """
-        """try:
-            if result:
-                suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
-                suggestion_dto.chat_history = state.dto.chat_history
-                suggestion_dto.last_message = result
-                suggestions = self.suggestion_pipeline(suggestion_dto)
+        try:
+            verdict = VerdictDTO(**json.loads(self.assess_user_answer_pipeline(state.dto)))
 
-                if self.suggestion_pipeline.tokens is not None:
-                    self._track_tokens(state, self.suggestion_pipeline.tokens)
+            # Ugly workaround forced by architecture: we must mutate prompt messages after render
+            # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
+            rendered_verdict_prompt = self.verdict_dependent_template.render(verdict=verdict.verdict)
+            for i, msg in enumerate(state.prompt.messages):
+                if msg.content == "VERDICT_DEPENDENT":
+                    state.prompt.messages[i] = SystemMessage(content=msg.content.replace("VERDICT_DEPENDENT", rendered_verdict_prompt))
 
-                state.callback.done(
-                    final_result=None,
-                    suggestions=suggestions,
-                    tokens=state.tokens,
-                )
-            else:
-                state.callback.skip(
-                    "Skipping suggestion generation as no output was generated."
-                )
+            if self.assess_user_answer_pipeline.tokens is not None:
+                self._track_tokens(state, self.assess_user_answer_pipeline.tokens)
+
+            state.callback.done(
+                final_result=None,
+                verdict=verdict,
+                tokens=state.tokens,
+            )
 
         except Exception as e:
-            logger.error("Error generating suggestions", exc_info=e)
-            state.callback.error("Generating interaction suggestions failed.")"""
+            logger.error("Error assessing answer", exc_info=e)
+            state.callback.error("Assessing answer failed.")
 
 
     @traceable(name="Prompt User Agent Pipeline")

@@ -1,0 +1,8 @@
+{% include "generation_rules.j2" %}
+{% if verdict == "suspicious" or verdict == "unsuspicious" %}
+{# write instructions for thanking user for answers and give feedback #}
+{% elif verdict == "next_question" %}
+The last answer by the student was insufficient because it was either too vague or maybe the student asked about the meaning of your question.
+Now, continue the prompting by asking the student another question.
+{{ generation_rules }}
+{% endif %}
