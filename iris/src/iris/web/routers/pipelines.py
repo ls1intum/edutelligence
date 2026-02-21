@@ -21,7 +21,8 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
-from iris.pipeline.chat.chat_pipeline import ChatContext, ChatPipeline
+from iris.pipeline.chat.chat_context import ChatContext
+from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )

@@ -1,18 +1,23 @@
+import json
 import os
+from datetime import datetime
 from typing import Any, Callable, List, Optional
 
+import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
+from iris.common.mastery_utils import get_mastery
 from iris.common.memiris_setup import get_tenant_for_user
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from iris.domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from iris.domain.variant.chat_variant import ChatVariant
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
@@ -22,19 +27,18 @@ from iris.pipeline.abstract_agent_pipeline import (
 )
 from iris.pipeline.chat.chat_context import ChatContext
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
-from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
-from iris.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
 from iris.pipeline.chat.interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
-from iris.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
-from iris.pipeline.chat.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 from iris.pipeline.shared.citation_pipeline import CitationPipeline, InformationType
+from iris.pipeline.shared.utils import datetime_to_string, format_custom_instructions
 from iris.retrieval.faq_retrieval import FaqRetrieval
+from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
+from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.tools.chat_tool_providers import (
     CHAT_TOOL_PROVIDERS,
     provide_faq_retrieval,
@@ -50,12 +54,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     """
     Replaces CourseChatPipeline / ExerciseChatPipeline / TextExerciseChatPipeline / LectureChatPipeline
     """
-
-    # Just for now -> See build_message
-    exercise_pipeline: ExerciseChatAgentPipeline
-    course_pipeline: CourseChatPipeline
-    text_exercise_pipeline: TextExerciseChatPipeline
-    lecture_pipeline: LectureChatPipeline
 
     # Shared
     context: ChatContext
@@ -81,13 +79,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
         self.context = context
 
-        self.event = event  # TODO: Was hat es mit dem Event auf sich ?
-
-        # Just for now -> See build_message
-        self.exercise_pipeline = ExerciseChatAgentPipeline()
-        self.course_pipeline = CourseChatPipeline(event=event)
-        self.text_exercise_pipeline = TextExerciseChatPipeline()
-        self.lecture_pipeline = LectureChatPipeline()
+        self.event = event
 
         # Initialize pipelines & retrievers
         self.session_title_pipeline = SessionTitleGenerationPipeline()
@@ -105,27 +97,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["j2"])
         )
         # Setup system prompt
-        # Just for now
-        match self.context:
-            case ChatContext.COURSE:
-                self.system_prompt_template = self.jinja_env.get_template(
-                    "course_chat_system_prompt.j2"
-                )
-            case ChatContext.LECTURE:
-                self.system_prompt_template = self.jinja_env.get_template(
-                    "lecture_chat_system_prompt.j2"
-                )
-            case ChatContext.EXERCISE:
-                self.system_prompt_template = self.jinja_env.get_template(
-                    "exercise_chat_system_prompt.j2"
-                )
-            case ChatContext.TEXT_EXERCISE:
-                self.system_prompt_template = self.jinja_env.get_template(
-                    "text_exercise_chat_system_prompt.j2"
-                )
-        # self.system_prompt_template = self.jinja_env.get_template(
-        #    "chat_system_prompt.j2" TODO: Prompts überarbeiten
-        # )
+        self.system_prompt_template = self.jinja_env.get_template(
+            "chat_system_prompt.j2"
+        )
         self.guide_prompt_template = None
 
         # Setup context-specific components
@@ -387,7 +361,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 tools.append(tool)
         return tools
 
-    def build_system_message(  # TODO: Überarbeiten
+    def build_system_message(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
     ) -> str:
@@ -400,16 +374,132 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             The system prompt string.
         """
-        if self.context == ChatContext.EXERCISE:
-            return self.exercise_pipeline.build_system_message(state)
-        elif self.context == ChatContext.TEXT_EXERCISE:
-            return self.text_exercise_pipeline.build_system_message(state)
+        dto = state.dto
+
+        # Extract user language
+        user_language = "en"
+        if dto.user and dto.user.lang_key:
+            user_language = dto.user.lang_key
+
+        # Tool availability
+        course_id = dto.course.id if dto.course else None
+        allow_lecture_tool = should_allow_lecture_tool(state.db, course_id)
+        allow_faq_tool = should_allow_faq_tool(state.db, course_id)
+        allow_memiris_tool = bool(
+            dto.user
+            and dto.user.memiris_enabled
+            and state.memiris_wrapper
+            and state.memiris_wrapper.has_memories()
+        )
+
+        # Custom instructions
+        custom_instructions = format_custom_instructions(dto.custom_instructions or "")
+
+        # Base template context (shared across all contexts)
+        template_context: dict[str, Any] = {
+            "context": self.context.value,
+            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+            "user_language": user_language,
+            "custom_instructions": custom_instructions,
+            "has_chat_history": bool(state.message_history),
+            "event": self.event,
+            "course_name": (dto.course.name if dto.course and dto.course.name else ""),
+            "allow_lecture_tool": allow_lecture_tool,
+            "allow_faq_tool": allow_faq_tool,
+            "allow_memiris_tool": allow_memiris_tool,
+        }
+
+        # Context-specific variables
+        if self.context == ChatContext.COURSE:
+            metrics_enabled = bool(
+                dto.metrics
+                and dto.course
+                and dto.course.competencies
+                and dto.course.student_analytics_dashboard_enabled
+            )
+            template_context.update(
+                {
+                    "has_competencies": bool(dto.course and dto.course.competencies),
+                    "has_exercises": bool(dto.course and dto.course.exercises),
+                    "metrics_enabled": metrics_enabled,
+                }
+            )
+            # JoL event data
+            if self.event == "jol" and dto.event_payload:
+                event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
+                comp = next(
+                    (
+                        c
+                        for c in dto.course.competencies
+                        if c.id == event_payload.competency_id
+                    ),
+                    None,
+                )
+                competency_progress = event_payload.competency_progress or 0.0
+                competency_confidence = event_payload.competency_confidence or 0.0
+                template_context["jol"] = json.dumps(
+                    {
+                        "value": event_payload.jol_value,
+                        "competency_mastery": get_mastery(
+                            competency_progress,
+                            competency_confidence,
+                        ),
+                    }
+                )
+                template_context["competency"] = (
+                    comp.model_dump_json() if comp else "{}"
+                )
+
         elif self.context == ChatContext.LECTURE:
-            return self.lecture_pipeline.build_system_message(state)
-        elif self.context == ChatContext.COURSE:
-            return self.course_pipeline.build_system_message(state)
-        else:
-            return []
+            template_context["lecture_name"] = (
+                dto.lecture.title if dto.lecture else None
+            )
+
+        elif self.context == ChatContext.EXERCISE:
+            query = self.get_latest_user_message(state)
+            template_context.update(
+                {
+                    "exercise_title": (dto.exercise.name if dto.exercise else ""),
+                    "problem_statement": (
+                        dto.exercise.problem_statement if dto.exercise else ""
+                    ),
+                    "programming_language": (
+                        dto.exercise.programming_language.lower()
+                        if dto.exercise and dto.exercise.programming_language
+                        else ""
+                    ),
+                    "has_query": query is not None,
+                }
+            )
+
+        elif self.context == ChatContext.TEXT_EXERCISE:
+            template_context.update(
+                {
+                    "exercise_id": (dto.exercise.id if dto.exercise else ""),
+                    "exercise_title": (dto.exercise.title if dto.exercise else ""),
+                    "course_name": (
+                        dto.exercise.course.name
+                        if dto.exercise and dto.exercise.course
+                        else ""
+                    ),
+                    "problem_statement": (
+                        dto.exercise.problem_statement if dto.exercise else ""
+                    ),
+                    "start_date": (
+                        str(dto.exercise.start_date)
+                        if dto.exercise and dto.exercise.start_date
+                        else ""
+                    ),
+                    "end_date": (
+                        str(dto.exercise.end_date)
+                        if dto.exercise and dto.exercise.end_date
+                        else ""
+                    ),
+                    "current_submission": dto.text_exercise_submission,
+                }
+            )
+
+        return self.system_prompt_template.render(template_context)
 
     def is_memiris_memory_creation_enabled(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant]

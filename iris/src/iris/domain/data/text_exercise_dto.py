@@ -7,5 +7,5 @@ from iris.domain.data.exercise_dto import ExerciseDTO
 
 
 class TextExerciseDTO(ExerciseDTO):
-    course: CourseDTO
+    course: CourseDTO  # TODO: entfernen ? -> Siehe ChatPipelineExecutionDTO
     example_solution: Optional[str] = Field(alias="exampleSolution", default=None)
