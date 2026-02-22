@@ -1,10 +1,13 @@
 from multiprocessing import Process
+from multiprocessing import Semaphore as ProcessSemaphore
+from multiprocessing import Value
 from threading import Semaphore, Thread
 
 from fastapi import APIRouter, Depends, status
 from sentry_sdk import capture_exception
 
-from iris.common.logging_config import get_logger
+from iris.common.logging_config import get_logger, setup_logging
+from iris.config import settings
 from iris.dependencies import TokenValidator
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
@@ -20,12 +23,12 @@ from ...domain.ingestion.deletion_pipeline_execution_dto import (
     FaqDeletionExecutionDto,
     LecturesDeletionExecutionDto,
 )
-from ...ingestion.ingestion_job_handler import IngestionJobHandler
+from ...ingestion.ingestion_job_handler import JobHandler
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
-from ...pipeline.transcription.video_transcription_pipeline import (
-    VideoTranscriptionPipeline,
+from ...pipeline.transcription.transcription_worker import (
+    run_video_transcription_worker,
 )
 from ...vector_database.database import VectorDatabase
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
@@ -38,24 +41,38 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 semaphore = Semaphore(5)
+ingestion_semaphore = ProcessSemaphore(5)
+TRANSCRIPTION_MAX_SLOTS = settings.transcription.max_concurrent_jobs
+transcription_semaphore = ProcessSemaphore(TRANSCRIPTION_MAX_SLOTS)
+transcription_active_count = Value("i", 0)  # shared int across all worker processes
 
-ingestion_job_handler = IngestionJobHandler()
+ingestion_job_handler = JobHandler(job_type="ingestion")
+transcription_job_handler = JobHandler(job_type="transcription")
 
 
-def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
+def run_lecture_update_pipeline_worker(
+    dto: IngestionPipelineExecutionDto, proc_semaphore: ProcessSemaphore
+):
     """
-    Run the lecture unit ingestion pipeline in a separate thread
+    Run the lecture unit ingestion pipeline in a separate process
     """
-    with semaphore:
-        lecture_ingestion_update_pipeline = LectureIngestionUpdatePipeline(dto)
-        lecture_ingestion_update_pipeline()
-        semaphore.release()
+    setup_logging()
+    proc_semaphore.acquire()
+    try:
+        LectureIngestionUpdatePipeline(dto)()
+    finally:
+        proc_semaphore.release()
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
     """
     Run the exercise chat pipeline in a separate thread
     """
+    for lu in dto.lecture_units:
+        transcription_job_handler.cancel_job(
+            lu.course_id, lu.lecture_id, lu.lecture_unit_id
+        )
+
     try:
         callback = LecturesDeletionStatusCallback(
             run_id=dto.settings.authentication_token,
@@ -135,7 +152,9 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """
     validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
 
-    process = Process(target=run_lecture_update_pipeline_worker, args=(dto,))
+    process = Process(
+        target=run_lecture_update_pipeline_worker, args=(dto, ingestion_semaphore)
+    )
     ingestion_job_handler.add_job(
         process=process,
         course_id=dto.lecture_unit.course_id,
@@ -194,35 +213,6 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     return
 
 
-# Video Transcription Pipeline
-
-
-def run_video_transcription_worker(dto: VideoTranscriptionPipelineExecutionDto):
-    """
-    Run the video transcription pipeline in a separate thread.
-    """
-    logger.info(
-        "[Lecture %d] Video transcription worker started",
-        dto.lecture_unit_id,
-    )
-
-    try:
-        pipeline = VideoTranscriptionPipeline(dto)
-        pipeline()
-        logger.info(
-            "[Lecture %d] Video transcription completed successfully",
-            dto.lecture_unit_id,
-        )
-    except Exception as e:
-        logger.error(
-            "[Lecture %d] Transcription pipeline failed: %s",
-            dto.lecture_unit_id,
-            str(e),
-            exc_info=True,
-        )
-        capture_exception(e)
-
-
 @router.post(
     "/transcription/video",
     status_code=status.HTTP_202_ACCEPTED,
@@ -240,8 +230,21 @@ def video_transcription_webhook(dto: VideoTranscriptionPipelineExecutionDto):
     logger.info(
         "Received transcription webhook: lecture_unit=%d, video_url=%s",
         dto.lecture_unit_id,
-        dto.video_url,
+        dto.video_url.split("?")[0],  # strip JWT query param
     )
 
-    thread = Thread(target=run_video_transcription_worker, args=(dto,))
-    thread.start()
+    process = Process(
+        target=run_video_transcription_worker,
+        args=(dto, transcription_semaphore, transcription_active_count),
+    )
+    transcription_job_handler.add_job(
+        process=process,
+        course_id=dto.course_id,
+        lecture_id=dto.lecture_id,
+        lecture_unit_id=dto.lecture_unit_id,
+    )
+    logger.info(
+        "[Lecture %d] Transcription process started (pid=%d)",
+        dto.lecture_unit_id,
+        process.pid,
+    )

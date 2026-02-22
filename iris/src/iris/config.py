@@ -63,6 +63,10 @@ class TranscriptionSettings(BaseModel):
         default=2,
         description="Max parallel Whisper API requests per transcription job",
     )
+    max_concurrent_jobs: int = Field(
+        default=2,
+        description="Max concurrent video transcription jobs (semaphore slots)",
+    )
 
 
 class Settings(BaseModel):
