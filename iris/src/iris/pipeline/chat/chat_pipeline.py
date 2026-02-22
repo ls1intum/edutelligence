@@ -35,9 +35,7 @@ from iris.pipeline.session_title_generation_pipeline import (
 )
 from iris.pipeline.shared.citation_pipeline import CitationPipeline, InformationType
 from iris.pipeline.shared.utils import datetime_to_string, format_custom_instructions
-from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
-from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.tools.chat_tool_providers import (
     CHAT_TOOL_PROVIDERS,
@@ -55,19 +53,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     Replaces CourseChatPipeline / ExerciseChatPipeline / TextExerciseChatPipeline / LectureChatPipeline
     """
 
-    # Shared
     context: ChatContext
+    event: Optional[str]
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
+    suggestion_pipeline: Optional[InteractionSuggestionPipeline]
+    code_feedback_pipeline: Optional[CodeFeedbackPipeline]
     jinja_env: Environment
     system_prompt_template: Any
-
-    # Context-Specific
-    lecture_retriever: Optional[LectureRetrieval]
-    faq_retriever: Optional[FaqRetrieval]
-    suggestion_pipeline: Optional[InteractionSuggestionPipeline]
-    event: Optional[str]
-    code_feedback_pipeline: Optional[CodeFeedbackPipeline]
     guide_prompt_template: Any
 
     def __init__(
@@ -83,10 +76,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         # Initialize pipelines & retrievers
         self.session_title_pipeline = SessionTitleGenerationPipeline()
         self.citation_pipeline = CitationPipeline()
-        self.suggestion_pipeline = None
-        self.code_feedback_pipeline = None
-        self.lecture_retriever = None
-        self.faq_retriever = None
+        self.suggestion_pipeline = InteractionSuggestionPipeline(variant=self.context)
+        self.code_feedback_pipeline = (
+            CodeFeedbackPipeline()
+        )  # TODO: Ungenutzt? Entfernen?
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -97,26 +90,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         )
         # Setup system prompt
         self.system_prompt_template = self.jinja_env.get_template(
-            "chat_system_prompt.j2"
+            "chat_system_prompt2.j2"
         )
         self.guide_prompt_template = self.jinja_env.get_template(
             "exercise_chat_guide_prompt.j2"
         )
-
-        # Setup context-specific components
-        if self.context == ChatContext.COURSE:
-            self.suggestion_pipeline = InteractionSuggestionPipeline(
-                variant=self.context
-            )
-
-        elif self.context == ChatContext.EXERCISE:
-            self.suggestion_pipeline = InteractionSuggestionPipeline(
-                variant=self.context
-            )
-            self.code_feedback_pipeline = CodeFeedbackPipeline()
-            self.guide_prompt_template = self.jinja_env.get_template(
-                "exercise_chat_guide_prompt.j2"
-            )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(context={self.context.value})"
@@ -594,12 +572,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         result: str,
     ) -> None:
         """
-        Generate interaction suggestions.
+        Generate interaction suggestions. This is only available ChatContext.COURSE, ChatContext.EXERCISE.
 
         Args:
             state: The current pipeline execution state.
             result: The final result string.
         """
+        if self.context not in {ChatContext.COURSE, ChatContext.EXERCISE}:
+            return
+
         # Extract user language
         user_language = "en"
         if state.dto.user and state.dto.user.lang_key:
