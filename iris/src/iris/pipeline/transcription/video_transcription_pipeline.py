@@ -54,6 +54,7 @@ class VideoTranscriptionPipeline:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
         self._heavy_result: Optional[dict] = None
+        self._heavy: Optional[HeavyTranscriptionPipeline] = None
 
     @observe(name="Video Transcription Pipeline")
     def __call__(self) -> None:
@@ -79,6 +80,7 @@ class VideoTranscriptionPipeline:
                 callback=callback,
                 temp_dir=self.temp_dir,
             )
+            self._heavy = heavy
             self._heavy_result = heavy()
 
             # Phase 2: Light pipeline (slide detection, alignment)
@@ -121,14 +123,17 @@ class VideoTranscriptionPipeline:
             raise
 
         finally:
-            self._cleanup()
+            self.cleanup()
 
-    def _cleanup(self) -> None:
+    def cleanup(self) -> None:
         """Clean up temporary files created during processing."""
-        if self._heavy_result is None:
+        if self._heavy_result is not None:
+            uid = self._heavy_result.get("uid")
+        elif self._heavy is not None:
+            uid = getattr(self._heavy, "uid", None)
+        else:
             return
 
-        uid = self._heavy_result.get("uid")
         if not uid:
             return
 
@@ -145,7 +150,7 @@ class VideoTranscriptionPipeline:
             try:
                 if file_path.exists():
                     file_path.unlink()
-                    logger.debug("Cleaned up: %s", file_path)
+                    logger.info("Cleaned up: %s", file_path)
             except OSError as e:
                 logger.warning("Failed to clean up %s: %s", file_path, e)
 
@@ -153,6 +158,6 @@ class VideoTranscriptionPipeline:
             try:
                 if dir_path.exists():
                     shutil.rmtree(dir_path)
-                    logger.debug("Cleaned up: %s", dir_path)
+                    logger.info("Cleaned up: %s", dir_path)
             except OSError as e:
                 logger.warning("Failed to clean up %s: %s", dir_path, e)
