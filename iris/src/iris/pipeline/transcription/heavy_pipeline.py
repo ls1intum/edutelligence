@@ -51,6 +51,7 @@ class HeavyTranscriptionPipeline:
         self.whisper_client = WhisperClient(
             model=settings.transcription.whisper_model,
             chunk_duration=settings.transcription.chunk_duration_seconds,
+            max_workers=settings.transcription.whisper_max_workers,
         )
 
     @observe(name="Heavy Transcription Pipeline")
@@ -65,25 +66,32 @@ class HeavyTranscriptionPipeline:
             - audio_path: Path to extracted audio
             - uid: Unique identifier for this job's temp files
         """
-        uid = str(uuid.uuid4())
+        self.uid = str(uuid.uuid4())
+        uid = self.uid
         video_path = self.temp_dir / f"{uid}.mp4"
         audio_path = self.temp_dir / f"{uid}.mp3"
+
+        # Strip JWT query param so the token is never written to logs
+        video_url_clean = self.dto.video_url.split("?")[0]
 
         logger.info(
             "[Lecture %d] Starting heavy pipeline for %s",
             self.dto.lecture_unit_id,
-            self.dto.video_url,
+            video_url_clean,
         )
 
         # Stage 1: Download video
         self.callback.in_progress("Downloading video...")
         logger.info(
-            "[Lecture %d] Stage 1/3: Downloading video from %s to %s",
+            "[Lecture %d] Stage 1/3: Downloading video -> %s",
             self.dto.lecture_unit_id,
-            self.dto.video_url,
             video_path,
         )
-        download_video(self.dto.video_url, str(video_path))
+        download_video(
+            self.dto.video_url,
+            str(video_path),
+            lecture_unit_id=self.dto.lecture_unit_id,
+        )
         self.callback.done("Video downloaded")
         logger.info(
             "[Lecture %d] Stage 1/3: Video downloaded successfully (%d MB)",
@@ -98,7 +106,9 @@ class HeavyTranscriptionPipeline:
             self.dto.lecture_unit_id,
             audio_path,
         )
-        extract_audio(str(video_path), str(audio_path))
+        extract_audio(
+            str(video_path), str(audio_path), lecture_unit_id=self.dto.lecture_unit_id
+        )
         self.callback.done("Audio extracted")
         logger.info(
             "[Lecture %d] Stage 2/3: Audio extracted successfully (%d MB)",
@@ -114,7 +124,9 @@ class HeavyTranscriptionPipeline:
             self.whisper_client.provider_name,
             self.whisper_client.chunk_duration,
         )
-        transcription = self.whisper_client.transcribe(str(audio_path))
+        transcription = self.whisper_client.transcribe(
+            str(audio_path), lecture_unit_id=self.dto.lecture_unit_id
+        )
         segment_count = len(transcription.get("segments", []))
         self.callback.done(f"Transcribed {segment_count} segments")
 
