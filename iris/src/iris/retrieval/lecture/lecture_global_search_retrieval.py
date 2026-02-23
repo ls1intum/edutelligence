@@ -1,3 +1,5 @@
+from typing import Any
+
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -45,45 +47,56 @@ class LectureGlobalSearchRetrieval:
             limit=limit,
         ).objects
 
+        # Collect unique lecture_unit_ids and fetch all metadata in one batch query
+        unit_ids = list(
+            {
+                obj.properties[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
+                for obj in results
+            }
+        )
+        lu_by_id = self._fetch_lecture_units(unit_ids)
+
         search_results = []
         for obj in results:
-            result = self._to_search_result_dto(obj.properties)
+            result = self._to_search_result_dto(obj.properties, lu_by_id)
             if result is not None:
                 search_results.append(result)
         return search_results
 
-    def _to_search_result_dto(self, segment_props) -> LectureSearchResultDTO | None:
-        """Fetch lecture unit metadata and map segment properties to a result DTO."""
+    def _fetch_lecture_units(self, unit_ids: list[int]) -> dict[int, Any]:
+        """Fetch lecture unit metadata for the given IDs in a single Weaviate query."""
+        if not unit_ids:
+            return {}
+        lecture_units = self.lecture_unit_collection.query.fetch_objects(
+            filters=Filter.by_property(
+                LectureUnitSchema.LECTURE_UNIT_ID.value
+            ).contains_any(unit_ids)
+        ).objects
+        return {
+            lu.properties[LectureUnitSchema.LECTURE_UNIT_ID.value]: lu.properties
+            for lu in lecture_units
+        }
+
+    @staticmethod
+    def _to_search_result_dto(
+        segment_props, lu_by_id: dict[int, Any]
+    ) -> LectureSearchResultDTO | None:
+        """Map segment properties to a result DTO using pre-fetched lecture unit metadata."""
         snippet = segment_props[LectureUnitSegmentSchema.SEGMENT_SUMMARY.value]
         if not snippet or snippet.startswith(_EMPTY_SEGMENT_PREFIX):
             return None
 
-        lecture_unit_filter = (
-            Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                segment_props[LectureUnitSegmentSchema.COURSE_ID.value]
-            )
-            & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
-                segment_props[LectureUnitSegmentSchema.LECTURE_ID.value]
-            )
-            & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
-                segment_props[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
-            )
-        )
-        lecture_units = self.lecture_unit_collection.query.fetch_objects(
-            filters=lecture_unit_filter
-        ).objects
-        if not lecture_units:
+        unit_id = segment_props[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
+        lu = lu_by_id.get(unit_id)
+        if lu is None:
             return None
 
-        lu = lecture_units[0].properties
         base_url = segment_props[LectureUnitSegmentSchema.BASE_URL.value]
         course_id = segment_props[LectureUnitSegmentSchema.COURSE_ID.value]
         lecture_id = segment_props[LectureUnitSegmentSchema.LECTURE_ID.value]
 
         return LectureSearchResultDTO(
-            lecture_unit_id=segment_props[
-                LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
-            ],
+            lecture_unit_id=unit_id,
             lecture_unit_name=lu[LectureUnitSchema.LECTURE_UNIT_NAME.value],
             lecture_unit_link=f"{base_url}/courses/{course_id}/lectures/{lecture_id}",
             lecture_id=lecture_id,
