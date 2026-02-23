@@ -55,7 +55,7 @@ class LectureGlobalSearchRetrieval:
     def _to_search_result_dto(self, segment_props) -> LectureSearchResultDTO | None:
         """Fetch lecture unit metadata and map segment properties to a result DTO."""
         snippet = segment_props[LectureUnitSegmentSchema.SEGMENT_SUMMARY.value]
-        if snippet.startswith(_EMPTY_SEGMENT_PREFIX):
+        if not snippet or snippet.startswith(_EMPTY_SEGMENT_PREFIX):
             return None
 
         lecture_unit_filter = (
