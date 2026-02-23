@@ -3,7 +3,6 @@ import pytest
 import logos.main as main
 
 
-@pytest.mark.asyncio
 async def test_route_and_execute_no_deployments_sync():
     """route_and_execute raises 404 when deployments list is empty."""
     with pytest.raises(main.HTTPException) as exc:
@@ -19,7 +18,6 @@ async def test_route_and_execute_no_deployments_sync():
     assert exc.value.status_code == 404
 
 
-@pytest.mark.asyncio
 async def test_route_and_execute_no_deployments_async():
     """route_and_execute returns error dict when deployments empty in async mode."""
     result = await main.route_and_execute(
@@ -35,7 +33,6 @@ async def test_route_and_execute_no_deployments_async():
     assert "error" in result["data"]
 
 
-@pytest.mark.asyncio
 async def test_route_and_execute_proxy_branch(monkeypatch):
     """route_and_execute delegates to _execute_proxy_mode when body has 'model'."""
     called = {}
@@ -59,7 +56,6 @@ async def test_route_and_execute_proxy_branch(monkeypatch):
     assert called.get("proxy") is True
 
 
-@pytest.mark.asyncio
 async def test_route_and_execute_resource_branch(monkeypatch):
     """route_and_execute delegates to _execute_resource_mode when body has no 'model'."""
     called = {}

@@ -41,6 +41,7 @@ openapi = "app.openapi:export"
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"
 flake8 = "7.1.2"
+coverage = {version = "^7.0", extras = ["toml"]}
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -59,9 +60,7 @@ markers = [
     "integration: tests requiring a running server or database",
     "slow: tests that take more than a few seconds",
 ]
-filterwarnings = [
-    "ignore::pytest.PytestUnknownMarkWarning",
-]
+filterwarnings = []
 
 # ---------------------------------------------------------------------------
 # Coverage

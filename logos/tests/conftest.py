@@ -185,7 +185,7 @@ sa_orm = _make_submodule(sa, "orm", {
     "Session": type("Session", (), {}),
 })
 sa_ext = _make_submodule(sa, "ext")
-_make_submodule(sa_ext, "declarative", {"declarative_base": lambda **kw: _DummyBase})
+_make_submodule(sa_ext, "declarative", {"declarative_base": lambda **_: _DummyBase})
 
 # ---------------------------------------------------------------------------
 # 8. psycopg2  (PostgreSQL driver — loaded by SQLAlchemy at runtime)

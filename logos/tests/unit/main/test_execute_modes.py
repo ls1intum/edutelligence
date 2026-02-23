@@ -3,7 +3,6 @@ import pytest
 import logos.main as main
 
 
-@pytest.mark.asyncio
 async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
     """_execute_proxy_mode raises 400 when body has no 'model' key."""
     # Stub DBManager so no real DB call is attempted
@@ -27,7 +26,6 @@ async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
     assert exc.value.status_code == 400
 
 
-@pytest.mark.asyncio
 async def test_execute_resource_mode_failure_records_error(monkeypatch):
     """_execute_resource_mode returns 503 when the pipeline fails."""
 
