@@ -42,7 +42,7 @@ logos/
 │   ├── responses.py                   # Helper utilities (URL merging, token extraction)
 │   ├── model_string_parser.py         # logos-v* model string parser
 │   ├── dbutils/
-│   │   ├── dbmanager.py               # All DB operations (~2170 lines) — context manager pattern + ensure_schema()
+│   │   ├── dbmanager.py               # All DB operations (~2170 lines) — context manager pattern
 │   │   ├── dbmodules.py               # SQLAlchemy ORM models
 │   │   └── dbrequest.py               # Pydantic request models
 │   ├── pipeline/
@@ -147,7 +147,6 @@ The `process.settings` JSONB field can store per-process configuration (e.g., ra
 3. **CRITICAL**: Add the migration filename to the `MIGRATIONS` array in `db/migrations/run_all_migrations.sh` — forgetting this means existing deployments never get the migration applied
 4. Update `db/init.sql` to reflect the new schema for fresh installs
 5. Update ORM models in `dbmodules.py` if applicable
-6. For critical columns, also add them to the `_REQUIRED_COLUMNS` list in `dbmanager.py` (defense-in-depth — `ensure_schema()` auto-applies `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on startup)
 
 **Common migration pitfall**: The `init.sql` file is only executed on first database initialization (PostgreSQL `docker-entrypoint-initdb.d`). Existing deployments with persistent volumes rely entirely on `run_all_migrations.sh` to get schema updates.
 
@@ -267,7 +266,7 @@ docker compose up --build
 
 1. **main.py is large** (~1690+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
-3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually. `ensure_schema()` in `dbmanager.py` auto-adds critical missing columns at startup as a safety net.
+3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
 4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
 5. **Token tracking exists** in the `usage_tokens` and `token_prices` tables.
 6. **The `process` table is the key auth entity** — each process has a unique `logos_key`.

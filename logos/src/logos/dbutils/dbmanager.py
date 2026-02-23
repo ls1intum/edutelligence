@@ -41,14 +41,6 @@ _METADATA = MetaData()
 _METADATA_REFLECTED = False
 _ENGINE_LOCK = threading.Lock()
 _METADATA_LOCK = threading.Lock()
-_SCHEMA_ENSURED = False
-_SCHEMA_LOCK = threading.Lock()
-
-# Columns that MUST exist on their respective tables.
-# Each entry is (table, column, sql_type). Checked once at startup.
-_REQUIRED_COLUMNS: list[tuple[str, str, str]] = [
-    ("log_entry", "request_id", "TEXT"),
-]
 
 
 def _init_engine():
@@ -65,41 +57,6 @@ def _init_engine():
                 )
                 _SESSION_FACTORY = sessionmaker(bind=_ENGINE)
     return _ENGINE
-
-
-def ensure_schema(engine=None):
-    """
-    Ensure required columns exist on their tables.
-
-    Runs once per process. Uses ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``
-    so it is safe to call repeatedly and in parallel across multiple workers.
-    """
-    global _SCHEMA_ENSURED
-    if _SCHEMA_ENSURED:
-        return
-    with _SCHEMA_LOCK:
-        if _SCHEMA_ENSURED:
-            return
-        if engine is None:
-            engine = _init_engine()
-        with engine.connect() as conn:
-            for table, column, col_type in _REQUIRED_COLUMNS:
-                stmt = text(
-                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
-                )
-                try:
-                    conn.execute(stmt)
-                    conn.commit()
-                    logger.info("Schema check: %s.%s ensured", table, column)
-                except Exception:
-                    conn.rollback()
-                    logger.warning(
-                        "Schema check: could not ensure %s.%s — "
-                        "run migration 019_add_request_id_to_log_entry.sql manually",
-                        table, column,
-                        exc_info=True,
-                    )
-        _SCHEMA_ENSURED = True
 
 
 def _ensure_metadata(engine):
@@ -2128,7 +2085,6 @@ class DBManager:
 
     def __enter__(self):
         self.engine = _init_engine()
-        ensure_schema(self.engine)
         _ensure_metadata(self.engine)
         self.metadata = _METADATA
         if _SESSION_FACTORY is None:
