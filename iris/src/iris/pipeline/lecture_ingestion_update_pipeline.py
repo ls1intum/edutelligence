@@ -93,7 +93,8 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 base_url=self.dto.settings.artemis_base_url,
             )
 
-            tokens += LectureUnitPipeline()(lecture_unit=lecture_unit_dto)
+            is_local = self.dto.settings is not None and self.dto.settings.is_local()
+            tokens += LectureUnitPipeline(local=is_local)(lecture_unit=lecture_unit_dto)
             callback.done(
                 "Ingested lecture unit summary into vector database",
                 tokens=tokens,
@@ -117,7 +118,8 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 name="Default",
                 description="Default lecture ingestion update variant using efficient models "
                 "for processing and embeddings.",
-                chat_model="gpt-4.1-mini",
+                cloud_chat_model="gpt-4.1-mini",
+                local_chat_model="gpt-oss:120b",
                 embedding_model="text-embedding-3-small",
             ),
             LectureIngestionUpdateVariant(
@@ -125,7 +127,8 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 name="Advanced",
                 description="Advanced lecture ingestion update variant using higher-quality models "
                 "for improved accuracy.",
-                chat_model="gpt-4.1",
+                cloud_chat_model="gpt-4.1",
+                local_chat_model="gpt-oss:120b",
                 embedding_model="text-embedding-3-large",
             ),
         ]

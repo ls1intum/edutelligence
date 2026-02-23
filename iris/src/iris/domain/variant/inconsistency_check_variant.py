@@ -9,14 +9,16 @@ class InconsistencyCheckVariant(AbstractVariant):
         variant_id: str,
         name: str,
         description: str,
-        solver_model: str,
+        cloud_solver_model: str,
+        local_solver_model: str,
     ):
         super().__init__(
             variant_id=variant_id,
             name=name,
             description=description,
         )
-        self.solver_model = solver_model
+        self.cloud_solver_model = cloud_solver_model
+        self.local_solver_model = local_solver_model
 
     def required_models(self) -> set[str]:
-        return {self.solver_model}
+        return {self.cloud_solver_model, self.local_solver_model}

@@ -24,6 +24,8 @@ entryPoints:
           scheme: https
   https:
     address: ":443"
+  grpc:
+    address: ":50051"
 
 serversTransport:
   insecureSkipVerify: false
@@ -51,7 +53,7 @@ tls:
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: ${LETSENCRYPT_EMAIL}
+      # Email is configured via command-line argument in docker-compose.yml
       storage: acme.json
       httpChallenge:
         entryPoint: http

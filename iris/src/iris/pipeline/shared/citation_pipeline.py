@@ -35,7 +35,7 @@ class CitationPipeline(SubPipeline):
     prompt_str: str
     prompt: ChatPromptTemplate
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="citation_pipeline")
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
@@ -53,7 +53,9 @@ class CitationPipeline(SubPipeline):
         self.pipelines = {}
 
         # Default variant
-        default_request_handler = ModelVersionRequestHandler(version="gpt-4.1-nano")
+        default_request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-4.1-nano"
+        )
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),
@@ -62,7 +64,9 @@ class CitationPipeline(SubPipeline):
         self.pipelines["default"] = default_llm | StrOutputParser()
 
         # Advanced variant
-        advanced_request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        advanced_request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-4.1-mini"
+        )
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),
