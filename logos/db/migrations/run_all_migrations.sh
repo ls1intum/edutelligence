@@ -53,6 +53,7 @@ MIGRATIONS=(
     "016_move_endpoint_to_model_api_keys.sql"
     "017_snapshot_provider_id_migration.sql"
     "018_drop_model_provider_config.sql"
+    "019_add_request_id_to_log_entry.sql"
 )
 
 FAILED=0
