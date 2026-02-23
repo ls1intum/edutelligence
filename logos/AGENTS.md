@@ -161,25 +161,42 @@ Tests stub heavy dependencies (sentence_transformers, gRPC) via `conftest.py`. D
 
 ## Git Workflow & Pull Requests
 
-### Branch Naming
-- `feature/logos/description-of-feature` or `feature/logos/issue-NNN`
-- Examples: `feature/logos/v1-models-endpoint`, `feature/logos/temp-providers`
+### Naming Conventions (MANDATORY)
+
+**PR Title** — Must match this regex (enforced by CI):
+```
+^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Nebula|Memiris)`:\s[A-Z].*$
+```
+Examples:
+- `` `Logos`: Add OpenAI-compatible /v1/models endpoint ``
+- `` `Logos`: Fix rate limiting for batch users ``
+
+**Commit Messages** — Must follow the same pattern (without backticks):
+```
+ProjectName: Description starting with capital letter (#issue_number)
+```
+Examples:
+- `Logos: Add OpenAI-compatible /v1/models endpoint (#420)`
+- `Logos: Fix rate limiting for batch users (#422)`
+
+**Branch Names**: `feature/logos/description` or `logos/description`
 
 ### ALWAYS Create Pull Requests for Issues
 When implementing a feature for a GitHub issue:
 1. Create a feature branch from `main`: `git checkout -b feature/logos/short-description`
 2. Implement the feature with tests
 3. Run ALL existing tests to verify zero regressions: `poetry run pytest tests/unit/ -v`
-4. Commit with a descriptive message: `feat(logos): description (#issue_number)`
+4. Commit with proper message format: `Logos: Description (#issue_number)`
 5. Push the branch: `git push origin feature/logos/short-description`
-6. **Create a PR** with `gh pr create` including:
-   - `Closes #NNN` to link the issue
-   - Summary of changes
-   - List of new/modified files
-   - New endpoints documented (method, path, auth, request/response)
-   - Testing section (what tests added, how to run)
-   - Any database migration notes
-7. Never merge directly to `main` without a PR
+6. **Create a PR** with `gh pr create`:
+   - Title MUST match the PR title regex above (with backtick-wrapped project name)
+   - Body should include: `Closes #NNN`, summary, changes list, new endpoints, testing info
+7. **After PR creation, ALWAYS**:
+   - Check CI/build status within a few minutes: `gh pr checks <PR_NUMBER>`
+   - If the PR title validation fails, fix it immediately with `gh pr edit <NUMBER> --title '...'`
+   - If tests fail, fix them before requesting review
+   - Monitor until all checks pass
+8. Never merge directly to `main` without a PR
 
 ### PR Description Template
 ```markdown
@@ -204,6 +221,13 @@ Brief description of what this PR implements.
 ## Database Changes
 - Migration: `db/migrations/NNN_description.sql`
 ```
+
+### Post-PR Checklist
+After creating a PR, always verify:
+1. **Title validation passes** — check with `gh pr checks <NUMBER>` or view on GitHub
+2. **All CI checks pass** — build, lint, tests
+3. **No merge conflicts** — rebase on main if needed
+4. If any check fails, fix immediately — do NOT leave failing PRs
 
 ## Conventions
 
