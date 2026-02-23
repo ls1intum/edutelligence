@@ -1612,6 +1612,43 @@ class DBManager:
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
+    def get_models_for_profile(self, profile_id: int) -> list[Dict[str, Any]]:
+        """
+        Get all models that a profile has access to via profile_model_permissions.
+
+        Returns:
+            List of dicts with model id, name, and description.
+        """
+        sql = text("""
+            SELECT DISTINCT m.id, m.name, m.description
+            FROM models m
+                JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+            WHERE pmp.profile_id = :profile_id
+            ORDER BY m.id
+        """)
+        rows = self.session.execute(sql, {"profile_id": int(profile_id)}).mappings().all()
+        return [dict(row) for row in rows]
+
+    def get_model_for_profile(self, profile_id: int, model_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a single model by name if the profile has access to it.
+
+        Returns:
+            Dict with model id, name, and description, or None if not found.
+        """
+        sql = text("""
+            SELECT DISTINCT m.id, m.name, m.description
+            FROM models m
+                JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+            WHERE pmp.profile_id = :profile_id
+              AND m.name = :name
+            ORDER BY m.id LIMIT 1
+        """)
+        row = self.session.execute(
+            sql, {"profile_id": int(profile_id), "name": model_name}
+        ).mappings().first()
+        return dict(row) if row else None
+
     # TODO: Remove these methods if not needed anymore
     # def get_models_by_profile(self, logos_key: str, profile_id: int):
     #     """
