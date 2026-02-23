@@ -1,3 +1,4 @@
+import contextvars
 import logging
 import os
 import time
@@ -32,7 +33,7 @@ from iris.config import settings
 from iris.llm import AzureOpenAIChatModel, OllamaModel
 from iris.llm.external.openai_chat import OpenAIChatModel
 from iris.llm.llm_manager import LlmManager
-from iris.tracing import get_current_context, observe, set_current_context
+from iris.tracing import observe
 from iris.vector_database.database import VectorDatabase
 
 _memiris_user_focus_personal_details = """
@@ -376,7 +377,7 @@ class MemirisWrapper:
         # for internal LLM calls (memory creation, consolidation, etc.)
         if use_cloud_models:
             return self.memory_creation_pipeline_openai.create_memories(
-                self.tenant, text
+                self.tenant, text, reference
             )
         else:
             return self.memory_creation_pipeline_ollama.create_memories(
@@ -402,13 +403,10 @@ class MemirisWrapper:
         Returns:
             Thread: The thread that is running the memory creation.
         """
-        # Capture parent tracing context before spawning thread
-        parent_ctx = get_current_context()
+        # Copy contextvars so the child thread inherits the Langfuse observation stack
+        ctx = contextvars.copy_context()
 
         def _create_memories():
-            # Restore parent tracing context in child thread
-            if parent_ctx:
-                set_current_context(parent_ctx)
             try:
                 memories = self.create_memories(text, reference, use_cloud_models)
                 result_storage.extend(memories)
@@ -417,7 +415,10 @@ class MemirisWrapper:
                     "Failed to create memories in thread: %s", e, exc_info=True
                 )
 
-        thread = Thread(name="MemirisMemoryCreationThread", target=_create_memories)
+        thread = Thread(
+            name="MemirisMemoryCreationThread",
+            target=lambda: ctx.run(_create_memories),
+        )
         thread.start()
         return thread
 
@@ -622,8 +623,11 @@ class MemirisWrapper:
             if connected_memory_ids
             else []
         )
+        # Filter out deleted memories and memories that don't exist
         connected_memory_map: dict[UUID, Memory] = {
-            memory.id: memory for memory in connected_memories if memory.id is not None
+            mem.id: mem
+            for mem in connected_memories
+            if mem is not None and mem.id is not None and not mem.deleted
         }
 
         # Build DTOs
@@ -632,12 +636,18 @@ class MemirisWrapper:
 
         connection_dtos = []
         for conn in connections:
+            # Only include memories that exist and are not deleted
             cm = [
                 MemoryDTO.from_memory(connected_memory_map[mid])
                 for mid in conn.memories
                 if mid in connected_memory_map
             ]
-            connection_dtos.append(MemoryConnectionDTO.from_connection(conn, cm))
+            # Filter out the current memory from the connection to check if there are other memories
+            other_memories = [m for m in cm if m.id != str(memory.id)]
+
+            # Only include connection if it has at least one other valid memory besides the current one
+            if len(other_memories) > 0:
+                connection_dtos.append(MemoryConnectionDTO.from_connection(conn))
 
         return MemoryWithRelationsDTO(
             memory=memory_dto, learnings=learning_dtos, connections=connection_dtos

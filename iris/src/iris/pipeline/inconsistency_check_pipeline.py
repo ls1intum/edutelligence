@@ -38,12 +38,16 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
     solver: Runnable
     prettify: Runnable
 
-    def __init__(self, callback: Optional[InconsistencyCheckCallback] = None):
+    def __init__(
+        self, callback: Optional[InconsistencyCheckCallback] = None, local: bool = False
+    ):
         super().__init__(implementation_id="inconsistency_check_pipeline")
         completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="gpt-o3-mini"),
+            request_handler=ModelVersionRequestHandler(
+                version="gpt-oss:120b" if local else "gpt-o3-mini"
+            ),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)
@@ -137,6 +141,7 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
                 variant_id="default",
                 name="Default",
                 description="Standard inconsistency check implementation with efficient model usage",
-                solver_model="gpt-o3-mini",
-            )
+                cloud_solver_model="gpt-o3-mini",
+                local_solver_model="gpt-oss:120b",
+            ),
         ]

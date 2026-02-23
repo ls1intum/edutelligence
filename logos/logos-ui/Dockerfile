@@ -3,12 +3,14 @@ FROM node:alpine AS build
 
 WORKDIR /app
 
-# Copy React UI source code
-COPY ./logos/logos-ui/ ./
+# Copy dependency manifests and npm config first for layer caching
+COPY ./logos/logos-ui/package.json ./logos/logos-ui/package-lock.json ./logos/logos-ui/.npmrc ./
 
-# Install dependencies
-RUN npm install @react-native-picker/picker
+# Install dependencies (cached unless package.json/package-lock.json changes)
 RUN npm ci
+
+# Copy remaining source
+COPY ./logos/logos-ui/ ./
 
 # Build React app (defaults to production mode)
 RUN npx expo export --platform web --output-dir web-build

@@ -4,15 +4,19 @@ on:
   pull_request:
     paths:
       - "iris/**"
+      - "memiris/**"
       - ".github/workflows/iris_build-and-push-docker.yml"
       - "!iris/README.md"
+      - "!memiris/README.md"
   push:
     branches:
       - main
     paths:
       - "iris/**"
+      - "memiris/**"
       - ".github/workflows/iris_build-and-push-docker.yml"
       - "!iris/README.md"
+      - "!memiris/README.md"
   release:
     types:
       - created

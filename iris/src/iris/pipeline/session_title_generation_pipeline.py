@@ -25,14 +25,16 @@ class SessionTitleGenerationPipeline(SubPipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     tokens: TokenUsageDTO
+    MAX_RECENT_MESSAGES = 10
+    MAX_MESSAGE_CHARS = 400
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="session_title_generation_pipeline")
 
         # Set the langchain chat model
-        model = "gpt-4.1-nano"
+        model = "gpt-oss:120b" if local else "gpt-4.1-nano"
         request_handler = ModelVersionRequestHandler(version=model)
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=30)
+        completion_args = CompletionArguments(temperature=0.0, max_tokens=128)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=completion_args,
@@ -55,6 +57,21 @@ class SessionTitleGenerationPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @classmethod
+    def format_recent_messages(cls, recent_messages: list[str]) -> str:
+        max_recent_messages = cls.MAX_RECENT_MESSAGES
+        selected_messages = recent_messages[-max_recent_messages:]
+        if not selected_messages:
+            return "(no recent messages)"
+
+        formatted_lines: list[str] = []
+        for idx, msg in enumerate(selected_messages, start=1):
+            normalized = str(msg or "").replace("\n", " ").strip()
+            if len(normalized) > cls.MAX_MESSAGE_CHARS:
+                normalized = normalized[: cls.MAX_MESSAGE_CHARS - 3].rstrip() + "..."
+            formatted_lines.append(f"{idx}. {normalized}")
+        return "\n".join(formatted_lines)
+
     @observe(name="Session Title Generation Pipeline")
     def __call__(
         self,
@@ -63,15 +80,38 @@ class SessionTitleGenerationPipeline(SubPipeline):
         user_language: str = "en",
         **kwargs,
     ) -> Optional[str]:
-        prompt_text = self.prompt_template.render(
-            current_session_title=current_session_title,
-            recent_messages=recent_messages,
-            user_language=user_language,
-        )
-        prompt = ChatPromptTemplate.from_messages([("system", prompt_text)])
+        prompt_text = self.prompt_template.render(user_language=user_language)
+        formatted_recent_messages = self.format_recent_messages(recent_messages)
         try:
             logger.info("Running Session Title Generation Pipeline")
-            session_title = (prompt | self.pipeline).invoke({})
+            # Keep the rendered text as data so `{}` inside message content is not
+            # interpreted as additional prompt template variables.
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", "{prompt_text}"),
+                    (
+                        "user",
+                        "Current title: {current_session_title}\n"
+                        "Recent messages (oldest first, newest last):\n"
+                        "{recent_messages}\n\n"
+                        "Return EXACTLY one line:\n"
+                        "KEEP\n"
+                        "or\n"
+                        "UPDATE: <new title>",
+                    ),
+                ]
+            )
+            session_title = (prompt | self.pipeline).invoke(
+                {
+                    "prompt_text": prompt_text,
+                    "current_session_title": current_session_title,
+                    "recent_messages": formatted_recent_messages,
+                }
+            )
+            logger.info(
+                "Session title raw LLM output | output=%r",
+                str(session_title)[:500] if session_title is not None else None,
+            )
             self.tokens = self.llm.tokens
             self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
             return session_title
