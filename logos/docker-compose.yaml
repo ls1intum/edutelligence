@@ -98,10 +98,14 @@ services:
       - internal
 
   logos-db:
-    image: postgres:17
+    build: ./db
     container_name: logos-db
     restart: unless-stopped
     user: postgres
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_cron
+      -c cron.database_name=logosdb
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
