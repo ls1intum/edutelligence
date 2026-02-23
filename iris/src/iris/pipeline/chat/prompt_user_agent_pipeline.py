@@ -15,7 +15,7 @@ from langsmith import traceable
 
 from .assess_user_answer_pipeline import AssessUserAnswerPipeline
 from ...common.memiris_setup import get_tenant_for_user
-from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
+from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
 from ...domain.data.verdict_dto import VerdictDTO
 from ...domain.variant.prompt_user_variant import PromptUserVariant
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -38,13 +38,14 @@ logger.setLevel(logging.INFO)
 
 
 class PromptUserAgentPipeline(
-    AbstractAgentPipeline[PromptUserChatPipelineExecutionDTO, PromptUserVariant]
+    AbstractAgentPipeline[PromptUserPipelineExecutionDTO, PromptUserVariant]
 ):
     """
     Exercise chat agent pipeline that assesses the authenticity of user submissions by generating questions and assessing the answers by the user.
     """
 
     assess_user_answer_pipeline: AssessUserAnswerPipeline
+    verdict: VerdictDTO | None
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
@@ -56,8 +57,9 @@ class PromptUserAgentPipeline(
         """
         super().__init__(implementation_id="prompt_user_chat_pipeline")
 
-        # Create the assessment pipeline
+        # Create the assessment pipeline and its result variable
         self.assess_user_answer_pipeline = AssessUserAnswerPipeline()
+        self.verdict = None
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -109,7 +111,7 @@ class PromptUserAgentPipeline(
     def is_memiris_memory_creation_enabled(
                 self,
                 state: AgentPipelineExecutionState[
-                    PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                    PromptUserPipelineExecutionDTO, PromptUserVariant
                 ],
         ) -> bool:
             """
@@ -124,7 +126,7 @@ class PromptUserAgentPipeline(
             return False
 
 
-    def get_memiris_tenant(self, dto: PromptUserChatPipelineExecutionDTO) -> str:
+    def get_memiris_tenant(self, dto: PromptUserPipelineExecutionDTO) -> str:
             """
             Return the Memiris tenant identifier for the current user.
 
@@ -142,7 +144,7 @@ class PromptUserAgentPipeline(
     def get_tools(
             self,
             state: AgentPipelineExecutionState[
-                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                PromptUserPipelineExecutionDTO, PromptUserVariant
             ],
     ) -> list[Callable]:
         """
@@ -198,7 +200,7 @@ class PromptUserAgentPipeline(
     def build_system_message(
             self,
             state: AgentPipelineExecutionState[
-                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                PromptUserPipelineExecutionDTO, PromptUserVariant
             ],
     ) -> str:
         """
@@ -235,7 +237,7 @@ class PromptUserAgentPipeline(
     def on_agent_step(
             self,
             state: AgentPipelineExecutionState[
-                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                PromptUserPipelineExecutionDTO, PromptUserVariant
             ],
             step: dict[str, Any],
     ) -> None:
@@ -253,7 +255,7 @@ class PromptUserAgentPipeline(
     def pre_agent_hook(
             self,
             state: AgentPipelineExecutionState[
-                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                PromptUserPipelineExecutionDTO, PromptUserVariant
             ],
     ):
         """
@@ -278,9 +280,9 @@ class PromptUserAgentPipeline(
     def post_agent_hook(
             self,
             state: AgentPipelineExecutionState[
-                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                PromptUserPipelineExecutionDTO, PromptUserVariant
             ],
-    ) -> str:
+    ):
         """
         Process results after agent execution.
         Args:
@@ -290,24 +292,28 @@ class PromptUserAgentPipeline(
             The processed result string.
         """
 
-        try: # TODO: only run refinement pipeline when actually a new question was generated (e.g. don't when verdict was suspicious/unsuspicious/clarify or event is build_with_points/timer/tab)
-            # Refine response using guide prompt
-            result = self._refine_response(state)
+        try:
+            # Only run refinement pipeline when a new question was generated (only questions are refined)
+            if self.event == "user_initiates_prompting" or self.verdict.verdict == "next_question":
+                # Refine response using guide prompt
+                result = self._refine_response(state)
+            else:
+                result = state.result
 
             state.callback.done("Done!", final_result=result, tokens=state.tokens)
-
-            return result
 
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
             state.callback.error("Error in processing response")
-            return state.result
+
+        # reset assessment result for next pipeline run
+        self.verdict = None
 
 
     def _refine_response(
             self,
             state: AgentPipelineExecutionState[
-                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                PromptUserPipelineExecutionDTO, PromptUserVariant
             ],
     ) -> str:
         """
@@ -373,7 +379,7 @@ class PromptUserAgentPipeline(
     def _assess_answer(
             self,
             state: AgentPipelineExecutionState[
-                PromptUserChatPipelineExecutionDTO, PromptUserVariant
+                PromptUserPipelineExecutionDTO, PromptUserVariant
             ]
     ) -> None:
         """
@@ -383,11 +389,11 @@ class PromptUserAgentPipeline(
             state: The current pipeline execution state.
         """
         try:
-            verdict = VerdictDTO(**json.loads(self.assess_user_answer_pipeline(state.dto)))
+            self.verdict = VerdictDTO(**json.loads(self.assess_user_answer_pipeline(state.dto)))
 
             # Ugly workaround forced by architecture: we must mutate prompt messages after render
             # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
-            rendered_verdict_prompt = self.verdict_dependent_template.render(verdict=verdict.verdict)
+            rendered_verdict_prompt = self.verdict_dependent_template.render(verdict=self.verdict.verdict)
             for i, msg in enumerate(state.prompt.messages):
                 if msg.content == "VERDICT_DEPENDENT":
                     state.prompt.messages[i] = SystemMessage(content=msg.content.replace("VERDICT_DEPENDENT", rendered_verdict_prompt))
@@ -397,7 +403,7 @@ class PromptUserAgentPipeline(
 
             state.callback.done(
                 final_result=None,
-                verdict=verdict,
+                verdict=self.verdict,
                 tokens=state.tokens,
             )
 
@@ -409,7 +415,7 @@ class PromptUserAgentPipeline(
     @traceable(name="Prompt User Agent Pipeline")
     def __call__(
             self,
-            dto: PromptUserChatPipelineExecutionDTO,
+            dto: PromptUserPipelineExecutionDTO,
             variant: PromptUserVariant,
             callback: PromptUserStatusCallback,
             event: str | None,

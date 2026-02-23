@@ -13,7 +13,7 @@ from iris.domain.data.programming_submission_dto import (
 from iris.domain.event.pyris_event_dto import PyrisEventDTO
 
 
-class PromptUserChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
+class PromptUserPipelineExecutionDTO(ChatPipelineExecutionDTO):
     submission: ProgrammingSubmissionDTO
     exercise: ProgrammingExerciseDTO
     course: Optional[CourseDTO] = None

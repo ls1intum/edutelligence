@@ -2,7 +2,7 @@
 # Templates are taken from Artemis: https://github.com/ls1intum/Artemis
 import datetime
 
-from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
+from iris.domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
@@ -537,7 +537,7 @@ OR
 
 LLM_ASSESSMENT_EVALUATION_PROMPT = ""
 
-DTO = PromptUserChatPipelineExecutionDTO(
+DTO = PromptUserPipelineExecutionDTO(
     submission=ProgrammingSubmissionDTO(id=1, date=datetime.datetime(2026, 1, 11), repository=CODE_SORTING, isPractice=False, buildFailed=False,
                                         latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
     exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=TEMPLATE_SORTING, problemStatement=TASK_SORTING),

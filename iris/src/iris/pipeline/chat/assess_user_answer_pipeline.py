@@ -13,7 +13,7 @@ from ..prompts.assess_user_answer_prompt import assess_user_answer_prompt, under
     over_equal_max_questions_rules, between_min_max_questions_rules
 
 from ...common.pyris_message import PyrisMessage
-from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserChatPipelineExecutionDTO
+from ...domain.chat.prompt_user_chat.prompt_user_chat_pipeline_execution_dto import PromptUserPipelineExecutionDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -84,7 +84,7 @@ class AssessUserAnswerPipeline(SubPipeline):
     @traceable(name="Assess User Answer Pipeline")
     def __call__(
             self,
-            dto: PromptUserChatPipelineExecutionDTO
+            dto: PromptUserPipelineExecutionDTO
     ) -> str:
         """
         Runs the pipeline
