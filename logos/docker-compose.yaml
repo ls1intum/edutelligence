@@ -129,7 +129,7 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === UI routing (https://${LOGOS_DOMAIN}:8080) ===
+      # === UI routing (https://${LOGOS_DOMAIN:-localhost}:8080) ===
       - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
       - "traefik.http.routers.internal-ui.entrypoints=secure8080"
       - "traefik.http.routers.internal-ui.tls=true"
@@ -155,7 +155,7 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Landing page routing (https://${LOGOS_DOMAIN}) ===
+      # === Landing page routing (https://${LOGOS_DOMAIN:-localhost}) ===
       - "traefik.http.routers.landing.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
       - "traefik.http.routers.landing.entrypoints=websecure"
       - "traefik.http.routers.landing.tls=true"
