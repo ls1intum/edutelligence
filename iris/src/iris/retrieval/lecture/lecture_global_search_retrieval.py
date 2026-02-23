@@ -70,7 +70,8 @@ class LectureGlobalSearchRetrieval:
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
             filters=Filter.by_property(
                 LectureUnitSchema.LECTURE_UNIT_ID.value
-            ).contains_any(unit_ids)
+            ).contains_any(unit_ids),
+            limit=len(unit_ids),
         ).objects
         return {
             lu.properties[LectureUnitSchema.LECTURE_UNIT_ID.value]: lu.properties
