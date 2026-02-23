@@ -1,5 +1,4 @@
-from fastapi import APIRouter
-from fastapi.params import Depends
+from fastapi import APIRouter, Depends
 
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
@@ -16,7 +15,7 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 logger = get_logger(__name__)
 
 
-@router.get("/lectures", dependencies=[Depends(TokenValidator())])
+@router.post("/lectures", dependencies=[Depends(TokenValidator())])
 def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]:
     """
     Search for lectures based on a query.
