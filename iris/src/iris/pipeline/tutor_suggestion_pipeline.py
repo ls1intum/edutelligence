@@ -1,9 +1,7 @@
 import json
 import os
-from datetime import datetime
 from typing import Any, Callable, List, cast
 
-import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from iris.common.logging_config import get_logger
@@ -16,6 +14,10 @@ from iris.domain.variant.variant import Dep, Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
+)
+from iris.pipeline.shared.utils import (
+    format_post_discussion,
+    get_current_utc_datetime_string,
 )
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
@@ -108,7 +110,7 @@ class TutorSuggestionPipeline(
         callback = state.callback
         if not isinstance(callback, TutorSuggestionCallback):
             callback = cast(TutorSuggestionCallback, state.callback)
-        discussion = self._get_post_discussion(state.dto.post)
+        discussion = format_post_discussion(state.dto.post, include_user_ids=True)
 
         tool_list: List[Callable] = []
         if is_programming_exercise:
@@ -203,10 +205,10 @@ class TutorSuggestionPipeline(
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
         tutor_query = self.get_text_of_latest_user_message(state) != ""
-        discussion = self._get_post_discussion(state.dto.post)
+        discussion = format_post_discussion(state.dto.post, include_user_ids=True)
         regeneration_requested = self.is_regeneration_by_user_requested(state)
         template_context = {
-            "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            "current_date": get_current_utc_datetime_string(),
             "allow_lecture_tool": allow_lecture_tool,
             "allow_faq_tool": allow_faq_tool,
             "has_chat_history": bool(state.message_history),
@@ -309,29 +311,6 @@ class TutorSuggestionPipeline(
             artifact=artifact_text,
         )
         return ""
-
-    def _get_post_discussion(self, post: PostDTO) -> str:
-        """
-        Get the discussion of the post.
-        Use this if you want to provide additional context regarding the discussion of a post.
-        The discussion is a summary of the answers to the post.
-
-        Returns:
-            str: The discussion of the post.
-        """
-        if post and post.content:
-            discussion = f"The posts question is: {post.content} by a user with id {post.user_id}\n"
-            if post.answers:
-                discussion += "The discussion of the post is:\n"
-                for answer in post.answers:
-                    if answer.content:
-                        discussion += f"- {answer.content} by {answer.user_id}\n"
-            else:
-                discussion += "No answers to the post yet."
-        else:
-            discussion = "No post content available."
-
-        return discussion
 
     def is_regeneration_by_user_requested(
         self,
