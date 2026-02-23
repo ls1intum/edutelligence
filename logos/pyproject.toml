@@ -7,7 +7,7 @@ authors = [
     {name = "Florian Briksa",email = "florian.briksa@tum.de"},
     {name = "Jakub Jakubczyk", email = "jakub.jakubczyk@tum.de"}
 ]
-readme = "./logos/README.md"
+readme = "README.md"
 requires-python = ">=3.13,<4.0.0"
 
 [tool.poetry.dependencies]
