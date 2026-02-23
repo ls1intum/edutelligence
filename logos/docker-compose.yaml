@@ -9,7 +9,7 @@ services:
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.secure8080.address=:8080"
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@tum.de}"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
       - "--api.dashboard=true"
       # - "--entrypoints.grpc.address=:50051"
