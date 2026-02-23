@@ -1,3 +1,16 @@
+import sys
+import types
+
+import pytest
+
+# This test exercises the real SentenceTransformer model — skip when stubbed.
+_st_mod = sys.modules.get("sentence_transformers")
+if _st_mod is None or isinstance(_st_mod, types.SimpleNamespace):
+    pytest.skip(
+        "Real sentence-transformers required (currently stubbed)",
+        allow_module_level=True,
+    )
+
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.laura_embedding_classifier import LauraEmbeddingClassifier
 from logos.classification.model_handler import ModelHandler

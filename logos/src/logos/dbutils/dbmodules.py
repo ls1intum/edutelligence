@@ -68,7 +68,6 @@ class Model(Base):
     __tablename__ = 'models'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    endpoint = Column(Text)
     weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
@@ -89,6 +88,7 @@ class Provider(Base):
     base_url = Column(Text, nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
+    api_key = Column(Text, nullable=True)
 
 
 class ModelProvider(Base):
@@ -107,6 +107,7 @@ class ModelApiKey(Base):
     model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
     provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
     api_key = Column(Text, nullable=False)
+    endpoint = Column(Text, nullable=False, default='')
 
     model = relationship("Model")
     provider = relationship("Provider")
@@ -160,6 +161,7 @@ class LogEntry(Base):
     policy_id = Column(Integer, ForeignKey('policies.id', ondelete="SET NULL"))
 
     classification_statistics = Column(JSON)
+    request_id = Column(Text)
 
     usage_tokens = relationship("UsageTokens")
 
