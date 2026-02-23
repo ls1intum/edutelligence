@@ -19,6 +19,7 @@ from iris.web.routers.health.health_endpoint import router as health_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
 from iris.web.routers.memiris import router as memiris_router
 from iris.web.routers.pipelines import router as pipelines_router
+from iris.web.routers.search import router as search_router
 from iris.web.routers.webhooks import router as webhooks_router
 
 # Initialize logging first
@@ -146,6 +147,7 @@ app.include_router(pipelines_router)
 app.include_router(webhooks_router)
 app.include_router(ingestion_status_router)
 app.include_router(memiris_router)
+app.include_router(search_router)
 
 # Initialize the LLM manager
 # Import here to avoid circular imports
