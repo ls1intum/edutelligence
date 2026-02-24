@@ -48,10 +48,10 @@ class LectureChatPipeline(
     jinja_env: Environment
     system_prompt_template: Any
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="lecture_chat_pipeline")
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.citation_pipeline = CitationPipeline()
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
+        self.citation_pipeline = CitationPipeline(local=local)
         self.lecture_retriever = None
         self.faq_retriever = None
         template_dir = os.path.join(
@@ -393,7 +393,8 @@ class LectureChatPipeline(
         try:
             logger.info("Running lecture chat pipeline...")
             # Call the parent __call__ method which handles the complete execution
-            super().__call__(dto, variant, callback)
+            local = dto.settings is not None and dto.settings.is_local()
+            super().__call__(dto, variant, callback, local=local)
         except Exception as e:
             logger.error(
                 "An error occurred while running the lecture chat pipeline",
@@ -411,16 +412,18 @@ class LectureChatPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
-                citation_model="gpt-4.1-nano",
+                cloud_agent_model="gpt-4.1-mini",
+                cloud_citation_model="gpt-4.1-nano",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="gpt-oss:120b",
             ),
             LectureChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
-                citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-4.1",
+                cloud_citation_model="gpt-4.1-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="gpt-oss:120b",
             ),
         ]
-
-    # method get_agent_params from course chat is not implemented here since it is the same as in the superclass

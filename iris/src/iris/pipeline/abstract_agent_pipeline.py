@@ -53,7 +53,24 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     llm: Any | None
     prompt: ChatPromptTemplate | None
     tokens: List[TokenUsageDTO]
+    local: bool
     tracing_context: Optional[TracingContext]
+
+
+def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
+    """Filter out messages with no meaningful content before handing them to pipelines."""
+    filtered: list[PyrisMessage] = []
+    for msg in messages:
+        if not msg.contents:
+            continue
+        content = msg.contents[0]
+        if (
+            isinstance(content, TextMessageContentDTO)
+            and not content.text_content.strip()
+        ):
+            continue
+        filtered.append(msg)
+    return filtered
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -472,9 +489,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return None
 
     @observe(name="Abstract Agent Pipeline")
-    def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback):
+    def __call__(
+        self, dto: DTO, variant: VARIANT, callback: StatusCallback, local: bool = False
+    ):
         """
         Call the agent pipeline with the provided arguments.
+
+        Args:
+            dto: Data transfer object containing the request
+            variant: The variant configuration to use
+            callback: Status callback for updates
+            local: If True, use local models; if False, use cloud models
         """
         start_time = time.perf_counter()
         pipeline_name = self.__class__.__name__
@@ -499,6 +524,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.llm = None
         state.prompt = None
         state.tokens = []
+        state.local = local  # Store local flag in state
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
@@ -510,15 +536,31 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         try:
             # 1. Prepare message history, user query, LLM, prompt and tools
-            state.message_history = self.get_recent_history_from_dto(state)
+            state.message_history = _filter_empty_messages(
+                self.get_recent_history_from_dto(state)
+            )
             user_query = self.get_text_of_latest_user_message(state)
 
-            # Create LLM from variant's agent_model
+            # Create LLM from variant's model selection (local/cloud)
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+
+            if local and hasattr(state.variant, "local_agent_model"):
+                selected_version = state.variant.local_agent_model
+            elif (not local) and hasattr(state.variant, "cloud_agent_model"):
+                selected_version = state.variant.cloud_agent_model
+            else:
+                raise AttributeError(
+                    f"Variant {state.variant.id} is missing "
+                    f"{"local_agent_model" if local else "cloud_agent_model"}"
+                )
+            if not selected_version:
+                raise ValueError(
+                    f"Variant {state.variant.id} has empty "
+                    f"{"local_agent_model" if local else "cloud_agent_model"}"
+                )
+
             state.llm = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(
-                    version=state.variant.agent_model
-                ),
+                request_handler=ModelVersionRequestHandler(version=selected_version),
                 completion_args=completion_args,
             )
 
@@ -526,7 +568,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             state.prompt = self.assemble_prompt_with_history(
                 state=state, system_prompt=system_message
             )
+
+            # Load tools for both local and cloud models
             state.tools = self.get_tools(state)
+
+            if local:
+                logger.info("Using local model with tool calling support")
+            else:
+                logger.info("Using cloud model with tool calling support")
 
             # 4. Start memory creation if enabled
             if self.is_memiris_memory_creation_enabled(state):
@@ -549,7 +598,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             # 8. Wait for the memory creation to finish if enabled
             if state.memiris_memory_creation_thread:
                 state.callback.in_progress("Waiting for memory creation to finish ...")
-                # noinspection PyUnboundLocalVariable
                 state.memiris_memory_creation_thread.join()
                 state.callback.done(
                     "Memory creation finished.",

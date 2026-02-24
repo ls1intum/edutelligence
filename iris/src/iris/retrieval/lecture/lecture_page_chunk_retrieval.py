@@ -64,9 +64,11 @@ class LecturePageChunkRetrieval(SubPipeline):
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-4o-mini"
+        )
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -206,7 +208,7 @@ class LecturePageChunkRetrieval(SubPipeline):
                 ],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
                 lecture_unit_id=lecture_page_chunk[
-                    LectureUnitPageChunkSchema.LECTURE_ID.value
+                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                 ],
                 lecture_unit_name=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_NAME.value

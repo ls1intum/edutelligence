@@ -1,4 +1,3 @@
-import concurrent.futures
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -17,7 +16,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -79,11 +78,15 @@ class BaseRetrieval(SubPipeline, ABC):
     def __call__(self, *args, **kwargs):
         """Muss in der konkreten Implementierung überschrieben werden"""
 
-    def __init__(self, client: WeaviateClient, schema_init_func, **kwargs):
+    def __init__(
+        self, client: WeaviateClient, schema_init_func, local: bool = False, **kwargs
+    ):
         super().__init__(
             implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
         )
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-4.1-mini"
+        )
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -216,7 +219,7 @@ class BaseRetrieval(SubPipeline, ABC):
         """
         Run the rewrite tasks in parallel.
         """
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             rewritten_query_future = executor.submit(
                 self.rewrite_student_query,
                 chat_history,
@@ -241,7 +244,7 @@ class BaseRetrieval(SubPipeline, ABC):
             rewritten_query = rewritten_query_future.result()
             hypothetical_answer_query = hypothetical_answer_query_future.result()
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             response_future = executor.submit(
                 self.search_in_db,
                 query=rewritten_query,
