@@ -54,6 +54,10 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     prompt: ChatPromptTemplate | None
     tokens: List[TokenUsageDTO]
     tracing_context: Optional[TracingContext]
+    query_text: str
+    lecture_content_storage: dict
+    faq_storage: dict
+    accessed_memory_storage: list
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -499,6 +503,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.llm = None
         state.prompt = None
         state.tokens = []
+        state.query_text = ""
+        state.lecture_content_storage = {}
+        state.faq_storage = {}
+        state.accessed_memory_storage = []
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)

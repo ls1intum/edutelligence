@@ -176,8 +176,15 @@ def provide_file_lookup(
 # ---------------------------------------------------------------------------
 
 
-def provide_lecture_retrieval(state: State, query_text: str) -> Optional[Callable]:
-    """Available: ALL contexts"""
+def provide_lecture_retrieval(state: State, context: ChatContext) -> Optional[Callable]:
+    """Available: COURSE, LECTURE, EXERCISE, TEXT_EXERCISE"""
+    if context not in {
+        ChatContext.COURSE,
+        ChatContext.LECTURE,
+        ChatContext.EXERCISE,
+        ChatContext.TEXT_EXERCISE,
+    }:
+        return None
     if not state.dto.course:
         return None
 
@@ -186,9 +193,6 @@ def provide_lecture_retrieval(state: State, query_text: str) -> Optional[Callabl
         return None
     lecture_retriever = LectureRetrieval(state.db.client)
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
-    callback = state.callback
-    chat_history = state.message_history
-    lecture_content_storage = getattr(state, "lecture_content_storage", {})
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
     lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
 
@@ -196,17 +200,24 @@ def provide_lecture_retrieval(state: State, query_text: str) -> Optional[Callabl
         lecture_retriever,
         course_id,
         base_url,
-        callback,
-        query_text,
-        chat_history,
-        lecture_content_storage,
+        state.callback,
+        state.query_text,
+        state.message_history,
+        state.lecture_content_storage,
         lecture_id=lecture_id,
         lecture_unit_id=lecture_unit_id,
     )
 
 
-def provide_faq_retrieval(state: State, query_text: str) -> Optional[Callable]:
-    """Available: ALL contexts"""
+def provide_faq_retrieval(state: State, context: ChatContext) -> Optional[Callable]:
+    """Available: COURSE, LECTURE, EXERCISE, TEXT_EXERCISE"""
+    if context not in {
+        ChatContext.COURSE,
+        ChatContext.LECTURE,
+        ChatContext.EXERCISE,
+        ChatContext.TEXT_EXERCISE,
+    }:
+        return None
     if not (state.dto.course and state.dto.course.name):
         return None
 
@@ -214,21 +225,16 @@ def provide_faq_retrieval(state: State, query_text: str) -> Optional[Callable]:
     if not should_allow_faq_tool(state.db, course_id):
         return None
     faq_retriever = FaqRetrieval(state.db.client)
-    course_name = state.dto.course.name
-    base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
-    callback = state.callback
-    chat_history = state.message_history
-    faq_storage = getattr(state, "faq_storage", {})
 
     return create_tool_faq_content_retrieval(
         faq_retriever,
         course_id,
-        course_name,
-        base_url,
-        callback,
-        query_text,
-        chat_history,
-        faq_storage,
+        state.dto.course.name,
+        state.dto.settings.artemis_base_url if state.dto.settings else "",
+        state.callback,
+        state.query_text,
+        state.message_history,
+        state.faq_storage,
     )
 
 
@@ -248,8 +254,9 @@ def provide_memory_search(state: State, context: ChatContext) -> Optional[Callab
         and state.memiris_wrapper.has_memories()
     ):
         return None
-    accessed_memory_storage = getattr(state, "accessed_memory_storage", [])
-    return state.memiris_wrapper.create_tool_memory_search(accessed_memory_storage)
+    return state.memiris_wrapper.create_tool_memory_search(
+        state.accessed_memory_storage
+    )
 
 
 def provide_find_similar_memories(
@@ -265,9 +272,8 @@ def provide_find_similar_memories(
         and state.memiris_wrapper.has_memories()
     ):
         return None
-    accessed_memory_storage = getattr(state, "accessed_memory_storage", [])
     return state.memiris_wrapper.create_tool_find_similar_memories(
-        accessed_memory_storage
+        state.accessed_memory_storage
     )
 
 
@@ -276,6 +282,8 @@ def provide_find_similar_memories(
 # ---------------------------------------------------------------------------
 
 CHAT_TOOL_PROVIDERS: list[Callable[[State, ChatContext], Optional[Callable]]] = [
+    provide_lecture_retrieval,
+    provide_faq_retrieval,
     provide_course_details,
     provide_exercise_list,
     provide_exercise_problem_statement,

@@ -37,11 +37,7 @@ from iris.pipeline.shared.citation_pipeline import CitationPipeline, Information
 from iris.pipeline.shared.utils import datetime_to_string, format_custom_instructions
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
-from iris.tools.chat_tool_providers import (
-    CHAT_TOOL_PROVIDERS,
-    provide_faq_retrieval,
-    provide_lecture_retrieval,
-)
+from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
 from iris.tracing import observe
 from iris.web.status.status_update import StatusCallback
 
@@ -204,7 +200,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 tokens=state.tokens,
                 session_title=session_title,
                 accessed_memories=(
-                    getattr(state, "accessed_memories", [])
+                    state.accessed_memory_storage
                     if self.context in [ChatContext.COURSE, ChatContext.LECTURE]
                     else None
                 ),
@@ -240,25 +236,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             List of tool functions for the agent.
         """
-        # Initialize shared storage on state
-        if not hasattr(state, "lecture_content_storage"):
-            setattr(state, "lecture_content_storage", {})
-        if not hasattr(state, "faq_storage"):
-            setattr(state, "faq_storage", {})
-        if not hasattr(state, "accessed_memory_storage"):
-            setattr(state, "accessed_memory_storage", [])
-        query_text = self.get_text_of_latest_user_message(state)
+        state.query_text = self.get_text_of_latest_user_message(state)
 
         tools: list[Callable] = []
-
-        lecture_retrieval = provide_lecture_retrieval(state, query_text)
-        if lecture_retrieval:
-            tools.append(lecture_retrieval)
-
-        faq_retrieval = provide_faq_retrieval(state, query_text)
-        if faq_retrieval:
-            tools.append(faq_retrieval)
-
         for provider in CHAT_TOOL_PROVIDERS:
             tool = provider(state, self.context)
             if tool is not None:
@@ -444,14 +424,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
         try:
             # Add FAQ citations
-            faq_storage = getattr(state, "faq_storage", {})
-            if faq_storage.get("faqs"):
+            if state.faq_storage.get("faqs"):
                 state.callback.in_progress("Adding FAQ references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
                 result = self.citation_pipeline(
-                    faq_storage["faqs"],
+                    state.faq_storage["faqs"],
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
@@ -460,14 +439,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 )
 
             # Add lecture content citations
-            lecture_content_storage = getattr(state, "lecture_content_storage", {})
-            if lecture_content_storage.get("content"):
+            if state.lecture_content_storage.get("content"):
                 state.callback.in_progress("Adding lecture references...")
                 base_url = (
                     state.dto.settings.artemis_base_url if state.dto.settings else ""
                 )
                 result = self.citation_pipeline(
-                    lecture_content_storage["content"],
+                    state.lecture_content_storage["content"],
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
