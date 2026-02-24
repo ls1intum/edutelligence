@@ -26,7 +26,7 @@ COPY shared/ ./shared/
 # Create a minimal package stub so the poetry-core build backend can
 # resolve metadata without needing the real source tree.
 RUN mkdir -p src/logos && echo '__version__ = "0.1.0"' > src/logos/__init__.py \
- && mkdir -p logos && touch logos/README.md
+ && touch README.md
 
 # Install all dependencies with uv (replaces poetry install ~436 s → ~30-60 s)
 RUN --mount=type=cache,target=/root/.cache/uv \
