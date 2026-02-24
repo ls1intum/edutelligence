@@ -86,7 +86,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         )
         # Setup system prompt
         self.system_prompt_template = self.jinja_env.get_template(
-            "chat_system_prompt2.j2"
+            "chat_system_prompt.j2"
         )
         self.guide_prompt_template = self.jinja_env.get_template(
             "exercise_chat_guide_prompt.j2"
