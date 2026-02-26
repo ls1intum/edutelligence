@@ -16,6 +16,23 @@ jobs:
     runs-on: ubuntu-latest
     environment: 'Atlas - Test 1'
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Copy Traefik config to remote host
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          source: "atlas/traefik/traefik.yml,atlas/traefik/config.yml"
+          target: /opt/atlasml/traefik/
+          strip_components: 2
+
       - name: Setup Traefik on remote host
         uses: appleboy/ssh-action@v1.2.5
         with:
