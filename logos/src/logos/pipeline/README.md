@@ -207,4 +207,4 @@ The pipeline integrates several modules together
 
 ### Database (`../dbutils/`)
 - `DBManager`: Database connection and query execution
-- Schema: models, providers, log_entry, request_events, model_provider_config
+- Schema: models, providers, log_entry, request_events

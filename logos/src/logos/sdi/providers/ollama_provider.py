@@ -42,9 +42,8 @@ class OllamaDataProvider:
     Provides accurate cold-start prediction and VRAM availability calculation.
 
     Configuration Hierarchy:
-    1. model_provider_config (per-model overrides)
-    2. providers table (provider-level defaults)
-    3. Hardcoded defaults (fallback)
+    1. providers table (provider-level defaults)
+    2. Hardcoded defaults (fallback)
     """
 
     # Hardcoded defaults (fallback when no database config exists)
@@ -137,32 +136,23 @@ class OllamaDataProvider:
     ) -> Any:
         """
         Get configuration value using the hierarchy:
-        1. model_provider_config (per-model override)
-        2. providers table (provider default)
-        3. Hardcoded default
+        1. providers table (provider default)
+        2. Hardcoded default
 
         Args:
-            model_id: Model ID to check for per-model override
+            model_id: Model ID (kept for API parity)
             config_key: Configuration key (e.g., 'parallel_capacity')
             default_value: Hardcoded default value
 
         Returns:
             Configuration value from the highest priority source
         """
-        # Level 1: Check model_provider_config
-        if self._db and model_id:
-            try:
-                model_config = self._db.get_model_provider_config(model_id, self.provider_id)
-                if model_config and model_config.get(config_key) is not None:
-                    return model_config[config_key]
-            except Exception as e:
-                logger.warning(f"[{self.name}] Failed to get model config: {e}")
 
-        # Level 2: Check providers table (loaded from _provider_config)
+        # Level 1: Check providers table (loaded from _provider_config)
         if self._provider_config.get(config_key) is not None:
             return self._provider_config[config_key]
 
-        # Level 3: Use hardcoded default
+        # Level 2: Use hardcoded default
         return default_value
 
     def register_model(self, model_id: int, model_name: str) -> None:
