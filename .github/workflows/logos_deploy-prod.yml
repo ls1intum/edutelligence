@@ -1,0 +1,31 @@
+name: Logos - Deploy to Prod
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Logos - Build"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Logos Prod VM
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and Deploy
+        # appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.LOGOS_PROD_HOST }}
+          username: ${{ secrets.LOGOS_PROD_USER }}
+          key: ${{ secrets.LOGOS_PROD_SSH_KEY }}
+          script: |
+            cd /opt/logos/edutelligence
+            git fetch origin
+            git checkout ${{ github.event.workflow_run.head_sha || github.sha }}
+            docker compose -f ./logos/docker-compose.yaml pull
+            docker compose -f ./logos/docker-compose.yaml up -d
+            docker image prune -f
