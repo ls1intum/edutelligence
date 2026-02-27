@@ -59,9 +59,7 @@ class CodeFeedbackPipeline(SubPipeline):
         self.variant = variant
 
         # Set up the language model
-        completion_args = CompletionArguments(
-            temperature=0, max_tokens=1024, response_format="text"
-        )
+        completion_args = CompletionArguments(temperature=0, response_format="text")
 
         if local:
             if variant == "advanced":
@@ -70,9 +68,9 @@ class CodeFeedbackPipeline(SubPipeline):
                 model = "gpt-oss:120b"
         else:
             if variant == "advanced":
-                model = "gpt-4.1"
+                model = "gpt-5.2"
             else:
-                model = "gpt-4.1-mini"
+                model = "gpt-5-mini"
 
         request_handler = ModelVersionRequestHandler(version=model)
         self.llm = IrisLangchainChatModel(

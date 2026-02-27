@@ -288,7 +288,7 @@ class AutonomousTutorPipeline(
                 variant_id="default",
                 name="Default",
                 description="Default autonomous tutor variant using the OpenAI GPT-OSS 20B model.",
-                cloud_agent_model="gpt-oss:latest",
-                local_agent_model="gpt-oss:latest",
+                cloud_agent_model="gpt-oss:120b",
+                local_agent_model="gpt-oss:120b",
             ),
         ]

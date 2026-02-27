@@ -84,6 +84,7 @@ def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
                         Message(
                             role="tool",
                             content=content.tool_content,
+                            tool_name=content.name,
                         )
                     )
             continue
@@ -131,6 +132,10 @@ def convert_to_iris_message(
         model=model,
     )
 
+    thinking = message.get("thinking")
+    if thinking:
+        logger.debug("Model thinking: %s", thinking[:500])
+
     tool_calls = message.get("tool_calls") or []
     if tool_calls:
         iris_tool_calls = [
@@ -151,7 +156,7 @@ def convert_to_iris_message(
             token_usage=tokens,
         )
 
-    contents = [TextMessageContentDTO(text_content=message["content"])]
+    contents = [TextMessageContentDTO(text_content=message["content"] or "")]
     return PyrisMessage(
         sender=map_str_to_role(message["role"]),
         contents=contents,
@@ -176,6 +181,7 @@ class OllamaModel(
     username: Optional[str] = None
     password: Optional[str] = None
     api_key: Optional[str] = None
+    think: Optional[Union[bool, Literal["low", "medium", "high"]]] = None
     _client: Client
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
@@ -268,6 +274,7 @@ class OllamaModel(
             model=self.model,
             messages=ollama_messages,
             tools=tools_for_client,
+            think=self.think,
             options=self.options,
         )
 

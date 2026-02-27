@@ -148,19 +148,15 @@ def memiris_create_user_memory_creation_pipeline_openai(
         if isinstance(model, OpenAIChatModel) and model.model == "gpt-5-mini":
             model_to_use = model
             break
-    else:
-        for model in llm_manager.entries:
-            if isinstance(model, OpenAIChatModel) and model.model == "gpt-4.1-mini":
-                model_to_use = model
-                break
-        else:
-            logging.error(
-                "No OpenAIChatModel with model 'gpt-5-mini' or 'gpt-4.1-mini' found in LlmManager."
-                "Using Ollama for Memiris instead."
-            )
-            return memiris_create_user_memory_creation_pipeline_ollama(
-                weaviate_client, vectorizer
-            )
+
+    if model_to_use is None:
+        logging.error(
+            "No OpenAIChatModel with model 'gpt-5-mini' found in LlmManager. "
+            "Using Ollama for Memiris instead."
+        )
+        return memiris_create_user_memory_creation_pipeline_ollama(
+            weaviate_client, vectorizer
+        )
 
     memiris_llm = OpenAiLanguageModel(
         model=model_to_use.model,
@@ -236,19 +232,15 @@ def memiris_create_user_memory_sleep_pipeline_openai(
         if isinstance(model, OpenAIChatModel) and model.model == "gpt-5-mini":
             model_to_use = model
             break
-    else:
-        for model in llm_manager.entries:
-            if isinstance(model, OpenAIChatModel) and model.model == "gpt-4.1-mini":
-                model_to_use = model
-                break
-        else:
-            logging.error(
-                "No OpenAIChatModel with model 'gpt-5-mini' or 'gpt-4.1-mini' found in LlmManager."
-                "Using Ollama for Memiris instead."
-            )
-            return memiris_create_user_memory_sleep_pipeline_ollama(
-                weaviate_client, vectorizer
-            )
+
+    if model_to_use is None:
+        logging.error(
+            "No OpenAIChatModel with model 'gpt-5-mini' found in LlmManager. "
+            "Using Ollama for Memiris instead."
+        )
+        return memiris_create_user_memory_sleep_pipeline_ollama(
+            weaviate_client, vectorizer
+        )
 
     memiris_llm = OpenAiLanguageModel(
         model=model_to_use.model,

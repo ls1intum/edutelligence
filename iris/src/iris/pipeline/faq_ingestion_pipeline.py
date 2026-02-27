@@ -45,8 +45,8 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
         self.dto = dto
         self.callback = callback
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(version="gpt-5-mini")
+        completion_args = CompletionArguments(temperature=0.2)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -66,7 +66,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
                 variant_id="default",
                 name="Default",
                 description="Default FAQ ingestion variant using efficient models.",
-                chat_model="gpt-4.1-mini",
+                chat_model="gpt-5-mini",
                 embedding_model="text-embedding-3-small",
             ),
         ]
