@@ -37,7 +37,7 @@ async def test_route_and_execute_proxy_branch(monkeypatch):
     """route_and_execute delegates to _execute_proxy_mode when body has 'model'."""
     called = {}
 
-    async def fake_proxy(body, headers, logos_key, deployments, log_id, is_async_job, profile_id=None):
+    async def fake_proxy(body, headers, logos_key, path, deployments, log_id, is_async_job, profile_id=None):
         called["proxy"] = True
         return {"status": "proxy"}
 

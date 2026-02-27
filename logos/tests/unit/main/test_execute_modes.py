@@ -19,6 +19,7 @@ async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
             body={"stream": True},          # no "model" key
             headers={"Authorization": "Bearer x"},
             logos_key="lg-key",
+            path="chat/completions",
             deployments=[{"model_id": 1, "provider_id": 1}],
             log_id=None,
             is_async_job=False,
