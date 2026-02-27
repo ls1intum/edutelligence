@@ -1,6 +1,23 @@
 from abc import ABC, abstractmethod
+from typing import TypeVar
 
 from ..feature_dto import FeatureDTO
+
+_V = TypeVar("_V", bound="AbstractVariant")
+
+
+def find_variant(variants: list[_V], variant_id: str) -> _V:
+    """Find a variant by ID from a list of variants.
+
+    Raises:
+        ValueError: If no variant matches the given ID.
+    """
+    for v in variants:
+        if v.id == variant_id:
+            return v
+    available = [v.id for v in variants]
+    available_str = ", ".join(available)
+    raise ValueError(f"Unknown variant: {variant_id}. Available: {available_str}")
 
 
 class AbstractVariant(ABC):
@@ -32,25 +49,3 @@ class AbstractVariant(ABC):
             name=self.name,
             description=self.description,
         )
-
-
-class AbstractAgentVariant(AbstractVariant):
-    """Abstract base class for agent-based variant configurations."""
-
-    cloud_agent_model: str
-    local_agent_model: str
-
-    def __init__(
-        self,
-        variant_id: str,
-        name: str,
-        description: str,
-        cloud_agent_model: str,
-        local_agent_model: str,
-    ):
-        super().__init__(variant_id=variant_id, name=name, description=description)
-        self.cloud_agent_model = cloud_agent_model
-        self.local_agent_model = local_agent_model
-
-    def required_models(self) -> set[str]:
-        return {self.cloud_agent_model, self.local_agent_model}

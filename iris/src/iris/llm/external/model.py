@@ -13,8 +13,6 @@ class LanguageModel(BaseModel, metaclass=ABCMeta):
     """Abstract class for the llm wrappers"""
 
     id: str
-    name: str
-    description: str
     model: str
 
 

@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
@@ -7,10 +7,10 @@ from langchain_core.runnables import Runnable
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
-from iris.domain.variant.inconsistency_check_variant import InconsistencyCheckVariant
+from iris.domain.variant.variant import Variant
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -24,13 +24,23 @@ from iris.web.status.status_update import InconsistencyCheckCallback
 logger = get_logger(__name__)
 
 
-class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
+class InconsistencyCheckPipeline(Pipeline):
     """InconsistencyCheckPipeline checks for consistency issues within an exercise by evaluating files from template
      and solution repositories.
 
     It invokes a solver pipeline to identify potential inconsistencies, then uses a prettify pipeline to generate a
      summary report.
     """
+
+    PIPELINE_ID = "inconsistency_check_pipeline"
+    ROLES = {"solver", "prettify"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Standard inconsistency check implementation with efficient model usage",
+        ),
+    ]
 
     llm: IrisLangchainChatModel
     callback: InconsistencyCheckCallback
@@ -39,22 +49,33 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
     prettify: Runnable
 
     def __init__(
-        self, callback: Optional[InconsistencyCheckCallback] = None, local: bool = False
+        self,
+        callback: Optional[InconsistencyCheckCallback] = None,
+        variant: Variant | None = None,
+        local: bool = False,
     ):
-        super().__init__(implementation_id="inconsistency_check_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
+        if variant is None:
+            raise ValueError("Variant is required for InconsistencyCheckPipeline")
+
         completion_args = CompletionArguments()
 
-        self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(
-                version="gpt-oss:120b" if local else "gpt-o3-mini"
-            ),
+        solver_model = variant.model("solver", local)
+        prettify_model = variant.model("prettify", local)
+
+        self.solver_llm = IrisLangchainChatModel(
+            request_handler=LlmRequestHandler(model_id=solver_model),
+            completion_args=completion_args,
+        )
+        self.prettify_llm = IrisLangchainChatModel(
+            request_handler=LlmRequestHandler(model_id=prettify_model),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)
-        self.solver = self.solver_prompt | self.llm
+        self.solver = self.solver_prompt | self.solver_llm
 
         self.prettify_prompt = PromptTemplate.from_template(prettify_prompt)
-        self.prettify = self.prettify_prompt | self.llm
+        self.prettify = self.prettify_prompt | self.prettify_llm
 
         self.callback = callback
         self.tokens = []
@@ -125,23 +146,12 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
         result = re.sub(r"^#\s.*?\n", "", result)
         result = re.sub(r"^#+.*?Summary of Consistency Issues\s*\n", "", result)
 
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
+        if self.solver_llm.tokens:
+            self._append_tokens(
+                self.solver_llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK
+            )
+        if self.prettify_llm.tokens:
+            self._append_tokens(
+                self.prettify_llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK
+            )
         self.callback.done(final_result=result, tokens=self.tokens)
-
-    @classmethod
-    def get_variants(cls) -> List[InconsistencyCheckVariant]:
-        """
-        Returns available variants for the InconsistencyCheckPipeline.
-
-        Returns:
-            List of InconsistencyCheckVariant objects representing available variants
-        """
-        return [
-            InconsistencyCheckVariant(
-                variant_id="default",
-                name="Default",
-                description="Standard inconsistency check implementation with efficient model usage",
-                cloud_solver_model="gpt-o3-mini",
-                local_solver_model="gpt-oss:120b",
-            ),
-        ]

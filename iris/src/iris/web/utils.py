@@ -2,8 +2,12 @@ from typing import Type
 
 from fastapi import HTTPException, status
 
+from iris.config import settings as app_settings
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
+from iris.domain.variant.abstract_variant import find_variant
+from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
+from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.pipeline import Pipeline
 
 
@@ -23,18 +27,32 @@ def validate_pipeline_variant(
     Raises:
         HTTPException: If the variant is not available or required models are missing
     """
+    if settings.is_local() and not app_settings.local_llm_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "type": "local_llm_disabled",
+                "errorMessage": "Local LLM usage is disabled. Configure Artemis to use CLOUD_AI.",
+            },
+        )
+
     variant = settings.variant
 
     # Get all variants for the pipeline
-    all_variants = pipeline_class.get_variants()
+    try:
+        all_variants = pipeline_class.get_variants()
+    except LlmConfigurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "type": "llm_configuration_invalid",
+                "errorMessage": str(e),
+            },
+        ) from e
     # Find the requested variant
-    requested_variant = None
-    for v in all_variants:
-        if v.id == variant:
-            requested_variant = v
-            break
-    # Check if variant exists
-    if requested_variant is None:
+    try:
+        requested_variant = find_variant(all_variants, variant)
+    except ValueError as exc:
         available_variant_ids = [v.id for v in all_variants]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -43,22 +61,27 @@ def validate_pipeline_variant(
                 "errorMessage": f'Variant "{variant}" is not available. '
                 f'Available variants: {", ".join(available_variant_ids)}',
             },
-        )
+        ) from exc
     # Check if required models are available
     # For variants that have required_models method, check model availability
     if hasattr(requested_variant, "required_models"):
         llm_manager = LlmManager()
-        available_models = {llm.model for llm in llm_manager.entries}
+        available_ids = {llm.id for llm in llm_manager.entries}
         required_models = requested_variant.required_models()
-        missing_models = required_models - available_models
+        missing_models = missing_llm_requirements(
+            required_models,
+            available_ids=available_ids,
+        )
         if missing_models:
+            missing_display = ", ".join(sorted(missing_models))
+            required_display = ", ".join(sorted(required_models))
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "type": "models_not_available",
                     "errorMessage": f'Variant "{variant}" requires models that are not available: '
-                    f'{", ".join(missing_models)}. '
-                    f'Required models: {", ".join(required_models)}',
+                    f"{missing_display}. "
+                    f"Required models: {required_display}",
                 },
             )
 

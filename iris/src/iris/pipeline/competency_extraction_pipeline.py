@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Optional
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -11,12 +11,10 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain import CompetencyExtractionPipelineExecutionDTO
 from iris.domain.data.competency_dto import Competency
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.domain.variant.competency_extraction_variant import (
-    CompetencyExtractionVariant,
-)
+from iris.domain.variant.variant import Variant
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
@@ -26,29 +24,35 @@ from iris.web.status.status_update import CompetencyExtractionCallback
 logger = get_logger(__name__)
 
 
-class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
+class CompetencyExtractionPipeline(Pipeline):
     """CompetencyExtractionPipeline extracts and processes competencies from course content.
 
     It leverages a language model to generate competency JSON, parses the output using a Pydantic output parser,
     and handles errors during parsing, appending tokens, and final result notification.
     """
 
+    PIPELINE_ID = "competency_extraction_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Default competency extraction variant"),
+    ]
+
     callback: CompetencyExtractionCallback
-    request_handler: ModelVersionRequestHandler
+    request_handler: LlmRequestHandler
     output_parser: PydanticOutputParser
 
     def __init__(
         self,
         callback: Optional[CompetencyExtractionCallback] = None,
+        variant: Variant | None = None,
         local: bool = False,
     ):
-        super().__init__(
-            implementation_id="competency_extraction_pipeline_reference_impl"
-        )
+        super().__init__(implementation_id=self.PIPELINE_ID)
+        if variant is None:
+            raise ValueError("Variant is required for CompetencyExtractionPipeline")
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1"
-        )
+        model = variant.model("chat", local)
+        self.request_handler = LlmRequestHandler(model_id=model)
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 
@@ -116,21 +120,3 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
             logger.debug("Generated competency: %s", competency)
             generated_competencies.append(competency)
         self.callback.done(final_result=generated_competencies, tokens=self.tokens)
-
-    @classmethod
-    def get_variants(cls) -> List[CompetencyExtractionVariant]:
-        """
-        Returns available variants for the CompetencyExtractionPipeline.
-
-        Returns:
-            List of CompetencyExtractionVariant objects representing available variants
-        """
-        return [
-            CompetencyExtractionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default competency extraction variant",
-                cloud_agent_model="gpt-4.1",
-                local_agent_model="gpt-oss:120b",
-            ),
-        ]

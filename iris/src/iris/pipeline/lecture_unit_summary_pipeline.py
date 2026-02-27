@@ -9,9 +9,10 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.lecture_unit_summary_prompt import (
     lecture_unit_summary_prompt,
 )
@@ -35,14 +36,14 @@ class LectureUnitSummaryPipeline(SubPipeline):
         lecture_unit_segment_summaries: List[str],
         local: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(implementation_id="lecture_unit_summary_pipeline")
         self.client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.lecture_unit_segment_summaries = lecture_unit_segment_summaries
 
-        request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-mini"
-        )
+        pipeline_id = "lecture_unit_summary_pipeline"
+        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         self.llm = IrisLangchainChatModel(

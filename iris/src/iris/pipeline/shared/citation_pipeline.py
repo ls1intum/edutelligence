@@ -16,9 +16,10 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.faq_schema import FaqSchema
@@ -88,10 +89,13 @@ class CitationPipeline(SubPipeline):
         self.llms = {}
         self.pipelines = {}
 
+        pipeline_id = "citation_pipeline"
+
+        default_model = resolve_model(pipeline_id, "default", "chat", local=local)
+        advanced_model = resolve_model(pipeline_id, "advanced", "chat", local=local)
+
         # Default variant
-        default_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-nano"
-        )
+        default_request_handler = LlmRequestHandler(model_id=default_model)
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),
@@ -100,9 +104,7 @@ class CitationPipeline(SubPipeline):
         self.pipelines["default"] = default_llm | StrOutputParser()
 
         # Advanced variant
-        advanced_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-mini"
-        )
+        advanced_request_handler = LlmRequestHandler(model_id=advanced_model)
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),

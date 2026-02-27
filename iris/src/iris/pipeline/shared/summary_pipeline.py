@@ -9,8 +9,9 @@ from langchain_core.runnables import Runnable
 
 from iris.common.logging_config import get_logger
 
-from ...llm import ModelVersionRequestHandler
+from ...llm import LlmRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
+from ...llm.llm_configuration import resolve_model
 from ...tracing import observe
 from ..sub_pipeline import SubPipeline
 
@@ -27,10 +28,9 @@ class SummaryPipeline(SubPipeline):
 
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="summary_pipeline")
-        # Set the langchain chat model
-        request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-3.5-turbo"
-        )
+        pipeline_id = "summary_pipeline"
+        model = resolve_model(pipeline_id, "default", "chat", local=local)
+        request_handler = LlmRequestHandler(model_id=model)
         self.llm = IrisLangchainCompletionModel(
             request_handler=request_handler, max_tokens=1000
         )

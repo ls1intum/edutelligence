@@ -1,7 +1,8 @@
 from weaviate.classes.query import Filter
 
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from iris.llm import ModelVersionRequestHandler
+from iris.llm import LlmRequestHandler
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
 )
@@ -27,8 +28,11 @@ class LectureUnitPipeline(SubPipeline):
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.local = local
+        embedding_model = resolve_model(
+            "lecture_unit_pipeline", "default", "embedding", local=local
+        )
+        self.llm_embedding = LlmRequestHandler(embedding_model)
 
     @observe(name="Lecture Unit Pipeline")
     def __call__(self, lecture_unit: LectureUnitDTO):

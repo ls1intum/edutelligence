@@ -10,11 +10,11 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 )
 
 from ..domain.data.faq_dto import FaqDTO
-from ..domain.variant.faq_ingestion_variant import FaqIngestionVariant
+from ..domain.variant.variant import Variant
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
@@ -26,50 +26,42 @@ from . import Pipeline
 logger = get_logger(__name__)
 
 
-class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
+class FaqIngestionPipeline(AbstractIngestion, Pipeline):
     """FaqIngestionPipeline handles the ingestion of FAQs into the database.
 
     It deletes old FAQs, processes new FAQ data using the language model pipeline,
     batches the updates, and reports the ingestion status via a callback.
     """
 
+    PIPELINE_ID = "faq_ingestion_pipeline"
+    ROLES = {"chat", "embedding"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Default FAQ ingestion variant using efficient models."),
+    ]
+
     def __init__(
         self,
         client: WeaviateClient,
         dto: Optional[FaqIngestionPipelineExecutionDto],
         callback: FaqIngestionStatus,
+        variant: Variant,
+        local: bool = False,
     ):
-        super().__init__()
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.client = client
         self.collection = init_faq_schema(client)
         self.dto = dto
         self.callback = callback
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        embedding_model = variant.model("embedding", local)
+        chat_model = variant.model("chat", local)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+        request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
-
-    @classmethod
-    def get_variants(cls) -> List[FaqIngestionVariant]:
-        """
-        Returns available variants for the FaqIngestionPipeline.
-
-        Returns:
-            List of FaqIngestionVariant objects representing available variants
-        """
-        return [
-            FaqIngestionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default FAQ ingestion variant using efficient models.",
-                chat_model="gpt-4.1-mini",
-                embedding_model="text-embedding-3-small",
-            ),
-        ]
 
     @observe(name="FAQ Ingestion Pipeline")
     def __call__(self) -> bool:

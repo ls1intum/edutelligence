@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -20,10 +20,10 @@ from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.variant.exercise_chat_variant import ExerciseChatVariant
+from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
@@ -51,11 +51,28 @@ logger = get_logger(__name__)
 
 
 class ExerciseChatAgentPipeline(
-    AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, ExerciseChatVariant]
+    AbstractAgentPipeline[ExerciseChatPipelineExecutionDTO, Variant]
 ):
     """
     Exercise chat agent pipeline that answers exercises related questions from students.
     """
+
+    PIPELINE_ID = "exercise_chat_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Uses a smaller model for faster responses."),
+        ("advanced", "Advanced", "Uses a larger model, balancing speed and quality."),
+    ]
+    DEPENDENCIES = [
+        Dep("citation_pipeline", variant="same"),
+        Dep("session_title_generation_pipeline"),
+        Dep("interaction_suggestion_pipeline", variant="exercise"),
+        Dep("code_feedback_pipeline"),
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
 
     session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -69,7 +86,7 @@ class ExerciseChatAgentPipeline(
         """
         Initialize the exercise chat agent pipeline.
         """
-        super().__init__(implementation_id="exercise_chat_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
 
         # Create the pipelines
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
@@ -99,40 +116,9 @@ class ExerciseChatAgentPipeline(
     def __str__(self):
         return f"{self.__class__.__name__}()"
 
-    @classmethod
-    def get_variants(cls) -> List[ExerciseChatVariant]:  # type: ignore[override]
-        """
-        Get available variants for the exercise chat pipeline.
-
-        Returns:
-            List of ExerciseChatVariant instances.
-        """
-        return [
-            ExerciseChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-            ExerciseChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
-                cloud_citation_model="gpt-4.1-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-        ]
-
     def is_memiris_memory_creation_enabled(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> bool:
         """
         Return True if background memory creation should be enabled for this run.
@@ -183,9 +169,7 @@ class ExerciseChatAgentPipeline(
 
     def get_tools(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> list[Callable]:
         """
         Create and return tools for the agent.
@@ -260,9 +244,7 @@ class ExerciseChatAgentPipeline(
 
     def build_system_message(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Build the system message/prompt for the agent.
@@ -310,9 +292,7 @@ class ExerciseChatAgentPipeline(
 
     def on_agent_step(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         step: dict[str, Any],
     ) -> None:
         """
@@ -328,9 +308,7 @@ class ExerciseChatAgentPipeline(
 
     def post_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Process results after agent execution.
@@ -371,9 +349,7 @@ class ExerciseChatAgentPipeline(
     @observe(name="Response Refinement")
     def _refine_response(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Refine the agent response using the guide prompt.
@@ -394,13 +370,10 @@ class ExerciseChatAgentPipeline(
                 {"problem_statement": problem_statement}
             )
 
-            # Create small LLM for refinement
             completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            refinement_model = state.variant.model("chat", state.local)
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(
-                    version=("gpt-oss:120b" if is_local else "gpt-4.1-mini")
-                ),
+                request_handler=LlmRequestHandler(model_id=refinement_model),
                 completion_args=completion_args,
             )
 
@@ -429,9 +402,7 @@ class ExerciseChatAgentPipeline(
 
     def _add_citations(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         result: str,
     ) -> str:
         """
@@ -496,9 +467,7 @@ class ExerciseChatAgentPipeline(
 
     def _generate_suggestions(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         result: str,
     ) -> None:
         """
@@ -541,9 +510,7 @@ class ExerciseChatAgentPipeline(
 
     def _generate_session_title(
         self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
+        state: AgentPipelineExecutionState[ExerciseChatPipelineExecutionDTO, Variant],
         output: str,
         dto: ExerciseChatPipelineExecutionDTO,
     ) -> Optional[str]:
@@ -564,7 +531,7 @@ class ExerciseChatAgentPipeline(
     def __call__(
         self,
         dto: ExerciseChatPipelineExecutionDTO,
-        variant: ExerciseChatVariant,
+        variant: Variant,
         callback: ExerciseChatStatusCallback,
         event: str | None,
     ):
