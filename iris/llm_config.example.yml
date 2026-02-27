@@ -39,7 +39,7 @@
 
 # ── Embedding models ─────────────────────────────────────────────────────────
 - api_key:
-  api_version: 2023-05-15
+  api_version: "2023-05-15"
   azure_deployment: te-3-large
   description: Embedding Large 8k Azure
   endpoint: "<your-endpoint>"
