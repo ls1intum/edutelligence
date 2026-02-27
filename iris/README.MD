@@ -102,13 +102,12 @@ Edit `llm_config.local.yml` and add your API keys. You need to configure **three
 **OpenAI chat model example:**
 
 ```yaml
-- id: "oai-gpt-41-mini"
-  name: "GPT 4.1 Mini"
-  description: "GPT 4.1 Mini on OpenAI"
+- id: "oai-gpt-5-mini"
+  name: "GPT 5 Mini"
+  description: "GPT 5 Mini on OpenAI"
   type: "openai_chat"
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
   api_key: "<your_openai_api_key>"
-  tools: []
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 ```
@@ -116,16 +115,15 @@ Edit `llm_config.local.yml` and add your API keys. You need to configure **three
 **Azure OpenAI chat model example:**
 
 ```yaml
-- id: "azure-gpt-41-mini"
-  name: "GPT 4.1 Mini"
-  description: "GPT 4.1 Mini on Azure"
+- id: "azure-gpt-5-mini"
+  name: "GPT 5 Mini"
+  description: "GPT 5 Mini on Azure"
   type: "azure_chat"
   endpoint: "<your_azure_endpoint>"
-  api_version: "2024-05-01-preview"
-  azure_deployment: "gpt-41-mini"
-  model: "gpt-4.1-mini"
+  api_version: "2025-04-01-preview"
+  azure_deployment: "gpt-5-mini"
+  model: "gpt-5-mini"
   api_key: "<your_azure_api_key>"
-  tools: []
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 ```
@@ -149,7 +147,7 @@ See `llm_config.example.yml` for the full list of model configurations including
 | Parameter                       | Description                                                                                                   |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `id`                            | Unique identifier across all configured models                                                                |
-| `model`                         | Official model name as used by the vendor (e.g. `gpt-4.1-mini`)                                               |
+| `model`                         | Official model name as used by the vendor (e.g. `gpt-5-mini`)                                                 |
 | `type`                          | Client selector: `openai_chat`, `azure_chat`, `ollama`, `openai_embedding`, `azure_embedding`, `cohere_azure` |
 | `api_key`                       | API key for the model provider                                                                                |
 | `endpoint`                      | Provider URL (required for Azure and Cohere)                                                                  |
@@ -159,7 +157,7 @@ See `llm_config.example.yml` for the full list of model configurations including
 | `cost_per_million_input_token`  | Input token cost, used for model routing decisions                                                            |
 | `cost_per_million_output_token` | Output token cost, used for model routing decisions                                                           |
 
-> **Note:** Most pipelines require the GPT-4.1 model family (`gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`) to be
+> **Note:** Most pipelines require the GPT-5 model family (`gpt-5.2`, `gpt-5-mini`, `gpt-5-nano`) to be
 > configured. Watch the logs for warnings about missing models.
 
 ### 6. Run the Server
@@ -221,7 +219,7 @@ pre-commit run --all-files
 
 ## Detect Secrets
 
-Scan all tracked files for accidentally committed secrets:
+Run these commands from the **iris** directory:
 
 ```bash
 git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
@@ -297,7 +295,7 @@ docker compose -f docker/pyris-production-internal.yml up -d
 
 ```bash
 # View logs
-docker compose -f docker/<compose-file> logs -f pyris-app
+docker compose -f docker/<compose-file> logs -f
 
 # Stop
 docker compose -f docker/<compose-file> down
