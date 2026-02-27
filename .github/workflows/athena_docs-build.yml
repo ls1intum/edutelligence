@@ -1,0 +1,86 @@
+name: Build Athena Documentation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: tj-actions/changed-files@v45
+        id: changed-docs
+        with:
+          files: athena/docs/**
+
+      - uses: tj-actions/changed-files@v45
+        id: changed-workflow
+        with:
+          files: |
+            .github/workflows/docs.yml
+            .github/workflows/athena_docs-build.yml
+
+      - id: changes
+        run: |
+          if [ "${{ steps.changed-docs.outputs.any_changed }}" = "true" ] || [ "${{ steps.changed-workflow.outputs.any_changed }}" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore Athena docs from cache
+        id: cache-athena
+        uses: actions/cache/restore@v4
+        with:
+          path: athena/docs/build
+          key: athena-docs-${{ hashFiles('athena/docs/**') }}
+          restore-keys: |
+            athena-docs-
+
+      - name: Setup Node.js
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-athena.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: athena/docs/package-lock.json
+
+      - name: Install dependencies
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-athena.outputs.cache-hit != 'true'
+        run: |
+          cd athena/docs
+          npm ci
+
+      - name: Build documentation
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-athena.outputs.cache-hit != 'true'
+        run: |
+          cd athena/docs
+          npm run build
+
+      - name: Save Athena docs to cache
+        if: needs.detect-changes.outputs.changed == 'true' || steps.cache-athena.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: athena/docs/build
+          key: athena-docs-${{ hashFiles('athena/docs/**') }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: athena-docs
+          path: athena/docs/build
+          retention-days: 1
