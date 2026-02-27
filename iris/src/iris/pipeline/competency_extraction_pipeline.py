@@ -47,7 +47,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
         )
         self.callback = callback
         self.request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1"
+            version="gpt-oss:120b" if local else "gpt-5.2"
         )
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
@@ -130,7 +130,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
                 variant_id="default",
                 name="Default",
                 description="Default competency extraction variant",
-                cloud_agent_model="gpt-4.1",
+                cloud_agent_model="gpt-5.2",
                 local_agent_model="gpt-oss:120b",
             ),
         ]

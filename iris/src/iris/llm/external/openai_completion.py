@@ -21,7 +21,6 @@ class OpenAICompletionModel(CompletionModel):
             model=self.model,
             prompt=prompt,
             temperature=arguments.temperature,
-            max_tokens=arguments.max_tokens,
             stop=arguments.stop,
         )
         return response

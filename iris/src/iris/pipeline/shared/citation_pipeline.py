@@ -90,33 +90,31 @@ class CitationPipeline(SubPipeline):
 
         # Default variant
         default_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-nano"
+            version="gpt-oss:120b" if local else "gpt-5-nano"
         )
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
-            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
+            completion_args=CompletionArguments(temperature=0),
         )
         self.llms["default"] = default_llm
         self.pipelines["default"] = default_llm | StrOutputParser()
 
         # Advanced variant
         advanced_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-mini"
+            version="gpt-oss:120b" if local else "gpt-5-mini"
         )
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,
-            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
+            completion_args=CompletionArguments(temperature=0),
         )
         self.llms["advanced"] = advanced_llm
         self.pipelines["advanced"] = advanced_llm | StrOutputParser()
 
         # RequestHandler for keyword/summary (small models, separate instance per thread)
         self._keyword_summary_request_handler = ModelVersionRequestHandler(
-            version="gemma3:27b" if local else "gpt-4.1-nano"
+            version="gemma3:27b" if local else "gpt-5-nano"
         )
-        self._keyword_summary_completion_args = CompletionArguments(
-            temperature=0, max_tokens=500
-        )
+        self._keyword_summary_completion_args = CompletionArguments(temperature=0)
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llms={list(self.llms.keys())})"

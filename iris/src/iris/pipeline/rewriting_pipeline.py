@@ -56,7 +56,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         self.callback = callback
         self.db = VectorDatabase()
         self.request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1"
+            version="gpt-oss:120b" if local else "gpt-5.2"
         )
         self.tokens = []
         self.variant = variant
@@ -185,8 +185,8 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
                 variant_id="faq",
                 name="Default FAQ Variant",
                 description="Default FAQ rewriting variant.",
-                cloud_rewriting_model="gpt-4.1",
-                cloud_consistency_model="gpt-4.1",
+                cloud_rewriting_model="gpt-5.2",
+                cloud_consistency_model="gpt-5.2",
                 local_rewriting_model="gpt-oss:120b",
                 local_consistency_model="gpt-oss:120b",
             ),
@@ -194,7 +194,7 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
                 variant_id="problem_statement",
                 name="Default Variant",
                 description="Default Problem statement rewriting variant.",
-                cloud_rewriting_model="gpt-4.1",
+                cloud_rewriting_model="gpt-5.2",
                 local_rewriting_model="gpt-oss:120b",
             ),
         ]
