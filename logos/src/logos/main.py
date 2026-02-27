@@ -968,11 +968,37 @@ async def handle_sync_request(path: str, request: Request):
     if not deployments:
         raise HTTPException(status_code=404, detail="No available model deployments for this profile")
 
+    # --- Per-user rate limiting ---
+    from logos.rate_limiter import get_rate_limiter
+    with DBManager() as db:
+        rate_limits = db.get_rate_limits(auth.process_id)
+    rpm_limit = rate_limits.get("rate_limit_rpm")
+    tpm_limit = rate_limits.get("rate_limit_tpm")
+
+    limiter = get_rate_limiter()
+    rl_result = limiter.check_and_record(auth.process_id, rpm_limit, tpm_limit)
+
+    if not rl_result.allowed:
+        rl_headers = rl_result.get_headers()
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers=rl_headers,
+        )
+
     # Route and execute request with profile context
-    return await route_and_execute(
+    response = await route_and_execute(
         deployments, body, headers, auth.logos_key, path, log_id,
         profile_id=auth.profile_id
     )
+
+    # Add rate limit headers to response
+    rl_headers = rl_result.get_headers()
+    if hasattr(response, 'headers') and rl_headers:
+        for key, value in rl_headers.items():
+            response.headers[key] = value
+
+    return response
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):
@@ -1380,6 +1406,132 @@ async def add_billing(data: AddBillingRequest):
 async def generalstats(data: LogosKeyModel):
     with DBManager() as db:
         return db.generalstats(**data.dict())
+
+
+# ============================================================================
+# iPRAKTIKUM USER MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.post("/logosdb/batch_create_users")
+async def batch_create_users(data: BatchCreateUsersRequest):
+    """
+    Batch create users from a list of email addresses. Root only.
+
+    Creates user, process (with API key), profile, and grants model access
+    for each email. Rate limits are set in process settings.
+    """
+    with DBManager() as db:
+        result, status = db.batch_create_users(
+            logos_key=data.logos_key,
+            emails=data.emails,
+            model_ids=data.model_ids,
+            rate_limit_rpm=data.rate_limit_rpm,
+            rate_limit_tpm=data.rate_limit_tpm,
+        )
+        return JSONResponse(content=result, status_code=status)
+
+
+@app.get("/logosdb/export_user_keys")
+async def export_user_keys(request: Request):
+    """
+    Export email-to-API-key mapping as CSV. Root only.
+
+    Returns CSV with columns: email,logos_key
+    """
+    from fastapi.responses import PlainTextResponse
+
+    headers = dict(request.headers)
+    logos_key, _ = authenticate_logos_key(headers)
+
+    with DBManager() as db:
+        data, status = db.get_all_user_keys(logos_key)
+
+    if isinstance(data, dict) and "error" in data:
+        raise HTTPException(status_code=status, detail=data["error"])
+
+    # Build CSV using stdlib to properly handle escaping
+    import csv as csv_module
+    import io
+    output = io.StringIO()
+    writer = csv_module.writer(output)
+    writer.writerow(["email", "logos_key"])
+    for row in data:
+        writer.writerow([row["email"], row["logos_key"]])
+    csv_content = output.getvalue()
+
+    return PlainTextResponse(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=user_keys.csv"},
+    )
+
+
+@app.get("/logosdb/opencode_config")
+async def get_opencode_config(request: Request):
+    """
+    Generate opencode config file for the authenticated user.
+
+    Returns a JSON config suitable for .opencode.json that configures
+    opencode to use Logos as the AI provider with the user's API key.
+    """
+    from logos.opencode_config import generate_opencode_config
+
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    # Determine Logos base URL from request
+    forwarded_host = request.headers.get("x-forwarded-host")
+    scheme = request.headers.get("x-forwarded-proto", "http")
+    if forwarded_host:
+        logos_base_url = f"{scheme}://{forwarded_host}"
+    else:
+        logos_base_url = str(request.base_url).rstrip("/")
+
+    # Get user's accessible models
+    with DBManager() as db:
+        models, _status = db.get_user_accessible_models(process_id)
+
+    config = generate_opencode_config(
+        logos_base_url=logos_base_url,
+        logos_key=logos_key,
+        available_models=models,
+    )
+
+    return JSONResponse(content=config)
+
+
+@app.get("/logosdb/my_usage")
+async def my_usage(request: Request):
+    """
+    Get usage statistics for the authenticated user only.
+
+    Returns token usage aggregated by model, by day, and totals.
+    Users can only see their own data — no access to other users' stats.
+    """
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    with DBManager() as db:
+        data, status = db.get_user_usage_stats(process_id)
+
+    return JSONResponse(content=data, status_code=status)
+
+
+@app.get("/logosdb/my_models")
+async def my_models(request: Request):
+    """
+    Get models accessible to the authenticated user.
+
+    Returns a simplified list of models (name + description) that the user
+    has access to via their profiles.
+    """
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    with DBManager() as db:
+        models, status = db.get_user_accessible_models(process_id)
+
+    return JSONResponse(content={"models": models}, status_code=status)
 
 
 @app.post("/logosdb/request_event_stats")

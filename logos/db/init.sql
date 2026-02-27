@@ -29,8 +29,11 @@ CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     username TEXT NOT NULL,
     prename TEXT,
-    name TEXT
+    name TEXT,
+    email TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
 CREATE TABLE services (
     id SERIAL PRIMARY KEY,
