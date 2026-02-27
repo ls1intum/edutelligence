@@ -156,7 +156,7 @@ def convert_to_iris_message(
             token_usage=tokens,
         )
 
-    contents = [TextMessageContentDTO(text_content=message["content"] or "")]
+    contents = [TextMessageContentDTO(text_content=message.get("content") or "")]
     return PyrisMessage(
         sender=map_str_to_role(message["role"]),
         contents=contents,
@@ -220,6 +220,7 @@ class OllamaModel(
             prompt=prompt,
             images=[image.base64] if image else None,
             format="json" if arguments.response_format == "JSON" else "",
+            think=self.think,
             options=self.options,
         )
         return response["response"]

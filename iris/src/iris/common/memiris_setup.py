@@ -150,7 +150,7 @@ def memiris_create_user_memory_creation_pipeline_openai(
             break
 
     if model_to_use is None:
-        logging.error(
+        logging.warning(
             "No OpenAIChatModel with model 'gpt-5-mini' found in LlmManager. "
             "Using Ollama for Memiris instead."
         )
@@ -234,7 +234,7 @@ def memiris_create_user_memory_sleep_pipeline_openai(
             break
 
     if model_to_use is None:
-        logging.error(
+        logging.warning(
             "No OpenAIChatModel with model 'gpt-5-mini' found in LlmManager. "
             "Using Ollama for Memiris instead."
         )

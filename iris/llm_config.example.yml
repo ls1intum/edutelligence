@@ -26,7 +26,7 @@
 
 # ── Azure example (GPT 5 Mini) ──────────────────────────────────────────────
 - api_key:
-  api_version: 2024-05-01-preview
+  api_version: 2025-04-01-preview
   azure_deployment: gpt-5-mini
   description: GPT 5 Mini on Azure
   endpoint: "<your-endpoint>"
@@ -39,7 +39,7 @@
 
 # ── Embedding models ─────────────────────────────────────────────────────────
 - api_key:
-  api_version: "2023-05-15T00:00:00.000Z"
+  api_version: 2023-05-15
   azure_deployment: te-3-large
   description: Embedding Large 8k Azure
   endpoint: "<your-endpoint>"

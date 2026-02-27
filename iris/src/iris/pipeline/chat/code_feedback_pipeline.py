@@ -59,7 +59,7 @@ class CodeFeedbackPipeline(SubPipeline):
         self.variant = variant
 
         # Set up the language model
-        completion_args = CompletionArguments(temperature=0, response_format="text")
+        completion_args = CompletionArguments(temperature=0, response_format="TEXT")
 
         if local:
             if variant == "advanced":
