@@ -39,6 +39,36 @@ class LangfuseSettings(BaseModel):
         return self
 
 
+class TranscriptionSettings(BaseModel):
+    """Settings for video transcription pipeline.
+
+    Note: Whisper API configuration is loaded from llm_config.yml,
+    not from application.yml. Add a whisper entry to llm_config.yml
+    with type 'azure_whisper' or 'openai_whisper'.
+    """
+
+    enabled: bool = Field(default=False, description="Enable video transcription")
+    temp_dir: str = Field(
+        default="tmp/transcription",
+        description="Directory for temporary video/audio files",
+    )
+    chunk_duration_seconds: int = Field(
+        default=900, description="Audio chunk duration in seconds (default: 15 min)"
+    )
+    whisper_model: str = Field(
+        default="whisper",
+        description="Model ID to look up in llm_config.yml",
+    )
+    whisper_max_workers: int = Field(
+        default=2,
+        description="Max parallel Whisper API requests per transcription job",
+    )
+    max_concurrent_jobs: int = Field(
+        default=2,
+        description="Max concurrent video transcription jobs (semaphore slots)",
+    )
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -47,6 +77,7 @@ class Settings(BaseModel):
     weaviate: WeaviateSettings
     memiris: MemirisSettings
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
+    transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
 
     @classmethod
     def get_settings(cls):

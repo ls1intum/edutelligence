@@ -66,3 +66,18 @@
   id: cohere
   name: Cohere Client V2
   type: cohere_azure
+- api_key:
+  api_version: 2024-02-15-preview
+  azure_deployment: whisper
+  description: Azure Whisper for transcription
+  endpoint: "<your-endpoint>"
+  id: azure-whisper
+  model: whisper
+  name: Azure Whisper
+  type: azure_whisper
+- api_key:
+  description: OpenAI Whisper for transcription
+  id: oai-whisper
+  model: whisper-1
+  name: OpenAI Whisper
+  type: openai_whisper
