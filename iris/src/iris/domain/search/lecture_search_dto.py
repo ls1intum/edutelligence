@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LectureSearchRequestDTO(BaseModel):
@@ -17,6 +17,8 @@ class LectureInfo(BaseModel):
 
 
 class LectureUnitInfo(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: int
     name: str
     link: str
@@ -24,6 +26,8 @@ class LectureUnitInfo(BaseModel):
 
 
 class LectureSearchResultDTO(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     course: CourseInfo
     lecture: LectureInfo
     lecture_unit: LectureUnitInfo = Field(alias="lectureUnit")

@@ -24,6 +24,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 logger = get_logger(__name__)
 
+# Segments whose summary starts with this prefix are placeholders written during ingestion
+# when a slide had no extractable content. They must be excluded from search results.
 _EMPTY_SEGMENT_PREFIX = "There is no content"
 
 

@@ -15,7 +15,9 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 logger = get_logger(__name__)
 
 
-@router.post("/lectures", dependencies=[Depends(TokenValidator())])
+@router.post(
+    "/lectures", dependencies=[Depends(TokenValidator())], response_model_by_alias=True
+)
 def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]:
     """
     Search for lectures based on a query.
