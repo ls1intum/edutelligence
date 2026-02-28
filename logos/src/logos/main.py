@@ -42,14 +42,6 @@ _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _ollama_monitor: Optional[OllamaProviderMonitor] = None
 
-OLLAMA_PROCESSING_TIMEOUT_S = 120
-
-
-def _get_processing_timeout_s(scheduling_stats: Optional[Dict[str, Any]]) -> Optional[int]:
-    if scheduling_stats and scheduling_stats.get("provider_type") == "ollama":
-        return OLLAMA_PROCESSING_TIMEOUT_S
-    return None
-
 
 def _record_azure_rate_limits(
     scheduling_stats: Optional[Dict[str, Any]],
@@ -380,7 +372,6 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
         last_chunk = None
         error_message = None
         timed_out = False
-        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
         ttft_recorded = False
 
         try:
@@ -397,69 +388,34 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
             # Prepare headers and payload using context resolver
             headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-            if processing_timeout_s:
-                async with asyncio.timeout(processing_timeout_s):
-                    async for chunk in _pipeline.executor.execute_streaming(
-                        context.forward_url,
-                        headers,
-                        prepared_payload,
-                        on_headers=process_headers,
-                    ):
-                        yield chunk
-                        if chunk and not ttft_recorded:
-                            if log_id:
-                                with DBManager() as db:
-                                    db.set_time_at_first_token(log_id)
-                            ttft_recorded = True
+            async for chunk in _pipeline.executor.execute_streaming(
+                context.forward_url,
+                headers,
+                prepared_payload,
+                on_headers=process_headers,
+            ):
+                yield chunk
+                if chunk and not ttft_recorded:
+                    if log_id:
+                        with DBManager() as db:
+                            db.set_time_at_first_token(log_id)
+                    ttft_recorded = True
 
-                        # Parse chunk for logging
-                        line = chunk.decode().strip()
-                        if line.startswith("data: ") and line != "data: [DONE]":
-                            try:
-                                blob = json.loads(line[6:])
-                                last_chunk = blob  # Keep track of last chunk (may have usage)
-                                if first_chunk is None:
-                                    first_chunk = blob
-                                if "choices" in blob and blob["choices"]:
-                                    delta = blob["choices"][0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        full_text += content
-                            except json.JSONDecodeError:
-                                pass
-            else:
-                async for chunk in _pipeline.executor.execute_streaming(
-                    context.forward_url,
-                    headers,
-                    prepared_payload,
-                    on_headers=process_headers,
-                ):
-                    yield chunk
-                    if chunk and not ttft_recorded:
-                        if log_id:
-                            with DBManager() as db:
-                                db.set_time_at_first_token(log_id)
-                        ttft_recorded = True
-
-                    # Parse chunk for logging
-                    line = chunk.decode().strip()
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            blob = json.loads(line[6:])
-                            last_chunk = blob  # Keep track of last chunk (may have usage)
-                            if first_chunk is None:
-                                first_chunk = blob
-                            if "choices" in blob and blob["choices"]:
-                                delta = blob["choices"][0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    full_text += content
-                        except json.JSONDecodeError:
-                            pass
-        except asyncio.TimeoutError:
-            timed_out = True
-            error_message = f"Processing timeout after {processing_timeout_s}s"
-            logger.warning("Streaming request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
+                # Parse chunk for logging
+                line = chunk.decode().strip()
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        blob = json.loads(line[6:])
+                        last_chunk = blob  # Keep track of last chunk (may have usage)
+                        if first_chunk is None:
+                            first_chunk = blob
+                        if "choices" in blob and blob["choices"]:
+                            delta = blob["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_text += content
+                    except json.JSONDecodeError:
+                        pass
         except Exception as e:
             error_message = str(e)
             raise e
@@ -536,29 +492,10 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
         timed_out = False
         error_message = None
 
-        try:
-            if processing_timeout_s:
-                exec_result = await asyncio.wait_for(
-                    _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload),
-                    timeout=processing_timeout_s,
-                )
-            else:
-                exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
-        except asyncio.TimeoutError:
-            timed_out = True
-            error_message = f"Processing timeout after {processing_timeout_s}s"
-            logger.warning("Sync request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
-            exec_result = ExecutionResult(
-                success=False,
-                response={"error": error_message},
-                error=error_message,
-                usage={},
-                is_streaming=False,
-            )
+        exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
 
         # Update rate limits from response headers
         if exec_result.headers:

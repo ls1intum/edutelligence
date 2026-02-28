@@ -1,40 +1,45 @@
+# ── Chat models (GPT-5 family) ───────────────────────────────────────────────
 - api_key:
-  api_version: 2024-05-01-preview
-  azure_deployment: gpt-41-mini
-  description: GPT 4.1 Mini on Azure
+  description: GPT 5.2
+  cost_per_million_input_token: 3.0
+  cost_per_million_output_token: 12.0
+  id: oai-gpt-52
+  model: gpt-5.2
+  name: GPT 5.2
+  type: openai_chat
+- api_key:
+  description: GPT 5 Mini
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+  id: oai-gpt-5-mini
+  model: gpt-5-mini
+  name: GPT 5 Mini
+  type: openai_chat
+- api_key:
+  description: GPT 5 Nano
+  cost_per_million_input_token: 0.1
+  cost_per_million_output_token: 0.4
+  id: oai-gpt-5-nano
+  model: gpt-5-nano
+  name: GPT 5 Nano
+  type: openai_chat
+
+# ── Azure example (GPT 5 Mini) ──────────────────────────────────────────────
+- api_key:
+  api_version: 2025-04-01-preview
+  azure_deployment: gpt-5-mini
+  description: GPT 5 Mini on Azure
   endpoint: "<your-endpoint>"
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
-  id: azure-gpt-41-mini
-  model: gpt-4.1-mini
-  name: GPT 4.1 Mini
+  id: azure-gpt-5-mini
+  model: gpt-5-mini
+  name: GPT 5 Mini (Azure)
   type: azure_chat
+
+# ── Embedding models ─────────────────────────────────────────────────────────
 - api_key:
-  description: GPT 4.1
-  cost_per_million_input_token: 0.4
-  cost_per_million_output_token: 1.6
-  id: oai-gpt-41
-  model: gpt-4.1
-  name: GPT 4.1
-  type: openai_chat
-- api_key:
-  description: GPT 4.1 Mini
-  cost_per_million_input_token: 0.4
-  cost_per_million_output_token: 1.6
-  id: oai-gpt-41-mini
-  model: gpt-4.1-mini
-  name: GPT 4.1 Mini
-  type: openai_chat
-- api_key:
-  description: GPT 4.1 Nano
-  cost_per_million_input_token: 0.4
-  cost_per_million_output_token: 1.6
-  id: oai-gpt-41-nano
-  model: gpt-4.1-nano
-  name: GPT 4.1 Nano
-  type: openai_chat
-- api_key:
-  api_version: "2023-05-15T00:00:00.000Z"
+  api_version: "2023-05-15"
   azure_deployment: te-3-large
   description: Embedding Large 8k Azure
   endpoint: "<your-endpoint>"
@@ -51,6 +56,8 @@
   model: text-embedding-3-small
   name: Embedding Small
   type: openai_embedding
+
+# ── Reranker ─────────────────────────────────────────────────────────────────
 - api_key:
   description: Cohere V2 client
   endpoint: "your_cohere-endpoint"

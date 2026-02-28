@@ -12,24 +12,6 @@ on:
         description: (Re-)deploys AtlasML.
 
 jobs:
-  provision-env:
-    runs-on: ubuntu-latest
-    environment: 'Atlas - Test 1'
-    steps:
-      - name: Setup Traefik on remote host
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ vars.VM_HOST }}
-          username: ${{ vars.VM_USERNAME }}
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
-          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
-          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
-          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
-          script: |
-            sudo mkdir -p /opt/atlasml/traefik
-            sudo touch /opt/atlasml/traefik/acme.json
-            sudo chmod 600 /opt/atlasml/traefik/acme.json
 
   deploy-atlasml:
     needs: provision-env
