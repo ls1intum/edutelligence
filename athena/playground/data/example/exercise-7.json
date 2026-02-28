@@ -1,0 +1,104 @@
+{
+  "id": 7,
+  "course_id": 2,
+  "title": "Pizza Delivery Process - Apollon v4",
+  "type": "modeling",
+  "max_points": 10.0,
+  "bonus_points": 0,
+  "grading_instructions": "For every correct diagram element, give 1 point. For every missing element, give 0 points. Ensure the BPMN diagram contains: 1 start event, 3 tasks (Bake pizza, Deliver pizza, Take the money), and 1 end event, all connected properly.",
+  "problem_statement": "Create a BPMN-Diagram for the following process description: 'As soon as we receive an order, we bake the pizza. Our delivery person takes it to the customer and takes the money, whereby the process completes successfully.'",
+  "example_solution": "{\"id\":\"984481c6-536d-4af1-a010-f3c315e1e79a\",\"version\":\"4.0.0\",\"title\":\"BPMN Diagram\",\"type\":\"BPMN\",\"nodes\":[{\"id\":\"afc256c8-c3ab-4034-800c-5402e178806f\",\"width\":40,\"height\":40,\"type\":\"bpmnStartEvent\",\"position\":{\"x\":280,\"y\":210},\"data\":{\"name\":\"Order received\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}},{\"id\":\"cd15d809-987d-4cec-bf92-1206f04f58f8\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":420,\"y\":200},\"data\":{\"name\":\"Bake Pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"955373f6-9041-4236-9964-4ae16769f8cb\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":670,\"y\":200},\"data\":{\"name\":\"Deliver Pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"01391e0d-b3a9-4e6b-830c-fb60f88b5401\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":910,\"y\":200},\"data\":{\"name\":\"Take the money\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"65d2ec12-780b-4291-a53e-ba0c8395595c\",\"width\":40,\"height\":40,\"type\":\"bpmnEndEvent\",\"position\":{\"x\":1140,\"y\":210},\"data\":{\"name\":\"End\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}}],\"edges\":[{\"id\":\"908fb68e-3a39-48cd-bffd-5987439a92d4\",\"source\":\"afc256c8-c3ab-4034-800c-5402e178806f\",\"target\":\"cd15d809-987d-4cec-bf92-1206f04f58f8\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"f4256968-459e-453c-ac49-e498dc427a25\",\"source\":\"cd15d809-987d-4cec-bf92-1206f04f58f8\",\"target\":\"955373f6-9041-4236-9964-4ae16769f8cb\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"533e8ec0-d282-44b5-bbc0-3f5c16da7223\",\"source\":\"955373f6-9041-4236-9964-4ae16769f8cb\",\"target\":\"01391e0d-b3a9-4e6b-830c-fb60f88b5401\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"adfb6ff9-b1e2-400e-bb5a-f760c252f19f\",\"source\":\"01391e0d-b3a9-4e6b-830c-fb60f88b5401\",\"target\":\"65d2ec12-780b-4291-a53e-ba0c8395595c\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}}],\"assessments\":{}}",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 1,
+      "text": "Correct solution with all elements",
+      "model": "{\"version\":\"4.0.0\",\"type\":\"BPMN\",\"nodes\":[{\"id\":\"afc256c8-c3ab-4034-800c-5402e178806f\",\"width\":40,\"height\":40,\"type\":\"bpmnStartEvent\",\"position\":{\"x\":280,\"y\":210},\"data\":{\"name\":\"Order received\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}},{\"id\":\"cd15d809-987d-4cec-bf92-1206f04f58f8\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":420,\"y\":200},\"data\":{\"name\":\"Bake Pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"955373f6-9041-4236-9964-4ae16769f8cb\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":670,\"y\":200},\"data\":{\"name\":\"Deliver Pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"01391e0d-b3a9-4e6b-830c-fb60f88b5401\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":910,\"y\":200},\"data\":{\"name\":\"Take the money\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"65d2ec12-780b-4291-a53e-ba0c8395595c\",\"width\":40,\"height\":40,\"type\":\"bpmnEndEvent\",\"position\":{\"x\":1140,\"y\":210},\"data\":{\"name\":\"End\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}}],\"edges\":[{\"id\":\"908fb68e-3a39-48cd-bffd-5987439a92d4\",\"source\":\"afc256c8-c3ab-4034-800c-5402e178806f\",\"target\":\"cd15d809-987d-4cec-bf92-1206f04f58f8\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"f4256968-459e-453c-ac49-e498dc427a25\",\"source\":\"cd15d809-987d-4cec-bf92-1206f04f58f8\",\"target\":\"955373f6-9041-4236-9964-4ae16769f8cb\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"533e8ec0-d282-44b5-bbc0-3f5c16da7223\",\"source\":\"955373f6-9041-4236-9964-4ae16769f8cb\",\"target\":\"01391e0d-b3a9-4e6b-830c-fb60f88b5401\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"adfb6ff9-b1e2-400e-bb5a-f760c252f19f\",\"source\":\"01391e0d-b3a9-4e6b-830c-fb60f88b5401\",\"target\":\"65d2ec12-780b-4291-a53e-ba0c8395595c\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}}],\"assessments\":{}}",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 101,
+          "title": "Perfect BPMN diagram",
+          "description": "Excellent work! Your BPMN diagram contains all required elements (start event, three tasks, and end event) with correct sequence flow connections. The process flow is logical and matches the problem statement perfectly.",
+          "credits": 10.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "text": "Missing start event",
+      "model": "{\"version\":\"4.0.0\",\"type\":\"BPMN\",\"nodes\":[{\"id\":\"task-bake-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":0,\"y\":0},\"data\":{\"name\":\"Bake pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-deliver-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":200,\"y\":0},\"data\":{\"name\":\"Deliver pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-money-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":400,\"y\":0},\"data\":{\"name\":\"Take the money\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"end-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnEndEvent\",\"position\":{\"x\":600,\"y\":10},\"data\":{\"name\":\"End\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}}],\"edges\":[{\"id\":\"flow-2\",\"source\":\"task-bake-1\",\"target\":\"task-deliver-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-3\",\"source\":\"task-deliver-1\",\"target\":\"task-money-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-4\",\"source\":\"task-money-1\",\"target\":\"end-event-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}}],\"assessments\":{}}",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 201,
+          "title": "Missing start event",
+          "description": "Your diagram is missing the start event (circle). In BPMN, every process must begin with a start event. Add a start event at the beginning of the process flow and connect it to the first task.",
+          "credits": -2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "text": "Missing end event",
+      "model": "{\"version\":\"4.0.0\",\"type\":\"BPMN\",\"nodes\":[{\"id\":\"start-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnStartEvent\",\"position\":{\"x\":0,\"y\":10},\"data\":{\"name\":\"Order received\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}},{\"id\":\"task-bake-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":90,\"y\":0},\"data\":{\"name\":\"Bake pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-deliver-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":290,\"y\":0},\"data\":{\"name\":\"Deliver pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-money-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":490,\"y\":0},\"data\":{\"name\":\"Take the money\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}}],\"edges\":[{\"id\":\"flow-1\",\"source\":\"start-event-1\",\"target\":\"task-bake-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-2\",\"source\":\"task-bake-1\",\"target\":\"task-deliver-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-3\",\"source\":\"task-deliver-1\",\"target\":\"task-money-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}}],\"assessments\":{}}",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 301,
+          "title": "Missing end event",
+          "description": "Your diagram is missing the end event. In BPMN, every process must end with an end event (circle). Complete the process by adding an end event after the 'Take the money' task.",
+          "credits": -2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "text": "Missing task: Take the money",
+      "model": "{\"version\":\"4.0.0\",\"type\":\"BPMN\",\"nodes\":[{\"id\":\"start-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnStartEvent\",\"position\":{\"x\":0,\"y\":10},\"data\":{\"name\":\"Order received\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}},{\"id\":\"task-bake-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":90,\"y\":0},\"data\":{\"name\":\"Bake pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-deliver-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":290,\"y\":0},\"data\":{\"name\":\"Deliver pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"end-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnEndEvent\",\"position\":{\"x\":490,\"y\":10},\"data\":{\"name\":\"End\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}}],\"edges\":[{\"id\":\"flow-1\",\"source\":\"start-event-1\",\"target\":\"task-bake-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-2\",\"source\":\"task-bake-1\",\"target\":\"task-deliver-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-3\",\"source\":\"task-deliver-1\",\"target\":\"end-event-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}}],\"assessments\":{}}",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 401,
+          "title": "Missing activity: Take the money",
+          "description": "You're missing the task 'Take the money' from your diagram. According to the problem statement, the delivery person must take the money from the customer. Add this task between 'Deliver pizza' and the end event.",
+          "credits": -2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "text": "Missing task: Deliver pizza",
+      "model": "{\"version\":\"4.0.0\",\"type\":\"BPMN\",\"nodes\":[{\"id\":\"start-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnStartEvent\",\"position\":{\"x\":0,\"y\":10},\"data\":{\"name\":\"Order received\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}},{\"id\":\"task-bake-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":90,\"y\":0},\"data\":{\"name\":\"Bake pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-money-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":290,\"y\":0},\"data\":{\"name\":\"Take the money\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"end-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnEndEvent\",\"position\":{\"x\":490,\"y\":10},\"data\":{\"name\":\"End\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}}],\"edges\":[{\"id\":\"flow-1\",\"source\":\"start-event-1\",\"target\":\"task-bake-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-2\",\"source\":\"task-bake-1\",\"target\":\"task-money-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-3\",\"source\":\"task-money-1\",\"target\":\"end-event-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}}],\"assessments\":{}}",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 501,
+          "title": "Missing activity: Deliver pizza",
+          "description": "You're missing the task 'Deliver pizza' from your diagram. The process requires that the delivery person takes the pizza to the customer. Add this task between 'Bake pizza' and 'Take the money'.",
+          "credits": -2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "text": "All tasks but wrong sequence",
+      "model": "{\"version\":\"4.0.0\",\"type\":\"BPMN\",\"nodes\":[{\"id\":\"start-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnStartEvent\",\"position\":{\"x\":0,\"y\":10},\"data\":{\"name\":\"Order received\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}},{\"id\":\"task-money-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":90,\"y\":0},\"data\":{\"name\":\"Take the money\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-bake-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":290,\"y\":0},\"data\":{\"name\":\"Bake pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"task-deliver-1\",\"width\":160,\"height\":60,\"type\":\"bpmnTask\",\"position\":{\"x\":490,\"y\":0},\"data\":{\"name\":\"Deliver pizza\",\"taskType\":\"default\",\"marker\":\"none\"},\"measured\":{\"width\":160,\"height\":60}},{\"id\":\"end-event-1\",\"width\":40,\"height\":40,\"type\":\"bpmnEndEvent\",\"position\":{\"x\":690,\"y\":10},\"data\":{\"name\":\"End\",\"eventType\":\"default\"},\"measured\":{\"width\":40,\"height\":40}}],\"edges\":[{\"id\":\"flow-1\",\"source\":\"start-event-1\",\"target\":\"task-money-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-2\",\"source\":\"task-money-1\",\"target\":\"task-bake-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-3\",\"source\":\"task-bake-1\",\"target\":\"task-deliver-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}},{\"id\":\"flow-4\",\"source\":\"task-deliver-1\",\"target\":\"end-event-1\",\"type\":\"BPMNSequenceFlow\",\"sourceHandle\":\"right\",\"targetHandle\":\"left\",\"data\":{\"points\":[]}}],\"assessments\":{}}",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 601,
+          "title": "Incorrect sequence of activities",
+          "description": "Your diagram contains all the required tasks, but they are in the wrong sequence. The correct order should be: (1) Bake pizza, (2) Deliver pizza, (3) Take the money. Reorder your tasks to reflect the logical flow of the pizza delivery process.",
+          "credits": -3.0,
+          "meta": {}
+        }
+      ]
+    }
+  ]
+}

@@ -26,5 +26,7 @@ RUN poetry config virtualenvs.create true \
 # Project files
 COPY . ./
 
+RUN poetry install --no-interaction --no-ansi
+
 # poetry scripts don't work here
 CMD poetry run python -m module_*
