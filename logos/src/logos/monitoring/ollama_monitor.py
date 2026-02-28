@@ -71,18 +71,18 @@ def _get_auth_headers_for_ps(provider_id: int) -> Dict[str, str] | None:
         return {}
 
 
-def _insert_error_snapshot(provider_ollama_url: str, error_message: str) -> None:
+def _insert_error_snapshot(provider_id: int, error_message: str) -> None:
     """
     Insert a snapshot with poll_success=FALSE to track errors.
 
     Args:
-        url: Ollama admin URL that failed
+        provider_id: Provider ID (FK to providers.id)
         error_message: Description of the error
     """
     try:
         with DBManager() as db:
             db.insert_provider_snapshot(
-                ollama_admin_url=provider_ollama_url,
+                provider_id=provider_id,
                 total_models_loaded=0,
                 total_vram_used_bytes=0,
                 loaded_models=[],
@@ -91,7 +91,7 @@ def _insert_error_snapshot(provider_ollama_url: str, error_message: str) -> None
             )
     except Exception as e:
         # If we can't even insert an error snapshot, just log it
-        logger.error(f"Failed to insert error snapshot for {provider_ollama_url}: {e}")
+        logger.error(f"Failed to insert error snapshot for provider {provider_id}: {e}")
 
 
 class OllamaProviderMonitor:
@@ -251,7 +251,7 @@ class OllamaProviderMonitor:
             # Insert successful snapshot
             with DBManager() as db:
                 db.insert_provider_snapshot(
-                    ollama_admin_url=provider_ollama_url,
+                    provider_id=provider_id,
                     total_models_loaded=len(loaded_models),
                     total_vram_used_bytes=total_vram,
                     loaded_models=loaded_models,
@@ -267,19 +267,19 @@ class OllamaProviderMonitor:
         except asyncio.TimeoutError:
             # HTTP timeout
             logger.warning(f"Timeout polling {provider_id}")
-            _insert_error_snapshot(provider_ollama_url, "HTTP timeout after 5 seconds")
+            _insert_error_snapshot(provider_id, "HTTP timeout after 5 seconds")
 
         except aiohttp.ClientError as e:
             # HTTP/connection errors
             logger.warning(f"HTTP error polling {provider_id}: {e}")
-            _insert_error_snapshot(provider_ollama_url, f"HTTP error: {e}")
+            _insert_error_snapshot(provider_id, f"HTTP error: {e}")
 
         except json.JSONDecodeError as e:
             # Malformed JSON response
             logger.warning(f"Invalid JSON from {provider_id}: {e}")
-            _insert_error_snapshot(provider_ollama_url, f"JSON decode error: {e}")
+            _insert_error_snapshot(provider_id, f"JSON decode error: {e}")
 
         except Exception as e:
             # Other errors (DB, parsing, etc.)
             logger.error(f"Unexpected error polling {provider_id}: {e}", exc_info=True)
-            _insert_error_snapshot(provider_ollama_url, f"Unexpected error: {e}")
+            _insert_error_snapshot(provider_id, f"Unexpected error: {e}")

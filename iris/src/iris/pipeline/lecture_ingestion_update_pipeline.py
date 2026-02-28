@@ -118,7 +118,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 name="Default",
                 description="Default lecture ingestion update variant using efficient models "
                 "for processing and embeddings.",
-                cloud_chat_model="gpt-4.1-mini",
+                cloud_chat_model="gpt-5-mini",
                 local_chat_model="gpt-oss:120b",
                 embedding_model="text-embedding-3-small",
             ),
@@ -127,7 +127,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 name="Advanced",
                 description="Advanced lecture ingestion update variant using higher-quality models "
                 "for improved accuracy.",
-                cloud_chat_model="gpt-4.1",
+                cloud_chat_model="gpt-5.2",
                 local_chat_model="gpt-oss:120b",
                 embedding_model="text-embedding-3-large",
             ),

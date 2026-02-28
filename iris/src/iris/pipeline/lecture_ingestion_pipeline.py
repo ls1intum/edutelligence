@@ -110,11 +110,11 @@ class LectureUnitPageIngestionPipeline(
         super().__init__()
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_chat = ModelVersionRequestHandler("gpt-4.1-mini")
+        self.llm_chat = ModelVersionRequestHandler("gpt-5-mini")
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler("gpt-5-mini")
+        completion_args = CompletionArguments(temperature=0.2)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -136,14 +136,14 @@ class LectureUnitPageIngestionPipeline(
                 name="Default",
                 description="Default lecture ingestion variant using efficient models "
                 "for text processing and embeddings.",
-                chat_model="gpt-4.1-mini",
+                chat_model="gpt-5-mini",
                 embedding_model="text-embedding-3-small",
             ),
             LectureUnitPageIngestionVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
-                chat_model="gpt-4.1",
+                chat_model="gpt-5.2",
                 embedding_model="text-embedding-3-large",
             ),
         ]
@@ -327,7 +327,7 @@ class LectureUnitPageIngestionPipeline(
         try:
             response = self.llm_chat.chat(
                 [iris_message],
-                CompletionArguments(temperature=0, max_tokens=512),
+                CompletionArguments(temperature=0),
                 tools=[],
             )
             self._append_tokens(
@@ -386,7 +386,7 @@ class LectureUnitPageIngestionPipeline(
         )
         response = self.llm_chat.chat(
             [iris_message],
-            CompletionArguments(temperature=0, max_tokens=20),
+            CompletionArguments(temperature=0),
             tools=[],
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)

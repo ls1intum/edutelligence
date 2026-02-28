@@ -1,6 +1,10 @@
-import datetime
+import json
 import os
+import re
+import threading
+from concurrent.futures import as_completed
 from enum import Enum
+from functools import partial
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
@@ -16,10 +20,28 @@ from iris.llm import (
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.sub_pipeline import SubPipeline
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.faq_schema import FaqSchema
 
 logger = get_logger(__name__)
+
+# Matches citation blocks with fixed positional fields:
+# `[cite:<type>:<entity_id>:<page>:<start>:<end>!<sequence_number>]`
+# where:
+# - `<type>` is `L` (lecture) or `F` (faq)
+# - `<entity_id>` is the lecture unit id or faq id
+# - `<page>`, `<start>`, `<end>` may be empty (`""`) if not applicable
+# - `<sequence_number>` is required and is used to make the citation unique and to resolve keyword/summary enrichment
+CITATION_BLOCK_WITH_SEQUENCE_PATTERN = re.compile(
+    r"\[cite:([LF]):([^:\]]*):([^:\]]*):([^:\]]*):([^:\]]*)!(\d+)\]"
+)
+
+INDEX_CITE_TYPE = 1
+INDEX_ENTITY_ID = 2
+INDEX_PAGE = 3
+INDEX_START = 4
+INDEX_END = 5
+INDEX_SEQUENCE_NUMBER = 6
 
 
 class InformationType(str, Enum):
@@ -28,7 +50,7 @@ class InformationType(str, Enum):
 
 
 class CitationPipeline(SubPipeline):
-    """A generic reranker pipeline that can be used to rerank a list of documents based on a question"""
+    """Formats answers with structured citations based on retrieved content used during answer generation."""
 
     llms: dict
     pipelines: dict
@@ -37,6 +59,7 @@ class CitationPipeline(SubPipeline):
 
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="citation_pipeline")
+        self._local = local
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
         with open(prompt_file_path, "r", encoding="utf-8") as file:
@@ -46,7 +69,20 @@ class CitationPipeline(SubPipeline):
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.faq_prompt_str = file.read()
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "citation_keyword_prompt.txt"
+        )
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
+            self.keyword_prompt_str = file.read()
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "citation_summary_prompt.txt"
+        )
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
+            self.summary_prompt_str = file.read()
         self.tokens = []
+        self._tokens_lock = threading.Lock()
+        self.used_citation_numbers: list[int] = []
+        self._last_citation_content_by_seq: dict[int, str] = {}
 
         # Create LLM variants
         self.llms = {}
@@ -54,25 +90,31 @@ class CitationPipeline(SubPipeline):
 
         # Default variant
         default_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-nano"
+            version="gpt-oss:120b" if local else "gpt-5-nano"
         )
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
-            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
+            completion_args=CompletionArguments(temperature=0),
         )
         self.llms["default"] = default_llm
         self.pipelines["default"] = default_llm | StrOutputParser()
 
         # Advanced variant
         advanced_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-mini"
+            version="gpt-oss:120b" if local else "gpt-5-mini"
         )
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,
-            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
+            completion_args=CompletionArguments(temperature=0),
         )
         self.llms["advanced"] = advanced_llm
         self.pipelines["advanced"] = advanced_llm | StrOutputParser()
+
+        # RequestHandler for keyword/summary (small models, separate instance per thread)
+        self._keyword_summary_request_handler = ModelVersionRequestHandler(
+            version="gemma3:27b" if local else "gpt-5-nano"
+        )
+        self._keyword_summary_completion_args = CompletionArguments(temperature=0)
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llms={list(self.llms.keys())})"
@@ -80,67 +122,307 @@ class CitationPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llms={list(self.llms.keys())})"
 
+    def _format_citation_part(self, value) -> str:
+        return "" if value is None else str(value)
+
+    def _build_lecture_citation_id(
+        self,
+        lecture_unit_id,
+        page_number=None,
+        start_time_sec=None,
+        end_time_sec=None,
+        citation_sequence_number=None,
+    ) -> str:
+        """
+        Create a lecture citation id with stable source metadata and lookup key.
+
+        Target format:
+        `[cite:L:<lecture_unit_id>:<page_number>:<start_time_sec>:<end_time_sec>!<citation_sequence_number>]`
+
+        The `citation_sequence_number` is the per-request running number that links a
+        citation in the final answer back to its original source text.
+        """
+        return (
+            "[cite:L:"
+            f"{self._format_citation_part(lecture_unit_id)}:"
+            f"{self._format_citation_part(page_number)}:"
+            f"{self._format_citation_part(start_time_sec)}:"
+            f"{self._format_citation_part(end_time_sec)}"
+            f"!{self._format_citation_part(citation_sequence_number)}]"
+        )
+
     def create_formatted_lecture_string(
         self, lecture_retrieval_dto: LectureRetrievalDTO
     ):
         """
-        Create a formatted string from the data
+        Build the serialized lecture context for the citation prompt.
+
+        The output is a JSON array containing all usable page chunks and transcript
+        segments. Each entry includes:
+        - `content`: the raw text shown to the citation model
+        - `id`: a structured citation id in the `[cite:L:...!<sequence_number>]` format
+
+        The numeric suffix after `!` is a unique citation sequence number per
+        request and is also used as lookup key in
+        `_last_citation_content_by_seq` for later keyword/summary generation.
         """
 
-        formatted_string_lecture_page_chunks = ""
+        citation_sequence_number = 0
+        self._last_citation_content_by_seq = {}
+        lecture_page_chunks = []
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
                 continue
-            # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
-            if ".deattachment" in paragraph.lecture_unit_link:
-                paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
-                    ".deattachment", ".de/api/core/files/attachment"
-                )
-            lct = (
-                f"Lecture: {paragraph.lecture_name},"
-                f" Unit: {paragraph.lecture_unit_name},"
-                f" Page: {paragraph.page_number},"
-                f" Link: {paragraph.lecture_unit_link or "No link available"},"
-                f"\nContent:\n---{paragraph.page_text_content}---\n\n"
+            citation_sequence_number += 1
+            self._last_citation_content_by_seq[citation_sequence_number] = (
+                paragraph.page_text_content
             )
-            formatted_string_lecture_page_chunks += lct
+            lecture_page_chunks.append(
+                {
+                    "id": self._build_lecture_citation_id(
+                        paragraph.lecture_unit_id,
+                        paragraph.page_number,
+                        None,
+                        None,
+                        citation_sequence_number,
+                    ),
+                    "content": paragraph.page_text_content,
+                }
+            )
 
-        formatted_string_lecture_transcriptions = ""
-
+        lecture_transcriptions = []
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
-            start_time_sec = paragraph.segment_start_time
-            end_time_sec = paragraph.segment_end_time
-            start_time_str = str(datetime.timedelta(seconds=int(start_time_sec)))
-            end_time_str = str(datetime.timedelta(seconds=int(end_time_sec)))
-            lct = (
-                f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}, Link: {paragraph.video_link or "No link available"}, "
-                f"Start Time: {start_time_str}, End Time: {end_time_str},\n"
-                f"Content:\n"
-                f"---{paragraph.segment_text}---\n\n"
+            if not paragraph.segment_text:
+                continue
+            start_time_sec = (
+                int(paragraph.segment_start_time)
+                if paragraph.segment_start_time is not None
+                else None
             )
-            formatted_string_lecture_transcriptions += lct
-        return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
-            "}", "}}"
-        ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
+            end_time_sec = (
+                int(paragraph.segment_end_time)
+                if paragraph.segment_end_time is not None
+                else None
+            )
+            citation_sequence_number += 1
+            self._last_citation_content_by_seq[citation_sequence_number] = (
+                paragraph.segment_text
+            )
+            lecture_transcriptions.append(
+                {
+                    "id": self._build_lecture_citation_id(
+                        paragraph.lecture_unit_id,
+                        paragraph.page_number,
+                        start_time_sec,
+                        end_time_sec,
+                        citation_sequence_number,
+                    ),
+                    "content": paragraph.segment_text,
+                }
+            )
 
-    def create_formatted_faq_string(self, faqs, base_url):
+        formatted_string = json.dumps(
+            lecture_page_chunks + lecture_transcriptions,
+            ensure_ascii=True,
+        )
+        return formatted_string
+
+    def create_formatted_faq_string(self, faqs):
         """
         Create a formatted string from the data
         """
-        formatted_string = ""
+        formatted_faqs = []
+        seq = 0
+        self._last_citation_content_by_seq = {}
         for faq in faqs:
-            faq = (
-                f"FAQ ID {faq.get(FaqSchema.FAQ_ID.value)},"
-                f" CourseId {faq.get(FaqSchema.COURSE_ID.value)} ,"
-                f" FAQ Question title {faq.get(FaqSchema.QUESTION_TITLE.value)} and"
-                f" FAQ Question Answer {faq.get(FaqSchema.QUESTION_ANSWER.value)} and"
-                f" FAQ link {base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId="
-                f"{faq.get(FaqSchema.FAQ_ID.value)}"
+            faq_id = faq.get(FaqSchema.FAQ_ID.value)
+            question = faq.get(FaqSchema.QUESTION_TITLE.value) or ""
+            answer = faq.get(FaqSchema.QUESTION_ANSWER.value) or ""
+            content = f"{question} {answer}".strip()
+            if not content:
+                continue
+            seq += 1
+            self._last_citation_content_by_seq[seq] = content
+            formatted_faqs.append(
+                {
+                    "id": f"[cite:F:{faq_id}:::!{seq}]",
+                    "content": content,
+                }
             )
-            formatted_string += faq
 
-        return formatted_string.replace("{", "{{").replace("}", "}}")
+        formatted_string = json.dumps(formatted_faqs, ensure_ascii=True)
+        return formatted_string
+
+    def extract_used_citation_numbers(self, answer: str) -> list[int]:
+        """
+        Extracts the sequence numbers after '!' from citation blocks in the answer.
+        Example matches:
+        - [cite:L:lecture-id:12:0:120!3]
+        - [cite:F:faq-id:::!9]
+        """
+        if not answer:
+            return []
+        numbers = []
+        for match in CITATION_BLOCK_WITH_SEQUENCE_PATTERN.finditer(answer):
+            numbers.append(int(match.group(INDEX_SEQUENCE_NUMBER)))
+        return numbers
+
+    def _sanitize_citation_field(self, value: str) -> str:
+        if not value:
+            return ""
+        cleaned = value.replace(":", " -").replace("]", ")").replace("[", "(")
+        return " ".join(cleaned.split())
+
+    def _generate_single_summary(
+        self,
+        language_instruction: str,
+        num: int,
+    ) -> str:
+        """Generate a single summary for a citation number."""
+        # Create thread-local LLM instance to avoid race conditions
+        llm = IrisLangchainChatModel(
+            request_handler=self._keyword_summary_request_handler,
+            completion_args=self._keyword_summary_completion_args,
+        )
+        pipeline = llm | StrOutputParser()
+        paragraph = self._last_citation_content_by_seq.get(num, "")
+        if not paragraph.strip():
+            return ""
+        summary_prompt = PromptTemplate(
+            template=language_instruction + self.summary_prompt_str,
+            input_variables=["Paragraph"],
+        )
+        raw = str((summary_prompt | pipeline).invoke({"Paragraph": paragraph})).strip()
+        with self._tokens_lock:
+            self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
+        return self._sanitize_citation_field(raw)
+
+    def _generate_keywords_sequential(
+        self,
+        language_instruction: str,
+        used_numbers: list[int],
+    ) -> dict[int, str]:
+        """Generate keywords sequentially to maintain deduplication."""
+        # Create thread-local LLM instance to avoid race conditions
+        llm = IrisLangchainChatModel(
+            request_handler=self._keyword_summary_request_handler,
+            completion_args=self._keyword_summary_completion_args,
+        )
+        pipeline = llm | StrOutputParser()
+        keyword_prompt = PromptTemplate(
+            template=language_instruction + self.keyword_prompt_str,
+            input_variables=["Paragraph", "UsedKeywords"],
+        )
+        keywords: dict[int, str] = {}
+        used_keywords: set[str] = set()
+        for num in used_numbers:
+            paragraph = self._last_citation_content_by_seq.get(num, "")
+            if not paragraph.strip():
+                keywords[num] = ""
+                continue
+            used_keywords_str = ", ".join(sorted(used_keywords))
+            raw = str(
+                (keyword_prompt | pipeline).invoke(
+                    {"Paragraph": paragraph, "UsedKeywords": used_keywords_str}
+                )
+            ).strip()
+            with self._tokens_lock:
+                self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
+            keyword = self._sanitize_citation_field(raw)
+            if keyword:
+                used_keywords.add(keyword)
+            keywords[num] = keyword
+        return keywords
+
+    def _build_keyword_summary_map(
+        self,
+        language_instruction: str,
+        used_numbers: list[int],
+    ) -> dict[int, tuple[str, str]]:
+        # Deduplicate used_numbers while preserving order
+        seen: set[int] = set()
+        unique_numbers: list[int] = []
+        for num in used_numbers:
+            if num not in seen:
+                seen.add(num)
+                unique_numbers.append(num)
+
+        # Filter out numbers with empty paragraphs
+        valid_numbers = [
+            num
+            for num in unique_numbers
+            if self._last_citation_content_by_seq.get(num, "").strip()
+        ]
+
+        if not valid_numbers:
+            return {num: ("", "") for num in unique_numbers}
+
+        with TracedThreadPoolExecutor(max_workers=len(valid_numbers) + 1) as executor:
+            keyword_future = executor.submit(
+                self._generate_keywords_sequential,
+                language_instruction,
+                valid_numbers,
+            )
+            summary_futures = {
+                executor.submit(
+                    self._generate_single_summary,
+                    language_instruction,
+                    num,
+                ): num
+                for num in valid_numbers
+            }
+            try:
+                keywords = keyword_future.result()
+            except Exception as keyword_error:
+                logger.error(
+                    "Citation keyword generation failed for numbers=%s",
+                    valid_numbers,
+                    exc_info=keyword_error,
+                )
+                keywords = {}
+            summaries = {}
+            for summary_future in as_completed(summary_futures):
+                citation_number = summary_futures[summary_future]
+                try:
+                    summaries[citation_number] = summary_future.result()
+                except Exception as summary_error:
+                    logger.error(
+                        "Citation summary generation failed for number=%s",
+                        citation_number,
+                        exc_info=summary_error,
+                    )
+        result: dict[int, tuple[str, str]] = {}
+        for num in unique_numbers:
+            if num in valid_numbers:
+                result[num] = (keywords.get(num, ""), summaries.get(num, ""))
+            else:
+                result[num] = ("", "")
+        return result
+
+    def _replace_cite_blocks_with_keyword_summary(
+        self, answer: str, summaries: dict[int, tuple[str, str]]
+    ) -> str:
+        replace_handler = partial(
+            self._replace_citation_with_keyword_summary,
+            summaries=summaries,
+        )
+        return CITATION_BLOCK_WITH_SEQUENCE_PATTERN.sub(replace_handler, answer)
+
+    def _replace_citation_with_keyword_summary(
+        self,
+        citation_match: re.Match,
+        summaries: dict[int, tuple[str, str]],
+    ) -> str:
+        cite_type = citation_match.group(INDEX_CITE_TYPE)
+        entity_id = citation_match.group(INDEX_ENTITY_ID)
+        page = citation_match.group(INDEX_PAGE)
+        start = citation_match.group(INDEX_START)
+        end = citation_match.group(INDEX_END)
+        num = int(citation_match.group(INDEX_SEQUENCE_NUMBER))
+        keyword, summary = summaries.get(num, ("", ""))
+        return (
+            f"[cite:{cite_type}:{entity_id}:{page}:{start}:{end}:{keyword}:{summary}]"
+        )
 
     @observe(name="Citation Pipeline")
     def __call__(
@@ -161,9 +443,7 @@ class CitationPipeline(SubPipeline):
             :param user_language: The user's preferred language ("en" or "de")
             :return: Selected file content
         """
-        paras = ""
-        paragraphs_page_chunks = ""
-        paragraphs_transcriptions = ""
+        paragraphs = ""
 
         if variant not in self.llms:
             variant = "default"
@@ -172,14 +452,10 @@ class CitationPipeline(SubPipeline):
         pipeline = self.pipelines[variant]
 
         if information_type == InformationType.FAQS:
-            paras = self.create_formatted_faq_string(
-                information, kwargs.get("base_url")
-            )
+            paragraphs = self.create_formatted_faq_string(information)
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
-            paragraphs_page_chunks, paragraphs_transcriptions = (
-                self.create_formatted_lecture_string(information)
-            )
+            paragraphs = self.create_formatted_lecture_string(information)
             self.prompt_str = self.lecture_prompt_str
 
         # Add language instruction to prompt
@@ -193,22 +469,28 @@ class CitationPipeline(SubPipeline):
                 template=language_instruction + self.prompt_str,
                 input_variables=["Answer", "Paragraphs"],
             )
-            if information_type == InformationType.FAQS:
-                response = (self.default_prompt | pipeline).invoke(
-                    {"Answer": answer, "Paragraphs": paras}
-                )
-            else:
-                response = (self.default_prompt | pipeline).invoke(
-                    {
-                        "Answer": answer,
-                        "Paragraphs": paragraphs_page_chunks,
-                        "TranscriptionParagraphs": paragraphs_transcriptions,
-                    }
-                )
+            response = (self.default_prompt | pipeline).invoke(
+                {"Answer": answer, "Paragraphs": paragraphs}
+            )
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            if "!NONE!" in str(response):
-                return answer
-            return response
+            response_str = str(response)
+            self.used_citation_numbers = self.extract_used_citation_numbers(
+                response_str
+            )
+            try:
+                summaries = self._build_keyword_summary_map(
+                    language_instruction=language_instruction,
+                    used_numbers=self.used_citation_numbers,
+                )
+                response_str = self._replace_cite_blocks_with_keyword_summary(
+                    response_str, summaries
+                )
+            except Exception as enrichment_error:
+                logger.error(
+                    "Citation enrichment failed, returning citations without keyword/summary",
+                    exc_info=enrichment_error,
+                )
+            return response_str
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
             raise e

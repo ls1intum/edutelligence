@@ -544,7 +544,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             user_query = self.get_text_of_latest_user_message(state)
 
             # Create LLM from variant's model selection (local/cloud)
-            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            completion_args = CompletionArguments(temperature=0.5)
 
             if local and hasattr(state.variant, "local_agent_model"):
                 selected_version = state.variant.local_agent_model
