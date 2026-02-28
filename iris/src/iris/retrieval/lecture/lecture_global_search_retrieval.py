@@ -4,7 +4,12 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
-from iris.domain.search.lecture_search_dto import LectureSearchResultDTO
+from iris.domain.search.lecture_search_dto import (
+    CourseInfo,
+    LectureInfo,
+    LectureSearchResultDTO,
+    LectureUnitInfo,
+)
 from iris.llm.request_handler.model_version_request_handler import (
     ModelVersionRequestHandler,
 )
@@ -96,13 +101,19 @@ class LectureGlobalSearchRetrieval:
         lecture_id = segment_props[LectureUnitSegmentSchema.LECTURE_ID.value]
 
         return LectureSearchResultDTO(
-            lecture_unit_id=unit_id,
-            lecture_unit_name=lu[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-            lecture_unit_link=f"/courses/{course_id}/lectures/{lecture_id}",
-            lecture_id=lecture_id,
-            lecture_name=lu[LectureUnitSchema.LECTURE_NAME.value],
-            course_id=course_id,
-            course_name=lu[LectureUnitSchema.COURSE_NAME.value],
-            page_number=segment_props[LectureUnitSegmentSchema.PAGE_NUMBER.value],
+            course=CourseInfo(
+                id=course_id,
+                name=lu[LectureUnitSchema.COURSE_NAME.value],
+            ),
+            lecture=LectureInfo(
+                id=lecture_id,
+                name=lu[LectureUnitSchema.LECTURE_NAME.value],
+            ),
+            lectureUnit=LectureUnitInfo(
+                id=unit_id,
+                name=lu[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                link=f"/courses/{course_id}/lectures/{lecture_id}",
+                pageNumber=segment_props[LectureUnitSegmentSchema.PAGE_NUMBER.value],
+            ),
             snippet=snippet,
         )
