@@ -14,6 +14,5 @@ class LectureSearchResultDTO(BaseModel):
     lecture_name: str
     course_id: int
     course_name: str
-    base_url: str
     page_number: int
     snippet: str

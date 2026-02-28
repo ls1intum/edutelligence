@@ -92,19 +92,17 @@ class LectureGlobalSearchRetrieval:
         if lu is None:
             return None
 
-        base_url = segment_props[LectureUnitSegmentSchema.BASE_URL.value]
         course_id = segment_props[LectureUnitSegmentSchema.COURSE_ID.value]
         lecture_id = segment_props[LectureUnitSegmentSchema.LECTURE_ID.value]
 
         return LectureSearchResultDTO(
             lecture_unit_id=unit_id,
             lecture_unit_name=lu[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-            lecture_unit_link=f"{base_url}/courses/{course_id}/lectures/{lecture_id}",
+            lecture_unit_link=f"/courses/{course_id}/lectures/{lecture_id}",
             lecture_id=lecture_id,
             lecture_name=lu[LectureUnitSchema.LECTURE_NAME.value],
             course_id=course_id,
             course_name=lu[LectureUnitSchema.COURSE_NAME.value],
-            base_url=base_url,
             page_number=segment_props[LectureUnitSegmentSchema.PAGE_NUMBER.value],
             snippet=snippet,
         )
