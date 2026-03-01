@@ -858,6 +858,37 @@ class DBManager:
             "avgVram": float(row["avg_vram"]) if row["avg_vram"] is not None else None,
         } for row in time_rows if row["bucket_ts"] is not None]
 
+        # Per-model time series (bucketed by time AND model).
+        # We only return rows for actual model traffic, so avoid joining against
+        # a generated empty bucket series (saves DB work for wide windows).
+        model_ts_rows = self.session.execute(text(f"""
+            SELECT
+                EXTRACT(
+                    EPOCH FROM to_timestamp(
+                        FLOOR(EXTRACT(EPOCH FROM {ts_expr}) / :bucket_seconds) * :bucket_seconds
+                    )
+                ) AS bucket_ts,
+                re.model_id,
+                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
+                COUNT(*) AS count
+            FROM request_events re
+            LEFT JOIN models m ON m.id = re.model_id
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+              AND re.model_id IS NOT NULL
+            GROUP BY 1, re.model_id, m.name
+            ORDER BY 1, model_name
+        """), params).mappings().all()
+        model_time_series: list[dict] = []
+        for row in model_ts_rows:
+            if row["bucket_ts"] is None:
+                continue
+            model_time_series.append({
+                "timestamp": int(row["bucket_ts"]) * 1000,
+                "modelId": row["model_id"],
+                "modelName": row["model_name"],
+                "count": int(row["count"] or 0),
+            })
+
         # Queue depth
         queue_row = self.session.execute(text(f"""
             SELECT
@@ -907,6 +938,7 @@ class DBManager:
                 "statusCounts": status_counts,
                 "modelBreakdown": model_breakdown,
                 "timeSeries": time_series,
+                "modelTimeSeries": model_time_series,
                 "queueDepth": queue_depth,
                 "runtimeByColdStart": runtime_by_cold,
             },
@@ -1381,6 +1413,363 @@ class DBManager:
 
         except Exception as e:
             logger.error(f"Failed to query ollama_vram_stats: {e}")
+            return {"error": str(e)}, 500
+
+    def get_ollama_vram_deltas(
+        self,
+        logos_key: str,
+        day: str,
+        after_snapshot_id: int = 0,
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return incremental per-provider VRAM snapshots for a single UTC day.
+
+        Args:
+            logos_key: Auth key
+            day: UTC day (YYYY-MM-DD / ISO date) or "all" for full history
+            after_snapshot_id: Only rows with id > this cursor are returned
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+
+        full_history = isinstance(day, str) and day.strip().lower() == "all"
+        if full_history:
+            start_dt = None
+            end_dt = None
+        else:
+            try:
+                parsed_day = isoparse(day)
+            except Exception:
+                return {"error": f"Invalid day format: {day}"}, 400
+
+            day_date = parsed_day.date()
+            start_dt = datetime.datetime.combine(day_date, datetime.time.min, tzinfo=tz_utc)
+            end_dt = start_dt + datetime.timedelta(days=1)
+
+        now = datetime.datetime.now(tz_utc)
+        if not full_history:
+            if start_dt > now:
+                return {"error": "Requested day is in the future."}, 400
+            if end_dt > now:
+                end_dt = now
+
+        params = {
+            "after_snapshot_id": int(after_snapshot_id or 0),
+        }
+
+        if full_history:
+            sql = text("""
+                SELECT
+                    s.id,
+                    s.provider_id,
+                    p.name AS provider_name,
+                    s.snapshot_ts,
+                    s.total_vram_used_bytes,
+                    s.total_models_loaded,
+                    s.loaded_models,
+                    p.total_vram_mb,
+                    MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                FROM ollama_provider_snapshots s
+                LEFT JOIN providers p
+                  ON p.id = s.provider_id
+                WHERE s.poll_success = TRUE
+                  AND s.id > :after_snapshot_id
+                ORDER BY s.id
+            """)
+        else:
+            params["start_ts"] = start_dt
+            params["end_ts"] = end_dt
+            sql = text("""
+                SELECT
+                    s.id,
+                    s.provider_id,
+                    p.name AS provider_name,
+                    s.snapshot_ts,
+                    s.total_vram_used_bytes,
+                    s.total_models_loaded,
+                    s.loaded_models,
+                    p.total_vram_mb,
+                    MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                FROM ollama_provider_snapshots s
+                LEFT JOIN providers p
+                  ON p.id = s.provider_id
+                WHERE s.poll_success = TRUE
+                  AND s.snapshot_ts >= :start_ts
+                  AND s.snapshot_ts < :end_ts
+                  AND s.id > :after_snapshot_id
+                ORDER BY s.id
+            """)
+
+        try:
+            rows = self.session.execute(sql, params).fetchall()
+            if not rows:
+                return {
+                    "providers": [],
+                    "last_snapshot_id": int(after_snapshot_id or 0),
+                }, 200
+
+            providers_data: Dict[int, Dict[str, Any]] = {}
+            last_snapshot_id = int(after_snapshot_id or 0)
+
+            for (
+                snapshot_id,
+                pid,
+                provider_name,
+                ts,
+                used_bytes,
+                models_loaded,
+                loaded_models,
+                total_vram_mb,
+                capacity_bytes,
+            ) in rows:
+                snapshot_id_int = int(snapshot_id or 0)
+                if snapshot_id_int > last_snapshot_id:
+                    last_snapshot_id = snapshot_id_int
+
+                used = int(used_bytes or 0)
+                configured_mb = int(total_vram_mb or 0)
+                cap = configured_mb * 1024 * 1024 if configured_mb > 0 else int(capacity_bytes or 0)
+                remaining_bytes = (cap - used) if cap and cap > used else None
+
+                if pid not in providers_data:
+                    providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+
+                providers_data[pid]["data"].append({
+                    "snapshot_id": snapshot_id_int,
+                    "timestamp": ts.isoformat() if ts else None,
+                    "vram_mb": used // (1024 * 1024),
+                    "vram_bytes": used,
+                    "used_vram_mb": used // (1024 * 1024),
+                    "remaining_vram_mb": (remaining_bytes // (1024 * 1024)) if isinstance(remaining_bytes, int) else None,
+                    "total_vram_mb": configured_mb if configured_mb > 0 else None,
+                    "models_loaded": models_loaded,
+                    "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
+                })
+
+            providers_list = [
+                {"provider_id": pid, "name": info["name"], "data": info["data"]}
+                for pid, info in providers_data.items()
+            ]
+
+            return {
+                "providers": providers_list,
+                "last_snapshot_id": last_snapshot_id,
+            }, 200
+
+        except Exception as e:
+            logger.error(f"Failed to query ollama_vram_deltas: {e}")
+            return {"error": str(e)}, 500
+
+    def get_request_enqueues_deltas(
+        self,
+        logos_key: str,
+        after_enqueue_ts: Optional[str],
+        after_request_id: Optional[str],
+        until_ts: Optional[str] = None,
+        limit: int = 5000,
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return enqueue-event deltas after a tuple cursor (enqueue_ts, request_id).
+
+        Args:
+            logos_key: Auth key
+            after_enqueue_ts: Cursor timestamp (ISO) or None for full start
+            after_request_id: Cursor request_id for tie-breaking identical timestamps
+            until_ts: Optional upper bound timestamp (ISO), defaults to now UTC
+            limit: Max rows returned
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+        cursor_request_id = str(after_request_id or "")
+        row_limit = max(1, int(limit or 5000))
+
+        cursor_dt: Optional[datetime.datetime] = None
+        if after_enqueue_ts:
+            try:
+                cursor_dt = isoparse(after_enqueue_ts).astimezone(tz_utc)
+            except Exception:
+                return {"error": f"Invalid after_enqueue_ts format: {after_enqueue_ts}"}, 400
+
+        if until_ts:
+            try:
+                until_dt = isoparse(until_ts).astimezone(tz_utc)
+            except Exception:
+                return {"error": f"Invalid until_ts format: {until_ts}"}, 400
+        else:
+            until_dt = datetime.datetime.now(tz_utc)
+
+        if cursor_dt and cursor_dt > until_dt:
+            return {"error": "after_enqueue_ts must be <= until_ts"}, 400
+
+        if cursor_dt is None:
+            sql = text("""
+                SELECT
+                    re.request_id,
+                    re.enqueue_ts,
+                    m.weight_privacy
+                FROM request_events re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE re.enqueue_ts IS NOT NULL
+                  AND re.enqueue_ts <= :until_ts
+                ORDER BY re.enqueue_ts, re.request_id
+                LIMIT :limit
+            """)
+            params = {
+                "until_ts": until_dt,
+                "limit": row_limit,
+            }
+        else:
+            sql = text("""
+                SELECT
+                    re.request_id,
+                    re.enqueue_ts,
+                    m.weight_privacy
+                FROM request_events re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE re.enqueue_ts IS NOT NULL
+                  AND (re.enqueue_ts, re.request_id) > (:cursor_ts, :cursor_request_id)
+                  AND re.enqueue_ts <= :until_ts
+                ORDER BY re.enqueue_ts, re.request_id
+                LIMIT :limit
+            """)
+            params = {
+                "cursor_ts": cursor_dt,
+                "cursor_request_id": cursor_request_id,
+                "until_ts": until_dt,
+                "limit": row_limit,
+            }
+
+        try:
+            rows = self.session.execute(sql, params).mappings().all()
+
+            events: List[Dict[str, Any]] = []
+            next_cursor_ts = after_enqueue_ts
+            next_cursor_id = cursor_request_id
+
+            for row in rows:
+                enqueue_ts = row.get("enqueue_ts")
+                request_id = str(row.get("request_id") or "")
+                if not enqueue_ts or not request_id:
+                    continue
+
+                weight_privacy = row.get("weight_privacy")
+                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
+                ts_ms = int(enqueue_ts.timestamp() * 1000)
+
+                events.append({
+                    "request_id": request_id,
+                    "enqueue_ts": ts_iso,
+                    "timestamp_ms": ts_ms,
+                    "is_cloud": bool(is_cloud),
+                })
+                next_cursor_ts = ts_iso
+                next_cursor_id = request_id
+
+            return {
+                "events": events,
+                "cursor": {
+                    "enqueue_ts": next_cursor_ts,
+                    "request_id": next_cursor_id,
+                },
+            }, 200
+        except Exception as e:
+            logger.error(f"Failed to query request enqueue deltas: {e}")
+            return {"error": str(e)}, 500
+
+    def get_request_enqueues_in_range(
+        self,
+        logos_key: str,
+        start_ts: str,
+        end_ts: str,
+        limit: int = 200000,
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return enqueue events for a fixed time window.
+
+        Args:
+            logos_key: Auth key
+            start_ts: Inclusive range start (ISO timestamp)
+            end_ts: Inclusive range end (ISO timestamp)
+            limit: Max rows returned
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+        row_limit = max(1, int(limit or 200000))
+
+        try:
+            start_dt = isoparse(start_ts).astimezone(tz_utc)
+        except Exception:
+            return {"error": f"Invalid start_ts format: {start_ts}"}, 400
+
+        try:
+            end_dt = isoparse(end_ts).astimezone(tz_utc)
+        except Exception:
+            return {"error": f"Invalid end_ts format: {end_ts}"}, 400
+
+        if start_dt > end_dt:
+            return {"error": "start_ts must be <= end_ts"}, 400
+
+        sql = text("""
+            SELECT
+                re.request_id,
+                re.enqueue_ts,
+                m.weight_privacy
+            FROM request_events re
+            LEFT JOIN models m ON m.id = re.model_id
+            WHERE re.enqueue_ts IS NOT NULL
+              AND re.enqueue_ts >= :start_ts
+              AND re.enqueue_ts <= :end_ts
+            ORDER BY re.enqueue_ts, re.request_id
+            LIMIT :limit
+        """)
+        params = {
+            "start_ts": start_dt,
+            "end_ts": end_dt,
+            "limit": row_limit,
+        }
+
+        try:
+            rows = self.session.execute(sql, params).mappings().all()
+            events: List[Dict[str, Any]] = []
+            last_cursor_ts: Optional[str] = None
+            last_cursor_id = ""
+
+            for row in rows:
+                enqueue_ts = row.get("enqueue_ts")
+                request_id = str(row.get("request_id") or "")
+                if not enqueue_ts or not request_id:
+                    continue
+
+                weight_privacy = row.get("weight_privacy")
+                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
+                ts_ms = int(enqueue_ts.timestamp() * 1000)
+
+                events.append({
+                    "request_id": request_id,
+                    "enqueue_ts": ts_iso,
+                    "timestamp_ms": ts_ms,
+                    "is_cloud": bool(is_cloud),
+                })
+                last_cursor_ts = ts_iso
+                last_cursor_id = request_id
+
+            return {
+                "events": events,
+                "cursor": {
+                    "enqueue_ts": last_cursor_ts,
+                    "request_id": last_cursor_id,
+                },
+            }, 200
+        except Exception as e:
+            logger.error(f"Failed to query request enqueue range: {e}")
             return {"error": str(e)}, 500
 
     def connect_model_api(self, logos_key: str, model_id: int, provider_id: int, api_key: str, endpoint: str = ""):

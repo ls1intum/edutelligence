@@ -57,6 +57,12 @@ export type RequestEventStats = {
     avgRunSeconds: number | null;
     avgVram: number | null;
   }>;
+  modelTimeSeries?: Array<{
+    timestamp: number; // Unix ts (ms)
+    modelId: number;
+    modelName: string;
+    count: number;
+  }>;
   queueDepth: {
     avgEnqueueDepth: number | null;
     avgScheduleDepth: number | null;
