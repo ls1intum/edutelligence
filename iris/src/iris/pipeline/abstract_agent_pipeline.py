@@ -534,6 +534,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
+        state.callback.in_progress("Pipeline execution started.")
+
         try:
             # 1. Prepare message history, user query, LLM, prompt and tools
             state.message_history = _filter_empty_messages(
