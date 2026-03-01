@@ -272,8 +272,8 @@ class CourseChatStatusCallback(StatusCallback):
                 name="Thinking",
             ),
             StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY, 
-                state=StageStateEnum.NOT_STARTED, 
+                weight=STAGE_WEIGHT_SECONDARY,
+                state=StageStateEnum.NOT_STARTED,
                 name="Creating suggestions",
             ),
             StageDTO(
