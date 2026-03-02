@@ -1,0 +1,21 @@
+name: Athena - Release
+
+on:
+  release:
+    types:
+      - created
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  athena:
+    uses: ./.github/workflows/athena.yml
+    with:
+      run_lint: false
+      run_tests: false
+      run_build: true
+      trigger_event: release
+      git_ref: ${{ github.ref }}
+    secrets: inherit
