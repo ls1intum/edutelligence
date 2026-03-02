@@ -81,11 +81,14 @@ weaviate:
   port: "8001"
   grpc_port: "50051"
 
-env_vars:
+memiris:
+  enabled: false
+
+env_vars: {}
 ```
 
 The example file also contains optional sections for **Memiris** (long-term memory) and **Langfuse** (LLM tracing).
-Enable them as needed.
+See `application.example.yml` for the full configuration reference.
 
 #### LLM Configuration
 
