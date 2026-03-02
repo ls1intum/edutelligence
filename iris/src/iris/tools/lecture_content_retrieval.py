@@ -2,6 +2,7 @@
 
 from typing import Any, Callable, Dict, List, Optional
 
+from ..pipeline.shared.citation_utils import build_lecture_citation_id
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
 
@@ -14,6 +15,7 @@ def create_tool_lecture_content_retrieval(
     query_text: str,
     history: List[Any],
     lecture_content_storage: Dict[str, Any],
+    citation_counter: Dict[str, int],
     lecture_id: Optional[int] = None,
     lecture_unit_id: Optional[int] = None,
 ) -> Callable[[], str]:
@@ -28,6 +30,7 @@ def create_tool_lecture_content_retrieval(
         query_text: The student's query text.
         history: Chat history messages.
         lecture_content_storage: Storage for retrieved content.
+        citation_counter: Shared counter for citation sequence numbers.
 
     Returns:
         Callable[[], str]: Function that returns lecture content string.
@@ -57,29 +60,110 @@ def create_tool_lecture_content_retrieval(
             base_url=base_url,
         )
 
-        # Store the lecture content for later use (e.g., citation pipeline)
-        lecture_content_storage["content"] = lecture_content
+        # Build citation content map with citation IDs created at retrieval time
+        citation_content_map = {}
 
-        result = "Lecture slide content:\n"
+        # Process page chunks
         for paragraph in lecture_content.lecture_unit_page_chunks:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
+            if not paragraph.page_text_content:
+                continue
+            seq_num = citation_counter["next"]
+            citation_counter["next"] += 1
+            citation_id = build_lecture_citation_id(
+                paragraph.lecture_unit_id,
+                paragraph.page_number,
+                None,
+                None,
+                seq_num,
             )
+            citation_content_map[seq_num] = {
+                "content": paragraph.page_text_content,
+                "citation_id": citation_id,
+                "type": "lecture_page",
+                "lecture_unit_id": paragraph.lecture_unit_id,
+                "page_number": paragraph.page_number,
+                "start_time": None,
+                "end_time": None,
+            }
 
-        result += "Lecture transcription content:\n"
+        # Process transcriptions
         for paragraph in lecture_content.lecture_transcriptions:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+            if not paragraph.segment_text:
+                continue
+            seq_num = citation_counter["next"]
+            citation_counter["next"] += 1
+            start_time = (
+                int(paragraph.segment_start_time)
+                if paragraph.segment_start_time is not None
+                else None
             )
+            end_time = (
+                int(paragraph.segment_end_time)
+                if paragraph.segment_end_time is not None
+                else None
+            )
+            citation_id = build_lecture_citation_id(
+                paragraph.lecture_unit_id,
+                paragraph.page_number,
+                start_time,
+                end_time,
+                seq_num,
+            )
+            citation_content_map[seq_num] = {
+                "content": paragraph.segment_text,
+                "citation_id": citation_id,
+                "type": "lecture_transcription",
+                "lecture_unit_id": paragraph.lecture_unit_id,
+                "page_number": paragraph.page_number,
+                "start_time": start_time,
+                "end_time": end_time,
+            }
 
-        result += "Lecture segment content:\n"
+        # Process segments
         for paragraph in lecture_content.lecture_unit_segments:
-            result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
+            if not paragraph.segment_summary:
+                continue
+            seq_num = citation_counter["next"]
+            citation_counter["next"] += 1
+            citation_id = build_lecture_citation_id(
+                paragraph.lecture_unit_id,
+                paragraph.page_number,
+                None,
+                None,
+                seq_num,
             )
+            citation_content_map[seq_num] = {
+                "content": paragraph.segment_summary,
+                "citation_id": citation_id,
+                "type": "lecture_segment",
+                "lecture_unit_id": paragraph.lecture_unit_id,
+                "page_number": paragraph.page_number,
+                "start_time": None,
+                "end_time": None,
+            }
+
+        # Store citation map
+        lecture_content_storage["citation_content_map"] = citation_content_map
+
+        # Format result string with simplified citation IDs for LLM
+        # Full citation IDs are stored in citation_content_map for later restoration
+        # Group by type in a single pass for efficiency
+        pages = []
+        transcriptions = []
+        segments = []
+
+        for seq_num, citation_data in sorted(citation_content_map.items()):
+            formatted = f'[cite:{seq_num}]\nContent:\n{citation_data["content"]}\n\n'
+            if citation_data["type"] == "lecture_page":
+                pages.append(formatted)
+            elif citation_data["type"] == "lecture_transcription":
+                transcriptions.append(formatted)
+            elif citation_data["type"] == "lecture_segment":
+                segments.append(formatted)
+
+        result = "Lecture slide content:\n" + "".join(pages)
+        result += "Lecture transcription content:\n" + "".join(transcriptions)
+        result += "Lecture segment content:\n" + "".join(segments)
 
         return result
 
