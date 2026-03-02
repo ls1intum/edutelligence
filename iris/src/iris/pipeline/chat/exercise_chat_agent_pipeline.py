@@ -112,8 +112,8 @@ class ExerciseChatAgentPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
-                cloud_citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-5-mini",
+                cloud_citation_model="gpt-5-mini",
                 local_agent_model="gpt-oss:120b",
                 local_citation_model="gpt-oss:120b",
             ),
@@ -121,8 +121,8 @@ class ExerciseChatAgentPipeline(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
-                cloud_citation_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-5.2",
+                cloud_citation_model="gpt-5-mini",
                 local_agent_model="gpt-oss:120b",
                 local_citation_model="gpt-oss:120b",
             ),
@@ -395,11 +395,11 @@ class ExerciseChatAgentPipeline(
             )
 
             # Create small LLM for refinement
-            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            completion_args = CompletionArguments(temperature=0.5)
             is_local = state.dto.settings is not None and state.dto.settings.is_local()
             llm_small = IrisLangchainChatModel(
                 request_handler=ModelVersionRequestHandler(
-                    version=("gpt-oss:120b" if is_local else "gpt-4.1-mini")
+                    version=("gpt-oss:120b" if is_local else "gpt-5-mini")
                 ),
                 completion_args=completion_args,
             )

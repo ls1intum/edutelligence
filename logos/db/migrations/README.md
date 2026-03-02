@@ -9,7 +9,7 @@ This directory contains SQL migration scripts for upgrading the Logos database s
 | `001_add_jobs_table.sql` | Add jobs table for async job tracking | NEW TABLE: jobs, NEW TYPE: job_status_enum |
 | `002_add_provider_sdi_columns.sql` | Add SDI columns to providers | providers: provider_type, ollama_admin_url, total_vram_mb, parallel_capacity, keep_alive_seconds, max_loaded_models, updated_at |
 | `003a_drop_provider_ssh_columns.sql` | Remove SSH connectivity columns from providers | providers: DROP ssh_host, ssh_user, ssh_port, ssh_key_path, ssh_remote_ollama_port |
-| `003b_create_model_provider_config.sql` | Create per-model per-provider config table | NEW TABLE: model_provider_config |
+| `003b_create_model_provider_config.sql` | Create per-model per-provider config table (deprecated) | NEW TABLE: model_provider_config |
 | `004_add_log_entry_sdi_columns.sql` | Add SDI metrics to log entries | log_entry: priority, queue_depth_at_arrival, utilization_at_arrival, queue_wait_ms, was_cold_start, load_duration_ms |
 | `005_create_request_events_table.sql` | Create request monitoring table | NEW TABLE: request_events, NEW TYPE: result_status_enum |
 | `006_update_model_endpoints_to_local_ollama.sql` | Point TUM GPU endpoints to local Ollama | models: UPDATE endpoint for TUM GPU models |
@@ -35,12 +35,12 @@ Or run each migration individually in order:
 docker exec -i logos-db psql -U postgres -d logosdb < 001_add_jobs_table.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 002_add_provider_sdi_columns.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 003a_drop_provider_ssh_columns.sql
-docker exec -i logos-db psql -U postgres -d logosdb < 003b_create_model_provider_config.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 004_add_log_entry_sdi_columns.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 005_create_request_events_table.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 006_update_model_endpoints_to_local_ollama.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 007_rename_openwebui_to_ollama_no_auth.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 008_create_ollama_provider_snapshots.sql
+docker exec -i logos-db psql -U postgres -d logosdb < 018_drop_model_provider_config.sql
 ```
 
 ### Option 2: Apply Specific Migration

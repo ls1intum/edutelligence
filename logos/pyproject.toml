@@ -7,7 +7,7 @@ authors = [
     {name = "Florian Briksa",email = "florian.briksa@tum.de"},
     {name = "Jakub Jakubczyk", email = "jakub.jakubczyk@tum.de"}
 ]
-readme = "./logos/README.md"
+readme = "README.md"
 requires-python = ">=3.13,<4.0.0"
 
 [tool.poetry.dependencies]
@@ -41,7 +41,43 @@ openapi = "app.openapi:export"
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"
 flake8 = "7.1.2"
+coverage = {version = "^7.0", extras = ["toml"]}
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests/unit"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: tests requiring a running server or database",
+    "slow: tests that take more than a few seconds",
+]
+filterwarnings = []
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

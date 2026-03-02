@@ -10,9 +10,10 @@
 - **Framework**: FastAPI (0.115.9) + Uvicorn
 - **Database**: PostgreSQL 17 via SQLAlchemy 2.x (raw SQL with `text()`, NOT the ORM query API)
 - **HTTP Client**: httpx (async)
-- **Dependency Management**: Poetry 2.x
-- **Testing**: pytest + pytest-asyncio
-- **Containerization**: Docker + Docker Compose + Traefik
+- **Dependency Management**: Poetry 2.x (lockfile: `poetry.lock`)
+- **Testing**: pytest + pytest-asyncio (asyncio_mode = "auto")
+- **Containerization**: Docker multi-stage build with `uv` (pinned), Docker Compose + Traefik v3
+- **CI**: GitHub Actions (`.github/workflows/logos_test.yml`) — runs unit tests with Poetry cache
 
 ## Repository Structure
 
@@ -20,8 +21,11 @@
 logos/
 ├── AGENTS.md                          # This file
 ├── pyproject.toml                     # Poetry config + dependencies
-├── Dockerfile                         # Container build
-├── docker-compose.yaml                # Full stack (db, app, ui, traefik)
+├── poetry.lock                        # Dependency lockfile (committed)
+├── .env.example                       # Environment variable template
+├── Dockerfile                         # Multi-stage Docker build (uv for deps)
+├── docker-compose.yaml                # Full stack (db, app, ui, landing, traefik)
+├── docker-compose.dev.yaml            # Local dev variant with local builds
 ├── run_tests.sh                       # Test runner (unit|integration|sdi|performance|all)
 ├── config/                            # Provider YAML configs
 │   ├── config-azure.yaml
@@ -38,7 +42,7 @@ logos/
 │   ├── responses.py                   # Helper utilities (URL merging, token extraction)
 │   ├── model_string_parser.py         # logos-v* model string parser
 │   ├── dbutils/
-│   │   ├── dbmanager.py               # All DB operations (~2148 lines) — context manager pattern
+│   │   ├── dbmanager.py               # All DB operations (~2170 lines) — context manager pattern
 │   │   ├── dbmodules.py               # SQLAlchemy ORM models
 │   │   └── dbrequest.py               # Pydantic request models
 │   ├── pipeline/
@@ -138,10 +142,13 @@ The `process.settings` JSONB field can store per-process configuration (e.g., ra
 6. Create a migration in `db/migrations/` (next sequential number)
 
 ### Adding a database migration
-1. Create `db/migrations/NNN_description.sql` (next number in sequence; currently up to 014)
+1. Create `db/migrations/NNN_description.sql` (next number in sequence; currently up to 019)
 2. Use `ALTER TABLE` / `CREATE TABLE` — migrations must be idempotent where possible (`IF NOT EXISTS`)
-3. Update `db/init.sql` to reflect the new schema for fresh installs
-4. Update ORM models in `dbmodules.py` if applicable
+3. **CRITICAL**: Add the migration filename to the `MIGRATIONS` array in `db/migrations/run_all_migrations.sh` — forgetting this means existing deployments never get the migration applied
+4. Update `db/init.sql` to reflect the new schema for fresh installs
+5. Update ORM models in `dbmodules.py` if applicable
+
+**Common migration pitfall**: The `init.sql` file is only executed on first database initialization (PostgreSQL `docker-entrypoint-initdb.d`). Existing deployments with persistent volumes rely entirely on `run_all_migrations.sh` to get schema updates.
 
 ### Testing
 ```bash
@@ -157,7 +164,7 @@ poetry run pytest tests/unit/main/test_route_and_execute.py -v
 
 Tests stub heavy dependencies (sentence_transformers, gRPC) via `conftest.py`. DBManager should be monkeypatched in tests — never connect to a real database in unit tests.
 
-**Note**: There are 5 pre-existing test failures on `main` (stale test signatures in `test_execute_modes.py` / `test_route_and_execute.py`, and a missing ML model in `test_classification.py`). These are not caused by new changes.
+**Note**: All unit tests should pass on `main` (25 passed, 1 skipped). The skipped test (`test_classification.py`) requires real `sentence-transformers` which is stubbed in `conftest.py`. Tests use `asyncio_mode = "auto"` so `@pytest.mark.asyncio` decorators are NOT needed on test functions.
 
 ## Git Workflow & Pull Requests
 
@@ -259,15 +266,19 @@ docker compose up --build
 
 1. **main.py is large** (~1690+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
-3. **No Alembic** — migrations are plain SQL files run manually via `docker exec`.
+3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
 4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
 5. **Token tracking exists** in the `usage_tokens` and `token_prices` tables.
 6. **The `process` table is the key auth entity** — each process has a unique `logos_key`.
 7. **Profiles control model access** — `profile_model_permissions` links profiles to models.
 8. **Existing tests mock DBManager** — follow the same pattern for new tests.
 9. **When adding OpenAI-compatible endpoints** (like `/v1/models`), follow the OpenAI API spec exactly.
-10. **For schema changes**: update BOTH `db/init.sql` (fresh install) AND add a migration file.
+10. **For schema changes**: update BOTH `db/init.sql` (fresh install) AND add a migration file AND add the migration to `run_all_migrations.sh` MIGRATIONS array.
 11. **DB method return values**: Methods returning `(dict, int)` tuples must be unpacked in endpoints — use `JSONResponse(content=result, status_code=status)`, never return the tuple directly.
 12. **Route ordering matters**: FastAPI matches routes in definition order. Specific routes must come before catch-all routes like `/v1/{path:path}`.
-13. **Pre-existing test failures**: 5 tests on `main` are known to fail — don't try to fix them unless explicitly asked.
+13. **Docker build**: Uses multi-stage build with `uv` (pinned version) for fast dependency installation. Runtime stage uses slim Python image with `VIRTUAL_ENV=/opt/venv`.
 14. **`process.settings` JSONB**: Flexible per-process config store. Used for rate limits and other settings. No schema migration needed to add new keys.
+15. **Traefik routing**: Domain and cert resolver are configured via environment variables `LOGOS_DOMAIN` (default: `localhost`) and `LOGOS_CERT_RESOLVER` (default: empty = no ACME). See `.env.example` for production setup.
+16. **Shared dependency**: The `shared/` sibling directory is symlinked as `logos/shared` for local dev. In CI, this is done explicitly: `ln -s ../shared logos/shared`.
+17. **Schema drift**: `init.sql` and `dbmodules.py` have some columns that are out of sync (e.g., several `providers` columns exist in SQL but not in ORM). The SQL schema (`init.sql`) is the source of truth; `dbmodules.py` only maps columns that the application code actively uses.
+18. **CI caching**: The CI workflow caches Poetry dependencies using `cache: "poetry"` with `cache-dependency-path: logos/poetry.lock`. Always commit `poetry.lock` changes.
