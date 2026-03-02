@@ -116,6 +116,33 @@ def delete_memory(user_id: int, memory_id: str) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.delete(
+    "/v1/memiris/user/{user_id}/delete-all",
+    dependencies=[Depends(TokenValidator())],
+)
+def delete_all_memories(user_id: int) -> Response:
+    """
+    Delete all Memiris memory data for a user.
+
+    Resolves the tenant for the given user and efficiently deletes all memories,
+    learnings, and connections for that tenant without loading them first.
+    Returns 204 No Content on success.
+
+    Args:
+        user_id: The user identifier used to derive the tenant.
+
+    Returns:
+        Response: Empty response with HTTP 204 No Content.
+    """
+    if not VectorDatabase.static_client_instance:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    tenant = get_tenant_for_user(user_id)
+    MemirisWrapper(
+        VectorDatabase.static_client_instance, tenant
+    ).delete_all_for_tenant()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get(
     "/v1/memiris/user/{user_id}/{memory_id}",
     dependencies=[Depends(TokenValidator())],
