@@ -67,11 +67,12 @@ class CitationPipeline(SubPipeline):
 
         # RequestHandler for keyword/summary (small models, separate instance per thread)
         self.keyword_summary_request_handler = ModelVersionRequestHandler(
-            version="gemma3:27b" if local else "gpt-4.1-nano"
+            version="gemma3:27b" if local else "gpt-5-nano"
         )
         self._keyword_summary_completion_args = CompletionArguments(
             temperature=0, max_tokens=500
         )
+        self._keyword_summary_completion_args = CompletionArguments(temperature=0)
 
     def __repr__(self):
         return f"{self.__class__.__name__}()"
