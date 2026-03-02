@@ -257,12 +257,8 @@ class CourseChatPipeline(
         Returns:
             str: The system message content
         """
-        # Extract user language with fallback
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        # Get user language from state
+        user_language = state.user_language
 
         # Get tool permissions
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -481,11 +477,7 @@ class CourseChatPipeline(
         if not merged_citation_map:
             return output
 
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        user_language = state.user_language
 
         # Enrich citations with keywords/summaries
         output = self.citation_pipeline(
@@ -519,11 +511,7 @@ class CourseChatPipeline(
             output: The agent's output
             dto: The pipeline execution DTO
         """
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        user_language = state.user_language
 
         try:
             if output:

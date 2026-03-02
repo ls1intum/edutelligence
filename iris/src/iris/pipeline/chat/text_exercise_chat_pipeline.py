@@ -255,12 +255,8 @@ class TextExerciseChatPipeline(
         """
         dto = state.dto
 
-        # Extract user language with fallback
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        # Get user language from state
+        user_language = state.user_language
 
         exercise_title = dto.exercise.title if dto.exercise else ""
         course_name = (
@@ -446,11 +442,7 @@ class TextExerciseChatPipeline(
         if not merged_citation_map:
             return result
 
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        user_language = state.user_language
 
         # Enrich citations with keywords/summaries
         try:

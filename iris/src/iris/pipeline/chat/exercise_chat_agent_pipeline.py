@@ -281,12 +281,8 @@ class ExerciseChatAgentPipeline(
         dto = state.dto
         query = self.get_latest_user_message(state)
 
-        # Extract user language with fallback
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        # Get user language from state
+        user_language = state.user_language
 
         problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
         exercise_title: str = dto.exercise.name if dto.exercise else ""
@@ -471,11 +467,7 @@ class ExerciseChatAgentPipeline(
         if not merged_citation_map:
             return result
 
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        user_language = state.user_language
 
         # Enrich citations with keywords/summaries
         try:
@@ -509,11 +501,7 @@ class ExerciseChatAgentPipeline(
             state: The current pipeline execution state.
             result: The final result string.
         """
-        user_language = (
-            state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
-            else "en"
-        )
+        user_language = state.user_language
 
         try:
             if result:

@@ -55,6 +55,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     tokens: List[TokenUsageDTO]
     local: bool
     tracing_context: Optional[TracingContext]
+    user_language: str
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -528,6 +529,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
+        )
+        # Extract user language once for the entire pipeline execution
+        state.user_language = (
+            state.dto.user.lang_key
+            if state.dto.user and state.dto.user.lang_key
+            else "en"
         )
 
         # Set up LangFuse tracing context for this thread
