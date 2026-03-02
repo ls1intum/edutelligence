@@ -100,7 +100,7 @@ Edit `llm_config.local.yml` and add your API keys. You need to configure **three
 
 1. **Chat models** (required) — for all pipeline conversations
 2. **Embedding models** (required) — for RAG vector storage and retrieval
-3. **Reranker models** (optional) — for improved retrieval quality
+3. **Reranker models** (optional) — required for course content features (lecture retrieval)
 
 **OpenAI chat model example:**
 
@@ -260,6 +260,9 @@ docker compose -f docker/pyris-dev.yml up --build
 This builds Pyris from source, starts it alongside Weaviate, and mounts your `application.local.yml` and
 `llm_config.local.yml` from the `iris/` directory.
 
+> **Note:** When running with Docker Compose, change `weaviate.host` in your `application.local.yml` from
+> `"localhost"` to `"weaviate"` (the Docker Compose service name).
+
 ### Production with Nginx
 
 1. Place your SSL certificate (`fullchain.pem`) and private key (`priv_key.pem`) in the paths specified in the compose
@@ -285,14 +288,16 @@ docker compose -f docker/pyris-production-internal.yml up -d
 
 ### Environment Variables
 
-| Variable                     | Default  | Description                                    |
-| ---------------------------- | -------- | ---------------------------------------------- |
-| `PYRIS_DOCKER_TAG`           | `latest` | Docker image tag for Pyris                     |
-| `PYRIS_APPLICATION_YML_FILE` | —        | Path to your `application.yml`                 |
-| `PYRIS_LLM_CONFIG_YML_FILE`  | —        | Path to your `llm_config.yml`                  |
-| `PYRIS_PORT`                 | `8000`   | Host port for Pyris (production-internal only) |
-| `WEAVIATE_PORT`              | `8001`   | Host port for Weaviate REST API                |
-| `WEAVIATE_GRPC_PORT`         | `50051`  | Host port for Weaviate gRPC                    |
+| Variable                               | Default  | Description                                           |
+| -------------------------------------- | -------- | ----------------------------------------------------- |
+| `PYRIS_DOCKER_TAG`                     | `latest` | Docker image tag for Pyris                            |
+| `PYRIS_APPLICATION_YML_FILE`           | —        | Path to your `application.yml`                        |
+| `PYRIS_LLM_CONFIG_YML_FILE`            | —        | Path to your `llm_config.yml`                         |
+| `PYRIS_PORT`                           | `8000`   | Host port for Pyris (production-internal only)        |
+| `WEAVIATE_PORT`                        | `8001`   | Host port for Weaviate REST API                       |
+| `WEAVIATE_GRPC_PORT`                   | `50051`  | Host port for Weaviate gRPC                           |
+| `NGINX_PROXY_SSL_CERTIFICATE_PATH`     | —        | Path to SSL certificate (`fullchain.pem`), Nginx only |
+| `NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH` | —        | Path to SSL private key (`priv_key.pem`), Nginx only  |
 
 ### Managing Containers
 
