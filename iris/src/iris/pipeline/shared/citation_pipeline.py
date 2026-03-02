@@ -79,7 +79,7 @@ class CitationPipeline(SubPipeline):
     def __str__(self):
         return f"{self.__class__.__name__}()"
 
-    def restore_simple_citations_to_full_format(
+    def _restore_simple_citations_to_full_format(
         self,
         answer: str,
         citation_content_map: dict[int, dict],
@@ -311,7 +311,7 @@ class CitationPipeline(SubPipeline):
         }
 
         # Step 0: Restore simple citations to full format before processing
-        answer = self.restore_simple_citations_to_full_format(
+        answer = self._restore_simple_citations_to_full_format(
             answer, citation_content_map
         )
 

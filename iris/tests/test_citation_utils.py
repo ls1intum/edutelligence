@@ -1,6 +1,6 @@
 """Tests for citation utilities."""
 
-from src.iris.pipeline.shared.citation_utils import (
+from iris.pipeline.shared.citation_utils import (
     build_faq_citation_id,
     build_lecture_citation_id,
 )
