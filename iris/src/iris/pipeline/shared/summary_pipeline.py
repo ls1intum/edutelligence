@@ -29,11 +29,9 @@ class SummaryPipeline(SubPipeline):
         super().__init__(implementation_id="summary_pipeline")
         # Set the langchain chat model
         request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-3.5-turbo"
+            version="gpt-oss:120b" if local else "gpt-5-nano"
         )
-        self.llm = IrisLangchainCompletionModel(
-            request_handler=request_handler, max_tokens=1000
-        )
+        self.llm = IrisLangchainCompletionModel(request_handler=request_handler)
         # Load the prompt from a file
         dirname = os.path.dirname(__file__)
         with open(

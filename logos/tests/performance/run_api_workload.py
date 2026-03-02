@@ -34,7 +34,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from string import Template
 from typing import Dict, List, Optional, Sequence
 
 import httpx
@@ -46,6 +45,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import ScalarFormatter, MaxNLocator
 
 
 @dataclass(slots=True)
@@ -87,8 +87,8 @@ class RequestResult:
 @dataclass(slots=True)
 class LogRecord:
     log_id: int
+    request_id: Optional[str]
     request_ts: datetime
-    forward_ts: Optional[datetime]
     ttft_ts: Optional[datetime]
     response_ts: Optional[datetime]
     provider_id: Optional[int]
@@ -96,6 +96,12 @@ class LogRecord:
     model_id: Optional[int]
     model_name: Optional[str]
     response_payload: Optional[dict]
+    # Scheduling metrics from request_events (joined by request_id)
+    enqueue_ts: Optional[datetime] = None
+    scheduled_ts: Optional[datetime] = None
+    complete_ts: Optional[datetime] = None
+    cold_start: Optional[bool] = None
+    result_status: Optional[str] = None
 
     @property
     def ttft_ms(self) -> Optional[float]:
@@ -107,6 +113,27 @@ class LogRecord:
     def total_latency_ms(self) -> Optional[float]:
         if self.response_ts and self.request_ts:
             return (self.response_ts - self.request_ts).total_seconds() * 1000
+        return None
+
+    @property
+    def queue_wait_ms(self) -> Optional[float]:
+        """Time spent waiting in queue (enqueue to scheduled)."""
+        if self.enqueue_ts and self.scheduled_ts:
+            return (self.scheduled_ts - self.enqueue_ts).total_seconds() * 1000
+        return None
+
+    @property
+    def processing_ms(self) -> Optional[float]:
+        """Time spent processing (scheduled to complete)."""
+        if self.scheduled_ts and self.complete_ts:
+            return (self.complete_ts - self.scheduled_ts).total_seconds() * 1000
+        return None
+
+    @property
+    def total_time_ms(self) -> Optional[float]:
+        """Total time from enqueue to complete."""
+        if self.enqueue_ts and self.complete_ts:
+            return (self.complete_ts - self.enqueue_ts).total_seconds() * 1000
         return None
 
 
@@ -245,18 +272,24 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 """
                 SELECT
                     le.id,
+                    le.request_id,
                     le.timestamp_request,
-                    le.timestamp_forwarding,
                     le.time_at_first_token,
                     le.timestamp_response,
                     le.provider_id,
                     providers.name AS provider_name,
                     le.model_id,
                     models.name AS model_name,
-                    le.response_payload
+                    le.response_payload,
+                    re.enqueue_ts,
+                    re.scheduled_ts,
+                    re.request_complete_ts,
+                    re.cold_start,
+                    re.result_status
                 FROM log_entry le
                 LEFT JOIN providers ON le.provider_id = providers.id
                 LEFT JOIN models ON le.model_id = models.id
+                LEFT JOIN request_events re ON re.request_id = le.request_id
                 WHERE le.process_id = :pid
                   AND le.id > :start_id
                 ORDER BY le.id ASC
@@ -276,8 +309,8 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
         records.append(
             LogRecord(
                 log_id=row.id,
+                request_id=row.request_id,
                 request_ts=row.timestamp_request,
-                forward_ts=row.timestamp_forwarding,
                 ttft_ts=row.time_at_first_token,
                 response_ts=row.timestamp_response,
                 provider_id=row.provider_id,
@@ -285,6 +318,11 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 model_id=row.model_id,
                 model_name=row.model_name,
                 response_payload=payload,
+                enqueue_ts=row.enqueue_ts,
+                scheduled_ts=row.scheduled_ts,
+                complete_ts=row.request_complete_ts,
+                cold_start=row.cold_start,
+                result_status=row.result_status,
             )
         )
     return records
@@ -336,7 +374,7 @@ def extract_token_count(payload: Optional[dict]) -> Optional[int]:
             return completion_tokens
 
     # Alternative fields
-    for key in ("output_tokens", "tokens_generated", "num_tokens"):
+    for key in ("output_tokens", "tokens_generated", "num_tokens", "eval_count", "completion_tokens"):
         value = payload.get(key)
         if isinstance(value, int):
             return value
@@ -366,6 +404,9 @@ def build_rows(
     ttft_values: List[float] = []
     tpot_values: List[float] = []
     latency_values: List[float] = []
+    queue_wait_values: List[float] = []
+    processing_values: List[float] = []
+    scheduler_total_values: List[float] = []
     successes = 0
 
     missing_logs = max(0, len(results) - len(logs))
@@ -382,10 +423,16 @@ def build_rows(
         log_id: Optional[int] = None
         tokens: Optional[int] = None
         tpot: Optional[float] = None
+        queue_wait: Optional[float] = None
+        processing_ms: Optional[float] = None
+        scheduler_total: Optional[float] = None
 
         if log is not None:
             ttft = log.ttft_ms
             total_latency = log.total_latency_ms
+            queue_wait = log.queue_wait_ms
+            processing_ms = log.processing_ms
+            scheduler_total = log.total_time_ms
             provider_id = log.provider_id
             provider_name = log.provider_name
             model_id = log.model_id
@@ -404,6 +451,12 @@ def build_rows(
                 tpot_values.append(tpot)
             if total_latency is not None:
                 latency_values.append(total_latency)
+            if queue_wait is not None:
+                queue_wait_values.append(queue_wait)
+            if processing_ms is not None:
+                processing_values.append(processing_ms)
+            if scheduler_total is not None:
+                scheduler_total_values.append(scheduler_total)
 
         if result.status_code and result.status_code < 400:
             successes += 1
@@ -428,6 +481,11 @@ def build_rows(
             "tpot_ms": tpot,
             "tokens": tokens,
             "total_latency_ms": total_latency,
+            "queue_wait_ms": queue_wait,
+            "processing_ms": processing_ms,
+            "scheduler_total_ms": scheduler_total,
+            "_request_ts": log.request_ts if log is not None else None,
+            "_response_ts": log.response_ts if log is not None else None,
             "response_text": response_text,
             "error": error_text,
         }
@@ -456,6 +514,21 @@ def build_rows(
     p95_latency = calculate_percentile(latency_values, 95)
     p99_latency = calculate_percentile(latency_values, 99)
 
+    avg_queue_wait = sum(queue_wait_values) / len(queue_wait_values) if queue_wait_values else math.nan
+    p50_queue_wait = calculate_percentile(queue_wait_values, 50)
+    p95_queue_wait = calculate_percentile(queue_wait_values, 95)
+    p99_queue_wait = calculate_percentile(queue_wait_values, 99)
+
+    avg_processing = sum(processing_values) / len(processing_values) if processing_values else math.nan
+    p50_processing = calculate_percentile(processing_values, 50)
+    p95_processing = calculate_percentile(processing_values, 95)
+    p99_processing = calculate_percentile(processing_values, 99)
+
+    avg_scheduler_total = sum(scheduler_total_values) / len(scheduler_total_values) if scheduler_total_values else math.nan
+    p50_scheduler_total = calculate_percentile(scheduler_total_values, 50)
+    p95_scheduler_total = calculate_percentile(scheduler_total_values, 95)
+    p99_scheduler_total = calculate_percentile(scheduler_total_values, 99)
+
     summary_stats = {
         "total_requests": total_requests,
         "successful_requests": successes,
@@ -474,6 +547,18 @@ def build_rows(
         "p50_latency_ms": p50_latency,
         "p95_latency_ms": p95_latency,
         "p99_latency_ms": p99_latency,
+        "avg_queue_wait_ms": avg_queue_wait,
+        "p50_queue_wait_ms": p50_queue_wait,
+        "p95_queue_wait_ms": p95_queue_wait,
+        "p99_queue_wait_ms": p99_queue_wait,
+        "avg_processing_ms": avg_processing,
+        "p50_processing_ms": p50_processing,
+        "p95_processing_ms": p95_processing,
+        "p99_processing_ms": p99_processing,
+        "avg_scheduler_total_ms": avg_scheduler_total,
+        "p50_scheduler_total_ms": p50_scheduler_total,
+        "p95_scheduler_total_ms": p95_scheduler_total,
+        "p99_scheduler_total_ms": p99_scheduler_total,
     }
 
     return summary_stats, detail_records, missing_logs
@@ -519,6 +604,24 @@ def write_summary_csv(path: Path, summary_stats: Dict[str, object]) -> None:
         writer.writerow(["p95_total_latency", fmt(summary_stats["p95_latency_ms"]), "ms"])
         writer.writerow(["p99_total_latency", fmt(summary_stats["p99_latency_ms"]), "ms"])
 
+        # Queue wait metrics
+        writer.writerow(["avg_queue_wait", fmt(summary_stats["avg_queue_wait_ms"]), "ms"])
+        writer.writerow(["p50_queue_wait", fmt(summary_stats["p50_queue_wait_ms"]), "ms"])
+        writer.writerow(["p95_queue_wait", fmt(summary_stats["p95_queue_wait_ms"]), "ms"])
+        writer.writerow(["p99_queue_wait", fmt(summary_stats["p99_queue_wait_ms"]), "ms"])
+
+        # Processing metrics (scheduled to complete)
+        writer.writerow(["avg_processing", fmt(summary_stats["avg_processing_ms"]), "ms"])
+        writer.writerow(["p50_processing", fmt(summary_stats["p50_processing_ms"]), "ms"])
+        writer.writerow(["p95_processing", fmt(summary_stats["p95_processing_ms"]), "ms"])
+        writer.writerow(["p99_processing", fmt(summary_stats["p99_processing_ms"]), "ms"])
+
+        # Scheduler total metrics (enqueue to complete)
+        writer.writerow(["avg_scheduler_total", fmt(summary_stats["avg_scheduler_total_ms"]), "ms"])
+        writer.writerow(["p50_scheduler_total", fmt(summary_stats["p50_scheduler_total_ms"]), "ms"])
+        writer.writerow(["p95_scheduler_total", fmt(summary_stats["p95_scheduler_total_ms"]), "ms"])
+        writer.writerow(["p99_scheduler_total", fmt(summary_stats["p99_scheduler_total_ms"]), "ms"])
+
 
 def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> None:
     """Write a detailed CSV with individual request data."""
@@ -537,6 +640,9 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
         "tpot_ms",
         "tokens",
         "total_latency_ms",
+        "queue_wait_ms",
+        "processing_ms",
+        "scheduler_total_ms",
         "response_text",
         "error",
     ]
@@ -565,45 +671,115 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
                 fmt(rec.get("tpot_ms")),
                 fmt(rec.get("tokens")),
                 fmt(rec.get("total_latency_ms")),
+                fmt(rec.get("queue_wait_ms")),
+                fmt(rec.get("processing_ms")),
+                fmt(rec.get("scheduler_total_ms")),
                 rec.get("response_text", ""),
                 rec.get("error", ""),
             ])
 
 
 def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, object]]) -> None:
+    def format_y_axis(ax) -> None:
+        formatter = ScalarFormatter(useOffset=False)
+        formatter.set_scientific(False)
+        ax.yaxis.set_major_formatter(formatter)
+
     successful = [
         rec for rec in detail_records
         if rec["response_text"] and isinstance(rec["total_latency_ms"], (int, float)) and isinstance(rec["client_duration_ms"], (int, float))
     ]
-    if not successful:
+    if successful:
+        request_labels = [rec["request_id"] for rec in successful]
+        total_latencies = [rec["total_latency_ms"] for rec in successful]
+        ttfts = [rec["ttft_ms"] if isinstance(rec["ttft_ms"], (int, float)) else 0.0 for rec in successful]
+        client_durations = [rec["client_duration_ms"] for rec in successful]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.bar(request_labels, total_latencies, label="Total latency (ms)", color="#4C72B0")
+        ax.bar(request_labels, ttfts, label="TTFT (ms)", color="#55A868")
+        ax.set_xlabel("Request ID")
+        ax.set_ylabel("Milliseconds")
+        ax.set_title("Latency Breakdown (Successful Requests)")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        format_y_axis(ax)
+        ax.tick_params(axis="x", labelbottom=False)
+        fig.tight_layout()
+        fig.savefig(path.with_suffix(".png"))
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(request_labels, client_durations, marker="o", linewidth=2, label="Client duration (ms)", color="#C44E52")
+        ax.set_xlabel("Request ID")
+        ax.set_ylabel("Milliseconds")
+        ax.set_title("Client Duration per Successful Request")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        format_y_axis(ax)
+        ax.tick_params(axis="x", labelbottom=False)
+        fig.tight_layout()
+        fig.savefig(path.with_name(path.stem + "_client_duration.png"))
+        plt.close(fig)
+
+    scheduler_records = [
+        rec for rec in detail_records
+        if isinstance(rec.get("queue_wait_ms"), (int, float)) and isinstance(rec.get("processing_ms"), (int, float))
+    ]
+    if not scheduler_records:
         return
 
-    request_labels = [rec["request_id"] for rec in successful]
-    total_latencies = [rec["total_latency_ms"] for rec in successful]
-    ttfts = [rec["ttft_ms"] if isinstance(rec["ttft_ms"], (int, float)) else 0.0 for rec in successful]
-    client_durations = [rec["client_duration_ms"] for rec in successful]
+    scheduler_labels = [rec["request_id"] for rec in scheduler_records]
+    queue_waits = [rec["queue_wait_ms"] for rec in scheduler_records]
+    processing_times = [rec["processing_ms"] for rec in scheduler_records]
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(request_labels, total_latencies, label="Total latency (ms)", color="#4C72B0")
-    ax.bar(request_labels, ttfts, label="TTFT (ms)", color="#55A868")
+    ax.bar(scheduler_labels, queue_waits, label="Queue wait (ms)", color="#8172B2")
+    ax.bar(
+        scheduler_labels,
+        processing_times,
+        bottom=queue_waits,
+        label="Processing (ms)",
+        color="#CCB974",
+    )
     ax.set_xlabel("Request ID")
     ax.set_ylabel("Milliseconds")
-    ax.set_title("Latency Breakdown (Successful Requests)")
+    ax.set_title("Scheduler Queue + Processing")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
+    format_y_axis(ax)
+    ax.tick_params(axis="x", labelbottom=False)
     fig.tight_layout()
-    fig.savefig(path.with_suffix(".png"))
+    fig.savefig(path.with_name(path.stem + "_queue_processing.png"))
     plt.close(fig)
 
+    success_times = []
+    for rec in detail_records:
+        status = rec.get("http_status")
+        if not isinstance(status, int) or status >= 400:
+            continue
+        ts = rec.get("_response_ts") or rec.get("_request_ts")
+        if ts is not None:
+            success_times.append(ts)
+
+    if not success_times:
+        return
+
+    success_times.sort()
+    start_ts = success_times[0]
+    elapsed_s = [(ts - start_ts).total_seconds() for ts in success_times]
+    cumulative = list(range(1, len(elapsed_s) + 1))
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(request_labels, client_durations, marker="o", linewidth=2, label="Client duration (ms)", color="#C44E52")
-    ax.set_xlabel("Request ID")
-    ax.set_ylabel("Milliseconds")
-    ax.set_title("Client Duration per Successful Request")
+    ax.plot(elapsed_s, cumulative, marker="o", linewidth=2, color="#4C72B0")
+    ax.set_xlabel("Time since first response (s)")
+    ax.set_ylabel("Cumulative successful requests")
+    ax.set_title("Cumulative Success Over Time")
     ax.grid(True, alpha=0.3)
-    ax.legend()
+    format_y_axis(ax)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
     fig.tight_layout()
-    fig.savefig(path.with_name(path.stem + "_client_duration.png"))
+    fig.savefig(path.with_name(path.stem + "_cumulative_success.png"))
     plt.close(fig)
 
 
@@ -611,8 +787,9 @@ async def run_workload(
     workload: Sequence[WorkloadEntry],
     logos_key: str,
     base_url: str,
+    request_timeout_s: float,
 ) -> List[RequestResult]:
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=request_timeout_s) as client:
         start_monotonic = asyncio.get_event_loop().time()
         tasks = [
             asyncio.create_task(dispatch_request(client, base_url, logos_key, entry, start_monotonic))
@@ -644,6 +821,12 @@ def main() -> None:
     parser.add_argument("--api-base", default="http://localhost:8080", help="Base URL for the Logos API.")
     parser.add_argument("--output", type=Path, default=Path("api_benchmark.csv"), help="Destination CSV file.")
     parser.add_argument("--latency-slo-ms", type=float, default=10_000.0, help="Latency SLO threshold in milliseconds.")
+    parser.add_argument(
+        "--request-timeout-s",
+        type=float,
+        default=1200.0,
+        help="Per-request timeout in seconds.",
+    )
     args = parser.parse_args()
 
     workload = parse_workload(args.workload)
@@ -655,7 +838,7 @@ def main() -> None:
 
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
-        results = asyncio.run(run_workload(workload, args.logos_key, args.api_base))
+        results = asyncio.run(run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s))
         logs = wait_for_log_records(
             process_id,
             start_log_id,

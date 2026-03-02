@@ -274,27 +274,9 @@ CREATE TABLE providers (
 );
 ```
 
-### model_provider_config table
-
-Per-model overrides for cold start thresholds and observed statistics:
-
-```sql
-CREATE TABLE model_provider_config (
-    model_id INTEGER NOT NULL,
-    provider_id INTEGER NOT NULL,
-    cold_start_threshold_ms REAL DEFAULT 1000.0,
-    parallel_capacity INTEGER DEFAULT NULL,
-    keep_alive_seconds INTEGER DEFAULT NULL,
-    observed_avg_cold_load_ms REAL DEFAULT NULL,
-    observed_avg_warm_load_ms REAL DEFAULT NULL,
-    PRIMARY KEY (model_id, provider_id)
-);
-```
-
 **Configuration Hierarchy:**
-1. `model_provider_config` (per-model overrides)
-2. `providers` table (provider defaults)
-3. Hardcoded defaults in `OllamaDataProvider`
+1. `providers` table (provider defaults)
+2. Hardcoded defaults in `OllamaDataProvider`
 
 ## Two-URL Architecture
 

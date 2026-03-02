@@ -102,7 +102,7 @@ class Executor:
                     url,
                     headers=headers,
                     json=payload,
-                    timeout=120,  # Increased to 2 minutes for cold starts
+                    timeout=None,  # No timeout to handle long-running LLM requests and cold starts
                 )
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")

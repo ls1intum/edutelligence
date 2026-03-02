@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Set, Tuple, Optional
+from typing import Any, Dict, Set, Optional
 import grpc
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -33,18 +35,12 @@ from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.monitoring.ollama_monitor import OllamaProviderMonitor
 from scripts import setup_proxy
 
+_SERVER_START_TIME = int(time.time())
+
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _ollama_monitor: Optional[OllamaProviderMonitor] = None
-
-OLLAMA_PROCESSING_TIMEOUT_S = 60
-
-
-def _get_processing_timeout_s(scheduling_stats: Optional[Dict[str, Any]]) -> Optional[int]:
-    if scheduling_stats and scheduling_stats.get("provider_type") == "ollama":
-        return OLLAMA_PROCESSING_TIMEOUT_S
-    return None
 
 
 def _record_azure_rate_limits(
@@ -298,11 +294,12 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
                     provider_id=provider_id,
                 )
             elif provider_type == "azure":
+                endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
                 _azure_facade.register_model(
                     model_id=model_id,
                     provider_name=provider_name,
                     model_name=model_name,
-                    model_endpoint=model_info["endpoint"],
+                    model_endpoint=endpoint or "",
                     provider_id=provider_id,
                 )
             else:
@@ -338,7 +335,6 @@ def classifier() -> ClassificationManager:
                 mdls.append({
                     "id": tpl["id"],
                     "name": tpl["name"],
-                    "endpoint": tpl["endpoint"],
                     "weight_privacy": tpl["weight_privacy"],
                     "weight_latency": tpl["weight_latency"],
                     "weight_accuracy": tpl["weight_accuracy"],
@@ -376,7 +372,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
         last_chunk = None
         error_message = None
         timed_out = False
-        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
+        ttft_recorded = False
 
         try:
             def process_headers(headers: dict):
@@ -392,59 +388,34 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
             # Prepare headers and payload using context resolver
             headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-            if processing_timeout_s:
-                async with asyncio.timeout(processing_timeout_s):
-                    async for chunk in _pipeline.executor.execute_streaming(
-                        context.forward_url,
-                        headers,
-                        prepared_payload,
-                        on_headers=process_headers,
-                    ):
-                        yield chunk
+            async for chunk in _pipeline.executor.execute_streaming(
+                context.forward_url,
+                headers,
+                prepared_payload,
+                on_headers=process_headers,
+            ):
+                yield chunk
+                if chunk and not ttft_recorded:
+                    if log_id:
+                        with DBManager() as db:
+                            db.set_time_at_first_token(log_id)
+                    ttft_recorded = True
 
-                        # Parse chunk for logging
-                        line = chunk.decode().strip()
-                        if line.startswith("data: ") and line != "data: [DONE]":
-                            try:
-                                blob = json.loads(line[6:])
-                                last_chunk = blob  # Keep track of last chunk (may have usage)
-                                if first_chunk is None:
-                                    first_chunk = blob
-                                if "choices" in blob and blob["choices"]:
-                                    delta = blob["choices"][0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        full_text += content
-                            except json.JSONDecodeError:
-                                pass
-            else:
-                async for chunk in _pipeline.executor.execute_streaming(
-                    context.forward_url,
-                    headers,
-                    prepared_payload,
-                    on_headers=process_headers,
-                ):
-                    yield chunk
-
-                    # Parse chunk for logging
-                    line = chunk.decode().strip()
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            blob = json.loads(line[6:])
-                            last_chunk = blob  # Keep track of last chunk (may have usage)
-                            if first_chunk is None:
-                                first_chunk = blob
-                            if "choices" in blob and blob["choices"]:
-                                delta = blob["choices"][0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    full_text += content
-                        except json.JSONDecodeError:
-                            pass
-        except asyncio.TimeoutError:
-            timed_out = True
-            error_message = f"Processing timeout after {processing_timeout_s}s"
-            logger.warning("Streaming request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
+                # Parse chunk for logging
+                line = chunk.decode().strip()
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        blob = json.loads(line[6:])
+                        last_chunk = blob  # Keep track of last chunk (may have usage)
+                        if first_chunk is None:
+                            first_chunk = blob
+                        if "choices" in blob and blob["choices"]:
+                            delta = blob["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_text += content
+                    except json.JSONDecodeError:
+                        pass
         except Exception as e:
             error_message = str(e)
             raise e
@@ -457,12 +428,22 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
 
                 # Build response payload
                 response_payload = {"content": full_text}
+                base_payload = None
                 if first_chunk:
-                    response_payload = first_chunk.copy()
+                    base_payload = first_chunk.copy()
+                if last_chunk:
+                    if base_payload is None:
+                        base_payload = last_chunk.copy()
+                    else:
+                        for key, value in last_chunk.items():
+                            if key not in base_payload:
+                                base_payload[key] = value
+                if base_payload:
+                    response_payload = base_payload
                     if "choices" in response_payload and response_payload["choices"]:
                         response_payload["choices"][0]["delta"] = {"content": full_text}
-                    if usage:
-                        response_payload["usage"] = usage
+                if usage:
+                    response_payload["usage"] = usage
 
                 with DBManager() as db:
                     db.set_response_payload(
@@ -473,6 +454,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         usage_tokens,
                         policy_id,
                         classification_stats,
+                        request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
                         queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
                         utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     )
@@ -510,29 +492,10 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-        processing_timeout_s = _get_processing_timeout_s(scheduling_stats)
         timed_out = False
         error_message = None
 
-        try:
-            if processing_timeout_s:
-                exec_result = await asyncio.wait_for(
-                    _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload),
-                    timeout=processing_timeout_s,
-                )
-            else:
-                exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
-        except asyncio.TimeoutError:
-            timed_out = True
-            error_message = f"Processing timeout after {processing_timeout_s}s"
-            logger.warning("Sync request timed out after %ss (model_id=%s)", processing_timeout_s, model_id)
-            exec_result = ExecutionResult(
-                success=False,
-                response={"error": error_message},
-                error=error_message,
-                usage={},
-                is_streaming=False,
-            )
+        exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -560,6 +523,8 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
             usage_tokens = extract_token_usage(usage) if usage else {}
 
             with DBManager() as db:
+                db.set_time_at_first_token(log_id)
+                db.set_response_timestamp(log_id)
                 db.set_response_payload(
                     log_id,
                     response_payload,
@@ -568,6 +533,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     usage_tokens,
                     policy_id,
                     classification_stats,
+                    request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
                     queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
                     utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                 )
@@ -652,12 +618,22 @@ def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: di
                 usage_tokens = extract_token_usage(usage) if usage else {}
 
                 response_payload = {"content": full_text}
+                base_payload = None
                 if first_chunk:
-                    response_payload = first_chunk.copy()
+                    base_payload = first_chunk.copy()
+                if last_chunk:
+                    if base_payload is None:
+                        base_payload = last_chunk.copy()
+                    else:
+                        for key, value in last_chunk.items():
+                            if key not in base_payload:
+                                base_payload[key] = value
+                if base_payload:
+                    response_payload = base_payload
                     if "choices" in response_payload and response_payload["choices"]:
                         response_payload["choices"][0]["delta"] = {"content": full_text}
-                    if usage:
-                        response_payload["usage"] = usage
+                if usage:
+                    response_payload["usage"] = usage
 
                 with DBManager() as db:
                     if ttft is None:
@@ -1546,6 +1522,75 @@ async def get_ollama_vram_stats_options():
             "Access-Control-Allow-Headers": "Content-Type, logos_key",
         }
     )
+
+
+# ============================================================================
+# OPENAI-COMPATIBLE MODEL LISTING
+# ============================================================================
+
+@app.get("/v1/models")
+async def list_models(request: Request):
+    """
+    List models accessible to the authenticated user (OpenAI-compatible).
+
+    Returns an OpenAI-compatible response listing all models the user's
+    current profile has access to via profile_model_permissions.
+
+    Returns:
+        JSONResponse matching the OpenAI GET /v1/models spec.
+    """
+    from logos.auth import authenticate_with_profile
+    auth = authenticate_with_profile(dict(request.headers))
+
+    with DBManager() as db:
+        models = db.get_models_for_profile(auth.profile_id)
+
+    data = [
+        {
+            "id": model["name"],
+            "object": "model",
+            "created": _SERVER_START_TIME,
+            "owned_by": "logos",
+        }
+        for model in models
+    ]
+
+    return JSONResponse(content={"object": "list", "data": data})
+
+
+@app.get("/v1/models/{model_id:path}")
+async def retrieve_model(model_id: str, request: Request):
+    """
+    Retrieve a single model by name (OpenAI-compatible).
+
+    Verifies the authenticated user has access to the requested model
+    through their profile's model permissions.
+
+    Params:
+        model_id: The model name (used as the OpenAI-style model id).
+        request: Incoming request.
+
+    Returns:
+        JSONResponse matching the OpenAI GET /v1/models/{model} spec.
+
+    Raises:
+        HTTPException(404): Model not found or user lacks access.
+    """
+    from logos.auth import authenticate_with_profile
+    auth = authenticate_with_profile(dict(request.headers))
+
+    with DBManager() as db:
+        model = db.get_model_for_profile(auth.profile_id, model_id)
+
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found or access denied")
+
+    return JSONResponse(content={
+        "id": model["name"],
+        "object": "model",
+        "created": _SERVER_START_TIME,
+        "owned_by": "logos",
+    })
 
 
 # ============================================================================

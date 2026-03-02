@@ -243,11 +243,20 @@ class OpenAIChatModel(ChatModel):
                 try:
                     params = {"model": self.model, "messages": messages}
 
-                    if arguments.temperature is not None:
-                        params["temperature"] = arguments.temperature
+                    # GPT-5 reasoning models do not support temperature,
+                    # top_p, or max_tokens.  Skip these for the entire
+                    # GPT-5/o-series family to be safe.
+                    model_lower = self.model.lower()
+                    is_reasoning_model = (
+                        model_lower.startswith("gpt-5")
+                        or model_lower.startswith("gpt-o")
+                        or model_lower.startswith("o1")
+                        or model_lower.startswith("o3")
+                        or model_lower.startswith("o4")
+                    )
 
-                    if arguments.max_tokens is not None:
-                        params["max_tokens"] = arguments.max_tokens
+                    if arguments.temperature is not None and not is_reasoning_model:
+                        params["temperature"] = arguments.temperature
 
                     if arguments.response_format == "JSON":
                         params["response_format"] = ResponseFormatJSONObject(
