@@ -290,11 +290,11 @@ def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
     Filter feedbacks based on priority to keep count in a manageable range.
     Removes feedbacks starting from lowest priority, only as many as needed to reach the limit.
 
-    Priority order (lowest to highest): NICE TO HAVE < MINOR ISSUE < MAJOR ISSUE < CRITICAL ISSUE
+    Priority order (lowest to highest): other < NICE TO HAVE < MINOR < MAJOR < CRITICAL
 
-    - Over 25 feedbacks: Remove MAJOR, MINOR, NICE TO HAVE until reaching 25
-    - Over 20 feedbacks: Remove MINOR and NICE TO HAVE until reaching 20
-    - Over 15 feedbacks: Remove NICE TO HAVE until reaching 15
+    - Over 25 feedbacks: Remove other, MAJOR, MINOR, NICE TO HAVE until reaching 25
+    - Over 20 feedbacks: Remove other, MINOR and NICE TO HAVE until reaching 20
+    - Over 15 feedbacks: Remove other and NICE TO HAVE until reaching 15
     """
     total_count = len(feedbacks)
     
@@ -324,13 +324,13 @@ def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
     # Determine target limit based on current count
     if total_count > 25:
         target_limit = 25
-        removable_categories = [nice_to_have, minor, major]  # Order: lowest priority first
+        removable_categories = [other, nice_to_have, minor, major]  # Order: lowest priority first
     elif total_count > 20:
         target_limit = 20
-        removable_categories = [nice_to_have, minor]
+        removable_categories = [other, nice_to_have, minor]
     else:  # total_count > 15
         target_limit = 15
-        removable_categories = [nice_to_have]
+        removable_categories = [other, nice_to_have]
 
     # Calculate how many we need to remove
     to_remove = total_count - target_limit
