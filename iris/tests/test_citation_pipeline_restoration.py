@@ -1,5 +1,6 @@
 """Tests for citation restoration functionality in CitationPipeline."""
 
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,15 +35,22 @@ class TestCitationRestoration:
             }
         }
 
-        # The __call__ method should restore simple citations before enrichment
-        result = citation_pipeline(
-            answer=answer,
-            citation_content_map=citation_content_map,
-            user_language="en",
-        )
+        # Mock the keyword and summary generation
+        with patch.object(
+            citation_pipeline,
+            "_build_keyword_summary_map",
+            return_value={1: ("neural_networks", "Intro to neural networks")},
+        ):
+            # The __call__ method should restore simple citations before enrichment
+            result = citation_pipeline(
+                answer=answer,
+                citation_content_map=citation_content_map,
+                user_language="en",
+            )
 
-        # Result should have full citation format with keyword and summary
-        # Format: [cite:L:123:5::keyword:summary]
-        assert "[cite:L:123:5:" in result
-        assert "[cite:1]" not in result
-        # The citation should be enriched with keyword and summary (two more fields after page)
+            # Result should have full citation format with keyword and summary
+            # Format: [cite:L:123:5:start:end:keyword:summary]
+            assert "[cite:1]" not in result
+            assert "!1]" not in result
+            assert re.search(r"\[cite:L:123:5:[^!]*:[^:\]]+:[^:\]]+\]", result)
+            # The citation should be enriched with keyword and summary (two more fields after page)

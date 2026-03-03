@@ -533,7 +533,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # Extract user language once for the entire pipeline execution
         state.user_language = (
             state.dto.user.lang_key
-            if state.dto.user and state.dto.user.lang_key
+            if state.dto
+            and hasattr(state.dto, "user")
+            and state.dto.user
+            and hasattr(state.dto.user, "lang_key")
+            and state.dto.user.lang_key
             else "en"
         )
 

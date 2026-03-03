@@ -67,6 +67,8 @@ def create_tool_lecture_content_retrieval(
         for paragraph in lecture_content.lecture_unit_page_chunks:
             if not paragraph.page_text_content:
                 continue
+            if not paragraph.lecture_unit_id:
+                continue
             seq_num = citation_counter["next"]
             citation_counter["next"] += 1
             citation_id = build_lecture_citation_id(
@@ -89,6 +91,8 @@ def create_tool_lecture_content_retrieval(
         # Process transcriptions
         for paragraph in lecture_content.lecture_transcriptions:
             if not paragraph.segment_text:
+                continue
+            if not paragraph.lecture_unit_id:
                 continue
             seq_num = citation_counter["next"]
             citation_counter["next"] += 1
@@ -122,6 +126,8 @@ def create_tool_lecture_content_retrieval(
         # Process segments
         for paragraph in lecture_content.lecture_unit_segments:
             if not paragraph.segment_summary:
+                continue
+            if not paragraph.lecture_unit_id:
                 continue
             seq_num = citation_counter["next"]
             citation_counter["next"] += 1

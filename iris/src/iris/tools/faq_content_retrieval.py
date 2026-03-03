@@ -71,6 +71,8 @@ def create_tool_faq_content_retrieval(
             answer = faq.get(FaqSchema.QUESTION_ANSWER.value) or ""
             if not question and not answer:
                 continue
+            if not faq_id:
+                continue
             seq_num = citation_counter["next"]
             citation_counter["next"] += 1
             citation_id = build_faq_citation_id(faq_id, seq_num)

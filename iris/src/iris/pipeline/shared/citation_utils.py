@@ -8,7 +8,7 @@ def build_lecture_citation_id(
     page_number: Optional[int] = None,
     start_time_sec: Optional[int] = None,
     end_time_sec: Optional[int] = None,
-    citation_sequence_number: Optional[int] = None,
+    citation_sequence_number: int = 1,
 ) -> str:
     """Build lecture citation ID: [cite:L:<lecture_unit_id>:<page>:<start>:<end>!<seq>]."""
 
@@ -17,7 +17,7 @@ def build_lecture_citation_id(
 
     return (
         f"[cite:L:{fmt(lecture_unit_id)}:{fmt(page_number)}:"
-        f"{fmt(start_time_sec)}:{fmt(end_time_sec)}!{fmt(citation_sequence_number)}]"
+        f"{fmt(start_time_sec)}:{fmt(end_time_sec)}!{citation_sequence_number}]"
     )
 
 
