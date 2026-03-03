@@ -297,6 +297,7 @@ class CitationPipeline(SubPipeline):
             answer: The answer text with citation IDs (simplified [cite:N] or full format)
             citation_content_map: Pre-built citation map with {seq_num: {citation_id, content, ...}}
             user_language: The user's preferred language ("en" or "de")
+            **kwargs: Additional keyword arguments (accepted for interface compatibility, intentionally unused)
 
         Returns:
             Answer with citations enriched with keywords/summaries
@@ -326,10 +327,9 @@ class CitationPipeline(SubPipeline):
             answer = self._replace_cite_blocks_with_keyword_summary(
                 answer, keyword_summary_map
             )
-        except Exception as enrichment_error:
-            logger.error(
-                "Citation enrichment failed, returning citations without keyword/summary",
-                exc_info=enrichment_error,
+        except Exception:
+            logger.exception(
+                "Citation enrichment failed, returning citations without keyword/summary"
             )
 
         return answer

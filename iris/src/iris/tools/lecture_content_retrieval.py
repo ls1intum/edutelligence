@@ -167,9 +167,13 @@ def create_tool_lecture_content_retrieval(
             elif citation_data["type"] == "lecture_segment":
                 segments.append(formatted)
 
-        result = "Lecture slide content:\n" + "".join(pages)
-        result += "Lecture transcription content:\n" + "".join(transcriptions)
-        result += "Lecture segment content:\n" + "".join(segments)
+        result = ""
+        if pages:
+            result += "Lecture slide content:\n" + "".join(pages)
+        if transcriptions:
+            result += "Lecture transcription content:\n" + "".join(transcriptions)
+        if segments:
+            result += "Lecture segment content:\n" + "".join(segments)
 
         return result
 
