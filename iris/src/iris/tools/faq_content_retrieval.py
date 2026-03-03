@@ -84,8 +84,10 @@ def create_tool_faq_content_retrieval(
                 "faq_id": faq_id,
             }
 
-        # Store citation map
-        faq_storage["citation_content_map"] = citation_content_map
+        # Store citation map (merge with existing to preserve prior citations in case tool is called several times)
+        existing_map = faq_storage.get("citation_content_map", {})
+        existing_map.update(citation_content_map)
+        faq_storage["citation_content_map"] = existing_map
 
         # Format result string with simplified citation IDs for LLM
         # Full citation IDs are stored in citation_content_map for later restoration

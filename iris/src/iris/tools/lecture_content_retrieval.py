@@ -171,8 +171,10 @@ def create_tool_lecture_content_retrieval(
                 "end_time": None,
             }
 
-        # Store citation map
-        lecture_content_storage["citation_content_map"] = citation_content_map
+        # Store citation map (merge with existing to preserve prior citations in case tool is called several times)
+        existing_map = lecture_content_storage.get("citation_content_map", {})
+        existing_map.update(citation_content_map)
+        lecture_content_storage["citation_content_map"] = existing_map
 
         # Format result string with simplified citation IDs for LLM
         # Full citation IDs are stored in citation_content_map for later restoration
