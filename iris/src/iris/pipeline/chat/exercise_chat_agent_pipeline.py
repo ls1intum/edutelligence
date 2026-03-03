@@ -206,8 +206,8 @@ class ExerciseChatAgentPipeline(
         if not hasattr(state, "faq_storage"):
             setattr(state, "faq_storage", {})
 
-        lecture_content_storage = getattr(state, "lecture_content_storage")
-        faq_storage = getattr(state, "faq_storage")
+        lecture_content_storage = getattr(state, "lecture_content_storage", {})
+        faq_storage = getattr(state, "faq_storage", {})
 
         # Create shared citation counter for unique sequence numbers
         citation_counter = {"next": 1}

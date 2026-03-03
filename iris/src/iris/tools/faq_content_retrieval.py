@@ -66,9 +66,10 @@ def create_tool_faq_content_retrieval(
         citation_content_map = {}
 
         for faq in retrieved_faqs:
-            faq_id = faq.get(FaqSchema.FAQ_ID.value)
-            question = faq.get(FaqSchema.QUESTION_TITLE.value) or ""
-            answer = faq.get(FaqSchema.QUESTION_ANSWER.value) or ""
+            faq_props = faq.get("properties", {})
+            faq_id = faq_props.get(FaqSchema.FAQ_ID.value)
+            question = faq_props.get(FaqSchema.QUESTION_TITLE.value) or ""
+            answer = faq_props.get(FaqSchema.QUESTION_ANSWER.value) or ""
             if not question and not answer:
                 continue
             if not faq_id:

@@ -128,7 +128,8 @@ class LectureChatPipeline(
 
         query_text = self.get_text_of_latest_user_message(state)
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -145,7 +146,8 @@ class LectureChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,

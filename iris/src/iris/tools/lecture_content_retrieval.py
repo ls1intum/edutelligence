@@ -2,9 +2,28 @@
 
 from typing import Any, Callable, Dict, List, Optional
 
+from iris.common.logging_config import get_logger
+
 from ..pipeline.shared.citation_utils import build_lecture_citation_id
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
+
+logger = get_logger(__name__)
+
+
+def _get_next_citation_number(citation_counter: Dict[str, int]) -> int:
+    """
+    Get next citation sequence number and increment counter.
+
+    Args:
+        citation_counter: Shared counter dict with 'next' key
+
+    Returns:
+        The next sequence number
+    """
+    seq_num = citation_counter.setdefault("next", 1)
+    citation_counter["next"] += 1
+    return seq_num
 
 
 def create_tool_lecture_content_retrieval(
@@ -69,8 +88,7 @@ def create_tool_lecture_content_retrieval(
                 continue
             if not paragraph.lecture_unit_id:
                 continue
-            seq_num = citation_counter.setdefault("next", 1)
-            citation_counter["next"] += 1
+            seq_num = _get_next_citation_number(citation_counter)
             citation_id = build_lecture_citation_id(
                 paragraph.lecture_unit_id,
                 paragraph.page_number,
@@ -94,18 +112,24 @@ def create_tool_lecture_content_retrieval(
                 continue
             if not paragraph.lecture_unit_id:
                 continue
-            seq_num = citation_counter.setdefault("next", 1)
-            citation_counter["next"] += 1
-            start_time = (
-                int(paragraph.segment_start_time)
-                if paragraph.segment_start_time is not None
-                else None
-            )
-            end_time = (
-                int(paragraph.segment_end_time)
-                if paragraph.segment_end_time is not None
-                else None
-            )
+            seq_num = _get_next_citation_number(citation_counter)
+            try:
+                start_time = (
+                    int(paragraph.segment_start_time)
+                    if paragraph.segment_start_time is not None
+                    else None
+                )
+                end_time = (
+                    int(paragraph.segment_end_time)
+                    if paragraph.segment_end_time is not None
+                    else None
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    "Invalid time value in transcription, skipping timestamps: %s", e
+                )
+                start_time = None
+                end_time = None
             citation_id = build_lecture_citation_id(
                 paragraph.lecture_unit_id,
                 paragraph.page_number,
@@ -129,8 +153,7 @@ def create_tool_lecture_content_retrieval(
                 continue
             if not paragraph.lecture_unit_id:
                 continue
-            seq_num = citation_counter.setdefault("next", 1)
-            citation_counter["next"] += 1
+            seq_num = _get_next_citation_number(citation_counter)
             citation_id = build_lecture_citation_id(
                 paragraph.lecture_unit_id,
                 paragraph.page_number,

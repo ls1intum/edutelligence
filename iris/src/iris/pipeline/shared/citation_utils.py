@@ -11,13 +11,11 @@ def build_lecture_citation_id(
     citation_sequence_number: int = 1,
 ) -> str:
     """Build lecture citation ID: [cite:L:<lecture_unit_id>:<page>:<start>:<end>!<seq>]."""
-
-    def fmt(val):
-        return "" if val is None else str(val)
-
     return (
-        f"[cite:L:{fmt(lecture_unit_id)}:{fmt(page_number)}:"
-        f"{fmt(start_time_sec)}:{fmt(end_time_sec)}!{citation_sequence_number}]"
+        f"[cite:L:{lecture_unit_id}:"
+        f"{"" if page_number is None else page_number}:"
+        f"{"" if start_time_sec is None else start_time_sec}:"
+        f"{"" if end_time_sec is None else end_time_sec}!{citation_sequence_number}]"
     )
 
 
