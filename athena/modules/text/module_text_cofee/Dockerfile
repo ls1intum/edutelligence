@@ -2,19 +2,19 @@
 
 # This is the Dockerfile for the module_text_cofee.
 
-# Protobuf build
+# Stage 1: Protobuf build
 FROM golang:alpine AS cofee_protobuf
 RUN apk update && apk add --no-cache make protobuf-dev
 WORKDIR /proto
 COPY cofee.proto .
 RUN protoc --python_out . cofee.proto
 
+# Stage 2: Builder — install dependencies in a virtual environment
+FROM python:3.11-slim AS builder
 
-FROM python:3.11
-LABEL org.opencontainers.image.source=https://github.com/ls1intum/Athena
-
-# Environment variable Python in Docker
-ENV PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
 
@@ -28,13 +28,30 @@ RUN pip install --no-cache-dir poetry==1.5.0
 COPY pyproject.toml poetry.lock ./
 # athena module (from the Dockerfile in the athena folder)
 COPY --from=athena /code /athena
-# install dependencies
+# install dependencies into an in-project venv
 RUN poetry config virtualenvs.create true \
     && poetry config virtualenvs.in-project true \
     && poetry install --no-interaction --no-ansi
 
+# Stage 3: Runtime — slim image without compilers or dev tools
+FROM python:3.11-slim
+LABEL org.opencontainers.image.source=https://github.com/ls1intum/Athena
+
+ENV PYTHONUNBUFFERED=1
+
+# Runtime dependency for psycopg2
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /code
+
+# Copy only the virtual environment from the builder
+COPY --from=builder /code/.venv /code/.venv
+# Copy the generated protobuf file
+COPY --from=builder /code/module_text_cofee/protobuf/ /code/module_text_cofee/protobuf/
+ENV PATH="/code/.venv/bin:$PATH"
+
 # Project files
 COPY . ./
 
-# poetry scripts don't work here
-CMD poetry run python -m module_*
+CMD ["python", "-m", "module_text_cofee"]

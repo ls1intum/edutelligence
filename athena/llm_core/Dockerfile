@@ -3,7 +3,12 @@
 # This is the Dockerfile for the shared llm package.
 # Its output is used as a dependency in the module_* Dockerfiles.
 
-FROM python:3.11 as llm_core
+FROM python:3.11-slim AS llm_core
+
+# Install build dependencies needed for C extensions (e.g. psycopg2)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
 
