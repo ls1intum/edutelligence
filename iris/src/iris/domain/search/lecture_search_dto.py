@@ -32,3 +32,15 @@ class LectureSearchResultDTO(BaseModel):
     lecture: LectureInfo
     lecture_unit: LectureUnitInfo = Field(alias="lectureUnit")
     snippet: str
+
+
+class LectureSearchAskRequestDTO(BaseModel):
+    query: str = Field(min_length=1)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class LectureSearchAskResponseDTO(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    answer: str
+    sources: list[LectureSearchResultDTO]
