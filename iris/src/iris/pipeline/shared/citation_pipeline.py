@@ -285,7 +285,7 @@ class CitationPipeline(SubPipeline):
         answer: str,
         citation_content_map: dict[int, dict],
         user_language: str = "en",
-        **kwargs,
+        **_kwargs,
     ) -> str:
         """
         Enrich citations with keywords and summaries.
@@ -297,7 +297,7 @@ class CitationPipeline(SubPipeline):
             answer: The answer text with citation IDs (simplified [cite:N] or full format)
             citation_content_map: Pre-built citation map with {seq_num: {citation_id, content, ...}}
             user_language: The user's preferred language ("en" or "de")
-            **kwargs: Additional keyword arguments (accepted for interface compatibility, intentionally unused)
+            **_kwargs: Additional keyword arguments (accepted for interface compatibility, intentionally unused)
 
         Returns:
             Answer with citations enriched with keywords/summaries

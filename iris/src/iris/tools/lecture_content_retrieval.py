@@ -69,7 +69,7 @@ def create_tool_lecture_content_retrieval(
                 continue
             if not paragraph.lecture_unit_id:
                 continue
-            seq_num = citation_counter["next"]
+            seq_num = citation_counter.setdefault("next", 1)
             citation_counter["next"] += 1
             citation_id = build_lecture_citation_id(
                 paragraph.lecture_unit_id,
@@ -94,7 +94,7 @@ def create_tool_lecture_content_retrieval(
                 continue
             if not paragraph.lecture_unit_id:
                 continue
-            seq_num = citation_counter["next"]
+            seq_num = citation_counter.setdefault("next", 1)
             citation_counter["next"] += 1
             start_time = (
                 int(paragraph.segment_start_time)
@@ -129,7 +129,7 @@ def create_tool_lecture_content_retrieval(
                 continue
             if not paragraph.lecture_unit_id:
                 continue
-            seq_num = citation_counter["next"]
+            seq_num = citation_counter.setdefault("next", 1)
             citation_counter["next"] += 1
             citation_id = build_lecture_citation_id(
                 paragraph.lecture_unit_id,

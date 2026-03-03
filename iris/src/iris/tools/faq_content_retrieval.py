@@ -73,7 +73,7 @@ def create_tool_faq_content_retrieval(
                 continue
             if not faq_id:
                 continue
-            seq_num = citation_counter["next"]
+            seq_num = citation_counter.setdefault("next", 1)
             citation_counter["next"] += 1
             citation_id = build_faq_citation_id(faq_id, seq_num)
             citation_content_map[seq_num] = {
