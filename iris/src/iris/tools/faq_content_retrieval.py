@@ -1,6 +1,6 @@
 """Tool for retrieving FAQ content using RAG."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from ..pipeline.shared.citation_utils import build_faq_citation_id
 from ..retrieval.faq_retrieval import FaqRetrieval
@@ -17,7 +17,7 @@ def create_tool_faq_content_retrieval(
     query_text: str,
     history: List[Any],
     faq_storage: Dict[str, Any],
-    citation_counter: Dict[str, int],
+    citation_counter: Optional[Dict[str, int]] = None,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves FAQ content using RAG.
@@ -31,7 +31,7 @@ def create_tool_faq_content_retrieval(
         query_text: The student's query text.
         history: Chat history messages.
         faq_storage: Storage for retrieved FAQs.
-        citation_counter: Shared counter for citation sequence numbers.
+        citation_counter: Shared counter for citation sequence numbers (optional, creates local if not provided).
 
     Returns:
         Callable[[], str]: Function that returns formatted FAQ content.
@@ -52,6 +52,11 @@ def create_tool_faq_content_retrieval(
         Returns:
             str: Formatted string containing relevant FAQ answers.
         """
+        # Use provided citation_counter or create local one if not provided
+        nonlocal citation_counter
+        if citation_counter is None:
+            citation_counter = {"next": 1}
+
         callback.in_progress("Retrieving faq content ...")
         retrieved_faqs = faq_retriever(
             chat_history=history,

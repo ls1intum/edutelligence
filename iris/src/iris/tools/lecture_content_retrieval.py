@@ -34,7 +34,7 @@ def create_tool_lecture_content_retrieval(
     query_text: str,
     history: List[Any],
     lecture_content_storage: Dict[str, Any],
-    citation_counter: Dict[str, int],
+    citation_counter: Optional[Dict[str, int]] = None,
     lecture_id: Optional[int] = None,
     lecture_unit_id: Optional[int] = None,
 ) -> Callable[[], str]:
@@ -49,7 +49,7 @@ def create_tool_lecture_content_retrieval(
         query_text: The student's query text.
         history: Chat history messages.
         lecture_content_storage: Storage for retrieved content.
-        citation_counter: Shared counter for citation sequence numbers.
+        citation_counter: Shared counter for citation sequence numbers (optional, creates local if not provided).
 
     Returns:
         Callable[[], str]: Function that returns lecture content string.
@@ -69,6 +69,11 @@ def create_tool_lecture_content_retrieval(
         Returns:
             str: Concatenated lecture slide, transcription, and segment content.
         """
+        # Use provided citation_counter or create local one if not provided
+        nonlocal citation_counter
+        if citation_counter is None:
+            citation_counter = {"next": 1}
+
         callback.in_progress("Retrieving lecture content ...")
         lecture_content = lecture_retriever(
             query=query_text,
