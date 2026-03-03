@@ -1,11 +1,68 @@
 import type { RequestEventStats } from "@/components/statistics/types";
 
 export function formatRangeLabel(range: { start: Date; end: Date }) {
-  const f = (d: Date) =>
+  const dayMs = 24 * 60 * 60 * 1000;
+  const hourMs = 60 * 60 * 1000;
+  const threeDaysMs = 3 * dayMs;
+  const durationMs = Math.max(range.end.getTime() - range.start.getTime(), 0);
+
+  const formatDay = (d: Date) =>
     `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1)
       .toString()
       .padStart(2, "0")}`;
-  return `${f(range.start)} → ${f(range.end)}`;
+
+  const formatTime = (
+    d: Date,
+    opts: { withMinutes: boolean; withSeconds: boolean }
+  ) => {
+    const hours = d.getHours();
+    const hours12 = hours % 12 || 12;
+    const meridiem = hours >= 12 ? "pm" : "am";
+    const minutes = d.getMinutes().toString().padStart(2, "0");
+    const seconds = d.getSeconds().toString().padStart(2, "0");
+
+    if (!opts.withMinutes) {
+      return `${hours12} ${meridiem}`;
+    }
+
+    if (!opts.withSeconds) {
+      return `${hours12}:${minutes} ${meridiem}`;
+    }
+
+    return `${hours12}:${minutes}:${seconds} ${meridiem}`;
+  };
+
+  if (durationMs < hourMs) {
+    return `${formatDay(range.start)} ${formatTime(range.start, {
+      withMinutes: true,
+      withSeconds: true,
+    })} → ${formatDay(range.end)} ${formatTime(range.end, {
+      withMinutes: true,
+      withSeconds: true,
+    })}`;
+  }
+
+  if (durationMs < dayMs) {
+    return `${formatDay(range.start)} ${formatTime(range.start, {
+      withMinutes: true,
+      withSeconds: false,
+    })} → ${formatDay(range.end)} ${formatTime(range.end, {
+      withMinutes: true,
+      withSeconds: false,
+    })}`;
+  }
+
+  if (durationMs < threeDaysMs) {
+    return `${formatDay(range.start)} ${formatTime(range.start, {
+      withMinutes: false,
+      withSeconds: false,
+    })} → ${formatDay(range.end)} ${formatTime(range.end, {
+      withMinutes: false,
+      withSeconds: false,
+    })}`;
+  }
+
+  return `${formatDay(range.start)} → ${formatDay(range.end)}`;
 };
 
 export const applyTimeSeriesLabels = (
