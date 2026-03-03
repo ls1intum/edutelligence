@@ -310,13 +310,13 @@ def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
 
     for fb in feedbacks:
         desc = fb.description
-        if desc.startswith("CRITICAL"):
+        if "Critical" in desc[:15]:
             critical.append(fb)
-        elif desc.startswith("MAJOR"):
+        elif "Major" in desc[:15]:
             major.append(fb)
-        elif desc.startswith("MINOR"):
+        elif "Minor" in desc[:15]:
             minor.append(fb)
-        elif desc.startswith("NICE"):
+        elif "Nice to Have" in desc[:20]:
             nice_to_have.append(fb)
         else:
             other.append(fb)
@@ -348,5 +348,9 @@ def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
 
     # Reconstruct the filtered list
     filtered = critical + major + minor + nice_to_have + other
+
+    for fb in feedbacks:
+        print("Feedback:")
+        print(f"[{fb.title}] {fb.description}")
 
     return filtered
