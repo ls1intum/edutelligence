@@ -349,8 +349,4 @@ def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
     # Reconstruct the filtered list
     filtered = critical + major + minor + nice_to_have + other
 
-    for fb in feedbacks:
-        print("Feedback:")
-        print(f"[{fb.title}] {fb.description}")
-
     return filtered
