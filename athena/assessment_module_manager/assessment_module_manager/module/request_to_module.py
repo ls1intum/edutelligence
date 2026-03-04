@@ -52,7 +52,7 @@ async def request_to_module(module: Module, headers: dict, path: str, lms_url: s
         # should be the same as the LMS key
 
     try:
-        async with httpx.AsyncClient(base_url=str(module.url), timeout=600) as client:
+        async with httpx.AsyncClient(base_url=str(module.url), timeout=800) as client:
             if method == "POST":
                 response = await client.post(path, json=data, headers=headers)
             elif method == "GET":
