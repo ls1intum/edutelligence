@@ -33,6 +33,9 @@ from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.monitoring.ollama_monitor import OllamaProviderMonitor
+from logos.temp_providers.registry import TempProviderRegistry
+from logos.temp_providers.health_monitor import HealthMonitor
+from logos.temp_providers.discovery import discover_models
 from scripts import setup_proxy
 
 _SERVER_START_TIME = int(time.time())
@@ -41,6 +44,7 @@ logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _ollama_monitor: Optional[OllamaProviderMonitor] = None
+_temp_health_monitor: Optional[HealthMonitor] = None
 
 
 def _record_azure_rate_limits(
@@ -98,6 +102,12 @@ async def lifespan(app: FastAPI):
     await _ollama_monitor.start()
     logger.info("Ollama provider monitoring started")
 
+    # Start temp-provider health monitor
+    global _temp_health_monitor
+    _temp_health_monitor = HealthMonitor(interval_s=30, auto_remove_after_s=300)
+    _temp_health_monitor.start()
+    logger.info("Temp-provider health monitor started")
+
     # Start gRPC server
     global _grpc_server
     _grpc_server = grpc.aio.server()
@@ -108,6 +118,10 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    # Stop temp-provider health monitor
+    if _temp_health_monitor:
+        await _temp_health_monitor.stop()
+
     # Stop Ollama provider monitoring
     if _ollama_monitor:
         await _ollama_monitor.stop()
@@ -680,10 +694,77 @@ async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: d
         return JSONResponse(content=response_payload, status_code=200 if exec_result.success else 500)
 
 
+async def _execute_temp_provider_request(
+    provider,
+    body: Dict[str, Any],
+    headers: Dict[str, str],
+    path: str,
+    is_async_job: bool,
+):
+    """
+    Forward a request to a temporary provider, handling errors gracefully.
+
+    If the provider is unreachable it is marked unhealthy and a 503 is returned.
+    """
+    from logos.temp_providers.registry import TempProvider, TempProviderRegistry
+    import httpx as _httpx
+
+    prov: TempProvider = provider
+    forward_url = prov.url.rstrip("/") + "/v1/" + path
+
+    fwd_headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if prov.auth_key:
+        fwd_headers["Authorization"] = f"Bearer {prov.auth_key}"
+
+    payload = {**body}
+    if "stream" not in payload:
+        payload["stream"] = False
+
+    try:
+        async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=10, read=120, write=10, pool=10)) as client:
+            resp = await client.post(forward_url, headers=fwd_headers, json=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            status_code = resp.status_code
+    except _httpx.HTTPStatusError as exc:
+        # Upstream returned a non-2xx HTTP response — forward it without marking unhealthy.
+        upstream_resp = exc.response
+        status_code = upstream_resp.status_code
+        try:
+            result = upstream_resp.json()
+        except ValueError:
+            result = {"error": upstream_resp.text}
+        logger.info(
+            "Temp provider %s (%s) returned HTTP %s",
+            prov.id, prov.name, status_code,
+        )
+    except _httpx.RequestError as exc:
+        # Transport-level error (connect/timeout/DNS) — mark unhealthy.
+        logger.warning("Temp provider %s (%s) request failed: %s", prov.id, prov.name, exc)
+        TempProviderRegistry().mark_unhealthy(prov.id)
+        error_payload = {"error": f"Temp provider '{prov.name}' is unreachable"}
+        if is_async_job:
+            return {"status_code": 503, "data": error_payload}
+        raise HTTPException(status_code=503, detail=error_payload["error"])
+    except Exception as exc:
+        # Unexpected error — mark unhealthy.
+        logger.exception("Unexpected error calling temp provider %s (%s)", prov.id, prov.name)
+        TempProviderRegistry().mark_unhealthy(prov.id)
+        error_payload = {"error": f"Temp provider '{prov.name}' is unreachable"}
+        if is_async_job:
+            return {"status_code": 503, "data": error_payload}
+        raise HTTPException(status_code=503, detail=error_payload["error"])
+
+    if is_async_job:
+        return {"status_code": status_code, "data": result}
+    return JSONResponse(content=result, status_code=status_code)
+
+
 async def _execute_proxy_mode(
     body: Dict[str, Any],
     headers: Dict[str, str],
     logos_key: str,
+    path: str,
     deployments: list[Deployment],
     log_id: Optional[int],
     is_async_job: bool,
@@ -710,6 +791,17 @@ async def _execute_proxy_mode(
             break
 
     if model_id is None:
+        # Check temp providers — the model may live on an ephemeral node.
+        temp_auth_token = headers.get("x-temp-provider-token") or headers.get("X-Temp-Provider-Token")
+        temp_prov = TempProviderRegistry().find_provider_for_model(model_name, auth_token=temp_auth_token)
+        if temp_prov is not None:
+            return await _execute_temp_provider_request(
+                provider=temp_prov,
+                body=body,
+                headers=headers,
+                path=path,
+                is_async_job=is_async_job,
+            )
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' not available for this key")
 
     # Ensure payload model matches DB name (avoid user-supplied mismatch)
@@ -931,7 +1023,7 @@ async def route_and_execute(
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
-            return await _execute_proxy_mode(body, headers, logos_key, deployments, log_id, is_async_job, profile_id=profile_id)
+            return await _execute_proxy_mode(body, headers, logos_key, path, deployments, log_id, is_async_job, profile_id=profile_id)
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
         return await _execute_resource_mode(deployments, body, headers, logos_key, log_id, is_async_job, profile_id=profile_id)
@@ -1522,6 +1614,124 @@ async def get_ollama_vram_stats_options():
             "Access-Control-Allow-Headers": "Content-Type, logos_key",
         }
     )
+
+
+# ============================================================================
+# TEMPORARY PROVIDER ENDPOINTS
+# ============================================================================
+
+@app.post("/logosdb/add_temp_provider")
+async def add_temp_provider(request: Request):
+    """
+    Register a temporary (in-memory) LLM provider.
+
+    Request body::
+
+        {
+            "url": "https://my-mac.tunnel.dev",
+            "auth_key": "optional-provider-credential",
+            "name": "my-mac-lmstudio"
+        }
+
+    Returns the provider info including auto-discovered models and a unique
+    ``auth_token`` that callers must present to route requests through this
+    provider.
+    """
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    body = await request.json()
+    url = body.get("url")
+    name = body.get("name", "temp-provider")
+    auth_key = body.get("auth_key")
+
+    if not url:
+        raise HTTPException(status_code=400, detail="'url' is required")
+
+    # Auto-discover models
+    models = await discover_models(url, auth_key)
+
+    registry = TempProviderRegistry()
+    provider = registry.register(
+        url=url,
+        name=name,
+        owner_process_id=process_id,
+        models=models,
+        auth_key=auth_key,
+    )
+
+    return JSONResponse(content=provider.to_dict(), status_code=201)
+
+
+@app.delete("/logosdb/remove_temp_provider/{provider_id}")
+async def remove_temp_provider(provider_id: str, request: Request):
+    """Remove a temporary provider. Only the owner or root can remove."""
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    registry = TempProviderRegistry()
+    provider = registry.get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Temp provider not found")
+
+    # Authorization: owner or root
+    with DBManager() as db:
+        is_root = db.check_authorization(logos_key)
+    if provider.owner_process_id != process_id and not is_root:
+        raise HTTPException(status_code=403, detail="Not authorized to remove this provider")
+
+    registry.unregister(provider_id)
+    return JSONResponse(content={"result": "removed"}, status_code=200)
+
+
+@app.get("/logosdb/temp_providers")
+async def list_temp_providers(request: Request):
+    """
+    List temporary providers with health status.
+
+    Root sees all providers; non-root sees only their own.
+    """
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    registry = TempProviderRegistry()
+
+    with DBManager() as db:
+        is_root = db.check_authorization(logos_key)
+
+    if is_root:
+        providers = registry.list_all()
+    else:
+        providers = registry.list_for_process(process_id)
+
+    return JSONResponse(
+        content={"providers": [p.to_dict() for p in providers]},
+        status_code=200,
+    )
+
+
+@app.post("/logosdb/refresh_temp_provider/{provider_id}")
+async def refresh_temp_provider(provider_id: str, request: Request):
+    """Force re-discovery of models on a temporary provider."""
+    headers = dict(request.headers)
+    logos_key, process_id = authenticate_logos_key(headers)
+
+    registry = TempProviderRegistry()
+    provider = registry.get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Temp provider not found")
+
+    with DBManager() as db:
+        is_root = db.check_authorization(logos_key)
+    if provider.owner_process_id != process_id and not is_root:
+        raise HTTPException(status_code=403, detail="Not authorized to refresh this provider")
+
+    models = await discover_models(provider.url, provider.auth_key)
+    registry.update_models(provider_id, models)
+
+    # Re-fetch to return updated state
+    updated = registry.get(provider_id)
+    return JSONResponse(content=updated.to_dict() if updated else {}, status_code=200)
 
 
 # ============================================================================
