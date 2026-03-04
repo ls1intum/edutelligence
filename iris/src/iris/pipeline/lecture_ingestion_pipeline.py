@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 import tempfile
 import threading
 from typing import List, Optional
@@ -8,7 +9,6 @@ import fitz
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -42,6 +42,27 @@ from . import Pipeline
 logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
+
+
+def clean_text(
+    text: str, *, bullets: bool = False, extra_whitespace: bool = False
+) -> str:
+    """Lightweight replacement for unstructured.cleaners.core.clean.
+
+    Applies operations in the same order as the original:
+    extra_whitespace first, then bullets.
+    """
+    if extra_whitespace:
+        text = re.sub(r"[\xa0\n]", " ", text)
+        text = re.sub(r" {2,}", " ", text).strip()
+    if bullets:
+        text = re.sub(
+            r"^\s*[\u2022\u2023\u25e6\u2043\u2219\u25cf\u25cb\u00b7\u2013*\-]\s+",
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+    return text
 
 
 def cleanup_temporary_file(file_path):
@@ -364,7 +385,7 @@ class LectureUnitPageIngestionPipeline(
             image_interpretation=image_interpretation,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
-        clean_output = clean(
+        clean_output = clean_text(
             (prompt | self.pipeline).invoke({}),
             bullets=True,
             extra_whitespace=True,
