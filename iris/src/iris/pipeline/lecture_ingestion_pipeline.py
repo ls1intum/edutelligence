@@ -79,14 +79,14 @@ def clean_text(
 ) -> str:
     """Lightweight replacement for unstructured.cleaners.core.clean.
 
-    Applies operations in the same order as the original:
-    extra_whitespace first, then bullets.
+    Bullets are stripped first so the multiline-anchored regex can match
+    line-leading bullets before newlines are collapsed by whitespace cleanup.
     """
+    if bullets:
+        text = _BULLET_PATTERN.sub("", text)
     if extra_whitespace:
         text = re.sub(r"[\xa0\n]", " ", text)
         text = re.sub(r" {2,}", " ", text).strip()
-    if bullets:
-        text = _BULLET_PATTERN.sub("", text)
     return text
 
 
