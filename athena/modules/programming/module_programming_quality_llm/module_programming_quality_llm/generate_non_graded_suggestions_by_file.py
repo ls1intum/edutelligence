@@ -287,7 +287,7 @@ async def generate_suggestions_by_file(
 
 def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
     """
-    Filter feedbacks based on priority to keep count in a manageable range.
+    Sort feedbacks by severity and filter to keep count in a manageable range.
     Removes feedbacks starting from lowest priority, only as many as needed to reach the limit.
 
     Priority order (lowest to highest): other < NICE TO HAVE < MINOR < MAJOR < CRITICAL
@@ -296,30 +296,12 @@ def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
     - Over 20 feedbacks: Remove other, MINOR and NICE TO HAVE until reaching 20
     - Over 15 feedbacks: Remove other and NICE TO HAVE until reaching 15
     """
+    critical, major, minor, nice_to_have, other = _categorize_feedbacks(feedbacks)
     total_count = len(feedbacks)
-    
+
     if total_count <= 15:
-        return feedbacks
-
-    # Categorize feedbacks by priority
-    critical = []
-    major = []
-    minor = []
-    nice_to_have = []
-    other = []  # Feedbacks that don't match any category
-
-    for fb in feedbacks:
-        desc = fb.description
-        if "Critical" in desc[:15]:
-            critical.append(fb)
-        elif "Major" in desc[:15]:
-            major.append(fb)
-        elif "Minor" in desc[:15]:
-            minor.append(fb)
-        elif "Nice to Have" in desc[:20]:
-            nice_to_have.append(fb)
-        else:
-            other.append(fb)
+        # Sort by severity but keep all
+        return critical + major + minor + nice_to_have + other
 
     # Determine target limit based on current count
     if total_count > 25:
@@ -346,7 +328,28 @@ def _filter_feedbacks_by_priority(feedbacks: List[Feedback]) -> List[Feedback]:
         del category[-remove_from_category:]
         to_remove -= remove_from_category
 
-    # Reconstruct the filtered list
-    filtered = critical + major + minor + nice_to_have + other
+    # Reconstruct the filtered list, sorted by severity (critical first)
+    return critical + major + minor + nice_to_have + other
 
-    return filtered
+def _categorize_feedbacks(feedbacks: List[Feedback]):
+    """Categorize feedbacks by priority. Returns (critical, major, minor, nice_to_have, other)."""
+    critical = []
+    major = []
+    minor = []
+    nice_to_have = []
+    other = []
+
+    for fb in feedbacks:
+        desc = fb.description
+        if "Critical" in desc[:15]:
+            critical.append(fb)
+        elif "Major" in desc[:15]:
+            major.append(fb)
+        elif "Minor" in desc[:15]:
+            minor.append(fb)
+        elif "Nice to Have" in desc[:20]:
+            nice_to_have.append(fb)
+        else:
+            other.append(fb)
+
+    return critical, major, minor, nice_to_have, other
