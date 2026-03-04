@@ -258,3 +258,25 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def find_all_tenants(self) -> list[str]:
         """Find all tenants in the Memory collection."""
         return list(self.memory_collection.tenants.get().keys())
+
+    @observe(name="weaviate.memory_repository.delete_all_for_tenant")
+    def delete_all_for_tenant(self, tenant: str) -> None:
+        """
+        Delete all memory entries for a given tenant efficiently without loading them first.
+
+        Args:
+            tenant: The tenant whose memories should be deleted.
+        """
+        try:
+            if not self.collection.tenants.exists(tenant):
+                return
+
+            # Delete all objects for the tenant using Weaviate's batch delete.
+            # Filter.by_id().not_equal(nil UUID) matches every stored object.
+            self.collection.with_tenant(tenant).data.delete_many(
+                where=Filter.by_id().not_equal("00000000-0000-0000-0000-000000000000")
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Error deleting all Memory objects for tenant {tenant}"
+            ) from e

@@ -1,3 +1,4 @@
+# pylint: disable=protected-access
 from uuid import UUID
 
 import pytest
