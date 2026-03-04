@@ -1,0 +1,36 @@
+# Node Controller
+#
+# Manages a single Ollama container on a GPU node via Docker SDK.
+# The Ollama container is created dynamically — it is NOT defined here.
+#
+# Usage:
+#   docker compose up --build
+#
+# GPU nodes (nvidia-smi metrics):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+
+services:
+  node-controller:
+    build: .
+    container_name: node-controller
+    restart: unless-stopped
+    ports:
+      - "${CONTROLLER_PORT:-8443}:8443"
+    environment:
+      - NODE_CONTROLLER_CONFIG=/app/config.yml
+    volumes:
+      - ./config.yml:/app/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./certs:/app/certs:ro
+    networks:
+      - controller-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  controller-net:
+    name: node-controller-net

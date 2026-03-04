@@ -1,0 +1,34 @@
+controller:
+  port: 8443
+  api_key: RANDOM_DEFAULT_KEY
+  tls_enabled: false
+  tls_cert_path: /app/certs/cert.pem
+  tls_key_path: /app/certs/key.pem
+  gpu_poll_interval: 5
+  ollama_poll_interval: 5
+ollama:
+  image: ollama/ollama:latest
+  container_name: ollama-server
+  host_port: 11434
+  container_port: 11434
+  gpu_devices: none
+  num_parallel: 4
+  max_loaded_models: 2
+  keep_alive: 5m
+  max_queue: 512
+  context_length: 4096
+  flash_attention: true
+  kv_cache_type: q8_0
+  sched_spread: false
+  multiuser_cache: false
+  gpu_overhead_bytes: 0
+  load_timeout: ''
+  origins: []
+  noprune: false
+  models_path: /root/.ollama/models
+  preload_models:
+  - qwen2.5:0.5b
+  env_overrides: {}
+docker:
+  network_name: node-controller-net
+  volume_name: ollama-models
