@@ -1,0 +1,25 @@
+# Exclude everything not needed by nebula (context is monorepo root)
+athena/
+atlas/
+logos/
+iris/
+memiris/
+hyperion/
+weaviate/
+shared/
+.github/
+.git/
+docs/
+node_modules/
+*.log
+*.bak
+*.tmp
+.vscode/
+.idea/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.tox/
+.ruff_cache/
+.mypy_cache/
