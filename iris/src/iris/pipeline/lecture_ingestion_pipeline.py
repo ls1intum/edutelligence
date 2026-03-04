@@ -44,6 +44,36 @@ logger = get_logger(__name__)
 batch_update_lock = threading.Lock()
 
 
+_UNICODE_BULLETS = (
+    "\u0095"  # BULLET (legacy Windows-1252)
+    "\u2022"  # BULLET
+    "\u2023"  # TRIANGULAR BULLET
+    "\u2043"  # HYPHEN BULLET
+    "\u3164"  # HANGUL FILLER
+    "\u204c"  # BLACK LEFTWARDS BULLET
+    "\u204d"  # BLACK RIGHTWARDS BULLET
+    "\u2219"  # BULLET OPERATOR
+    "\u25cb"  # WHITE CIRCLE
+    "\u25cf"  # BLACK CIRCLE
+    "\u25d8"  # INVERSE BULLET
+    "\u25e6"  # WHITE BULLET
+    "\u2619"  # REVERSED ROTATED FLORAL HEART BULLET
+    "\u2765"  # ROTATED HEAVY BLACK HEART BULLET
+    "\u2767"  # ROTATED FLORAL HEART BULLET
+    "\u29be"  # CIRCLED WHITE BULLET
+    "\u29bf"  # CIRCLED BULLET
+    "\u002d"  # HYPHEN-MINUS
+    "\u2013"  # EN DASH
+    "\u00b7"  # MIDDLE DOT
+    "\u2024"  # ONE DOT LEADER
+    "\u002a"  # ASTERISK
+)
+_BULLET_PATTERN = re.compile(
+    rf"^\s*[{re.escape(_UNICODE_BULLETS)}]\s*",
+    flags=re.MULTILINE,
+)
+
+
 def clean_text(
     text: str, *, bullets: bool = False, extra_whitespace: bool = False
 ) -> str:
@@ -56,12 +86,7 @@ def clean_text(
         text = re.sub(r"[\xa0\n]", " ", text)
         text = re.sub(r" {2,}", " ", text).strip()
     if bullets:
-        text = re.sub(
-            r"^\s*[\u2022\u2023\u25e6\u2043\u2219\u25cf\u25cb\u00b7\u2013*\-]\s+",
-            "",
-            text,
-            flags=re.MULTILINE,
-        )
+        text = _BULLET_PATTERN.sub("", text)
     return text
 
 
