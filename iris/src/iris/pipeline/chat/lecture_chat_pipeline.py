@@ -28,7 +28,7 @@ from ...tools import (
 )
 from ...web.status.status_update import LectureChatCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
-from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.citation_pipeline import CitationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
 
 logger = get_logger(__name__)
@@ -115,6 +115,9 @@ class LectureChatPipeline(
         if not hasattr(state, "accessed_memory_storage"):
             setattr(state, "accessed_memory_storage", [])
 
+        # Create shared citation counter for unique sequence numbers
+        citation_counter = {"next": 1}
+
         callback = state.callback
         if not isinstance(callback, LectureChatCallback):
             callback = cast(LectureChatCallback, state.callback)
@@ -125,7 +128,8 @@ class LectureChatPipeline(
 
         query_text = self.get_text_of_latest_user_message(state)
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -135,13 +139,15 @@ class LectureChatPipeline(
                     query_text,
                     state.message_history,
                     getattr(state, "lecture_content_storage", {}),
+                    citation_counter,
                     lecture_id=state.dto.lecture.id if state.dto.lecture else None,
                     lecture_unit_id=state.dto.lecture_unit_id,
                 )
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -152,6 +158,7 @@ class LectureChatPipeline(
                     query_text,
                     state.message_history,
                     getattr(state, "faq_storage", {}),
+                    citation_counter,
                 )
             )
 
@@ -181,10 +188,8 @@ class LectureChatPipeline(
         Returns:
             str: The system message content
         """
-        # Extract user language with fallback
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Get user language from state
+        user_language = state.user_language
 
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
@@ -274,15 +279,12 @@ class LectureChatPipeline(
         Returns:
             str: The final result
         """
-        if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
-            state.result = self._process_citations(
-                state,
-                state.result,
-                state.lecture_content_storage,
-                state.faq_storage,
-                state.dto,
-                state.variant,
-            )
+        state.result = self._process_citations(
+            state,
+            state.result,
+            state.lecture_content_storage,
+            state.faq_storage,
+        )
 
         session_title = self._generate_session_title(state, state.result, state.dto)
 
@@ -304,8 +306,6 @@ class LectureChatPipeline(
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
-        dto: LectureChatPipelineExecutionDTO,
-        variant: LectureChatVariant,
     ) -> str:
         """
         Process citations for lecture content and FAQs.
@@ -315,41 +315,32 @@ class LectureChatPipeline(
             output: The agent's output
             lecture_content_storage: Storage for lecture content
             faq_storage: Storage for FAQ content
-            dto: The pipeline execution DTO
-            variant: The variant configuration
 
         Returns:
             str: The output with citations added
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Merge citation maps - simple dict merge since sequence numbers are already unique
+        merged_citation_map = {}
+        merged_citation_map.update(
+            lecture_content_storage.get("citation_content_map", {})
+        )
+        merged_citation_map.update(faq_storage.get("citation_content_map", {}))
 
-        if lecture_content_storage.get("content"):
-            base_url = dto.settings.artemis_base_url if dto.settings else ""
-            output = self.citation_pipeline(
-                lecture_content_storage["content"],
-                output,
-                InformationType.PARAGRAPHS,
-                variant=variant.id,
-                user_language=user_language,
-                base_url=base_url,
-            )
-        if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
-            for token in self.citation_pipeline.tokens:
-                self._track_tokens(state, token)
+        if not merged_citation_map:
+            return output
 
-        if faq_storage.get("faqs"):
-            base_url = dto.settings.artemis_base_url if dto.settings else ""
-            output = self.citation_pipeline(
-                faq_storage["faqs"],
-                output,
-                InformationType.FAQS,
-                variant=variant.id,
-                user_language=user_language,
-                base_url=base_url,
-            )
+        user_language = state.user_language
+
+        # Enrich citations with keywords/summaries
+        output = self.citation_pipeline(
+            answer=output,
+            citation_content_map=merged_citation_map,
+            user_language=user_language,
+        )
+
+        # Track tokens
+        for token in getattr(self.citation_pipeline, "tokens", []):
+            self._track_tokens(state, token)
 
         return output
 

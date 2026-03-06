@@ -42,7 +42,7 @@ from ...tools import (
 )
 from ...web.status.status_update import ExerciseChatStatusCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
-from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.citation_pipeline import CitationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
@@ -206,8 +206,11 @@ class ExerciseChatAgentPipeline(
         if not hasattr(state, "faq_storage"):
             setattr(state, "faq_storage", {})
 
-        lecture_content_storage = getattr(state, "lecture_content_storage")
-        faq_storage = getattr(state, "faq_storage")
+        lecture_content_storage = getattr(state, "lecture_content_storage", {})
+        faq_storage = getattr(state, "faq_storage", {})
+
+        # Create shared citation counter for unique sequence numbers
+        citation_counter = {"next": 1}
 
         # Build tool list based on available data and permissions
         tool_list: list[Callable] = [
@@ -236,6 +239,7 @@ class ExerciseChatAgentPipeline(
                     query_text,
                     state.message_history,
                     lecture_content_storage,
+                    citation_counter,
                 )
             )
 
@@ -253,6 +257,7 @@ class ExerciseChatAgentPipeline(
                     query_text,
                     state.message_history,
                     faq_storage,
+                    citation_counter,
                 )
             )
 
@@ -276,10 +281,8 @@ class ExerciseChatAgentPipeline(
         dto = state.dto
         query = self.get_latest_user_message(state)
 
-        # Extract user language with fallback
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Get user language from state
+        user_language = state.user_language
 
         problem_statement: str = dto.exercise.problem_statement if dto.exercise else ""
         exercise_title: str = dto.exercise.name if dto.exercise else ""
@@ -293,6 +296,10 @@ class ExerciseChatAgentPipeline(
             custom_instructions=dto.custom_instructions or ""
         )
 
+        # Get tool permissions
+        allow_lecture_tool = should_allow_lecture_tool(state.db, dto.course.id)
+        allow_faq_tool = should_allow_faq_tool(state.db, dto.course.id)
+
         # Build system prompt using Jinja2 template
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
@@ -304,6 +311,8 @@ class ExerciseChatAgentPipeline(
             "has_query": query is not None,
             "has_chat_history": len(state.message_history) > 0,
             "custom_instructions": custom_instructions,
+            "allow_lecture_tool": allow_lecture_tool,
+            "allow_faq_tool": allow_faq_tool,
         }
 
         return self.system_prompt_template.render(template_context)
@@ -444,55 +453,39 @@ class ExerciseChatAgentPipeline(
         Returns:
             The result with citations added.
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Get storages
+        lecture_content_storage = getattr(state, "lecture_content_storage", {})
+        faq_storage = getattr(state, "faq_storage", {})
 
+        # Merge citation maps (sequence numbers are already unique)
+        merged_citation_map = {}
+        merged_citation_map.update(
+            lecture_content_storage.get("citation_content_map", {})
+        )
+        merged_citation_map.update(faq_storage.get("citation_content_map", {}))
+
+        if not merged_citation_map:
+            return result
+
+        user_language = state.user_language
+
+        # Enrich citations with keywords/summaries
         try:
-            # Add FAQ citations
-            faq_storage = getattr(state, "faq_storage", {})
-            if faq_storage.get("faqs"):
-                state.callback.in_progress("Augmenting response ...")
-                base_url = (
-                    state.dto.settings.artemis_base_url if state.dto.settings else ""
-                )
-                result = self.citation_pipeline(
-                    faq_storage["faqs"],
-                    result,
-                    InformationType.FAQS,
-                    variant=state.variant.id,
-                    user_language=user_language,
-                    base_url=base_url,
-                )
-
-            # Add lecture content citations
-            lecture_content_storage = getattr(state, "lecture_content_storage", {})
-            if lecture_content_storage.get("content"):
-                state.callback.in_progress("Augmenting response ...")
-                base_url = (
-                    state.dto.settings.artemis_base_url if state.dto.settings else ""
-                )
-                result = self.citation_pipeline(
-                    lecture_content_storage["content"],
-                    result,
-                    InformationType.PARAGRAPHS,
-                    variant=state.variant.id,
-                    user_language=user_language,
-                    base_url=base_url,
-                )
-
-            if (
-                hasattr(self.citation_pipeline, "tokens")
-                and self.citation_pipeline.tokens
-            ):
-                for token in self.citation_pipeline.tokens:
-                    self._track_tokens(state, token)
-            return result
-
+            state.callback.in_progress("Augmenting response ...")
+            result = self.citation_pipeline(
+                answer=result,
+                citation_content_map=merged_citation_map,
+                user_language=user_language,
+            )
         except Exception as e:
-            logger.error("Error adding citations", exc_info=e)
+            logger.error("Citation pipeline failed", exc_info=e)
             return result
+
+        # Track tokens
+        for token in getattr(self.citation_pipeline, "tokens", []):
+            self._track_tokens(state, token)
+
+        return result
 
     def _generate_suggestions(
         self,
@@ -508,10 +501,7 @@ class ExerciseChatAgentPipeline(
             state: The current pipeline execution state.
             result: The final result string.
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        user_language = state.user_language
 
         try:
             if result:

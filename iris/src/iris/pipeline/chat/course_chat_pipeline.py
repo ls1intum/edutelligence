@@ -41,7 +41,7 @@ from ..abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
-from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.citation_pipeline import CitationPipeline
 from ..shared.utils import (
     datetime_to_string,
     format_custom_instructions,
@@ -158,6 +158,9 @@ class CourseChatPipeline(
         if not hasattr(state, "accessed_memory_storage"):
             setattr(state, "accessed_memory_storage", [])
 
+        # Create shared citation counter for unique sequence numbers
+        citation_counter = {"next": 1}
+
         # Use the callback from state - cast to the correct type
         callback = state.callback
         if not isinstance(callback, CourseChatStatusCallback):
@@ -207,6 +210,7 @@ class CourseChatPipeline(
                     query_text,
                     state.message_history,
                     getattr(state, "lecture_content_storage", {}),
+                    citation_counter,
                 )
             )
 
@@ -223,6 +227,7 @@ class CourseChatPipeline(
                     query_text,
                     state.message_history,
                     getattr(state, "faq_storage", {}),
+                    citation_counter,
                 )
             )
 
@@ -252,10 +257,8 @@ class CourseChatPipeline(
         Returns:
             str: The system message content
         """
-        # Extract user language with fallback
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Get user language from state
+        user_language = state.user_language
 
         # Get tool permissions
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -415,15 +418,12 @@ class CourseChatPipeline(
             str: The final result
         """
         # Process citations if we have them
-        if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
-            state.result = self._process_citations(
-                state,
-                state.result,
-                state.lecture_content_storage,
-                state.faq_storage,
-                state.dto,
-                state.variant,
-            )
+        state.result = self._process_citations(
+            state,
+            state.result,
+            state.lecture_content_storage,
+            state.faq_storage,
+        )
 
         # Generate title
         session_title = self._generate_session_title(state, state.result, state.dto)
@@ -454,8 +454,6 @@ class CourseChatPipeline(
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
-        dto: CourseChatPipelineExecutionDTO,
-        variant: CourseChatVariant,
     ) -> str:
         """
         Process citations for lecture content and FAQs.
@@ -465,41 +463,32 @@ class CourseChatPipeline(
             output: The agent's output
             lecture_content_storage: Storage for lecture content
             faq_storage: Storage for FAQ content
-            dto: The pipeline execution DTO
-            variant: The variant configuration
 
         Returns:
             str: The output with citations added
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Merge citation maps (sequence numbers are already unique)
+        merged_citation_map = {}
+        merged_citation_map.update(
+            lecture_content_storage.get("citation_content_map", {})
+        )
+        merged_citation_map.update(faq_storage.get("citation_content_map", {}))
 
-        if lecture_content_storage.get("content"):
-            base_url = dto.settings.artemis_base_url if dto.settings else ""
-            output = self.citation_pipeline(
-                lecture_content_storage["content"],
-                output,
-                InformationType.PARAGRAPHS,
-                variant=variant.id,
-                user_language=user_language,
-                base_url=base_url,
-            )
-        if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
-            for token in self.citation_pipeline.tokens:
-                self._track_tokens(state, token)
+        if not merged_citation_map:
+            return output
 
-        if faq_storage.get("faqs"):
-            base_url = dto.settings.artemis_base_url if dto.settings else ""
-            output = self.citation_pipeline(
-                faq_storage["faqs"],
-                output,
-                InformationType.FAQS,
-                variant=variant.id,
-                user_language=user_language,
-                base_url=base_url,
-            )
+        user_language = state.user_language
+
+        # Enrich citations with keywords/summaries
+        output = self.citation_pipeline(
+            answer=output,
+            citation_content_map=merged_citation_map,
+            user_language=user_language,
+        )
+
+        # Track tokens
+        for token in getattr(self.citation_pipeline, "tokens", []):
+            self._track_tokens(state, token)
 
         return output
 
@@ -522,10 +511,7 @@ class CourseChatPipeline(
             output: The agent's output
             dto: The pipeline execution DTO
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        user_language = state.user_language
 
         try:
             if output:
