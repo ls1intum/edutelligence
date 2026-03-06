@@ -395,7 +395,7 @@ class PromptUserAgentPipeline(
             # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
             rendered_verdict_prompt = self.verdict_dependent_template.render(verdict=self.verdict.verdict)
             for i, msg in enumerate(state.prompt.messages):
-                if msg.content == "VERDICT_DEPENDENT":
+                if "VERDICT_DEPENDENT" in msg.content:
                     state.prompt.messages[i] = SystemMessage(content=msg.content.replace("VERDICT_DEPENDENT", rendered_verdict_prompt))
 
             if self.assess_user_answer_pipeline.tokens is not None:

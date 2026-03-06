@@ -542,7 +542,8 @@ DTO = PromptUserPipelineExecutionDTO(
                                         latestResult=ResultDTO(completionDate=datetime.datetime(2026, 1, 10), successful=True)),
     exercise=ProgrammingExerciseDTO(id=1, name="Bubble Sort", programmingLanguage="JAVA", templateRepository=TEMPLATE_SORTING, problemStatement=TASK_SORTING),
     course=CourseDTO(id=1,name="Intro to Programming", description=None),
-    eventPayload=PyrisEventDTO(eventType=None, event=None), settings=None,
+    eventPayload=PyrisEventDTO(eventType=None, event=None),
+    settings=None,
     user=UserDTO(id=1, firstName="Random", lastName="User", memirisEnabled=False), minQuestions=0, maxQuestions=0, questionsAsked=0)
 
 VARIANT = PromptUserVariant(
