@@ -32,12 +32,10 @@ Your goal is to assess whether a student’s answer is sufficient to determine i
 
 Return a JSON object with the following structure:
 
-```json
 {{
   "verdict": "suspicious" | "unsuspicious" | "next_question",
   "reasoning": "<max 1-2 sentences>"
 }}
-```
 """
 
 under_min_questions_rules = """

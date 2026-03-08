@@ -8,9 +8,9 @@ import pytz
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langsmith import traceable
 
 from .assess_user_answer_pipeline import AssessUserAnswerPipeline
@@ -294,7 +294,7 @@ class PromptUserAgentPipeline(
 
         try:
             # Only run refinement pipeline when a new question was generated (only questions are refined)
-            if self.event == "user_initiates_prompting" or self.verdict.verdict == "next_question":
+            if self.event == "user_initiates_prompting" or (self.verdict and self.verdict.verdict == "next_question"):
                 # Refine response using guide prompt
                 result = self._refine_response(state)
             else:
@@ -394,9 +394,10 @@ class PromptUserAgentPipeline(
             # Ugly workaround forced by architecture: we must mutate prompt messages after render
             # because the base class __call__ renders the prompt before we decide verdict in pre_agent_hook
             rendered_verdict_prompt = self.verdict_dependent_template.render(verdict=self.verdict.verdict)
-            for i, msg in enumerate(state.prompt.messages):
-                if "VERDICT_DEPENDENT" in msg.content:
-                    state.prompt.messages[i] = SystemMessage(content=msg.content.replace("VERDICT_DEPENDENT", rendered_verdict_prompt))
+
+            for msg in state.prompt.messages:
+                if isinstance(msg, SystemMessagePromptTemplate) and "VERDICT_DEPENDENT" in msg.prompt.template:
+                    msg.prompt.template = msg.prompt.template.replace("VERDICT_DEPENDENT", rendered_verdict_prompt)
 
             if self.assess_user_answer_pipeline.tokens is not None:
                 self._track_tokens(state, self.assess_user_answer_pipeline.tokens)

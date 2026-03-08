@@ -130,4 +130,5 @@ class AssessUserAnswerPipeline(SubPipeline):
         token_usage = self.llm.tokens
         token_usage.pipeline = PipelineEnum.IRIS_ASSESS_USER_ANSWER
         self.tokens = token_usage
-        return response.replace("{", "{{").replace("}", "}}")
+
+        return response
