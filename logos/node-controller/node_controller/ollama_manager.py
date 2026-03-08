@@ -32,10 +32,11 @@ _STOP_TIMEOUT = 15         # seconds for graceful stop
 class OllamaManager:
     """Manages the lifecycle of a single Ollama Docker container."""
 
-    def __init__(self, network_name: str, volume_name: str) -> None:
+    def __init__(self, network_name: str, volume_name: str, models_host_path: str | None = None) -> None:
         self._client: docker.DockerClient | None = None
         self._network_name = network_name
         self._volume_name = volume_name
+        self._models_host_path = models_host_path
         self._http: httpx.AsyncClient | None = None
         self._preload_tasks: list[asyncio.Task] = []  # tracked for clean shutdown
         self._reconfigure_lock = asyncio.Lock()  # prevents concurrent recreate races
@@ -97,30 +98,62 @@ class OllamaManager:
         device_requests = self._build_device_requests(config)
 
         gpu_mode = "GPU" if device_requests else "CPU-only"
+        effective_parallel = config.max_num_parallel if config.max_num_parallel > 0 else config.num_parallel
         logger.info(
-            "Creating Ollama container '%s' (image=%s, port=%d, num_parallel=%d, %s)",
+            "Creating Ollama container '%s' (image=%s, port=%d, "
+            "num_parallel=%d, max_num_parallel=%d, effective=%d, %s)",
             config.container_name,
             config.image,
             config.host_port,
             config.num_parallel,
+            config.max_num_parallel,
+            effective_parallel,
             gpu_mode,
         )
 
+        models_source = self._models_host_path or self._volume_name
+        volumes = {
+            models_source: {
+                "bind": config.models_path,
+                "mode": "rw",
+            }
+        }
+
+        if config.use_host_binary:
+            # Thin-container mode: mount the host Ollama binary and CUDA libs.
+            # The host binary prefers cuda_v12 (~7s cold start) vs the Docker
+            # image's cuda_v13 (~80s on compute-capability 7.5 GPUs).
+            image = config.base_image
+            volumes[config.host_binary_path] = {
+                "bind": config.host_binary_path,
+                "mode": "ro",
+            }
+            volumes[config.host_lib_path] = {
+                "bind": config.host_lib_path,
+                "mode": "ro",
+            }
+            command = f"{config.host_binary_path} serve"
+            logger.info(
+                "Host-binary mode: mounting %s and %s from host",
+                config.host_binary_path,
+                config.host_lib_path,
+            )
+        else:
+            image = config.image
+            command = None  # use image's default entrypoint + CMD
+
         run_kwargs: dict[str, Any] = dict(
-            image=config.image,
+            image=image,
             name=config.container_name,
             detach=True,
             environment=env,
             ports={f"{config.container_port}/tcp": config.host_port},
-            volumes={
-                self._volume_name: {
-                    "bind": config.models_path,
-                    "mode": "rw",
-                }
-            },
+            volumes=volumes,
             network=self._network_name,
             restart_policy={"Name": "unless-stopped"},
         )
+        if command is not None:
+            run_kwargs["command"] = command
         if device_requests:
             run_kwargs["device_requests"] = device_requests
 
@@ -416,8 +449,11 @@ class OllamaManager:
     @staticmethod
     def _build_env(config: OllamaConfig) -> dict[str, str]:
         """Build the environment variables dict for the Ollama container."""
+        # Use max_num_parallel (the process ceiling) for the actual env var.
+        # When max_num_parallel is 0 (auto), fall back to num_parallel.
+        effective_parallel = config.max_num_parallel if config.max_num_parallel > 0 else config.num_parallel
         env = {
-            "OLLAMA_NUM_PARALLEL": str(config.num_parallel),
+            "OLLAMA_NUM_PARALLEL": str(effective_parallel),
             "OLLAMA_MAX_LOADED_MODELS": str(config.max_loaded_models),
             "OLLAMA_KEEP_ALIVE": config.keep_alive,
             "OLLAMA_MAX_QUEUE": str(config.max_queue),
@@ -441,6 +477,8 @@ class OllamaManager:
             env["OLLAMA_ORIGINS"] = ",".join(config.origins)
         if config.noprune:
             env["OLLAMA_NOPRUNE"] = "1"
+        if config.llm_library:
+            env["OLLAMA_LLM_LIBRARY"] = config.llm_library
         # Merge user-provided overrides last (takes precedence over everything)
         env.update(config.env_overrides)
         return env

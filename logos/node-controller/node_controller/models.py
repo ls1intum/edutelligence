@@ -33,6 +33,12 @@ class OllamaConfig(BaseModel):
 
     # Ollama runtime params (all become environment variables, require restart)
     num_parallel: int = 4
+    max_num_parallel: int = 0  # 0 = auto (use num_parallel). When >0, this is the
+    # actual OLLAMA_NUM_PARALLEL sent to the process. num_parallel becomes the
+    # *advertised* virtual limit that Logos uses for scheduling.  Changing
+    # num_parallel (within max) is instant — no container restart.  Changing
+    # max_num_parallel triggers a restart.  Over-provision to avoid 80s
+    # cold-start penalty on every parallelism change.
     max_loaded_models: int = 3
     keep_alive: str = "5m"
     max_queue: int = 512
@@ -63,9 +69,24 @@ class OllamaConfig(BaseModel):
     # Prevent Ollama from automatically pruning unused model blobs.
     noprune: bool = False
 
+    # Force a specific CUDA backend.  Ollama ships both cuda_v12 and cuda_v13.
+    # On compute-capability 7.x GPUs the v13 backend has a ~75s graph-compile
+    # penalty on every fresh process start, while v12 loads in ~7s.  Set to
+    # "cuda_v12" to avoid this.  Empty string = let Ollama auto-detect.
+    llm_library: str = ""
+
     models_path: str = "/root/.ollama/models"
     preload_models: list[str] = Field(default_factory=list)
     env_overrides: dict[str, str] = Field(default_factory=dict)
+
+    # Host-binary mode: run the host's Ollama binary inside a thin container
+    # instead of the full ollama/ollama Docker image.  This uses the host's
+    # CUDA v12 backend (~7s cold start) instead of the Docker image's CUDA v13
+    # backend (~80s cold start on compute-capability 7.5 GPUs).
+    use_host_binary: bool = False
+    host_binary_path: str = "/usr/local/bin/ollama"
+    host_lib_path: str = "/usr/local/lib/ollama"
+    base_image: str = "debian:bookworm-slim"
 
 
 class ControllerConfig(BaseModel):
@@ -85,6 +106,7 @@ class DockerConfig(BaseModel):
 
     network_name: str = "node-controller-net"
     volume_name: str = "ollama-models"
+    models_host_path: str | None = None
 
 
 class AppConfig(BaseModel):
@@ -207,6 +229,7 @@ class ReconfigureRequest(BaseModel):
     """
 
     num_parallel: int | None = None
+    max_num_parallel: int | None = None
     max_loaded_models: int | None = None
     keep_alive: str | None = None
     max_queue: int | None = None
@@ -226,6 +249,7 @@ class ReconfigureRequest(BaseModel):
     load_timeout: str | None = None
     origins: list[str] | None = None
     noprune: bool | None = None
+    llm_library: str | None = None
 
 
 class ModelCreateRequest(BaseModel):

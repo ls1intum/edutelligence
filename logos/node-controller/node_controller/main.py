@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     manager = OllamaManager(
         network_name=cfg.docker.network_name,
         volume_name=cfg.docker.volume_name,
+        models_host_path=cfg.docker.models_host_path,
     )
     try:
         await manager.init()
@@ -112,6 +113,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Shutting down…")
     await status_poller.stop()
     await gpu_collector.stop()
+
+    # Stop and remove the spawned Ollama container so it doesn't hold
+    # the Docker network open after the controller exits.
+    try:
+        await manager.destroy(cfg.ollama.container_name)
+    except Exception:
+        logger.warning("Could not remove Ollama container during shutdown", exc_info=True)
+
     await manager.close()
     logger.info("Shutdown complete")
 

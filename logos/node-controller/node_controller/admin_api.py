@@ -164,7 +164,13 @@ async def reconfigure_ollama(request: Request, req: ReconfigureRequest) -> Actio
     if not updates:
         return ActionResponse(success=True, message="No changes requested")
 
-    new_config, needs_restart, changed = apply_reconfigure(updates)
+    try:
+        new_config, needs_restart, changed = apply_reconfigure(updates)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
 
     # Nothing actually changed — all submitted values match current config
     if not changed:

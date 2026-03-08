@@ -1,13 +1,20 @@
-# GPU overlay — adds nvidia-smi access for GPU metrics.
+# GPU overlay — enable GPU access for metrics via NVIDIA Container Toolkit.
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 #
-# Requires an NVIDIA GPU host with the nvidia-smi binary and NVML library
-# at the standard Linux paths.  If these paths differ on your host, edit below.
+# Requires NVIDIA Container Toolkit on the host.
 
 services:
   node-controller:
-    volumes:
-      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
-      - /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:ro
+    # Let the runtime inject GPU device nodes and driver libs.
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=utility,compute
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]

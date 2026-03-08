@@ -22,6 +22,7 @@ logger = logging.getLogger("node_controller.config")
 # (all of these become Docker env vars or container-level settings)
 _RESTART_FIELDS: frozenset[str] = frozenset({
     "num_parallel",
+    "max_num_parallel",
     "max_loaded_models",
     "keep_alive",
     "max_queue",
@@ -39,6 +40,11 @@ _RESTART_FIELDS: frozenset[str] = frozenset({
     "load_timeout",
     "origins",
     "noprune",
+    "use_host_binary",
+    "host_binary_path",
+    "host_lib_path",
+    "base_image",
+    "llm_library",
 })
 
 # Global singleton — set by load_config()
@@ -147,6 +153,14 @@ def apply_reconfigure(
             current[key] = value
 
     new_ollama = OllamaConfig(**current)
+
+    # Validate: num_parallel must not exceed max_num_parallel (when set)
+    if new_ollama.max_num_parallel > 0 and new_ollama.num_parallel > new_ollama.max_num_parallel:
+        raise ValueError(
+            f"num_parallel ({new_ollama.num_parallel}) exceeds "
+            f"max_num_parallel ({new_ollama.max_num_parallel})"
+        )
+
     cfg.ollama = new_ollama
 
     # Only persist if something actually changed

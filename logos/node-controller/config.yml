@@ -9,14 +9,15 @@ controller:
 ollama:
   image: ollama/ollama:latest
   container_name: ollama-server
-  host_port: 11434
+  host_port: 11435
   container_port: 11434
-  gpu_devices: none
-  num_parallel: 4
+  gpu_devices: all
+  num_parallel: 8
+  max_num_parallel: 0
   max_loaded_models: 2
-  keep_alive: 5m
+  keep_alive: 10m
   max_queue: 512
-  context_length: 4096
+  context_length: 1024
   flash_attention: true
   kv_cache_type: q8_0
   sched_spread: false
@@ -25,10 +26,15 @@ ollama:
   load_timeout: ''
   origins: []
   noprune: false
+  llm_library: cuda_v12
   models_path: /root/.ollama/models
-  preload_models:
-  - qwen2.5:0.5b
+  preload_models: []
   env_overrides: {}
+  use_host_binary: false
+  host_binary_path: /usr/local/bin/ollama
+  host_lib_path: /usr/local/lib/ollama
+  base_image: debian:bookworm-slim
 docker:
   network_name: node-controller-net
   volume_name: ollama-models
+  models_host_path: /usr/share/ollama/.ollama/models
