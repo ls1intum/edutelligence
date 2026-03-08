@@ -86,6 +86,14 @@ services:
       - "traefik.http.routers.logos-server-docs.service=logos-server"
       - "traefik.http.routers.logos-server-docs.priority=100"
 
+      # === Routing: /ws (WebSocket) ===
+      - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
+      - "traefik.http.routers.logos-server-ws.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-ws.tls=true"
+      - "traefik.http.routers.logos-server-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-ws.service=logos-server"
+      - "traefik.http.routers.logos-server-ws.priority=100"
+
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
 
