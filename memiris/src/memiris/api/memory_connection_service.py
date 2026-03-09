@@ -133,3 +133,22 @@ class MemoryConnectionService:
             raise ValueError("MemoryConnection object must have an ID.")
 
         return self._memory_connection_repository.save(tenant, memory_connection)
+
+    def delete_all_for_tenant(self, tenant: str) -> None:
+        """
+        Delete all memory connection entries for a given tenant efficiently without loading them first.
+
+        Args:
+            tenant: The tenant whose memory connections should be deleted.
+
+        Returns:
+            None
+        """
+        if isinstance(
+            self._memory_connection_repository, WeaviateMemoryConnectionRepository
+        ):
+            self._memory_connection_repository.delete_all_for_tenant(tenant)
+        else:
+            raise NotImplementedError(
+                "delete_all_for_tenant is only implemented for WeaviateMemoryConnectionRepository."
+            )
