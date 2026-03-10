@@ -574,7 +574,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 reference = self.get_memiris_reference(dto=state.dto)
                 state.memiris_memory_creation_thread = (
                     state.memiris_wrapper.create_memories_in_separate_thread(
-                        user_query, reference, state.memiris_memory_creation_storage
+                        user_query,
+                        reference,
+                        state.memiris_memory_creation_storage,
+                        use_local=state.local,
                     )
                 )
 

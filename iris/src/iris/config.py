@@ -19,20 +19,25 @@ class WeaviateSettings(BaseModel):
 class MemirisLlmConfiguration(BaseModel):
     """
     Configuration for the LLMs used by Memiris.
-     - embeddings: List of embedding model identifiers.
-     - learning_extractor: Model identifier for the learning extractor.
-     - learning_deduplicator: Model identifier for the learning deduplicator.
-     - memory_creator: Model identifier for the memory creator.
-     - sleep_tool_llm: Model identifier for the sleep tool LLM.
-     - sleep_json_llm: Model identifier for the sleep JSON LLM.
+     - embeddings: List of embedding model identifiers (same for local and cloud).
+     - learning_extractor: Model identifier(s) for the learning extractor.
+        Can be a string or dict with 'local' and 'cloud' keys.
+     - learning_deduplicator: Model identifier(s) for the learning deduplicator.
+        Can be a string or dict with 'local' and 'cloud' keys.
+     - memory_creator: Model identifier(s) for the memory creator.
+        Can be a string or dict with 'local' and 'cloud' keys.
+     - sleep_tool_llm: Model identifier(s) for the sleep tool LLM.
+        Can be a string or dict with 'local' and 'cloud' keys.
+     - sleep_json_llm: Model identifier(s) for the sleep JSON LLM.
+        Can be a string or dict with 'local' and 'cloud' keys.
     """
 
     embeddings: list[str] = Field(default_factory=list)
-    learning_extractor: str = Field()
-    learning_deduplicator: str = Field()
-    memory_creator: str = Field()
-    sleep_tool_llm: str = Field()
-    sleep_json_llm: str = Field()
+    learning_extractor: str | dict[str, str] = Field()
+    learning_deduplicator: str | dict[str, str] = Field()
+    memory_creator: str | dict[str, str] = Field()
+    sleep_tool_llm: str | dict[str, str] = Field()
+    sleep_json_llm: str | dict[str, str] = Field()
 
 
 class MemirisSettings(BaseModel):

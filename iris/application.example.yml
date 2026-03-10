@@ -13,11 +13,21 @@ memiris:
     embeddings:
       - mxbai-embed-large
       - nomic-embed-text
-    learning_extractor: gemma3
-    learning_deduplicator: gemma3
-    memory_creator: gpt-oss
-    sleep_tool_llm: gpt-oss
-    sleep_json_llm: gemma3
+    learning_extractor:
+      local: gemma3
+      cloud: gemma3
+    learning_deduplicator:
+      local: gemma3
+      cloud: gemma3
+    memory_creator:
+      local: gpt-oss
+      cloud: gpt-oss
+    sleep_tool_llm:
+      local: gpt-oss
+      cloud: gpt-oss
+    sleep_json_llm:
+      local: gemma3
+      cloud: gemma3
 
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 

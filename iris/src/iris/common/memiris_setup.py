@@ -77,6 +77,22 @@ Keep the learnings short and concise. Better have multiple short learnings than 
 type Tenant = str
 
 
+def _get_model_id(config_value: str | dict[str, str], use_local: bool) -> str:
+    """
+    Extract the model ID from a configuration value.
+
+    Args:
+        config_value: Either a string (single model) or dict with 'local' and 'cloud' keys.
+        use_local: Whether to use the local or cloud model.
+
+    Returns:
+        The model ID string.
+    """
+    if isinstance(config_value, str):
+        return config_value
+    return config_value["local"] if use_local else config_value["cloud"]
+
+
 def _convert_iris_model_to_memiris_llm(
     model_id: str,
 ) -> OpenAiLanguageModel | OllamaLanguageModel:
@@ -115,7 +131,7 @@ def _convert_iris_model_to_memiris_llm(
 
 
 def _create_memory_creation_pipeline(
-    weaviate_client: WeaviateClient, vectorizer: Vectorizer
+    weaviate_client: WeaviateClient, vectorizer: Vectorizer, use_local: bool = True
 ) -> MemoryCreationPipeline:
     """
     Creates a memory creation pipeline for users using configured LLMs.
@@ -123,6 +139,7 @@ def _create_memory_creation_pipeline(
     Args:
         weaviate_client: A client instance for interacting with the Weaviate database.
         vectorizer: The vectorizer to use for embedding generation.
+        use_local: Whether to use local or cloud models. Defaults to True (local).
 
     Returns:
         MemoryCreationPipeline: The fully constructed memory creation pipeline.
@@ -133,12 +150,14 @@ def _create_memory_creation_pipeline(
     config = settings.memiris.llm_configuration
 
     learning_extractor_llm = _convert_iris_model_to_memiris_llm(
-        config.learning_extractor
+        _get_model_id(config.learning_extractor, use_local)
     )
     learning_deduplicator_llm = _convert_iris_model_to_memiris_llm(
-        config.learning_deduplicator
+        _get_model_id(config.learning_deduplicator, use_local)
     )
-    memory_creator_llm = _convert_iris_model_to_memiris_llm(config.memory_creator)
+    memory_creator_llm = _convert_iris_model_to_memiris_llm(
+        _get_model_id(config.memory_creator, use_local)
+    )
 
     return (
         MemoryCreationPipelineBuilder()
@@ -164,7 +183,7 @@ def _create_memory_creation_pipeline(
 
 
 def _create_memory_sleep_pipeline(
-    weaviate_client: WeaviateClient, vectorizer: Vectorizer
+    weaviate_client: WeaviateClient, vectorizer: Vectorizer, use_local: bool = True
 ) -> MemorySleepPipeline:
     """
     Creates a memory sleep pipeline for users using configured LLMs.
@@ -172,6 +191,7 @@ def _create_memory_sleep_pipeline(
     Args:
         weaviate_client: A client instance for interacting with the Weaviate database.
         vectorizer: The vectorizer to use for embedding generation.
+        use_local: Whether to use local or cloud models. Defaults to True (local).
 
     Returns:
         MemorySleepPipeline: The fully constructed memory sleep pipeline.
@@ -181,8 +201,12 @@ def _create_memory_sleep_pipeline(
 
     config = settings.memiris.llm_configuration
 
-    tool_llm = _convert_iris_model_to_memiris_llm(config.sleep_tool_llm)
-    json_llm = _convert_iris_model_to_memiris_llm(config.sleep_json_llm)
+    tool_llm = _convert_iris_model_to_memiris_llm(
+        _get_model_id(config.sleep_tool_llm, use_local)
+    )
+    json_llm = _convert_iris_model_to_memiris_llm(
+        _get_model_id(config.sleep_json_llm, use_local)
+    )
 
     return (
         MemorySleepPipelineBuilder()
@@ -258,12 +282,20 @@ class MemirisWrapper:
         ]
         self.vectorizer = Vectorizer(self._memiris_embedding_models)
 
-        # Create pipelines using configuration
-        self.memory_creation_pipeline = _create_memory_creation_pipeline(
-            weaviate_client, self.vectorizer
+        # Create local pipelines
+        self.memory_creation_pipeline_local = _create_memory_creation_pipeline(
+            weaviate_client, self.vectorizer, use_local=True
         )
-        self.memory_sleep_pipeline = _create_memory_sleep_pipeline(
-            weaviate_client, self.vectorizer
+        self.memory_sleep_pipeline_local = _create_memory_sleep_pipeline(
+            weaviate_client, self.vectorizer, use_local=True
+        )
+
+        # Create cloud pipelines
+        self.memory_creation_pipeline_cloud = _create_memory_creation_pipeline(
+            weaviate_client, self.vectorizer, use_local=False
+        )
+        self.memory_sleep_pipeline_cloud = _create_memory_sleep_pipeline(
+            weaviate_client, self.vectorizer, use_local=False
         )
 
         self.learning_service = LearningService(weaviate_client)
@@ -272,22 +304,29 @@ class MemirisWrapper:
         self.tenant = tenant
 
     @observe(name="Memiris: Create Memories")
-    def create_memories(self, text: str, reference: str) -> Sequence[Memory]:
+    def create_memories(
+        self, text: str, reference: str, use_local: bool = True
+    ) -> Sequence[Memory]:
         """
         Creates memories for the given text using the memory creation pipeline.
 
         Args:
             text (str): The text to create memories from.
             reference (str): The reference for the memories.
+            use_local (bool): Whether to use local or cloud models. Defaults to True (local).
         Returns:
             Sequence[Memory]: A sequence of created Memory objects.
         """
         if not self.enabled:
             logging.warning("MemirisWrapper is disabled, returning empty sequence.")
             return []
-        return self.memory_creation_pipeline.create_memories(
-            self.tenant, text, reference
+
+        pipeline = (
+            self.memory_creation_pipeline_local
+            if use_local
+            else self.memory_creation_pipeline_cloud
         )
+        return pipeline.create_memories(self.tenant, text, reference)
 
     @observe(name="Memiris: Create Memories (Async)")
     def create_memories_in_separate_thread(
@@ -295,6 +334,7 @@ class MemirisWrapper:
         text: str,
         reference: str,
         result_storage: list[Memory],
+        use_local: bool = True,
     ) -> Thread:
         """
         Creates memories for the given text in a separate thread and stores the results in the provided storage.
@@ -303,6 +343,7 @@ class MemirisWrapper:
             text (str): The text to create memories from.
             reference (str): The reference for the memories.
             result_storage (list[Memory]): The storage to append the created memories to.
+            use_local (bool): Whether to use local or cloud models. Defaults to True (local).
         Returns:
             Thread: The thread that is running the memory creation.
         """
@@ -311,7 +352,7 @@ class MemirisWrapper:
 
         def _create_memories():
             try:
-                memories = self.create_memories(text, reference)
+                memories = self.create_memories(text, reference, use_local)
                 result_storage.extend(memories)
             except Exception as e:
                 logging.error(
@@ -326,9 +367,12 @@ class MemirisWrapper:
         return thread
 
     @observe(name="Memiris: Sleep Memories")
-    def sleep_memories(self) -> None:
+    def sleep_memories(self, use_local: bool = True) -> None:
         """
         Sleeps memories for the tenant using the memory sleep pipeline.
+
+        Args:
+            use_local (bool): Whether to use local or cloud models. Defaults to True (local).
         """
         if not self.enabled:
             logging.warning("MemirisWrapper is disabled, skipping sleep memories.")
@@ -336,7 +380,14 @@ class MemirisWrapper:
         # Track time for the sleep operation
         start_time = time.perf_counter()
         logging.info("Starting memory sleep for tenant %s", self.tenant)
-        self.memory_sleep_pipeline.sleep(self.tenant)
+
+        pipeline = (
+            self.memory_sleep_pipeline_local
+            if use_local
+            else self.memory_sleep_pipeline_cloud
+        )
+        pipeline.sleep(self.tenant)
+
         elapsed = time.perf_counter() - start_time
         logging.info(
             "Memory sleep finished for tenant %s; duration=%.3fs", self.tenant, elapsed
