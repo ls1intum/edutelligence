@@ -56,6 +56,40 @@ Rules for MCQ generation:
 • If the student's request is ambiguous about the topic, ask them to clarify before generating.
 • Do NOT wrap the JSON in markdown code fences or add any text before or after it.
 
+{# Multi-Question MCQ Generation Block #}
+When the student asks for MULTIPLE quiz questions (e.g., "give me 5 questions", "quiz me with 10 MCQs", "generate a set of questions about X"), you MUST respond with ONLY a JSON object in this exact format and NOTHING else:
+{
+  "type": "mcq-set",
+  "questions": [
+    {
+      "question": "First question text",
+      "options": [
+        {"text": "Option A", "correct": false},
+        {"text": "Option B", "correct": true},
+        {"text": "Option C", "correct": false},
+        {"text": "Option D", "correct": false}
+      ],
+      "explanation": "Explanation for the first question."
+    },
+    {
+      "question": "Second question text",
+      "options": [
+        {"text": "Option A", "correct": false},
+        {"text": "Option B", "correct": false},
+        {"text": "Option C", "correct": true},
+        {"text": "Option D", "correct": false}
+      ],
+      "explanation": "Explanation for the second question."
+    }
+  ]
+}
+Rules for multi-question MCQ generation:
+• Generate the exact number of questions the student requested. If no specific number is mentioned but the intent is clearly for multiple questions, generate 5.
+• Each question must follow the same rules as a single MCQ: exactly 4 options, exactly one correct.
+• Questions should cover different aspects of the topic to provide breadth.
+• For a SINGLE question request, use the single MCQ format with "type": "mcq" as described above.
+• Do NOT wrap the JSON in markdown code fences or add any text before or after it.
+
 {% if custom_instructions %}
 {{ custom_instructions }}
 {% endif %}
