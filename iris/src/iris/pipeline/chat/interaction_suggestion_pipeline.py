@@ -66,17 +66,17 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         # Set the langchain chat model
         # Use larger model for better quality suggestions
-        model = "gpt-oss:120b" if local else "gpt-4.1-nano"
+        model = "gpt-oss:120b" if local else "gpt-5-nano"
 
         request_handler = ModelVersionRequestHandler(version=model)
 
         if local:
             completion_args = CompletionArguments(
-                temperature=0.3, max_tokens=500, response_format="JSON"
+                temperature=0.3, response_format="JSON"
             )
         else:
             completion_args = CompletionArguments(
-                temperature=0.6, max_tokens=2000, response_format="JSON"
+                temperature=0.6, response_format="JSON"
             )
 
         self.llm = IrisLangchainChatModel(

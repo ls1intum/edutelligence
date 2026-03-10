@@ -41,6 +41,15 @@ services:
     ports:
       - "5002:5002"
 
+  module_programming_quality_llm:
+    hostname: module-programming-quality-llm
+    build: modules/programming/module_programming_quality_llm
+    depends_on:
+      - athena
+      - llm_core
+    ports:
+      - "5007:5007"
+
   module_text_llm:
     hostname: module-text-llm
     build: modules/text/module_text_llm

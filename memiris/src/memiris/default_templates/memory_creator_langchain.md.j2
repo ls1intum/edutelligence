@@ -52,6 +52,8 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * Use **only** UUIDs that actually exist in the provided learnings.
 * Returning an empty array is acceptable **only** if no valid memory can be formed.
 * Produce the final JSON **only after** you have completed the exploration/thinking phase with multiple tool calls.
+* The final message **must not** contain any tool calls, reflections, or explanations — only the JSON array of Memory objects.
+* Do not output JSON that does not conform to the schema.
 
 # Style for Memory Content
 
@@ -65,5 +67,5 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * [ ] Each memory centers on **one theme**; closely related sub-aspects acceptable; no unrelated blends.
 * [ ] No invented or altered UUIDs; all UUIDs exist in input.
 * [ ] Minimal duplication of the same learning across memories.
-* [ ] No extraneous text; output is a **JSON array only** that matches `{{ memory_json_schema }}` exactly.
+* [ ] No extraneous text; final message is a **JSON array only** that matches the above schema exactly.
 * [ ] Exploration phase completed with **multiple** tool calls; stop when further calls won’t change groupings.
