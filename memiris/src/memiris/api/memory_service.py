@@ -154,3 +154,20 @@ class MemoryService:
             raise NotImplementedError(
                 "find_all_tenants is only implemented for WeaviateMemoryRepository."
             )
+
+    def delete_all_for_tenant(self, tenant: str) -> None:
+        """
+        Delete all memory entries for a given tenant efficiently without loading them first.
+
+        Args:
+            tenant: The tenant whose memories should be deleted.
+
+        Returns:
+            None
+        """
+        if isinstance(self._memory_repository, WeaviateMemoryRepository):
+            self._memory_repository.delete_all_for_tenant(tenant)
+        else:
+            raise NotImplementedError(
+                "delete_all_for_tenant is only implemented for WeaviateMemoryRepository."
+            )
