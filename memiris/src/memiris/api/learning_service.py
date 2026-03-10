@@ -124,3 +124,20 @@ class LearningService:
             raise ValueError("Learning object must have an ID.")
 
         return self._learning_repository.save(tenant, learning)
+
+    def delete_all_for_tenant(self, tenant: str) -> None:
+        """
+        Delete all learning entries for a given tenant efficiently without loading them first.
+
+        Args:
+            tenant: The tenant whose learnings should be deleted.
+
+        Returns:
+            None
+        """
+        if isinstance(self._learning_repository, WeaviateLearningRepository):
+            self._learning_repository.delete_all_for_tenant(tenant)
+        else:
+            raise NotImplementedError(
+                "delete_all_for_tenant is only implemented for WeaviateLearningRepository."
+            )
