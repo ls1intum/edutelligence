@@ -50,8 +50,8 @@ class LectureSearchAnswerPipeline(SubPipeline):
         hyde_model = "gpt-oss:120b" if local else "gpt-4.1-nano"
         answer_model = "gpt-oss:120b" if local else "gpt-4.1-mini"
 
-        hyde_completion_args = CompletionArguments(temperature=0.7, max_tokens=100)
-        answer_completion_args = CompletionArguments(temperature=0.3, max_tokens=600)
+        hyde_completion_args = CompletionArguments(temperature=0.7)
+        answer_completion_args = CompletionArguments(temperature=0.3)
         self.hyde_llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=hyde_model),
             completion_args=hyde_completion_args,
