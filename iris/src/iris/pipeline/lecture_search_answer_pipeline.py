@@ -47,8 +47,8 @@ class LectureSearchAnswerPipeline(SubPipeline):
         self.tokens = []
         self.retriever = LectureGlobalSearchRetrieval(client)
 
-        hyde_model = "gpt-oss:120b" if local else "gpt-4.1-nano"
-        answer_model = "gpt-oss:120b" if local else "gpt-4.1-mini"
+        hyde_model = "gpt-oss:120b" if local else "gpt-5-nano"
+        answer_model = "gpt-oss:120b" if local else "gpt-5-mini"
 
         hyde_completion_args = CompletionArguments(temperature=0.7)
         answer_completion_args = CompletionArguments(temperature=0.3)
