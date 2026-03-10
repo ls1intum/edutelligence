@@ -2,7 +2,7 @@
 Configuration loading, saving, and runtime management.
 
 Loads from config.yml, supports partial updates with file writes,
-and determines whether a config change requires container recreation.
+and determines whether a config change requires a process restart.
 """
 
 from __future__ import annotations
@@ -14,15 +14,14 @@ from typing import Any
 
 import yaml
 
-from node_controller.models import AppConfig, OllamaConfig
+from node_controller.models import AppConfig, LaneConfig, OllamaConfig
 
 logger = logging.getLogger("node_controller.config")
 
-# Fields that require Ollama container recreation when changed
-# (all of these become Docker env vars or container-level settings)
+# Fields that require Ollama process restart when changed
+# (all of these become environment variables or process-level settings)
 _RESTART_FIELDS: frozenset[str] = frozenset({
     "num_parallel",
-    "max_num_parallel",
     "max_loaded_models",
     "keep_alive",
     "max_queue",
@@ -30,9 +29,7 @@ _RESTART_FIELDS: frozenset[str] = frozenset({
     "flash_attention",
     "kv_cache_type",
     "gpu_devices",
-    "image",
-    "host_port",
-    "container_port",
+    "port",
     "env_overrides",
     "sched_spread",
     "multiuser_cache",
@@ -40,10 +37,6 @@ _RESTART_FIELDS: frozenset[str] = frozenset({
     "load_timeout",
     "origins",
     "noprune",
-    "use_host_binary",
-    "host_binary_path",
-    "host_lib_path",
-    "base_image",
     "llm_library",
 })
 
@@ -114,10 +107,6 @@ def save_config(config: AppConfig | None = None) -> None:
 
     data = cfg.model_dump(mode="json")
 
-    # Write directly to the file.  We can't use the atomic temp+rename pattern
-    # because config.yml is typically a Docker bind-mounted file, and Docker
-    # holds a reference to the specific inode — os.rename() would fail with
-    # EBUSY.  Direct write is safe here since we're the only writer.
     with open(_config_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
         f.flush()
@@ -154,13 +143,6 @@ def apply_reconfigure(
 
     new_ollama = OllamaConfig(**current)
 
-    # Validate: num_parallel must not exceed max_num_parallel (when set)
-    if new_ollama.max_num_parallel > 0 and new_ollama.num_parallel > new_ollama.max_num_parallel:
-        raise ValueError(
-            f"num_parallel ({new_ollama.num_parallel}) exceeds "
-            f"max_num_parallel ({new_ollama.max_num_parallel})"
-        )
-
     cfg.ollama = new_ollama
 
     # Only persist if something actually changed
@@ -168,3 +150,15 @@ def apply_reconfigure(
         save_config(cfg)
 
     return new_ollama, needs_restart, changed
+
+
+def get_lanes_config() -> list[LaneConfig]:
+    """Return the current lanes configuration."""
+    return get_config().lanes
+
+
+def save_lanes_config(lanes: list[LaneConfig]) -> None:
+    """Update the lanes section in config and persist."""
+    cfg = get_config()
+    cfg.lanes = lanes
+    save_config(cfg)

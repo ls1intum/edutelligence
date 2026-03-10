@@ -1,8 +1,9 @@
 """
 Admin API endpoints for authenticated operators.
 
-Provides Ollama container lifecycle management (start/stop/restart/reconfigure/
-destroy), model operations (pull/delete/unload/preload), and a health check.
+Provides Ollama process lifecycle management (start/stop/restart/reconfigure/
+destroy), model operations (pull/delete/unload/preload), lane management,
+and a public health check.
 
 Service instances are stored in ``app.state`` during lifespan and accessed
 via ``request.app.state``.
@@ -11,155 +12,120 @@ via ``request.app.state``.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-import docker.errors
-
 from node_controller.auth import verify_api_key
-from node_controller.config import apply_reconfigure, get_config
+from node_controller.config import apply_reconfigure, get_config, save_lanes_config
 from node_controller.models import (
     ActionResponse,
-    ContainerState,
     HealthResponse,
+    LaneApplyResult,
+    LaneEvent,
+    LaneReconfigureRequest,
+    LaneSetRequest,
+    LaneSleepRequest,
+    LaneStatus,
     ModelActionRequest,
     ModelCreateRequest,
     ModelInfoResponse,
+    ProcessState,
     ReconfigureRequest,
 )
 
 router = APIRouter(tags=["admin"])
 
 
-# ------------------------------------------------------------------
-# Health (public — no auth for Docker health checks)
-# ------------------------------------------------------------------
-
-
 @router.get(
     "/health",
     response_model=HealthResponse,
-    summary="Public health check for Docker / load balancer probes",
+    summary="Public health check for load balancer probes",
 )
 async def health(request: Request) -> HealthResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
     gpu_collector = request.app.state.gpu_collector
 
-    container = await manager.status(cfg.ollama.container_name)
+    process_status = manager.status()
     gpu_snap = await gpu_collector.get_snapshot()
     return HealthResponse(
         status="ok",
-        ollama_running=container.state == ContainerState.RUNNING,
+        ollama_running=process_status.state == ProcessState.RUNNING,
         gpu_available=gpu_snap.nvidia_smi_available,
     )
-
-
-# ------------------------------------------------------------------
-# Ollama container lifecycle
-# ------------------------------------------------------------------
 
 
 @router.post(
     "/admin/ollama/start",
     response_model=ActionResponse,
-    summary="Start the Ollama container",
+    summary="Start (spawn) the Ollama process",
     dependencies=[Depends(verify_api_key)],
 )
 async def start_ollama(request: Request) -> ActionResponse:
     cfg = get_config()
     manager = request.app.state.ollama_manager
     try:
-        cs = await manager.start(cfg.ollama.container_name)
+        ps = await manager.spawn(cfg.ollama)
         return ActionResponse(
             success=True,
-            message=f"Container started (state={cs.state.value})",
-            details=cs.model_dump(mode="json"),
+            message=f"Ollama process started (state={ps.state.value})",
+            details=ps.model_dump(mode="json"),
         )
-    except ValueError:
-        # Container doesn't exist — create it
-        try:
-            cs = await manager.create(cfg.ollama)
-            return ActionResponse(
-                success=True,
-                message=f"Container created and started (state={cs.state.value})",
-                details=cs.model_dump(mode="json"),
-            )
-        except docker.errors.APIError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Docker error creating Ollama container: {exc.explanation or str(exc)}",
-            )
-    except docker.errors.APIError as exc:
+    except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Docker error starting Ollama container: {exc.explanation or str(exc)}",
+            detail=f"Failed to spawn Ollama process: {exc}",
         )
 
 
 @router.post(
     "/admin/ollama/stop",
     response_model=ActionResponse,
-    summary="Gracefully stop the Ollama container",
+    summary="Gracefully stop the Ollama process",
     dependencies=[Depends(verify_api_key)],
 )
 async def stop_ollama(request: Request) -> ActionResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    try:
-        cs = await manager.stop(cfg.ollama.container_name)
-        return ActionResponse(
-            success=True,
-            message="Container stopped",
-            details=cs.model_dump(mode="json"),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except docker.errors.APIError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Docker error: {exc.explanation or str(exc)}",
-        )
+    ps = await manager.stop()
+    return ActionResponse(
+        success=True,
+        message=f"Ollama process stopped (state={ps.state.value})",
+        details=ps.model_dump(mode="json"),
+    )
 
 
 @router.post(
     "/admin/ollama/restart",
     response_model=ActionResponse,
-    summary="Restart the Ollama container without config change",
+    summary="Restart the Ollama process without config change",
     dependencies=[Depends(verify_api_key)],
 )
 async def restart_ollama(request: Request) -> ActionResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
     try:
-        cs = await manager.restart(cfg.ollama.container_name)
+        ps = await manager.restart()
         return ActionResponse(
             success=True,
-            message="Container restarted",
-            details=cs.model_dump(mode="json"),
+            message=f"Ollama process restarted (state={ps.state.value})",
+            details=ps.model_dump(mode="json"),
         )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except docker.errors.APIError as exc:
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Docker error: {exc.explanation or str(exc)}",
+            detail=f"Failed to restart Ollama process: {exc}",
         )
 
 
 @router.post(
     "/admin/ollama/reconfigure",
     response_model=ActionResponse,
-    summary="Update Ollama config and recreate the container if needed",
+    summary="Update Ollama config and restart the process if needed",
     dependencies=[Depends(verify_api_key)],
 )
 async def reconfigure_ollama(request: Request, req: ReconfigureRequest) -> ActionResponse:
-    """
-    Apply partial config updates.  Only provided (non-None) fields are
-    changed.  If any runtime-affecting fields changed, the container is
-    destroyed and recreated with the new settings.
-    """
     updates = req.model_dump(exclude_none=True)
     if not updates:
         return ActionResponse(success=True, message="No changes requested")
@@ -172,7 +138,6 @@ async def reconfigure_ollama(request: Request, req: ReconfigureRequest) -> Actio
             detail=str(exc),
         )
 
-    # Nothing actually changed — all submitted values match current config
     if not changed:
         return ActionResponse(
             success=True,
@@ -189,51 +154,44 @@ async def reconfigure_ollama(request: Request, req: ReconfigureRequest) -> Actio
 
     if needs_restart:
         try:
-            cs = await manager.recreate(new_config)
-        except docker.errors.APIError as exc:
+            ps = await manager.reconfigure(new_config)
+        except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Docker error recreating container: {exc.explanation or str(exc)}",
+                detail=f"Failed to reconfigure Ollama process: {exc}",
             )
         status_poller.update_config(new_config)
         return ActionResponse(
             success=True,
-            message="Configuration updated — container recreated",
+            message="Configuration updated — process restarted",
             details={
-                "container": cs.model_dump(mode="json"),
+                "process": ps.model_dump(mode="json"),
                 "changed_fields": changed,
                 "restarted": True,
             },
         )
-    else:
-        # Non-restart fields (e.g. preload_models) — just save
-        status_poller.update_config(new_config)
-        return ActionResponse(
-            success=True,
-            message="Configuration updated (no restart required)",
-            details={
-                "changed_fields": changed,
-                "restarted": False,
-            },
-        )
+
+    status_poller.update_config(new_config)
+    return ActionResponse(
+        success=True,
+        message="Configuration updated (no restart required)",
+        details={
+            "changed_fields": changed,
+            "restarted": False,
+        },
+    )
 
 
 @router.post(
     "/admin/ollama/destroy",
     response_model=ActionResponse,
-    summary="Force-remove the Ollama container entirely",
+    summary="Kill the Ollama process and clear state",
     dependencies=[Depends(verify_api_key)],
 )
 async def destroy_ollama(request: Request) -> ActionResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    await manager.destroy(cfg.ollama.container_name)
-    return ActionResponse(success=True, message="Container destroyed")
-
-
-# ------------------------------------------------------------------
-# Model operations
-# ------------------------------------------------------------------
+    await manager.destroy()
+    return ActionResponse(success=True, message="Ollama process destroyed")
 
 
 @router.post(
@@ -243,9 +201,8 @@ async def destroy_ollama(request: Request) -> ActionResponse:
     dependencies=[Depends(verify_api_key)],
 )
 async def pull_model(request: Request, req: ModelActionRequest) -> ActionResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    ok = await manager.pull_model(cfg.ollama, req.model)
+    ok = await manager.pull_model(req.model)
     if ok:
         return ActionResponse(success=True, message=f"Model '{req.model}' pulled")
     raise HTTPException(
@@ -255,15 +212,29 @@ async def pull_model(request: Request, req: ModelActionRequest) -> ActionRespons
 
 
 @router.post(
+    "/admin/models/pull/stream",
+    summary="Pull model with streaming progress (NDJSON)",
+    dependencies=[Depends(verify_api_key)],
+)
+async def pull_model_stream(request: Request, req: ModelActionRequest) -> StreamingResponse:
+    manager = request.app.state.ollama_manager
+
+    async def _stream():
+        async for chunk in manager.pull_model_streaming(req.model):
+            yield json.dumps(chunk) + "\n"
+
+    return StreamingResponse(_stream(), media_type="application/x-ndjson")
+
+
+@router.post(
     "/admin/models/delete",
     response_model=ActionResponse,
     summary="Delete a model from disk",
     dependencies=[Depends(verify_api_key)],
 )
 async def delete_model(request: Request, req: ModelActionRequest) -> ActionResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    ok = await manager.delete_model(cfg.ollama, req.model)
+    ok = await manager.delete_model(req.model)
     if ok:
         return ActionResponse(success=True, message=f"Model '{req.model}' deleted")
     raise HTTPException(
@@ -279,9 +250,8 @@ async def delete_model(request: Request, req: ModelActionRequest) -> ActionRespo
     dependencies=[Depends(verify_api_key)],
 )
 async def unload_model(request: Request, req: ModelActionRequest) -> ActionResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    ok = await manager.unload_model(cfg.ollama, req.model)
+    ok = await manager.unload_model(req.model)
     if ok:
         return ActionResponse(success=True, message=f"Model '{req.model}' unloaded")
     raise HTTPException(
@@ -297,9 +267,8 @@ async def unload_model(request: Request, req: ModelActionRequest) -> ActionRespo
     dependencies=[Depends(verify_api_key)],
 )
 async def preload_model(request: Request, req: ModelActionRequest) -> ActionResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    ok = await manager.preload_model(cfg.ollama, req.model)
+    ok = await manager.preload_model(req.model)
     if ok:
         return ActionResponse(success=True, message=f"Model '{req.model}' preloaded")
     raise HTTPException(
@@ -308,37 +277,17 @@ async def preload_model(request: Request, req: ModelActionRequest) -> ActionResp
     )
 
 
-# ------------------------------------------------------------------
-# Model customization — create variants, inspect, copy
-# ------------------------------------------------------------------
-
-
 @router.post(
     "/admin/models/create",
     response_model=ActionResponse,
-    summary="Create a model variant from a Modelfile (custom num_ctx, system prompt, etc.)",
+    summary="Create a model variant from a Modelfile",
     dependencies=[Depends(verify_api_key)],
 )
 async def create_model(request: Request, req: ModelCreateRequest) -> ActionResponse:
-    """
-    Create a model variant using Ollama's Modelfile format.
-
-    This is the primary mechanism for per-model customization without\
-    restarting the container.  Common uses:
-
-    - **Custom context length**: ``PARAMETER num_ctx 8192``
-    - **Custom temperature**: ``PARAMETER temperature 0.3``
-    - **System prompt**: ``SYSTEM You are a helpful coding assistant.``
-    - **LoRA adapters**: ``ADAPTER /path/to/adapter``
-    """
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    ok = await manager.create_model(cfg.ollama, req.name, req.modelfile)
+    ok = await manager.create_model(req.name, req.modelfile)
     if ok:
-        return ActionResponse(
-            success=True,
-            message=f"Model '{req.name}' created from Modelfile",
-        )
+        return ActionResponse(success=True, message=f"Model '{req.name}' created from Modelfile")
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"Failed to create model '{req.name}'",
@@ -348,13 +297,12 @@ async def create_model(request: Request, req: ModelCreateRequest) -> ActionRespo
 @router.post(
     "/admin/models/show",
     response_model=ModelInfoResponse,
-    summary="Show detailed model information (Modelfile, parameters, template)",
+    summary="Show detailed model information",
     dependencies=[Depends(verify_api_key)],
 )
 async def show_model(request: Request, req: ModelActionRequest) -> ModelInfoResponse:
-    cfg = get_config()
     manager = request.app.state.ollama_manager
-    info = await manager.show_model(cfg.ollama, req.model)
+    info = await manager.show_model(req.model)
     if info is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -370,51 +318,217 @@ async def show_model(request: Request, req: ModelActionRequest) -> ModelInfoResp
     )
 
 
-class ModelCopyRequest(ModelActionRequest):
-    """Copy a model under a new name."""
-    destination: str
+@router.post(
+    "/admin/lanes/apply",
+    response_model=LaneApplyResult,
+    summary="Declarative: set desired lane configuration (diff + execute)",
+    dependencies=[Depends(verify_api_key)],
+)
+async def apply_lanes(request: Request, req: LaneSetRequest) -> LaneApplyResult:
+    lane_manager = request.app.state.lane_manager
+    result = await lane_manager.apply_lanes(req.lanes)
+
+    if result.success:
+        save_lanes_config(req.lanes)
+
+    return result
+
+
+@router.get(
+    "/admin/lanes/templates",
+    response_model=dict[str, Any],
+    summary="Get copy-paste lane templates for Ollama, vLLM, and mixed setups",
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_lane_templates() -> dict[str, Any]:
+    """Return practical lane configuration templates for operators."""
+    return {
+        "notes": [
+            "Use POST /admin/lanes/apply with one of these payloads.",
+            "Lane IDs are derived from model names; duplicate models are rejected.",
+            "For vLLM lanes, num_parallel is ignored (continuous batching).",
+            "vLLM sleep control is available at POST /admin/lanes/{lane_id}/sleep and /wake when enable_sleep_mode=true.",
+        ],
+        "templates": {
+            "single_ollama_lane": {
+                "lanes": [
+                    {
+                        "model": "qwen2.5-coder:32b",
+                        "backend": "ollama",
+                        "num_parallel": 8,
+                        "context_length": 4096,
+                        "keep_alive": "10m",
+                        "kv_cache_type": "q8_0",
+                        "flash_attention": True,
+                        "gpu_devices": "0,1",
+                    }
+                ]
+            },
+            "single_vllm_lane": {
+                "lanes": [
+                    {
+                        "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+                        "backend": "vllm",
+                        "context_length": 4096,
+                        "flash_attention": True,
+                        "gpu_devices": "0,1",
+                        "vllm": {
+                            "vllm_binary": "vllm",
+                            "tensor_parallel_size": 2,
+                            "max_model_len": 4096,
+                            "dtype": "float16",
+                            "quantization": "",
+                            "gpu_memory_utilization": 0.70,
+                            "enforce_eager": True,
+                            "enable_prefix_caching": True,
+                            "disable_custom_all_reduce": False,
+                            "disable_nccl_p2p": False,
+                            "enable_sleep_mode": False,
+                            "server_dev_mode": False,
+                            "extra_args": [],
+                        },
+                    }
+                ]
+            },
+            "mixed_lanes": {
+                "lanes": [
+                    {
+                        "model": "qwen2.5-coder:32b",
+                        "backend": "ollama",
+                        "num_parallel": 8,
+                        "context_length": 4096,
+                        "keep_alive": "10m",
+                        "kv_cache_type": "q8_0",
+                        "flash_attention": True,
+                        "gpu_devices": "0",
+                    },
+                    {
+                        "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+                        "backend": "vllm",
+                        "context_length": 4096,
+                        "flash_attention": True,
+                        "gpu_devices": "1",
+                        "vllm": {
+                            "tensor_parallel_size": 1,
+                            "gpu_memory_utilization": 0.70,
+                            "enforce_eager": True,
+                            "enable_prefix_caching": True,
+                            "extra_args": [],
+                        },
+                    },
+                ]
+            },
+        },
+    }
+
+
+@router.get(
+    "/admin/lanes",
+    response_model=list[LaneStatus],
+    summary="Get status of all active lanes",
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_lanes(request: Request) -> list[LaneStatus]:
+    lane_manager = request.app.state.lane_manager
+    return await lane_manager.get_all_statuses()
+
+
+@router.get(
+    "/admin/lanes/events",
+    response_model=list[LaneEvent],
+    summary="Recent lane transition events",
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_lane_events(request: Request, limit: int = 100) -> list[LaneEvent]:
+    lane_manager = request.app.state.lane_manager
+    events = lane_manager.event_log
+    if limit > 0:
+        events = events[-limit:]
+    return events
+
+
+@router.get(
+    "/admin/lanes/{lane_id}",
+    response_model=LaneStatus,
+    summary="Get status of a specific lane",
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_lane(request: Request, lane_id: str) -> LaneStatus:
+    lane_manager = request.app.state.lane_manager
+    try:
+        return await lane_manager.get_lane_status(lane_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lane '{lane_id}' not found")
 
 
 @router.post(
-    "/admin/models/copy",
+    "/admin/lanes/{lane_id}/reconfigure",
+    response_model=LaneStatus,
+    summary="Reconfigure a single lane (partial update)",
+    dependencies=[Depends(verify_api_key)],
+)
+async def reconfigure_lane(request: Request, lane_id: str, req: LaneReconfigureRequest) -> LaneStatus:
+    lane_manager = request.app.state.lane_manager
+    updates = req.model_dump(exclude_none=True)
+    if not updates:
+        try:
+            return await lane_manager.get_lane_status(lane_id)
+        except KeyError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lane '{lane_id}' not found")
+    try:
+        return await lane_manager.reconfigure_lane(lane_id, updates)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lane '{lane_id}' not found")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/admin/lanes/{lane_id}/sleep",
+    response_model=LaneStatus,
+    summary="Put a vLLM lane into sleep mode",
+    dependencies=[Depends(verify_api_key)],
+)
+async def sleep_lane(request: Request, lane_id: str, req: LaneSleepRequest) -> LaneStatus:
+    lane_manager = request.app.state.lane_manager
+    try:
+        return await lane_manager.sleep_lane(lane_id, level=req.level, mode=req.mode)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lane '{lane_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/admin/lanes/{lane_id}/wake",
+    response_model=LaneStatus,
+    summary="Wake a sleeping vLLM lane",
+    dependencies=[Depends(verify_api_key)],
+)
+async def wake_lane(request: Request, lane_id: str) -> LaneStatus:
+    lane_manager = request.app.state.lane_manager
+    try:
+        return await lane_manager.wake_lane(lane_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lane '{lane_id}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.delete(
+    "/admin/lanes/{lane_id}",
     response_model=ActionResponse,
-    summary="Copy/alias a model under a new name (instant, no disk copy)",
+    summary="Remove a lane",
     dependencies=[Depends(verify_api_key)],
 )
-async def copy_model(request: Request, req: ModelCopyRequest) -> ActionResponse:
-    cfg = get_config()
-    manager = request.app.state.ollama_manager
-    ok = await manager.copy_model(cfg.ollama, req.model, req.destination)
-    if ok:
-        return ActionResponse(
-            success=True,
-            message=f"Model '{req.model}' copied to '{req.destination}'",
-        )
-    raise HTTPException(
-        status_code=status.HTTP_502_BAD_GATEWAY,
-        detail=f"Failed to copy model '{req.model}' to '{req.destination}'",
-    )
-
-
-@router.post(
-    "/admin/models/pull/stream",
-    summary="Pull a model with streaming progress (SSE)",
-    dependencies=[Depends(verify_api_key)],
-)
-async def pull_model_stream(request: Request, req: ModelActionRequest) -> StreamingResponse:
-    """Stream pull progress as newline-delimited JSON (NDJSON).
-
-    Each line is a JSON object like:
-        {"status": "pulling abc123", "completed": 1234567, "total": 5000000}
-    """
-    cfg = get_config()
-    manager = request.app.state.ollama_manager
-
-    async def _stream():
-        async for chunk in manager.pull_model_streaming(cfg.ollama, req.model):
-            yield json.dumps(chunk) + "\n"
-
-    return StreamingResponse(
-        _stream(),
-        media_type="application/x-ndjson",
-    )
+async def delete_lane(request: Request, lane_id: str) -> ActionResponse:
+    lane_manager = request.app.state.lane_manager
+    try:
+        await lane_manager.remove_lane(lane_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lane '{lane_id}' not found")
+    return ActionResponse(success=True, message=f"Lane '{lane_id}' removed")

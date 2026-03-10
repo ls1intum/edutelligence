@@ -1,19 +1,18 @@
 controller:
-  port: 8443
+  port: 8444
   api_key: RANDOM_DEFAULT_KEY
   tls_enabled: false
-  tls_cert_path: /app/certs/cert.pem
-  tls_key_path: /app/certs/key.pem
+  tls_cert_path: certs/cert.pem
+  tls_key_path: certs/key.pem
   gpu_poll_interval: 5
   ollama_poll_interval: 5
+  lane_port_start: 11436
+  lane_port_end: 11499
 ollama:
-  image: ollama/ollama:latest
-  container_name: ollama-server
-  host_port: 11435
-  container_port: 11434
+  ollama_binary: /usr/local/bin/ollama
+  port: 11435
   gpu_devices: all
-  num_parallel: 8
-  max_num_parallel: 0
+  num_parallel: 4
   max_loaded_models: 2
   keep_alive: 10m
   max_queue: 512
@@ -27,14 +26,7 @@ ollama:
   origins: []
   noprune: false
   llm_library: cuda_v12
-  models_path: /root/.ollama/models
+  models_path: /usr/share/ollama/.ollama/models
   preload_models: []
   env_overrides: {}
-  use_host_binary: false
-  host_binary_path: /usr/local/bin/ollama
-  host_lib_path: /usr/local/lib/ollama
-  base_image: debian:bookworm-slim
-docker:
-  network_name: node-controller-net
-  volume_name: ollama-models
-  models_host_path: /usr/share/ollama/.ollama/models
+lanes: []

@@ -1,285 +1,391 @@
 {
-	"info": {
-		"_postman_id": "node-controller-v1",
-		"name": "Node Controller",
-		"description": "Manages a single Ollama Docker container on a GPU node.\n\n## Setup\n1. `cd node-controller && docker compose up --build`\n2. Set the `base_url` variable to `http://localhost:8443`\n3. Set the `api_key` variable to the key from config.yml (default: `RANDOM_DEFAULT_KEY`)\n\n## Workflow\n1. Health → 2. Start Ollama → 3. Status → 4. Pull Model → 5. Preload → 6. Chat via Ollama",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
-	},
-	"variable": [
-		{
-			"key": "base_url",
-			"value": "http://localhost:8443"
-		},
-		{
-			"key": "api_key",
-			"value": "RANDOM_DEFAULT_KEY"
-		},
-		{
-			"key": "model_name",
-			"value": "qwen2.5:0.5b"
-		}
-	],
-	"auth": {
-		"type": "bearer",
-		"bearer": [
-			{
-				"key": "token",
-				"value": "{{api_key}}",
-				"type": "string"
-			}
-		]
-	},
-	"item": [
-		{
-			"name": "1. Startup & Health",
-			"item": [
-				{
-					"name": "Root",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "GET",
-						"url": "{{base_url}}/",
-						"description": "Basic service info — no auth required."
-					}
-				},
-				{
-					"name": "Health Check",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "GET",
-						"url": "{{base_url}}/health",
-						"description": "Public health probe. Returns ollama_running and gpu_available booleans. Used by Docker healthcheck / load balancers."
-					}
-				},
-				{
-					"name": "Swagger Docs",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "GET",
-						"url": "{{base_url}}/docs",
-						"description": "Interactive API docs (open in browser)."
-					}
-				}
-			]
-		},
-		{
-			"name": "2. Status & Monitoring",
-			"item": [
-				{
-					"name": "Full Node Status",
-					"request": {
-						"method": "GET",
-						"url": "{{base_url}}/status",
-						"description": "Primary endpoint for Logos. Returns container state, loaded models, GPU metrics, and current Ollama config — all in one call."
-					}
-				},
-				{
-					"name": "GPU Metrics",
-					"request": {
-						"method": "GET",
-						"url": "{{base_url}}/gpu",
-						"description": "nvidia-smi snapshot: utilization %, temperature, power, VRAM usage per GPU. Returns nvidia_smi_available=false on non-GPU hosts."
-					}
-				},
-				{
-					"name": "Available & Loaded Models",
-					"request": {
-						"method": "GET",
-						"url": "{{base_url}}/models",
-						"description": "Lists all models on disk (from /api/tags) and currently loaded in VRAM (from /api/ps) with size and VRAM usage breakdown."
-					}
-				},
-				{
-					"name": "Current Ollama Config",
-					"request": {
-						"method": "GET",
-						"url": "{{base_url}}/config",
-						"description": "Returns the active Ollama runtime configuration (num_parallel, keep_alive, image, etc.)."
-					}
-				}
-			]
-		},
-		{
-			"name": "3. Container Lifecycle",
-			"item": [
-				{
-					"name": "Start Ollama",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/ollama/start",
-						"description": "Start the Ollama container. Creates it from config if it doesn't exist yet."
-					}
-				},
-				{
-					"name": "Stop Ollama",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/ollama/stop",
-						"description": "Gracefully stop the Ollama container (15s timeout)."
-					}
-				},
-				{
-					"name": "Restart Ollama",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/ollama/restart",
-						"description": "Restart without changing config. Waits for ready."
-					}
-				},
-				{
-					"name": "Reconfigure Ollama",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/ollama/reconfigure",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"num_parallel\": 8,\n  \"keep_alive\": \"10m\",\n  \"max_loaded_models\": 2\n}"
-						},
-						"description": "Partial config update. Only include fields you want to change. If runtime fields change, the container is automatically destroyed and recreated."
-					}
-				},
-				{
-					"name": "Destroy Ollama",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/ollama/destroy",
-						"description": "Force-remove the Ollama container. Models on disk are preserved."
-					}
-				}
-			]
-		},
-		{
-			"name": "4. Model Management",
-			"item": [
-				{
-					"name": "Pull Model",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/models/pull",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"model\": \"{{model_name}}\"\n}"
-						},
-						"description": "Download a model from the Ollama registry. Can take minutes for large models."
-					}
-				},
-				{
-					"name": "Preload Model into VRAM",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/models/preload",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"model\": \"{{model_name}}\"\n}"
-						},
-						"description": "Load the model into GPU VRAM so the first inference is instant."
-					}
-				},
-				{
-					"name": "Unload Model from VRAM",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/models/unload",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"model\": \"{{model_name}}\"\n}"
-						},
-						"description": "Evict the model from VRAM (sets keep_alive=0). Frees GPU memory."
-					}
-				},
-				{
-					"name": "Delete Model from Disk",
-					"request": {
-						"method": "POST",
-						"url": "{{base_url}}/admin/models/delete",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"model\": \"{{model_name}}\"\n}"
-						},
-						"description": "Permanently delete a model from disk."
-					}
-				}
-			]
-		},
-		{
-			"name": "5. Direct Ollama (bypass controller)",
-			"description": "These go directly to the Ollama container on port 11434 — the controller is NOT in the path for inference.",
-			"item": [
-				{
-					"name": "Ollama Version",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "GET",
-						"url": "http://localhost:11434/api/version",
-						"description": "Verify Ollama is running."
-					}
-				},
-				{
-					"name": "List Local Models",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "GET",
-						"url": "http://localhost:11434/api/tags",
-						"description": "List all models downloaded to disk."
-					}
-				},
-				{
-					"name": "Chat Completion (OpenAI format)",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "POST",
-						"url": "http://localhost:11434/v1/chat/completions",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"model\": \"{{model_name}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"Hello, what is 2+2?\" }\n  ],\n  \"stream\": false\n}"
-						},
-						"description": "OpenAI-compatible chat endpoint. This is what Logos hits directly."
-					}
-				},
-				{
-					"name": "Generate (Ollama native)",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "POST",
-						"url": "http://localhost:11434/api/generate",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"model\": \"{{model_name}}\",\n  \"prompt\": \"Why is the sky blue?\",\n  \"stream\": false\n}"
-						},
-						"description": "Ollama native generate endpoint."
-					}
-				},
-				{
-					"name": "Running Models (ps)",
-					"request": {
-						"auth": { "type": "noauth" },
-						"method": "GET",
-						"url": "http://localhost:11434/api/ps",
-						"description": "Show models currently loaded in VRAM."
-					}
-				}
-			]
-		}
-	]
+  "info": {
+    "_postman_id": "node-controller-v2",
+    "name": "Node Controller (Current)",
+    "description": "Current Node Controller API collection (process + lane architecture).\n\nSetup:\n1. Start controller (`python -m node_controller.main` or docker compose).\n2. Set base_url and api_key variables.\n3. Use /admin/lanes/apply for lane orchestration.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8444"
+    },
+    {
+      "key": "api_key",
+      "value": "RANDOM_DEFAULT_KEY"
+    },
+    {
+      "key": "ollama_base_url",
+      "value": "http://localhost:11435"
+    },
+    {
+      "key": "model_name",
+      "value": "qwen2.5:0.5b"
+    },
+    {
+      "key": "lane_id",
+      "value": "qwen2.5-coder_32b"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{api_key}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Public",
+      "item": [
+        {
+          "name": "Root",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": "{{base_url}}/"
+          }
+        },
+        {
+          "name": "Health",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": "{{base_url}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Status",
+      "item": [
+        {
+          "name": "Node Status",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/status"
+          }
+        },
+        {
+          "name": "GPU",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/gpu"
+          }
+        },
+        {
+          "name": "Models Loaded",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/models/loaded"
+          }
+        },
+        {
+          "name": "Models Available",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/models/available"
+          }
+        },
+        {
+          "name": "Lanes (Status API)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/lanes"
+          }
+        },
+        {
+          "name": "Config",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/config"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin Ollama",
+      "item": [
+        {
+          "name": "Start",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/ollama/start"
+          }
+        },
+        {
+          "name": "Stop",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/ollama/stop"
+          }
+        },
+        {
+          "name": "Restart",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/ollama/restart"
+          }
+        },
+        {
+          "name": "Reconfigure",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"num_parallel\": 8,\n  \"keep_alive\": \"10m\"\n}"
+            },
+            "url": "{{base_url}}/admin/ollama/reconfigure"
+          }
+        },
+        {
+          "name": "Destroy",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/ollama/destroy"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin Models",
+      "item": [
+        {
+          "name": "Pull",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{model_name}}\"\n}"
+            },
+            "url": "{{base_url}}/admin/models/pull"
+          }
+        },
+        {
+          "name": "Pull Stream (NDJSON)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{model_name}}\"\n}"
+            },
+            "url": "{{base_url}}/admin/models/pull/stream"
+          }
+        },
+        {
+          "name": "Preload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{model_name}}\"\n}"
+            },
+            "url": "{{base_url}}/admin/models/preload"
+          }
+        },
+        {
+          "name": "Unload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{model_name}}\"\n}"
+            },
+            "url": "{{base_url}}/admin/models/unload"
+          }
+        },
+        {
+          "name": "Delete",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{model_name}}\"\n}"
+            },
+            "url": "{{base_url}}/admin/models/delete"
+          }
+        },
+        {
+          "name": "Show",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{model_name}}\"\n}"
+            },
+            "url": "{{base_url}}/admin/models/show"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin Lanes",
+      "item": [
+        {
+          "name": "Templates",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/admin/lanes/templates"
+          }
+        },
+        {
+          "name": "Apply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lanes\": [\n    {\n      \"model\": \"qwen2.5-coder:32b\",\n      \"backend\": \"ollama\",\n      \"num_parallel\": 8,\n      \"context_length\": 4096,\n      \"keep_alive\": \"10m\",\n      \"kv_cache_type\": \"q8_0\",\n      \"flash_attention\": true,\n      \"gpu_devices\": \"0\"\n    }\n  ]\n}"
+            },
+            "url": "{{base_url}}/admin/lanes/apply"
+          }
+        },
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/admin/lanes"
+          }
+        },
+        {
+          "name": "Events",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/admin/lanes/events?limit=100"
+          }
+        },
+        {
+          "name": "Get One",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/admin/lanes/{{lane_id}}"
+          }
+        },
+        {
+          "name": "Reconfigure One",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"num_parallel\": 16\n}"
+            },
+            "url": "{{base_url}}/admin/lanes/{{lane_id}}/reconfigure"
+          }
+        },
+        {
+          "name": "Delete One",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/admin/lanes/{{lane_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Direct Inference (Bypass Controller)",
+      "description": "Inference goes directly to backend ports. For single Ollama process mode, use ollama_base_url (default 11435).",
+      "item": [
+        {
+          "name": "Ollama Version",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": "{{ollama_base_url}}/api/version"
+          }
+        },
+        {
+          "name": "Ollama Tags",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": "{{ollama_base_url}}/api/tags"
+          }
+        },
+        {
+          "name": "OpenAI Chat",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{model_name}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"Hello, what is 2+2?\" }\n  ],\n  \"stream\": false\n}"
+            },
+            "url": "{{ollama_base_url}}/v1/chat/completions"
+          }
+        }
+      ]
+    }
+  ]
 }

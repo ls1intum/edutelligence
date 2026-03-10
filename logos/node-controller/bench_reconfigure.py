@@ -12,7 +12,7 @@ Scenarios:
     4. (New) Optional preload timing after reconfigure
 
 Usage:
-  python bench_reconfigure.py [--base-url http://localhost:8443] [--rounds 3]
+  python bench_reconfigure.py [--base-url http://localhost:8444] [--rounds 3]
 """
 
 import argparse
@@ -139,7 +139,7 @@ def bench_warm_switch(
     t_preload = None
     if initial_restarted:
         if preload_after:
-            print(f"    Container restarted. Preloading model...")
+            print("    Process restarted. Preloading model...")
             _, before_preload_api = preload_model(base, api_key, model)
             print(f"    Preload API returned in {before_preload_api*1000:.0f}ms")
         print(f"    Waiting for model to load...")
@@ -306,7 +306,7 @@ def print_summary(results: list[dict]):
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark num_parallel reconfigure speed")
-    parser.add_argument("--base-url", default="http://localhost:8443", help="Node controller base URL")
+    parser.add_argument("--base-url", default="http://localhost:8444", help="Node controller base URL")
     parser.add_argument("--model", default="qwen2.5:0.5b", help="Model to benchmark")
     parser.add_argument("--low", type=int, default=4, help="Low parallelism")
     parser.add_argument("--high", type=int, default=8, help="High parallelism")
@@ -332,8 +332,8 @@ def main():
         print(f"\nERROR: Cannot reach node controller at {args.base_url}: {e}")
         sys.exit(1)
 
-    host_port = cfg.get("host_port", 11434)
-    ollama_url = args.ollama_url or f"http://localhost:{host_port}"
+    ollama_port = int(cfg.get("port", 11435))
+    ollama_url = args.ollama_url or f"http://localhost:{ollama_port}"
     print(f"Ollama URL:      {ollama_url}")
 
     results = bench_round_trip(

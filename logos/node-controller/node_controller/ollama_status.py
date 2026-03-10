@@ -1,7 +1,7 @@
 """
 Ollama instance status poller.
 
-Periodically queries the managed Ollama container's HTTP API to collect
+Periodically queries the managed Ollama process's HTTP API to collect
 loaded models, available models, and version.  Results are cached and
 served via the Logos-facing API.
 
@@ -81,7 +81,7 @@ class OllamaStatusPoller:
 
     def _base_url(self) -> str:
         assert self._config is not None
-        return f"http://{self._config.container_name}:{self._config.container_port}"
+        return f"http://127.0.0.1:{self._config.port}"
 
     async def _poll_loop(self) -> None:
         while True:

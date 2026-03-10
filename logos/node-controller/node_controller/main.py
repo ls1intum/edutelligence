@@ -1,7 +1,7 @@
 """
 Node Controller — FastAPI application entry point.
 
-Wires all components together: config, Docker manager, GPU collector,
+Wires all components together: config, Ollama process manager, GPU collector,
 Ollama status poller, and API routers.  Manages the async lifespan
 (startup/shutdown) of all background services.
 
@@ -22,8 +22,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from node_controller.config import get_config, load_config
 from node_controller.gpu import GpuMetricsCollector
+from node_controller.lane_manager import LaneManager
 from node_controller.ollama_manager import OllamaManager
 from node_controller.ollama_status import OllamaStatusPoller
+from node_controller.vram_budget import VramBudgetManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,13 +42,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     Startup order:
       1. Load config
-      2. Connect to Docker daemon
-      3. Create/start the Ollama container (if configured)
+      2. Initialise Ollama process manager
+      3. Spawn the Ollama process
       4. Start GPU metrics collector
       5. Start Ollama status poller
       6. Store all service instances in app.state
 
-    Shutdown order: reverse (stop poller, stop GPU, close Docker).
+    Shutdown order: reverse (stop poller, stop GPU, kill Ollama process).
     """
 
     # ---- 1. Config ----
@@ -57,53 +59,61 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sys.exit(1)
 
     logger.info(
-        "Config loaded — controller port=%d, Ollama image=%s, num_parallel=%d",
+        "Config loaded — controller port=%d, Ollama port=%d, num_parallel=%d",
         cfg.controller.port,
-        cfg.ollama.image,
+        cfg.ollama.port,
         cfg.ollama.num_parallel,
     )
 
-    # ---- 2. Docker ----
-    manager = OllamaManager(
-        network_name=cfg.docker.network_name,
-        volume_name=cfg.docker.volume_name,
-        models_host_path=cfg.docker.models_host_path,
-    )
-    try:
-        await manager.init()
-    except Exception:
-        logger.exception("Failed to connect to Docker daemon")
-        sys.exit(1)
+    # ---- 2. Ollama process manager (legacy single-process mode) ----
+    manager = OllamaManager()
+    await manager.init()
 
-    # ---- 3. Ollama container ----
+    # ---- 3. Spawn Ollama process ----
     try:
-        container_status = await manager.status(cfg.ollama.container_name)
-        if container_status.state.value in ("not_found", "stopped"):
-            logger.info("Creating/starting Ollama container…")
-            await manager.create(cfg.ollama)
-        elif container_status.state.value == "running":
-            logger.info("Ollama container already running (id=%s)", container_status.container_id)
-        else:
-            logger.warning(
-                "Ollama container in unexpected state '%s' — recreating",
-                container_status.state.value,
-            )
-            await manager.recreate(cfg.ollama)
+        process_status = await manager.spawn(cfg.ollama)
+        logger.info("Ollama process status: %s (pid=%s)", process_status.state.value, process_status.pid)
     except Exception:
-        logger.exception("Failed to ensure Ollama container — continuing without it")
+        logger.exception("Failed to spawn Ollama process — continuing without it")
 
     # ---- 4. GPU collector ----
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.controller.gpu_poll_interval)
     await gpu_collector.start()
 
-    # ---- 5. Ollama status poller ----
+    # ---- 5. Ollama status poller (for legacy single-process mode) ----
     status_poller = OllamaStatusPoller(poll_interval=cfg.controller.ollama_poll_interval)
     await status_poller.start(cfg.ollama)
 
-    # ---- 6. Store in app.state for route handlers ----
+    # ---- 6. Lane manager (multi-process mode) ----
+    lane_manager = LaneManager(
+        global_config=cfg.ollama,
+        lane_port_start=cfg.controller.lane_port_start,
+        lane_port_end=cfg.controller.lane_port_end,
+        reserved_ports={cfg.ollama.port},
+    )
+
+    # Auto-apply lanes from config if present
+    if cfg.lanes:
+        logger.info("Applying %d lane(s) from config...", len(cfg.lanes))
+        try:
+            result = await lane_manager.apply_lanes(cfg.lanes)
+            for action in result.actions:
+                logger.info("  Lane '%s': %s (%s)", action.lane_id, action.action, action.details)
+            if result.errors:
+                for err in result.errors:
+                    logger.error("  Lane error: %s", err)
+        except Exception:
+            logger.exception("Failed to apply lanes from config — continuing without lanes")
+
+    # ---- 7. VRAM budget manager ----
+    vram_budget = VramBudgetManager(gpu_collector)
+
+    # ---- 8. Store in app.state for route handlers ----
     app.state.ollama_manager = manager
     app.state.gpu_collector = gpu_collector
     app.state.status_poller = status_poller
+    app.state.lane_manager = lane_manager
+    app.state.vram_budget = vram_budget
 
     logger.info("Node Controller started — all systems ready")
 
@@ -114,12 +124,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await status_poller.stop()
     await gpu_collector.stop()
 
-    # Stop and remove the spawned Ollama container so it doesn't hold
-    # the Docker network open after the controller exits.
+    # Shutdown lanes
     try:
-        await manager.destroy(cfg.ollama.container_name)
+        await lane_manager.destroy_all()
     except Exception:
-        logger.warning("Could not remove Ollama container during shutdown", exc_info=True)
+        logger.warning("Error shutting down lanes", exc_info=True)
+    await lane_manager.close()
+
+    try:
+        await manager.destroy()
+    except Exception:
+        logger.warning("Could not stop Ollama process during shutdown", exc_info=True)
 
     await manager.close()
     logger.info("Shutdown complete")
@@ -130,8 +145,8 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Node Controller",
         description=(
-            "Manages a single Ollama Docker container on a GPU node. "
-            "Exposes nvidia-smi metrics, Ollama status, and admin controls to Logos."
+            "Manages Ollama processes on a GPU node — single-process or multi-lane mode. "
+            "Exposes nvidia-smi metrics, Ollama status, lane management, and admin controls to Logos."
         ),
         version="1.0.0",
         lifespan=lifespan,
@@ -144,7 +159,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Import and include routers (they are populated during lifespan)
     from node_controller.admin_api import router as admin_router
     from node_controller.logos_api import router as logos_router
 
@@ -169,30 +183,18 @@ def main() -> None:
     """CLI entry point."""
     cfg = load_config()
 
-    host = "0.0.0.0"
-    port = cfg.controller.port
+    kwargs: dict = {
+        "app": "node_controller.main:app",
+        "host": "0.0.0.0",
+        "port": cfg.controller.port,
+        "log_level": "info",
+    }
 
-    ssl_kwargs = {}
     if cfg.controller.tls_enabled:
-        from pathlib import Path
+        kwargs["ssl_certfile"] = cfg.controller.tls_cert_path
+        kwargs["ssl_keyfile"] = cfg.controller.tls_key_path
 
-        cert = Path(cfg.controller.tls_cert_path)
-        key = Path(cfg.controller.tls_key_path)
-        if cert.exists() and key.exists():
-            ssl_kwargs["ssl_certfile"] = str(cert)
-            ssl_kwargs["ssl_keyfile"] = str(key)
-            logger.info("TLS enabled (cert=%s)", cert)
-        else:
-            logger.warning("TLS enabled but cert/key not found — falling back to HTTP")
-
-    logger.info("Starting Node Controller on %s:%d", host, port)
-    uvicorn.run(
-        "node_controller.main:app",
-        host=host,
-        port=port,
-        log_level="info",
-        **ssl_kwargs,
-    )
+    uvicorn.run(**kwargs)
 
 
 if __name__ == "__main__":

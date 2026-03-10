@@ -1,0 +1,1470 @@
+{
+  "timestamp_utc": "2026-03-09T23:40:13.021371+00:00",
+  "controller_url": "http://127.0.0.1:8444",
+  "concurrency": [
+    1,
+    4,
+    8,
+    16,
+    32
+  ],
+  "max_tokens": 200,
+  "warmup": 1,
+  "prompt_mode": "fixed_shared_prefix",
+  "temperature": 0.1,
+  "run_plan": [
+    {
+      "run_label": "vllm_prefix_off",
+      "lane_config": {
+        "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        "backend": "vllm",
+        "context_length": 4096,
+        "flash_attention": false,
+        "gpu_devices": "0,1",
+        "vllm": {
+          "vllm_binary": "/home/ge84ciq/node-controller-test/edutelligence/logos/node-controller/.venv/bin/vllm",
+          "tensor_parallel_size": 2,
+          "max_model_len": 4096,
+          "dtype": "float16",
+          "quantization": "",
+          "gpu_memory_utilization": 0.9,
+          "enforce_eager": true,
+          "enable_prefix_caching": false,
+          "extra_args": []
+        }
+      }
+    },
+    {
+      "run_label": "vllm_prefix_on",
+      "lane_config": {
+        "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        "backend": "vllm",
+        "context_length": 4096,
+        "flash_attention": false,
+        "gpu_devices": "0,1",
+        "vllm": {
+          "vllm_binary": "/home/ge84ciq/node-controller-test/edutelligence/logos/node-controller/.venv/bin/vllm",
+          "tensor_parallel_size": 2,
+          "max_model_len": 4096,
+          "dtype": "float16",
+          "quantization": "",
+          "gpu_memory_utilization": 0.9,
+          "enforce_eager": true,
+          "enable_prefix_caching": true,
+          "extra_args": []
+        }
+      }
+    },
+    {
+      "run_label": "ollama_np1",
+      "lane_config": {
+        "model": "deepseek-r1:latest",
+        "backend": "ollama",
+        "num_parallel": 1,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    },
+    {
+      "run_label": "ollama_np4",
+      "lane_config": {
+        "model": "deepseek-r1:latest",
+        "backend": "ollama",
+        "num_parallel": 4,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    },
+    {
+      "run_label": "ollama_np8",
+      "lane_config": {
+        "model": "deepseek-r1:latest",
+        "backend": "ollama",
+        "num_parallel": 8,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    },
+    {
+      "run_label": "ollama_np16",
+      "lane_config": {
+        "model": "deepseek-r1:latest",
+        "backend": "ollama",
+        "num_parallel": 16,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    },
+    {
+      "run_label": "ollama_np32",
+      "lane_config": {
+        "model": "deepseek-r1:latest",
+        "backend": "ollama",
+        "num_parallel": 32,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    }
+  ],
+  "backends": [
+    {
+      "run_label": "vllm_prefix_off",
+      "backend": "vllm",
+      "configured_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "served_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "lane_port": 11436,
+      "prompt_mode": "fixed_shared_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": false,
+      "ollama_num_parallel": null,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 200,
+          "batch_time_s": 6.342,
+          "aggregate_tok_s": 31.536,
+          "avg_latency_s": 6.337,
+          "p50_latency_s": 6.337,
+          "p95_latency_s": 6.337,
+          "avg_ttft_ms": 66.8,
+          "avg_tok_per_req_s": 31.558,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 800,
+          "batch_time_s": 6.772,
+          "aggregate_tok_s": 118.13,
+          "avg_latency_s": 6.749,
+          "p50_latency_s": 6.771,
+          "p95_latency_s": 6.771,
+          "avg_ttft_ms": 124.2,
+          "avg_tok_per_req_s": 29.634,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1600,
+          "batch_time_s": 6.875,
+          "aggregate_tok_s": 232.712,
+          "avg_latency_s": 6.863,
+          "p50_latency_s": 6.872,
+          "p95_latency_s": 6.874,
+          "avg_ttft_ms": 158.8,
+          "avg_tok_per_req_s": 29.141,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 3200,
+          "batch_time_s": 7.107,
+          "aggregate_tok_s": 450.258,
+          "avg_latency_s": 7.097,
+          "p50_latency_s": 7.101,
+          "p95_latency_s": 7.104,
+          "avg_ttft_ms": 225.6,
+          "avg_tok_per_req_s": 28.183,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 6400,
+          "batch_time_s": 7.388,
+          "aggregate_tok_s": 866.246,
+          "avg_latency_s": 7.377,
+          "p50_latency_s": 7.38,
+          "p95_latency_s": 7.385,
+          "avg_ttft_ms": 317.7,
+          "avg_tok_per_req_s": 27.11,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        }
+      ]
+    },
+    {
+      "run_label": "vllm_prefix_on",
+      "backend": "vllm",
+      "configured_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "served_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "lane_port": 11436,
+      "prompt_mode": "fixed_shared_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": true,
+      "ollama_num_parallel": null,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 200,
+          "batch_time_s": 6.625,
+          "aggregate_tok_s": 30.19,
+          "avg_latency_s": 6.624,
+          "p50_latency_s": 6.624,
+          "p95_latency_s": 6.624,
+          "avg_ttft_ms": 72.3,
+          "avg_tok_per_req_s": 30.191,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 800,
+          "batch_time_s": 6.953,
+          "aggregate_tok_s": 115.061,
+          "avg_latency_s": 6.929,
+          "p50_latency_s": 6.951,
+          "p95_latency_s": 6.952,
+          "avg_ttft_ms": 126.7,
+          "avg_tok_per_req_s": 28.865,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1600,
+          "batch_time_s": 7.033,
+          "aggregate_tok_s": 227.486,
+          "avg_latency_s": 7.021,
+          "p50_latency_s": 7.03,
+          "p95_latency_s": 7.032,
+          "avg_ttft_ms": 158.0,
+          "avg_tok_per_req_s": 28.485,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 3200,
+          "batch_time_s": 7.187,
+          "aggregate_tok_s": 445.259,
+          "avg_latency_s": 7.176,
+          "p50_latency_s": 7.181,
+          "p95_latency_s": 7.184,
+          "avg_ttft_ms": 206.3,
+          "avg_tok_per_req_s": 27.87,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 6400,
+          "batch_time_s": 7.614,
+          "aggregate_tok_s": 840.556,
+          "avg_latency_s": 7.601,
+          "p50_latency_s": 7.604,
+          "p95_latency_s": 7.609,
+          "avg_ttft_ms": 293.5,
+          "avg_tok_per_req_s": 26.313,
+          "gpu_mem_baseline_total_mb": 30368,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np1",
+      "backend": "ollama",
+      "configured_model": "deepseek-r1:latest",
+      "served_model": "deepseek-r1:latest",
+      "lane_port": 11436,
+      "prompt_mode": "fixed_shared_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 1,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 200,
+          "batch_time_s": 3.872,
+          "aggregate_tok_s": 51.648,
+          "avg_latency_s": 3.872,
+          "p50_latency_s": 3.872,
+          "p95_latency_s": 3.872,
+          "avg_ttft_ms": 538.4,
+          "avg_tok_per_req_s": 51.652,
+          "gpu_mem_baseline_total_mb": 5414,
+          "gpu_mem_peak_total_mb": 5414,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            5410,
+            4
+          ]
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 800,
+          "batch_time_s": 14.063,
+          "aggregate_tok_s": 56.888,
+          "avg_latency_s": 8.998,
+          "p50_latency_s": 9.009,
+          "p95_latency_s": 14.062,
+          "avg_ttft_ms": 5578.8,
+          "avg_tok_per_req_s": 27.859,
+          "gpu_mem_baseline_total_mb": 5414,
+          "gpu_mem_peak_total_mb": 5532,
+          "gpu_mem_peak_delta_mb": 118,
+          "gpu_mem_peak_per_gpu_mb": [
+            5410,
+            122
+          ]
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1600,
+          "batch_time_s": 27.24,
+          "aggregate_tok_s": 58.738,
+          "avg_latency_s": 15.476,
+          "p50_latency_s": 15.473,
+          "p95_latency_s": 27.237,
+          "avg_ttft_ms": 12129.3,
+          "avg_tok_per_req_s": 19.14,
+          "gpu_mem_baseline_total_mb": 5532,
+          "gpu_mem_peak_total_mb": 5532,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            5410,
+            122
+          ]
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 3200,
+          "batch_time_s": 54.162,
+          "aggregate_tok_s": 59.082,
+          "avg_latency_s": 28.884,
+          "p50_latency_s": 28.871,
+          "p95_latency_s": 54.159,
+          "avg_ttft_ms": 25541.4,
+          "avg_tok_per_req_s": 12.102,
+          "gpu_mem_baseline_total_mb": 5532,
+          "gpu_mem_peak_total_mb": 5532,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            5410,
+            122
+          ]
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 6400,
+          "batch_time_s": 108.177,
+          "aggregate_tok_s": 59.162,
+          "avg_latency_s": 55.975,
+          "p50_latency_s": 55.954,
+          "p95_latency_s": 104.83,
+          "avg_ttft_ms": 52630.2,
+          "avg_tok_per_req_s": 7.187,
+          "gpu_mem_baseline_total_mb": 5532,
+          "gpu_mem_peak_total_mb": 5532,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            5410,
+            122
+          ]
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np4",
+      "backend": "ollama",
+      "configured_model": "deepseek-r1:latest",
+      "served_model": "deepseek-r1:latest",
+      "lane_port": 11436,
+      "prompt_mode": "fixed_shared_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 4,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 200,
+          "batch_time_s": 3.877,
+          "aggregate_tok_s": 51.588,
+          "avg_latency_s": 3.876,
+          "p50_latency_s": 3.876,
+          "p95_latency_s": 3.876,
+          "avg_ttft_ms": 555.5,
+          "avg_tok_per_req_s": 51.594,
+          "gpu_mem_baseline_total_mb": 6472,
+          "gpu_mem_peak_total_mb": 6472,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            6350,
+            122
+          ]
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 800,
+          "batch_time_s": 6.426,
+          "aggregate_tok_s": 124.501,
+          "avg_latency_s": 6.389,
+          "p50_latency_s": 6.39,
+          "p95_latency_s": 6.424,
+          "avg_ttft_ms": 578.5,
+          "avg_tok_per_req_s": 31.306,
+          "gpu_mem_baseline_total_mb": 6472,
+          "gpu_mem_peak_total_mb": 6472,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            6350,
+            122
+          ]
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1600,
+          "batch_time_s": 12.132,
+          "aggregate_tok_s": 131.882,
+          "avg_latency_s": 9.145,
+          "p50_latency_s": 9.133,
+          "p95_latency_s": 12.13,
+          "avg_ttft_ms": 3344.9,
+          "avg_tok_per_req_s": 24.424,
+          "gpu_mem_baseline_total_mb": 6472,
+          "gpu_mem_peak_total_mb": 6472,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            6350,
+            122
+          ]
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 3200,
+          "batch_time_s": 23.686,
+          "aggregate_tok_s": 135.1,
+          "avg_latency_s": 14.901,
+          "p50_latency_s": 14.878,
+          "p95_latency_s": 23.682,
+          "avg_ttft_ms": 9106.8,
+          "avg_tok_per_req_s": 17.213,
+          "gpu_mem_baseline_total_mb": 6472,
+          "gpu_mem_peak_total_mb": 6472,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            6350,
+            122
+          ]
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 6400,
+          "batch_time_s": 47.376,
+          "aggregate_tok_s": 135.089,
+          "avg_latency_s": 26.78,
+          "p50_latency_s": 26.732,
+          "p95_latency_s": 47.37,
+          "avg_ttft_ms": 20972.2,
+          "avg_tok_per_req_s": 11.194,
+          "gpu_mem_baseline_total_mb": 6472,
+          "gpu_mem_peak_total_mb": 6472,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            6350,
+            122
+          ]
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np8",
+      "backend": "ollama",
+      "configured_model": "deepseek-r1:latest",
+      "served_model": "deepseek-r1:latest",
+      "lane_port": 11436,
+      "prompt_mode": "fixed_shared_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 8,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 200,
+          "batch_time_s": 4.156,
+          "aggregate_tok_s": 48.128,
+          "avg_latency_s": 4.155,
+          "p50_latency_s": 4.155,
+          "p95_latency_s": 4.155,
+          "avg_ttft_ms": 565.6,
+          "avg_tok_per_req_s": 48.132,
+          "gpu_mem_baseline_total_mb": 7736,
+          "gpu_mem_peak_total_mb": 7854,
+          "gpu_mem_peak_delta_mb": 118,
+          "gpu_mem_peak_per_gpu_mb": [
+            7732,
+            122
+          ]
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 800,
+          "batch_time_s": 6.447,
+          "aggregate_tok_s": 124.083,
+          "avg_latency_s": 6.418,
+          "p50_latency_s": 6.413,
+          "p95_latency_s": 6.447,
+          "avg_ttft_ms": 582.7,
+          "avg_tok_per_req_s": 31.163,
+          "gpu_mem_baseline_total_mb": 7854,
+          "gpu_mem_peak_total_mb": 7854,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            7732,
+            122
+          ]
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1600,
+          "batch_time_s": 11.048,
+          "aggregate_tok_s": 144.826,
+          "avg_latency_s": 10.981,
+          "p50_latency_s": 11.016,
+          "p95_latency_s": 11.046,
+          "avg_ttft_ms": 688.8,
+          "avg_tok_per_req_s": 18.214,
+          "gpu_mem_baseline_total_mb": 7854,
+          "gpu_mem_peak_total_mb": 7854,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            7732,
+            122
+          ]
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 3200,
+          "batch_time_s": 21.382,
+          "aggregate_tok_s": 149.661,
+          "avg_latency_s": 16.0,
+          "p50_latency_s": 15.981,
+          "p95_latency_s": 21.378,
+          "avg_ttft_ms": 5612.0,
+          "avg_tok_per_req_s": 14.063,
+          "gpu_mem_baseline_total_mb": 7854,
+          "gpu_mem_peak_total_mb": 7854,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            7732,
+            122
+          ]
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 6400,
+          "batch_time_s": 42.675,
+          "aggregate_tok_s": 149.972,
+          "avg_latency_s": 26.724,
+          "p50_latency_s": 26.722,
+          "p95_latency_s": 42.636,
+          "avg_ttft_ms": 16274.9,
+          "avg_tok_per_req_s": 9.689,
+          "gpu_mem_baseline_total_mb": 7854,
+          "gpu_mem_peak_total_mb": 7854,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            7732,
+            122
+          ]
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np16",
+      "backend": "ollama",
+      "configured_model": "deepseek-r1:latest",
+      "served_model": "deepseek-r1:latest",
+      "lane_port": 11436,
+      "prompt_mode": "fixed_shared_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 16,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 200,
+          "batch_time_s": 3.906,
+          "aggregate_tok_s": 51.198,
+          "avg_latency_s": 3.906,
+          "p50_latency_s": 3.906,
+          "p95_latency_s": 3.906,
+          "avg_ttft_ms": 576.8,
+          "avg_tok_per_req_s": 51.205,
+          "gpu_mem_baseline_total_mb": 10384,
+          "gpu_mem_peak_total_mb": 10384,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            10380,
+            4
+          ]
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 800,
+          "batch_time_s": 6.449,
+          "aggregate_tok_s": 124.054,
+          "avg_latency_s": 6.433,
+          "p50_latency_s": 6.448,
+          "p95_latency_s": 6.448,
+          "avg_ttft_ms": 578.1,
+          "avg_tok_per_req_s": 31.088,
+          "gpu_mem_baseline_total_mb": 10384,
+          "gpu_mem_peak_total_mb": 10502,
+          "gpu_mem_peak_delta_mb": 118,
+          "gpu_mem_peak_per_gpu_mb": [
+            10380,
+            122
+          ]
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1600,
+          "batch_time_s": 10.939,
+          "aggregate_tok_s": 146.269,
+          "avg_latency_s": 10.895,
+          "p50_latency_s": 10.898,
+          "p95_latency_s": 10.937,
+          "avg_ttft_ms": 698.1,
+          "avg_tok_per_req_s": 18.356,
+          "gpu_mem_baseline_total_mb": 10502,
+          "gpu_mem_peak_total_mb": 10502,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            10380,
+            122
+          ]
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 3200,
+          "batch_time_s": 11.853,
+          "aggregate_tok_s": 269.984,
+          "avg_latency_s": 11.756,
+          "p50_latency_s": 11.752,
+          "p95_latency_s": 11.851,
+          "avg_ttft_ms": 879.1,
+          "avg_tok_per_req_s": 17.012,
+          "gpu_mem_baseline_total_mb": 10502,
+          "gpu_mem_peak_total_mb": 10504,
+          "gpu_mem_peak_delta_mb": 2,
+          "gpu_mem_peak_per_gpu_mb": [
+            10382,
+            122
+          ]
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 6400,
+          "batch_time_s": 23.082,
+          "aggregate_tok_s": 277.276,
+          "avg_latency_s": 17.342,
+          "p50_latency_s": 17.261,
+          "p95_latency_s": 23.072,
+          "avg_ttft_ms": 6234.7,
+          "avg_tok_per_req_s": 12.913,
+          "gpu_mem_baseline_total_mb": 10504,
+          "gpu_mem_peak_total_mb": 10504,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            10382,
+            122
+          ]
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np32",
+      "backend": "ollama",
+      "configured_model": "deepseek-r1:latest",
+      "served_model": "deepseek-r1:latest",
+      "lane_port": 11436,
+      "prompt_mode": "fixed_shared_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-r1:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "Review this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 32,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 200,
+          "batch_time_s": 4.235,
+          "aggregate_tok_s": 47.224,
+          "avg_latency_s": 4.235,
+          "p50_latency_s": 4.235,
+          "p95_latency_s": 4.235,
+          "avg_ttft_ms": 594.7,
+          "avg_tok_per_req_s": 47.227,
+          "gpu_mem_baseline_total_mb": 15728,
+          "gpu_mem_peak_total_mb": 15846,
+          "gpu_mem_peak_delta_mb": 118,
+          "gpu_mem_peak_per_gpu_mb": [
+            15724,
+            122
+          ]
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 800,
+          "batch_time_s": 6.267,
+          "aggregate_tok_s": 127.648,
+          "avg_latency_s": 6.243,
+          "p50_latency_s": 6.243,
+          "p95_latency_s": 6.266,
+          "avg_ttft_ms": 588.6,
+          "avg_tok_per_req_s": 32.037,
+          "gpu_mem_baseline_total_mb": 15846,
+          "gpu_mem_peak_total_mb": 15846,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15724,
+            122
+          ]
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1600,
+          "batch_time_s": 10.403,
+          "aggregate_tok_s": 153.803,
+          "avg_latency_s": 10.331,
+          "p50_latency_s": 10.356,
+          "p95_latency_s": 10.402,
+          "avg_ttft_ms": 612.4,
+          "avg_tok_per_req_s": 19.359,
+          "gpu_mem_baseline_total_mb": 15846,
+          "gpu_mem_peak_total_mb": 15846,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15724,
+            122
+          ]
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 3200,
+          "batch_time_s": 11.731,
+          "aggregate_tok_s": 272.783,
+          "avg_latency_s": 11.664,
+          "p50_latency_s": 11.655,
+          "p95_latency_s": 11.725,
+          "avg_ttft_ms": 891.9,
+          "avg_tok_per_req_s": 17.147,
+          "gpu_mem_baseline_total_mb": 15846,
+          "gpu_mem_peak_total_mb": 15846,
+          "gpu_mem_peak_delta_mb": 0,
+          "gpu_mem_peak_per_gpu_mb": [
+            15724,
+            122
+          ]
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 6400,
+          "batch_time_s": 17.67,
+          "aggregate_tok_s": 362.196,
+          "avg_latency_s": 17.549,
+          "p50_latency_s": 17.617,
+          "p95_latency_s": 17.663,
+          "avg_ttft_ms": 1648.9,
+          "avg_tok_per_req_s": 11.398,
+          "gpu_mem_baseline_total_mb": 15846,
+          "gpu_mem_peak_total_mb": 15848,
+          "gpu_mem_peak_delta_mb": 2,
+          "gpu_mem_peak_per_gpu_mb": [
+            15726,
+            122
+          ]
+        }
+      ]
+    }
+  ],
+  "comparison": [
+    {
+      "concurrency": 1,
+      "vllm_prefix_off_aggregate_tok_s": 31.536,
+      "vllm_prefix_off_avg_ttft_ms": 66.8,
+      "vllm_prefix_on_aggregate_tok_s": 30.19,
+      "vllm_prefix_on_avg_ttft_ms": 72.3,
+      "ollama_np1_aggregate_tok_s": 51.648,
+      "ollama_np1_avg_ttft_ms": 538.4,
+      "ollama_np4_aggregate_tok_s": 51.588,
+      "ollama_np4_avg_ttft_ms": 555.5,
+      "ollama_np8_aggregate_tok_s": 48.128,
+      "ollama_np8_avg_ttft_ms": 565.6,
+      "ollama_np16_aggregate_tok_s": 51.198,
+      "ollama_np16_avg_ttft_ms": 576.8,
+      "ollama_np32_aggregate_tok_s": 47.224,
+      "ollama_np32_avg_ttft_ms": 594.7,
+      "speedup_vllm_prefix_off_over_ollama_np1": 0.611,
+      "speedup_vllm_prefix_off_over_ollama_np4": 0.611,
+      "speedup_vllm_prefix_off_over_ollama_np8": 0.655,
+      "speedup_vllm_prefix_off_over_ollama_np16": 0.616,
+      "speedup_vllm_prefix_off_over_ollama_np32": 0.668
+    },
+    {
+      "concurrency": 4,
+      "vllm_prefix_off_aggregate_tok_s": 118.13,
+      "vllm_prefix_off_avg_ttft_ms": 124.2,
+      "vllm_prefix_on_aggregate_tok_s": 115.061,
+      "vllm_prefix_on_avg_ttft_ms": 126.7,
+      "ollama_np1_aggregate_tok_s": 56.888,
+      "ollama_np1_avg_ttft_ms": 5578.8,
+      "ollama_np4_aggregate_tok_s": 124.501,
+      "ollama_np4_avg_ttft_ms": 578.5,
+      "ollama_np8_aggregate_tok_s": 124.083,
+      "ollama_np8_avg_ttft_ms": 582.7,
+      "ollama_np16_aggregate_tok_s": 124.054,
+      "ollama_np16_avg_ttft_ms": 578.1,
+      "ollama_np32_aggregate_tok_s": 127.648,
+      "ollama_np32_avg_ttft_ms": 588.6,
+      "speedup_vllm_prefix_off_over_ollama_np1": 2.077,
+      "speedup_vllm_prefix_off_over_ollama_np4": 0.949,
+      "speedup_vllm_prefix_off_over_ollama_np8": 0.952,
+      "speedup_vllm_prefix_off_over_ollama_np16": 0.952,
+      "speedup_vllm_prefix_off_over_ollama_np32": 0.925
+    },
+    {
+      "concurrency": 8,
+      "vllm_prefix_off_aggregate_tok_s": 232.712,
+      "vllm_prefix_off_avg_ttft_ms": 158.8,
+      "vllm_prefix_on_aggregate_tok_s": 227.486,
+      "vllm_prefix_on_avg_ttft_ms": 158.0,
+      "ollama_np1_aggregate_tok_s": 58.738,
+      "ollama_np1_avg_ttft_ms": 12129.3,
+      "ollama_np4_aggregate_tok_s": 131.882,
+      "ollama_np4_avg_ttft_ms": 3344.9,
+      "ollama_np8_aggregate_tok_s": 144.826,
+      "ollama_np8_avg_ttft_ms": 688.8,
+      "ollama_np16_aggregate_tok_s": 146.269,
+      "ollama_np16_avg_ttft_ms": 698.1,
+      "ollama_np32_aggregate_tok_s": 153.803,
+      "ollama_np32_avg_ttft_ms": 612.4,
+      "speedup_vllm_prefix_off_over_ollama_np1": 3.962,
+      "speedup_vllm_prefix_off_over_ollama_np4": 1.765,
+      "speedup_vllm_prefix_off_over_ollama_np8": 1.607,
+      "speedup_vllm_prefix_off_over_ollama_np16": 1.591,
+      "speedup_vllm_prefix_off_over_ollama_np32": 1.513
+    },
+    {
+      "concurrency": 16,
+      "vllm_prefix_off_aggregate_tok_s": 450.258,
+      "vllm_prefix_off_avg_ttft_ms": 225.6,
+      "vllm_prefix_on_aggregate_tok_s": 445.259,
+      "vllm_prefix_on_avg_ttft_ms": 206.3,
+      "ollama_np1_aggregate_tok_s": 59.082,
+      "ollama_np1_avg_ttft_ms": 25541.4,
+      "ollama_np4_aggregate_tok_s": 135.1,
+      "ollama_np4_avg_ttft_ms": 9106.8,
+      "ollama_np8_aggregate_tok_s": 149.661,
+      "ollama_np8_avg_ttft_ms": 5612.0,
+      "ollama_np16_aggregate_tok_s": 269.984,
+      "ollama_np16_avg_ttft_ms": 879.1,
+      "ollama_np32_aggregate_tok_s": 272.783,
+      "ollama_np32_avg_ttft_ms": 891.9,
+      "speedup_vllm_prefix_off_over_ollama_np1": 7.621,
+      "speedup_vllm_prefix_off_over_ollama_np4": 3.333,
+      "speedup_vllm_prefix_off_over_ollama_np8": 3.009,
+      "speedup_vllm_prefix_off_over_ollama_np16": 1.668,
+      "speedup_vllm_prefix_off_over_ollama_np32": 1.651
+    },
+    {
+      "concurrency": 32,
+      "vllm_prefix_off_aggregate_tok_s": 866.246,
+      "vllm_prefix_off_avg_ttft_ms": 317.7,
+      "vllm_prefix_on_aggregate_tok_s": 840.556,
+      "vllm_prefix_on_avg_ttft_ms": 293.5,
+      "ollama_np1_aggregate_tok_s": 59.162,
+      "ollama_np1_avg_ttft_ms": 52630.2,
+      "ollama_np4_aggregate_tok_s": 135.089,
+      "ollama_np4_avg_ttft_ms": 20972.2,
+      "ollama_np8_aggregate_tok_s": 149.972,
+      "ollama_np8_avg_ttft_ms": 16274.9,
+      "ollama_np16_aggregate_tok_s": 277.276,
+      "ollama_np16_avg_ttft_ms": 6234.7,
+      "ollama_np32_aggregate_tok_s": 362.196,
+      "ollama_np32_avg_ttft_ms": 1648.9,
+      "speedup_vllm_prefix_off_over_ollama_np1": 14.642,
+      "speedup_vllm_prefix_off_over_ollama_np4": 6.412,
+      "speedup_vllm_prefix_off_over_ollama_np8": 5.776,
+      "speedup_vllm_prefix_off_over_ollama_np16": 3.124,
+      "speedup_vllm_prefix_off_over_ollama_np32": 2.392
+    }
+  ]
+}

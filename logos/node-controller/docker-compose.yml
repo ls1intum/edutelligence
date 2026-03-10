@@ -1,36 +1,52 @@
 # Node Controller
 #
-# Manages a single Ollama container on a GPU node via Docker SDK.
-# The Ollama container is created dynamically — it is NOT defined here.
+# Manages a single Ollama process on a GPU node.
+# The controller spawns Ollama as a child process using the bundled binary.
 #
-# Usage:
-#   docker compose up --build
+# Quick start:  ./start.sh
+# Manual:       docker compose up --build -d
 #
-# GPU nodes (nvidia-smi metrics):
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+# GPU support is always enabled.  If the NVIDIA Container Toolkit is
+# installed, nvidia-smi will be available inside the container and GPU
+# metrics will be collected automatically.  If not, the controller
+# gracefully falls back to cpu-only mode — no separate overlay needed.
 
 services:
   node-controller:
-    build: .
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
+        INSTALL_VLLM: ${INSTALL_VLLM:-1}
+        VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
     container_name: node-controller
     restart: unless-stopped
-    ports:
-      - "${CONTROLLER_PORT:-8443}:8443"
+    network_mode: host
+    pid: host
     environment:
       - NODE_CONTROLLER_CONFIG=/app/config.yml
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=utility,compute
+      - CUDA_HOME=/usr/local/cuda-12.8
     volumes:
       - ./config.yml:/app/config.yml
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      - /usr/local/cuda-12.8:/usr/local/cuda-12.8:ro
       - ./certs:/app/certs:ro
-    networks:
-      - controller-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8444/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
 
-networks:
-  controller-net:
-    name: node-controller-net
+volumes:
+  ollama-models:
