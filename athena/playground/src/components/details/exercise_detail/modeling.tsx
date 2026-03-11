@@ -22,22 +22,18 @@ export default function ModelingExerciseDetail({
   }, [editor]);
 
   useEffect(() => {
-    const Apollon = require("@ls1intum/apollon");
-
-    if (!editorRef?.current) {
-      console.warn("Editor reference is not set, cannot initialize Apollon editor.");
+     if (!editorRef?.current) {
       return;
     }
-
-    if (!exercise.example_solution || exercise.example_solution?.length === 0) {
-      return;
-    }
-
-    setEditor(new Apollon.ApollonEditor(editorRef.current!, {
-      model: JSON.parse(exercise.example_solution),
-      readonly: true,
-      scale: 0.8
-    }));
+    
+    // Dynamically import both ApollonEditor and importDiagram to avoid SSR issues
+    import('@tumaet/apollon').then(({ ApollonEditor, importDiagram }) => {
+      setEditor(new ApollonEditor(editorRef.current!, {
+        model: importDiagram(JSON.parse(exercise.example_solution || '{}')),
+        readonly: true,
+        scale: 0.8
+      }));
+    });
 
   }, [editorRef, exercise]);
 
