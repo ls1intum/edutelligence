@@ -1,0 +1,24 @@
+# Exclude everything not needed by iris (context is monorepo root)
+athena/
+atlas/
+logos/
+nebula/
+hyperion/
+weaviate/
+shared/
+.github/
+.git/
+docs/
+node_modules/
+*.log
+*.bak
+*.tmp
+.vscode/
+.idea/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.tox/
+.ruff_cache/
+.mypy_cache/
