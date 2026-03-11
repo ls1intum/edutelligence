@@ -8,6 +8,16 @@ controller:
   ollama_poll_interval: 5
   lane_port_start: 11436
   lane_port_end: 11499
+logos:
+  enabled: false
+  logos_url: ''
+  allow_insecure_http: false
+  provider_id: 0
+  shared_key: ''
+  node_id: ''
+  capabilities_models: []
+  heartbeat_interval_seconds: 5
+  reconnect_backoff_seconds: 3
 ollama:
   ollama_binary: /usr/local/bin/ollama
   port: 11435

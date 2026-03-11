@@ -202,7 +202,7 @@ class RequestPipeline:
         )
         
         # 3. Resolve execution context (with authorization check)
-        exec_context = self._context_resolver.resolve_context(
+        exec_context = await self._context_resolver.resolve_context(
                 model_id=scheduling_result.model_id,
                 provider_id=scheduling_result.provider_id,
                 logos_key=request.logos_key,

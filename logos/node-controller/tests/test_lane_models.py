@@ -48,3 +48,13 @@ def test_lane_set_request_rejects_duplicate_normalized_lane_ids() -> None:
                 LaneConfig(model="org_model_v1", backend="ollama"),
             ]
         )
+
+
+def test_lane_set_request_allows_same_model_with_unique_lane_ids() -> None:
+    req = LaneSetRequest(
+        lanes=[
+            LaneConfig(lane_id="replica-a", model="org/model:v1", backend="ollama"),
+            LaneConfig(lane_id="replica-b", model="org/model:v1", backend="ollama"),
+        ]
+    )
+    assert len(req.lanes) == 2

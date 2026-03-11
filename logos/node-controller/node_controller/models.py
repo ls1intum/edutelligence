@@ -1,5 +1,5 @@
 """
-Pydantic models for the Node Controller.
+Pydantic models for the Node service.
 
 Covers: configuration, Ollama status, GPU metrics, API requests/responses.
 """
@@ -131,11 +131,26 @@ class ControllerConfig(BaseModel):
     lane_port_end: int = 11499
 
 
+class LogosConfig(BaseModel):
+    """Optional Logos control-plane integration settings."""
+
+    enabled: bool = False
+    logos_url: str = ""
+    allow_insecure_http: bool = False
+    provider_id: int = 0
+    shared_key: str = ""
+    node_id: str = ""
+    capabilities_models: list[str] = Field(default_factory=list)
+    heartbeat_interval_seconds: int = Field(default=5, ge=1)
+    reconnect_backoff_seconds: int = Field(default=3, ge=1)
+
+
 class AppConfig(BaseModel):
     """Top-level application configuration."""
 
     controller: ControllerConfig = Field(default_factory=ControllerConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    logos: LogosConfig = Field(default_factory=LogosConfig)
     lanes: list[LaneConfig] = Field(default_factory=list)
 
 
@@ -354,6 +369,13 @@ class LaneConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    lane_id: str | None = Field(
+        default=None,
+        description=(
+            "Stable unique lane identifier. If omitted, it is derived from model "
+            "name (slashes/colons normalized). Set explicitly for same-model replicas."
+        ),
+    )
     model: str = Field(..., description="Model to load in this lane, e.g. 'llama3.2'")
     backend: Literal["ollama", "vllm"] = Field(default="ollama", description="Inference backend: 'ollama' | 'vllm'")
     num_parallel: int = Field(default=4, ge=1, description="Concurrent inference slots (Ollama only)")
@@ -431,6 +453,11 @@ class LaneStatus(BaseModel):
         description="True when vLLM sleep mode endpoints are enabled for this lane.",
     )
     sleep_state: Literal["unsupported", "unknown", "awake", "sleeping"] = "unsupported"
+    active_requests: int = Field(
+        default=0,
+        ge=0,
+        description="Number of in-flight inference requests currently routed through relay for this lane.",
+    )
     loaded_models: list[LoadedModel] = Field(default_factory=list)
     lane_config: LaneConfig | None = None
     backend_params: dict[str, Any] = Field(default_factory=dict)
@@ -454,16 +481,16 @@ class LaneSetRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_unique_lane_models(self) -> LaneSetRequest:
-        # Lane ID is derived from model name; duplicates silently overwriting
-        # each other would be surprising for operators.
+        # Lane IDs must be unique; replicas are supported by setting lane_id explicitly.
         lane_ids: dict[str, str] = {}
         for lane in self.lanes:
-            lane_id = lane.model.replace("/", "_").replace(":", "_")
+            lane_id = (lane.lane_id or lane.model).replace("/", "_").replace(":", "_")
             if lane_id in lane_ids:
                 prev_model = lane_ids[lane_id]
                 raise ValueError(
-                    "Duplicate lane model detected after lane-id normalization: "
-                    f"{prev_model!r} and {lane.model!r} both map to lane_id={lane_id!r}."
+                    "Duplicate lane_id detected after normalization: "
+                    f"{prev_model!r} and {lane.model!r} both map to lane_id={lane_id!r}. "
+                    "Use unique lanes[].lane_id for same-model replicas."
                 )
             lane_ids[lane_id] = lane.model
         return self

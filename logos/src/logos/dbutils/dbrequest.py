@@ -1,6 +1,6 @@
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LogosKeyModel(BaseModel):
@@ -155,3 +155,47 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+
+
+class NodeControllerAuthRequest(BaseModel):
+    provider_id: int
+    shared_key: str
+    node_id: str = ""
+    capabilities_models: list[str] = Field(default_factory=list)
+
+
+class NodeControllerRegisterRequest(LogosKeyModel):
+    provider_name: str
+    base_url: str = ""
+
+
+class NodeControllerStatusRequest(LogosKeyModel):
+    provider_id: int
+
+
+class NodeControllerApplyLanesRequest(LogosKeyModel):
+    provider_id: int
+    lanes: list[dict[str, Any]]
+
+
+class NodeControllerSleepLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+    level: int = 1
+    mode: str = "wait"
+
+
+class NodeControllerWakeLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+
+
+class NodeControllerDeleteLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+
+
+class NodeControllerReconfigureLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+    updates: dict[str, Any]

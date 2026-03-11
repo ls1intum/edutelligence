@@ -1,5 +1,5 @@
 """
-Node Controller — FastAPI application entry point.
+Node service — FastAPI application entry point.
 
 Wires all components together: config, Ollama process manager, GPU collector,
 Ollama status poller, and API routers.  Manages the async lifespan
@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from node_controller.config import get_config, load_config
 from node_controller.gpu import GpuMetricsCollector
 from node_controller.lane_manager import LaneManager
+from node_controller.logos_bridge import LogosBridgeClient
 from node_controller.ollama_manager import OllamaManager
 from node_controller.ollama_status import OllamaStatusPoller
 from node_controller.vram_budget import VramBudgetManager
@@ -32,7 +33,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("node_controller")
+logger = logging.getLogger("node")
 
 
 @asynccontextmanager
@@ -114,8 +115,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.status_poller = status_poller
     app.state.lane_manager = lane_manager
     app.state.vram_budget = vram_budget
+    logos_bridge = LogosBridgeClient(app, cfg.logos)
+    app.state.logos_bridge = logos_bridge
+    await logos_bridge.start()
 
-    logger.info("Node Controller started — all systems ready")
+    logger.info("Node started — all systems ready")
 
     yield
 
@@ -130,6 +134,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error shutting down lanes", exc_info=True)
     await lane_manager.close()
+    try:
+        await app.state.logos_bridge.stop()
+    except Exception:
+        logger.warning("Error stopping Logos bridge", exc_info=True)
 
     try:
         await manager.destroy()
@@ -143,7 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build and return the FastAPI application."""
     app = FastAPI(
-        title="Node Controller",
+        title="Node",
         description=(
             "Manages Ollama processes on a GPU node — single-process or multi-lane mode. "
             "Exposes nvidia-smi metrics, Ollama status, lane management, and admin controls to Logos."
@@ -161,14 +169,16 @@ def create_app() -> FastAPI:
 
     from node_controller.admin_api import router as admin_router
     from node_controller.logos_api import router as logos_router
+    from node_controller.relay_api import router as relay_router
 
     app.include_router(logos_router)
     app.include_router(admin_router)
+    app.include_router(relay_router)
 
     @app.get("/", tags=["root"])
     async def root() -> dict:
         return {
-            "service": "Node Controller",
+            "service": "Node",
             "version": "1.0.0",
             "docs": "/docs",
         }

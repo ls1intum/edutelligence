@@ -5,7 +5,7 @@ class Deployment(TypedDict):
     """Minimal info describing an available model deployment."""
     model_id: int
     provider_id: int
-    type: str  # 'azure' | 'ollama'
+    type: str  # 'azure' | 'ollama' | 'node'
 
 
 def get_unique_models_from_deployments(deployments: List[Deployment]) -> List[int]:

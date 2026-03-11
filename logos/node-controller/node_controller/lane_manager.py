@@ -114,15 +114,22 @@ class PortAllocator:
         return dict(self._used)
 
 
-def _lane_id(model: str) -> str:
-    """Derive a lane ID from a model name.  Sanitise for readability."""
-    return model.replace("/", "_").replace(":", "_")
+def _normalize_lane_id(raw: str) -> str:
+    return raw.replace("/", "_").replace(":", "_")
+
+
+def _lane_id_from_config(lane_config: LaneConfig) -> str:
+    """Resolve lane_id from config (explicit override or model-derived fallback)."""
+    if lane_config.lane_id:
+        return _normalize_lane_id(lane_config.lane_id)
+    return _normalize_lane_id(lane_config.model)
 
 
 def _routing_inference_endpoint(backend: str) -> str:
-    if backend == "vllm":
+    # Relay uses OpenAI-compatible chat completions for both backends.
+    if backend in {"vllm", "ollama"}:
         return "/v1/chat/completions"
-    return "/api/generate"
+    return "/v1/chat/completions"
 
 
 def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
@@ -170,6 +177,7 @@ class LaneManager:
         )
         self._lock = asyncio.Lock()
         self._event_log: list[LaneEvent] = []
+        self._active_requests: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Declarative API
@@ -196,11 +204,11 @@ class LaneManager:
 
             desired_map: dict[str, LaneConfig] = {}
             for lc in desired:
-                lid = _lane_id(lc.model)
+                lid = _lane_id_from_config(lc)
                 if lid in desired_map:
                     raise ValueError(
                         f"Duplicate desired lane id '{lid}' (from model '{lc.model}'). "
-                        "Model names must be unique after '/' and ':' are normalized."
+                        "Use unique lanes[].lane_id for replicas."
                     )
                 desired_map[lid] = lc
 
@@ -324,7 +332,7 @@ class LaneManager:
 
     async def add_lane(self, lane_config: LaneConfig) -> LaneStatus:
         """Add a single lane."""
-        lid = _lane_id(lane_config.model)
+        lid = _lane_id_from_config(lane_config)
         async with self._lock:
             if lid in self._handles:
                 raise ValueError(f"Lane '{lid}' already exists")
@@ -420,8 +428,29 @@ class LaneManager:
 
     def get_handle_for_model(self, model: str) -> ProcessHandle | None:
         """Find the process handle for a given model name."""
-        lid = _lane_id(model)
-        return self._handles.get(lid)
+        matches: list[tuple[str, ProcessHandle]] = []
+        for lane_id, handle in self._handles.items():
+            lc = handle.lane_config
+            if lc is not None and lc.model == model:
+                matches.append((lane_id, handle))
+        if not matches:
+            return None
+        # Prefer least-loaded replica for model-level lookup.
+        matches.sort(key=lambda item: (self._active_requests.get(item[0], 0), item[0]))
+        return matches[0][1]
+
+    async def increment_active_requests(self, lane_id: str) -> None:
+        async with self._lock:
+            if lane_id not in self._handles:
+                raise KeyError(f"Lane '{lane_id}' not found")
+            self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
+
+    async def decrement_active_requests(self, lane_id: str) -> None:
+        async with self._lock:
+            if lane_id not in self._handles:
+                return
+            current = self._active_requests.get(lane_id, 0)
+            self._active_requests[lane_id] = max(0, current - 1)
 
     @property
     def lane_ids(self) -> list[str]:
@@ -475,6 +504,7 @@ class LaneManager:
             await handle.close()
             raise
         self._handles[lane_id] = handle
+        self._active_requests[lane_id] = 0
         self._record_event(lane_id, "spawned", model=lane_config.model,
                            port=port, num_parallel=lane_config.num_parallel)
         logger.info("Lane '%s' added (backend=%s, model=%s, port=%d)",
@@ -487,6 +517,7 @@ class LaneManager:
         await handle.destroy()
         await handle.close()
         self._port_alloc.release(lane_id)
+        self._active_requests.pop(lane_id, None)
         self._record_event(lane_id, "stopped")
         logger.info("Lane '%s' removed", lane_id)
 
@@ -610,6 +641,7 @@ class LaneManager:
                         await restored.spawn(orig_lc)
                         self._handles[lid] = restored
                         self._port_alloc._used[lid] = orig_port
+                        self._active_requests[lid] = 0
                         self._record_event(lid, "rollback_restored", model=orig_lc.model, port=orig_port)
                     except Exception:
                         logger.error("Rollback: failed to restore lane '%s'", lid, exc_info=True)
@@ -625,6 +657,7 @@ class LaneManager:
                     await restored.spawn(lc)
                     self._handles[lid] = restored
                     self._port_alloc._used[lid] = port
+                    self._active_requests[lid] = 0
                     self._record_event(lid, "rollback_restored", model=lc.model, port=port)
                 except Exception:
                     logger.error("Rollback: failed to re-add removed lane '%s'", lid, exc_info=True)
@@ -729,7 +762,7 @@ class LaneManager:
         effective_gpu_devices = ""
         backend = "ollama"
         routing_url = f"http://127.0.0.1:{handle.port}"
-        inference_endpoint = "/api/generate"
+        inference_endpoint = "/v1/chat/completions"
         sleep_mode_enabled = False
         sleep_state: str = "unsupported"
         backend_params: dict[str, Any] = {}
@@ -824,6 +857,7 @@ class LaneManager:
             effective_gpu_devices=effective_gpu_devices,
             sleep_mode_enabled=sleep_mode_enabled,
             sleep_state=sleep_state,
+            active_requests=self._active_requests.get(handle.lane_id, 0),
             loaded_models=loaded_models,
             lane_config=lc,
             backend_params=backend_params,

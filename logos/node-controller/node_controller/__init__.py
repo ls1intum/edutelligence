@@ -1,1 +1,1 @@
-# Node Controller — Ollama instance manager for Logos
+# Node service — model lane manager for Logos

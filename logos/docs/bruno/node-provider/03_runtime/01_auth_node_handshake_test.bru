@@ -1,0 +1,24 @@
+meta {
+  name: Auth Node (Handshake Test)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/logosdb/providers/node/auth
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "provider_id": "{{providerId}}",
+    "shared_key": "{{sharedKey}}",
+    "node_id": "{{nodeId}}",
+    "capabilities_models": ["{{modelName}}"]
+  }
+}

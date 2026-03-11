@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, Tuple
 import logging
 
 from logos.dbutils.dbmanager import DBManager
+from logos.node_controller_registry import NodeControllerRuntimeRegistry
 
 
 logger = logging.getLogger(__name__)
@@ -21,10 +22,12 @@ class ExecutionContext:
     model_id: int
     provider_id: int
     provider_name: str
+    provider_type: str
     forward_url: str
     auth_header: str
     auth_value: str
     model_name: str
+    lane_id: Optional[str] = None
 
 
 class ContextResolver:
@@ -40,7 +43,10 @@ class ContextResolver:
     - Making HTTP calls (that's the Executor's job)
     """
 
-    def resolve_context(
+    def __init__(self, node_registry: Optional[NodeControllerRuntimeRegistry] = None):
+        self._node_registry = node_registry
+
+    async def resolve_context(
         self,
         model_id: int,
         provider_id: int,
@@ -81,19 +87,47 @@ class ContextResolver:
                 return None
 
         provider_name = auth_info["provider_name"]
+        provider_type_raw = (auth_info.get("provider_type") or "").lower()
+        provider_type = "node" if provider_type_raw in {"node", "node_controller"} else provider_type_raw
         model_name = auth_info["model_name"]
         endpoint = auth_info["endpoint"]
         base_url = auth_info["base_url"]
-        forward_url = self._merge_url(base_url, endpoint)
+        lane_id: Optional[str] = None
+
+        if provider_type == "node":
+            if self._node_registry is None:
+                logger.error(
+                    "Node provider selected but registry is not configured (provider_id=%s)",
+                    provider_id,
+                )
+                return None
+            lane = await self._node_registry.select_lane_for_model(provider_id, model_name)
+            if lane is None:
+                logger.warning(
+                    "No active lane available for node provider=%s model=%s",
+                    provider_id,
+                    model_name,
+                )
+                return None
+            lane_id = str(lane.get("lane_id", "")).strip()
+            if not lane_id:
+                logger.error("Node lane missing lane_id for provider=%s", provider_id)
+                return None
+            # Node uses websocket RPC for both control and data plane.
+            forward_url = f"node://provider/{provider_id}/lane/{lane_id}"
+        else:
+            forward_url = self._merge_url(base_url, endpoint)
 
         return ExecutionContext(
             model_id=model_id,
             provider_id=provider_id,
             provider_name=provider_name,
+            provider_type=provider_type,
             forward_url=forward_url,
             auth_header=auth_name,
             auth_value=auth_format.format(api_key or ""),
             model_name=model_name,
+            lane_id=lane_id,
         )
 
 
@@ -117,7 +151,7 @@ class ContextResolver:
             headers[context.auth_header] = context.auth_value
 
         # OpenWebUI requires model name injection
-        if "openwebui" in context.provider_name.lower() or "ollama" in context.provider_name.lower():
+        if context.provider_type in {"ollama", "node"} or "openwebui" in context.provider_name.lower():
             payload = {**payload, "model": context.model_name}
 
         return headers, payload

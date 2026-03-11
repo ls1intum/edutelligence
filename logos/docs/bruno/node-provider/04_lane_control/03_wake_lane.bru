@@ -1,0 +1,23 @@
+meta {
+  name: Wake Lane
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/logosdb/providers/node/lanes/wake
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}",
+    "provider_id": "{{providerId}}",
+    "lane_id": "{{laneId}}"
+  }
+}

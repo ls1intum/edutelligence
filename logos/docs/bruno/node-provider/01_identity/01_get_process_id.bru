@@ -1,0 +1,21 @@
+meta {
+  name: Get Process ID
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/logosdb/get_process_id
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}"
+  }
+}

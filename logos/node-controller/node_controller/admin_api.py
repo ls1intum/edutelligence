@@ -345,7 +345,7 @@ async def get_lane_templates() -> dict[str, Any]:
     return {
         "notes": [
             "Use POST /admin/lanes/apply with one of these payloads.",
-            "Lane IDs are derived from model names; duplicate models are rejected.",
+            "Lane IDs must be unique; replicas for the same model are supported with explicit lane_id values.",
             "For vLLM lanes, num_parallel is ignored (continuous batching).",
             "vLLM sleep control is available at POST /admin/lanes/{lane_id}/sleep and /wake when enable_sleep_mode=true.",
         ],

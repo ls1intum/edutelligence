@@ -2,10 +2,10 @@
 Logos-facing status API endpoints.
 
 These are the endpoints Logos polls to get node status, GPU metrics, loaded
-models, and the current Ollama config.  All require authentication.
+models, and the current Ollama config. All require authentication.
 
-Logos sends inference requests DIRECTLY to the Ollama process's port —
-these endpoints are for management data only.
+Inference offload is served via the secure Logos websocket session.
+These endpoints are for management data only.
 
 Service instances (manager, gpu_collector, status_poller) are stored in
 ``app.state`` during lifespan and accessed via ``request.app.state``.
@@ -127,8 +127,7 @@ async def get_lanes(request: Request) -> list[LaneStatus]:
     Returns the status of all active model lanes.
 
     Each lane has its own Ollama process on a dedicated port.  Logos
-    should route inference requests to ``http://host:{lane.port}``
-    for the lane's model.
+    uses for lane selection and runtime visibility.
     """
     lane_manager = request.app.state.lane_manager
     return await lane_manager.get_all_statuses()

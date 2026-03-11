@@ -1,12 +1,15 @@
 import asyncio
+import hmac
 import json
 import logging
+import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Set, Optional
 import grpc
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
@@ -33,6 +36,11 @@ from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.monitoring.ollama_monitor import OllamaProviderMonitor
+from logos.node_controller_registry import (
+    NodeControllerCommandError,
+    NodeControllerOfflineError,
+    NodeControllerRuntimeRegistry,
+)
 from scripts import setup_proxy
 
 _SERVER_START_TIME = int(time.time())
@@ -41,6 +49,7 @@ logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _ollama_monitor: Optional[OllamaProviderMonitor] = None
+_node_registry = NodeControllerRuntimeRegistry()
 
 
 def _record_azure_rate_limits(
@@ -199,6 +208,85 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
     return policy if policy else None
 
 
+def _require_root_access(logos_key: str) -> None:
+    with DBManager() as db:
+        if not db.check_authorization(logos_key):
+            raise HTTPException(status_code=403, detail="Root authorization required")
+
+
+def _normalize_provider_type(provider_type: str | None) -> str:
+    normalized = (provider_type or "").strip().lower()
+    if normalized in {"node", "node_controller"}:
+        return "node"
+    return normalized
+
+
+def _node_insecure_dev_mode_enabled() -> bool:
+    raw = os.getenv("LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_tls_request(request: Request) -> bool:
+    if _node_insecure_dev_mode_enabled():
+        return True
+    if request.url.scheme == "https":
+        return True
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
+    return "https" in forwarded_values
+
+
+def _require_tls_request(request: Request) -> None:
+    if not _is_tls_request(request):
+        raise HTTPException(status_code=400, detail="TLS is required for node provider auth/session endpoints")
+
+
+def _build_node_ws_url(request: Request, token: str) -> str:
+    _require_tls_request(request)
+    ws_scheme = "ws" if _node_insecure_dev_mode_enabled() else "wss"
+    host = request.headers.get("host", "")
+    if not host:
+        raise HTTPException(status_code=400, detail="Missing Host header for websocket URL generation")
+    return f"{ws_scheme}://{host}/logosdb/providers/node/session?token={token}"
+
+
+async def _filter_node_deployments(deployments: list[Deployment]) -> list[Deployment]:
+    """
+    Enforce provider model scope intersection:
+    DB deployment assignment AND node capabilities.
+    """
+    if not deployments:
+        return []
+
+    filtered: list[Deployment] = []
+    model_name_cache: dict[int, str] = {}
+
+    with DBManager() as db:
+        for deployment in deployments:
+            provider_type = _normalize_provider_type(deployment.get("type"))
+            if provider_type != "node":
+                filtered.append({**deployment, "type": provider_type or deployment.get("type", "")})
+                continue
+
+            model_id = int(deployment["model_id"])
+            if model_id not in model_name_cache:
+                model_info = db.get_model(model_id)
+                model_name_cache[model_id] = (model_info or {}).get("name", "")
+
+            model_name = model_name_cache[model_id]
+            if not model_name:
+                continue
+
+            allowed = await _node_registry.is_model_allowed(
+                int(deployment["provider_id"]),
+                model_name,
+            )
+            if allowed:
+                filtered.append({**deployment, "type": "node"})
+
+    return filtered
+
+
 async def start_pipeline():
     """Initialize the new request pipeline components."""
     global _pipeline, _queue_mgr, _ollama_facade, _azure_facade, _context_resolver
@@ -224,7 +312,7 @@ async def start_pipeline():
     executor = Executor()
 
     # 6. Context Resolver
-    _context_resolver = ContextResolver()
+    _context_resolver = ContextResolver(node_registry=_node_registry)
 
     # 7. Classifier
     clf = classifier()
@@ -388,12 +476,28 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
             # Prepare headers and payload using context resolver
             headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-            async for chunk in _pipeline.executor.execute_streaming(
-                context.forward_url,
-                headers,
-                prepared_payload,
-                on_headers=process_headers,
-            ):
+            if context.provider_type == "node":
+                if not context.lane_id:
+                    raise RuntimeError("node execution context missing lane_id")
+                stream_payload = {
+                    **prepared_payload,
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                }
+                chunk_iter = _node_registry.send_stream_command(
+                    provider_id=provider_id,
+                    action="infer_stream",
+                    params={"lane_id": context.lane_id, "payload": stream_payload},
+                )
+            else:
+                chunk_iter = _pipeline.executor.execute_streaming(
+                    context.forward_url,
+                    headers,
+                    prepared_payload,
+                    on_headers=process_headers,
+                )
+
+            async for chunk in chunk_iter:
                 yield chunk
                 if chunk and not ttft_recorded:
                     if log_id:
@@ -494,8 +598,59 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
 
         timed_out = False
         error_message = None
+        status_override = None
 
-        exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        if context.provider_type == "node":
+            if not context.lane_id:
+                raise RuntimeError("node execution context missing lane_id")
+            sync_payload = {**prepared_payload, "stream": False}
+            try:
+                rpc_result = await _node_registry.send_command(
+                    provider_id=provider_id,
+                    action="infer",
+                    params={"lane_id": context.lane_id, "payload": sync_payload},
+                )
+                status_override = int(rpc_result.get("status_code", 200))
+                response_payload = rpc_result.get("body")
+                if response_payload is None:
+                    response_payload = {}
+                if not isinstance(response_payload, dict):
+                    response_payload = {"response": response_payload}
+                rpc_error = str(rpc_result.get("error") or "").strip() or None
+                if status_override >= 400 and rpc_error is None:
+                    rpc_error = f"node infer returned HTTP {status_override}"
+                exec_result = ExecutionResult(
+                    success=status_override < 400,
+                    response=response_payload,
+                    error=rpc_error,
+                    usage={},
+                    is_streaming=False,
+                    headers=rpc_result.get("headers")
+                    if isinstance(rpc_result.get("headers"), dict)
+                    else None,
+                )
+            except NodeControllerOfflineError as exc:
+                status_override = 503
+                exec_result = ExecutionResult(
+                    success=False,
+                    response={"error": str(exc)},
+                    error=str(exc),
+                    usage={},
+                    is_streaming=False,
+                    headers=None,
+                )
+            except NodeControllerCommandError as exc:
+                status_override = 502
+                exec_result = ExecutionResult(
+                    success=False,
+                    response={"error": str(exc)},
+                    error=str(exc),
+                    usage={},
+                    is_streaming=False,
+                    headers=None,
+                )
+        else:
+            exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -549,10 +704,10 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
-            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+            status_code = status_override if status_override is not None else (504 if timed_out else (200 if exec_result.success else 500))
             return {"status_code": status_code, "data": response_payload}
         else:
-            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+            status_code = status_override if status_override is not None else (504 if timed_out else (200 if exec_result.success else 500))
             return JSONResponse(content=exec_result.response, status_code=status_code)
 
     finally:
@@ -960,6 +1115,7 @@ async def handle_sync_request(path: str, request: Request):
     # Get available deployments (model, provider tuple) for THIS profile - profile_id EXPLICITLY passed
     try:
         deployments = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
+        deployments = await _filter_node_deployments(deployments)
     except PermissionError as e:
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
@@ -1130,6 +1286,7 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     # Get available models for this profile - profile_id EXPLICITLY passed
     try:
         models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
+        models = await _filter_node_deployments(models)
     except PermissionError as e:
         return {"status_code": 401, "data": {"error": str(e)}}
     except ValueError as e:
@@ -1143,6 +1300,231 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
         models, json_data, headers, auth.logos_key, path, usage_id,
         is_async_job=True,
         profile_id=auth.profile_id
+    )
+
+
+# ============================================================================
+# NODE PROVIDER ENDPOINTS
+# ============================================================================
+
+
+def _is_tls_websocket(websocket: WebSocket) -> bool:
+    if _node_insecure_dev_mode_enabled():
+        return True
+    if websocket.url.scheme in {"wss", "https"}:
+        return True
+    forwarded = websocket.headers.get("x-forwarded-proto", "")
+    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
+    return "https" in forwarded_values or "wss" in forwarded_values
+
+
+@app.post("/logosdb/providers/node/register")
+@app.post("/logosdb/providers/node-controller/register", deprecated=True)
+async def node_register(data: NodeControllerRegisterRequest):
+    """
+    Root-only provider bootstrap endpoint.
+    Creates a node provider row and generates a shared key.
+    """
+    _require_root_access(data.logos_key)
+
+    provider_name = (data.provider_name or "").strip()
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider_name is required")
+
+    shared_key = secrets.token_urlsafe(48)
+    with DBManager() as db:
+        result, code = db.add_provider(
+            logos_key=data.logos_key,
+            provider_name=provider_name,
+            base_url=(data.base_url or "").strip(),
+            api_key=shared_key,
+            auth_name="",
+            auth_format="{}",
+            provider_type="node",
+        )
+
+    if code != 200:
+        return JSONResponse(status_code=code, content=result)
+
+    return {
+        "provider_id": result.get("provider-id"),
+        "provider_name": provider_name,
+        "provider_type": "node",
+        "shared_key": shared_key,
+    }
+
+
+@app.post("/logosdb/providers/node/auth")
+@app.post("/logosdb/providers/node-controller/auth", deprecated=True)
+async def node_auth(data: NodeControllerAuthRequest, request: Request):
+    """
+    Pre-provisioned provider authentication for node.
+    """
+    _require_tls_request(request)
+    with DBManager() as db:
+        provider = db.get_provider(data.provider_id)
+
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    provider_type = _normalize_provider_type(provider.get("provider_type"))
+    if provider_type != "node":
+        raise HTTPException(status_code=403, detail="Provider is not configured as node")
+
+    expected = str(provider.get("api_key") or "")
+    presented = data.shared_key or ""
+    if not expected or not hmac.compare_digest(presented, expected):
+        raise HTTPException(status_code=403, detail="Invalid provider shared key")
+
+    node_id = data.node_id.strip() if data.node_id else f"node-{data.provider_id}"
+    token = await _node_registry.issue_ticket(
+        provider_id=data.provider_id,
+        node_id=node_id,
+        capabilities_models=data.capabilities_models,
+        ttl_seconds=60,
+    )
+    return {
+        "session_token": token,
+        "ws_url": _build_node_ws_url(request, token),
+        "expires_in_seconds": 60,
+    }
+
+
+@app.websocket("/logosdb/providers/node/session")
+@app.websocket("/logosdb/providers/node-controller/session")
+async def node_session(websocket: WebSocket, token: str):
+    if not _is_tls_websocket(websocket):
+        await websocket.close(code=1008, reason="TLS required")
+        return
+
+    ticket = await _node_registry.consume_ticket(token)
+    if ticket is None:
+        await websocket.close(code=1008, reason="Invalid or expired token")
+        return
+
+    await websocket.accept()
+    await _node_registry.attach_session(ticket, websocket)
+
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            if not isinstance(payload, dict):
+                continue
+            msg_type = payload.get("type")
+            if msg_type == "status_update":
+                await _node_registry.update_status(
+                    provider_id=ticket.provider_id,
+                    status=payload.get("status") if isinstance(payload.get("status"), dict) else {},
+                    capabilities_models=payload.get("capabilities_models")
+                    if isinstance(payload.get("capabilities_models"), list)
+                    else None,
+                )
+            elif msg_type == "heartbeat":
+                await _node_registry.mark_heartbeat(ticket.provider_id)
+            elif msg_type == "command_result":
+                await _node_registry.on_command_result(ticket.provider_id, payload)
+            elif msg_type == "stream_start":
+                await _node_registry.on_stream_start(ticket.provider_id, payload)
+            elif msg_type == "stream_chunk":
+                await _node_registry.on_stream_chunk(ticket.provider_id, payload)
+            elif msg_type == "stream_end":
+                await _node_registry.on_stream_end(ticket.provider_id, payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await _node_registry.detach_session(ticket.provider_id, websocket)
+
+
+@app.post("/logosdb/providers/node/status")
+@app.post("/logosdb/providers/node-controller/status", deprecated=True)
+async def node_status(data: NodeControllerStatusRequest):
+    _require_root_access(data.logos_key)
+    try:
+        return await _node_registry.get_runtime_snapshot(data.provider_id)
+    except NodeControllerOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
+
+
+@app.post("/logosdb/providers/node/gpu")
+@app.post("/logosdb/providers/node-controller/gpu", deprecated=True)
+async def node_gpu(data: NodeControllerStatusRequest):
+    _require_root_access(data.logos_key)
+    try:
+        return await _node_registry.get_gpu(data.provider_id)
+    except NodeControllerOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
+
+
+@app.post("/logosdb/providers/node/lanes")
+@app.post("/logosdb/providers/node-controller/lanes", deprecated=True)
+async def node_lanes(data: NodeControllerStatusRequest):
+    _require_root_access(data.logos_key)
+    try:
+        return {"lanes": await _node_registry.get_lanes(data.provider_id)}
+    except NodeControllerOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
+
+
+async def _dispatch_node_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
+    try:
+        return await _node_registry.send_command(provider_id, action=action, params=params or {})
+    except NodeControllerOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
+    except NodeControllerCommandError as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+
+@app.post("/logosdb/providers/node/lanes/apply")
+@app.post("/logosdb/providers/node-controller/lanes/apply", deprecated=True)
+async def node_apply_lanes(data: NodeControllerApplyLanesRequest):
+    _require_root_access(data.logos_key)
+    return await _dispatch_node_command(
+        provider_id=data.provider_id,
+        action="apply_lanes",
+        params={"lanes": data.lanes},
+    )
+
+
+@app.post("/logosdb/providers/node/lanes/sleep")
+@app.post("/logosdb/providers/node-controller/lanes/sleep", deprecated=True)
+async def node_sleep_lane(data: NodeControllerSleepLaneRequest):
+    _require_root_access(data.logos_key)
+    return await _dispatch_node_command(
+        provider_id=data.provider_id,
+        action="sleep_lane",
+        params={"lane_id": data.lane_id, "level": data.level, "mode": data.mode},
+    )
+
+
+@app.post("/logosdb/providers/node/lanes/wake")
+@app.post("/logosdb/providers/node-controller/lanes/wake", deprecated=True)
+async def node_wake_lane(data: NodeControllerWakeLaneRequest):
+    _require_root_access(data.logos_key)
+    return await _dispatch_node_command(
+        provider_id=data.provider_id,
+        action="wake_lane",
+        params={"lane_id": data.lane_id},
+    )
+
+
+@app.post("/logosdb/providers/node/lanes/delete")
+@app.post("/logosdb/providers/node-controller/lanes/delete", deprecated=True)
+async def node_delete_lane(data: NodeControllerDeleteLaneRequest):
+    _require_root_access(data.logos_key)
+    return await _dispatch_node_command(
+        provider_id=data.provider_id,
+        action="delete_lane",
+        params={"lane_id": data.lane_id},
+    )
+
+
+@app.post("/logosdb/providers/node/lanes/reconfigure")
+@app.post("/logosdb/providers/node-controller/lanes/reconfigure", deprecated=True)
+async def node_reconfigure_lane(data: NodeControllerReconfigureLaneRequest):
+    _require_root_access(data.logos_key)
+    return await _dispatch_node_command(
+        provider_id=data.provider_id,
+        action="reconfigure_lane",
+        params={"lane_id": data.lane_id, "updates": data.updates},
     )
 
 

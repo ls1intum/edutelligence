@@ -40,6 +40,7 @@ services:
     environment:
       PROVIDER_NAME: azure
       BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: ${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-false}
     expose:
       - "8080"
       # - "50051"

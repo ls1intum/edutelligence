@@ -427,7 +427,7 @@ class VllmProcessHandle:
         raise RuntimeError(
             f"[{self.lane_id}] No C compiler found in runtime (checked: {checked_display}). "
             "vLLM/Triton startup may JIT-compile kernels and requires a compiler. "
-            "Install build-essential in the node-controller image or set CC to an "
+            "Install build-essential in the node image or set CC to an "
             "absolute compiler path."
         )
 

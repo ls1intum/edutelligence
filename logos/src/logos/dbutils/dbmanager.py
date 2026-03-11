@@ -352,12 +352,14 @@ class DBManager:
                      api_key: str, auth_name: str, auth_format: str, provider_type: str) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        provider_type = (provider_type or "").strip()
+        provider_type = (provider_type or "").strip().lower()
+        if provider_type == "node_controller":
+            provider_type = "node"
         if not provider_type:
             return {"error": "provider_type is required"}, 400
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
                                        "auth_name": auth_name, "auth_format": auth_format,
-                                       "provider_type": provider_type})
+                                       "provider_type": provider_type, "api_key": api_key})
         return {"result": f"Created Provider.", "provider-id": pk}, 200
 
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
@@ -1481,10 +1483,11 @@ class DBManager:
                    mak.endpoint  AS endpoint,
                    p.id          AS provider_id,
                    p.name        AS provider_name,
+                   p.provider_type AS provider_type,
                    p.base_url    AS base_url,
                    p.auth_name   AS auth_name,
                    p.auth_format AS auth_format,
-                   mak.api_key   AS api_key
+                   COALESCE(NULLIF(mak.api_key, ''), p.api_key, '') AS api_key
             FROM models m
             JOIN model_provider mp ON m.id = mp.model_id
             JOIN providers p ON mp.provider_id = p.id
@@ -1790,8 +1793,10 @@ class DBManager:
             "id": result.id,
             "name": result.name,
             "base_url": result.base_url,
+            "provider_type": result.provider_type,
             "auth_name": result.auth_name,
             "auth_format": result.auth_format,
+            "api_key": result.api_key,
         }
 
     def get_provider_to_model(self, model_id: int):
