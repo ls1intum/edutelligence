@@ -167,3 +167,31 @@ class TestWeaviateLearningRepository(WeaviateTest):
         )
         assert search_results is not None
         assert len(search_results) == 0
+
+    def test_delete_all_for_tenant(self, learning_repository):
+        """Test deleting all learnings for a tenant."""
+        learning1 = self._create_learning(learning_repository)
+        learning2 = self._create_learning(learning_repository)
+        learning3 = self._create_learning(learning_repository)
+
+        # Verify objects exist
+        all_before = learning_repository.all("test")
+        ids_before = [learning.id for learning in all_before]
+        assert learning1.id in ids_before
+        assert learning2.id in ids_before
+        assert learning3.id in ids_before
+
+        # Delete all
+        learning_repository.delete_all_for_tenant("test")
+
+        # Verify all objects are gone
+        all_after = learning_repository.all("test")
+        ids_after = [learning.id for learning in all_after]
+        assert learning1.id not in ids_after
+        assert learning2.id not in ids_after
+        assert learning3.id not in ids_after
+
+    def test_delete_all_for_tenant_nonexistent(self, learning_repository):
+        """Test that delete_all_for_tenant does not raise for a non-existent tenant."""
+        # Should not raise even if the tenant does not exist
+        learning_repository.delete_all_for_tenant("tenant_that_does_not_exist")
