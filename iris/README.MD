@@ -213,7 +213,7 @@ their programming exercises on Artemis in a pedagogically meaningful way.
    ```bash
    APPLICATION_YML_PATH=./application.local.yml \
    LLM_CONFIG_PATH=./llm_config.local.yml \
-   uvicorn app.main:app --reload
+   poetry run uvicorn iris.main:app --reload
    ```
 
 7. **Access API Documentation**
