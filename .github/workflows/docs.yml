@@ -27,13 +27,13 @@ jobs:
       url: https://ls1intum.github.io/edutelligence
     steps:
       - name: Download Athena docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: athena-docs
           path: site/athena
 
       - name: Download Atlas docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: atlas-docs
           path: site/atlas
