@@ -11,7 +11,7 @@ import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
 import { VStack } from "@/components/ui/vstack";
 import { Button, ButtonText } from "@/components/ui/button";
-import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react-native";
+import { ChevronDown, ChevronUp } from "lucide-react-native";
 
 if (
   Platform.OS === "android" &&
@@ -43,7 +43,6 @@ export interface RequestItem {
 
 interface RequestStackProps {
   requests: RequestItem[];
-  error?: string | null;
 }
 
 function deriveStage(item: RequestItem): RequestStage {
@@ -124,7 +123,7 @@ function formatPriorityLabel(value: string): string {
     );
 }
 
-export default function RequestStack({ requests, error }: RequestStackProps) {
+export default function RequestStack({ requests }: RequestStackProps) {
   const [expanded, setExpanded] = useState(false);
   const [renderRequests, setRenderRequests] = useState<RequestItem[]>([]);
   const [exitingIds, setExitingIds] = useState<string[]>([]);
@@ -169,19 +168,6 @@ export default function RequestStack({ requests, error }: RequestStackProps) {
       return [...visibleRequests, ...exitingItems];
     });
   }, [visibleRequests]);
-
-  if (error) {
-    return (
-      <View className="w-full rounded-lg border border-red-500/20 bg-red-500/10 p-4">
-        <HStack space="sm" className="items-center justify-center">
-          <AlertTriangle size={16} className="text-red-500" />
-          <Text className="text-sm text-red-500">
-            Failed to load latest requests: {error}
-          </Text>
-        </HStack>
-      </View>
-    );
-  }
 
   if (!requests.length) {
     return null;
