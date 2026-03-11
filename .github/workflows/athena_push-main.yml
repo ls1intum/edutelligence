@@ -1,0 +1,31 @@
+name: Athena - Push to Main
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena.yml"
+      - ".github/workflows/athena_push-main.yml"
+      - ".github/workflows/athena_test.yml"
+      - ".github/workflows/athena_lint.yml"
+      - ".github/workflows/athena_build-and-push-docker.yml"
+      - ".github/scripts/athena_images-to-build.sh"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  athena:
+    uses: ./.github/workflows/athena.yml
+    with:
+      trigger_event: push
+      before_sha: ${{ github.event.before }}
+      git_ref: ${{ github.ref }}
+    secrets: inherit

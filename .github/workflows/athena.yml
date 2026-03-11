@@ -1,0 +1,132 @@
+name: Athena
+
+on:
+  workflow_call:
+    inputs:
+      run_lint:
+        type: boolean
+        default: true
+      run_tests:
+        type: boolean
+        default: true
+      run_build:
+        type: boolean
+        default: true
+      trigger_event:
+        type: string
+        default: ''
+      pull_request_number:
+        type: string
+        default: ''
+      pull_request_head_sha:
+        type: string
+        default: ''
+      pull_request_title:
+        type: string
+        default: ''
+      pull_request_updated_at:
+        type: string
+        default: ''
+      before_sha:
+        type: string
+        default: ''
+      git_ref:
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      run_lint:
+        description: Run Athena linting
+        type: boolean
+        required: false
+        default: true
+      run_tests:
+        description: Run Athena tests
+        type: boolean
+        required: false
+        default: true
+      run_build:
+        description: Build and push Athena Docker images
+        type: boolean
+        required: false
+        default: true
+      trigger_event:
+        description: Source event type (e.g. release)
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run_lint: ${{ steps.changes.outputs.run_lint }}
+      run_tests: ${{ steps.changes.outputs.run_tests }}
+      run_build: ${{ steps.changes.outputs.run_build }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: tj-actions/changed-files@v45
+        id: athena-lint-test
+        with:
+          files: |
+            athena/**
+            !athena/docs/**
+            !athena/README.md
+            .github/workflows/athena.yml
+            .github/workflows/athena_test.yml
+            .github/workflows/athena_lint.yml
+
+      - uses: tj-actions/changed-files@v45
+        id: athena-build
+        with:
+          files: |
+            athena/**
+            !athena/docs/**
+            !athena/README.md
+            .github/workflows/athena.yml
+            .github/workflows/athena_build-and-push-docker.yml
+            .github/scripts/athena_images-to-build.sh
+
+      - id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run_lint=true" >> "$GITHUB_OUTPUT"
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+            echo "run_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "run_lint=${{ steps.athena-lint-test.outputs.any_changed }}" >> "$GITHUB_OUTPUT"
+          echo "run_tests=${{ steps.athena-lint-test.outputs.any_changed }}" >> "$GITHUB_OUTPUT"
+          echo "run_build=${{ steps.athena-build.outputs.any_changed }}" >> "$GITHUB_OUTPUT"
+
+  lint:
+    needs: detect-changes
+    if: inputs.run_lint && needs.detect-changes.outputs.run_lint == 'true'
+    uses: ./.github/workflows/athena_lint.yml
+    secrets: inherit
+
+  test:
+    needs: detect-changes
+    if: inputs.run_tests && needs.detect-changes.outputs.run_tests == 'true'
+    uses: ./.github/workflows/athena_test.yml
+    with:
+      pull_request_number: ${{ inputs.pull_request_number }}
+    secrets: inherit
+
+  build:
+    needs: detect-changes
+    if: inputs.run_build && (needs.detect-changes.outputs.run_build == 'true' || inputs.trigger_event == 'release')
+    uses: ./.github/workflows/athena_build-and-push-docker.yml
+    with:
+      trigger_event: ${{ inputs.trigger_event }}
+      pull_request_number: ${{ inputs.pull_request_number }}
+      pull_request_head_sha: ${{ inputs.pull_request_head_sha }}
+      pull_request_title: ${{ inputs.pull_request_title }}
+      pull_request_updated_at: ${{ inputs.pull_request_updated_at }}
+      before_sha: ${{ inputs.before_sha }}
+      git_ref: ${{ inputs.git_ref }}
+    secrets: inherit

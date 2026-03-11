@@ -1,0 +1,36 @@
+name: Athena - Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena.yml"
+      - ".github/workflows/athena_pullrequest.yml"
+      - ".github/workflows/athena_test.yml"
+      - ".github/workflows/athena_lint.yml"
+      - ".github/workflows/athena_build-and-push-docker.yml"
+      - ".github/scripts/athena_images-to-build.sh"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  athena:
+    uses: ./.github/workflows/athena.yml
+    with:
+      trigger_event: pull_request
+      pull_request_number: ${{ github.event.pull_request.number }}
+      pull_request_head_sha: ${{ github.event.pull_request.head.sha }}
+      pull_request_title: ${{ github.event.pull_request.title }}
+      pull_request_updated_at: ${{ github.event.pull_request.updated_at }}
+      git_ref: ${{ github.ref }}
+    secrets: inherit
