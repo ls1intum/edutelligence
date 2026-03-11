@@ -28,7 +28,7 @@ from ...tools import (
 )
 from ...web.status.status_update import TextExerciseChatCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
-from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.citation_pipeline import CitationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
 
 logger = get_logger(__name__)
@@ -181,6 +181,9 @@ class TextExerciseChatPipeline(
         lecture_content_storage = getattr(state, "lecture_content_storage")
         faq_storage = getattr(state, "faq_storage")
 
+        # Create shared citation counter for unique sequence numbers
+        citation_counter = {"next": 1}
+
         # Build tool list
         tool_list: list[Callable] = []
 
@@ -207,6 +210,7 @@ class TextExerciseChatPipeline(
                         query_text,
                         state.message_history,
                         lecture_content_storage,
+                        citation_counter,
                     )
                 )
 
@@ -228,6 +232,7 @@ class TextExerciseChatPipeline(
                         query_text,
                         state.message_history,
                         faq_storage,
+                        citation_counter,
                     )
                 )
 
@@ -250,10 +255,8 @@ class TextExerciseChatPipeline(
         """
         dto = state.dto
 
-        # Extract user language with fallback
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Get user language from state
+        user_language = state.user_language
 
         exercise_title = dto.exercise.title if dto.exercise else ""
         course_name = (
@@ -276,6 +279,15 @@ class TextExerciseChatPipeline(
 
         custom_instructions = format_custom_instructions(custom_instructions)
 
+        # Get tool permissions
+        allow_lecture_tool = False
+        allow_faq_tool = False
+        if dto.exercise and dto.exercise.course and dto.exercise.course.id:
+            allow_lecture_tool = should_allow_lecture_tool(
+                state.db, dto.exercise.course.id
+            )
+            allow_faq_tool = should_allow_faq_tool(state.db, dto.exercise.course.id)
+
         # Build system prompt using Jinja2 template
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
@@ -288,6 +300,8 @@ class TextExerciseChatPipeline(
             "end_date": end_date,
             "current_submission": dto.current_submission,
             "custom_instructions": custom_instructions,
+            "allow_lecture_tool": allow_lecture_tool,
+            "allow_faq_tool": allow_faq_tool,
         }
 
         return self.system_prompt_template.render(template_context)
@@ -414,57 +428,39 @@ class TextExerciseChatPipeline(
         Returns:
             The result with citations added.
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
+        # Get storages
+        lecture_content_storage = getattr(state, "lecture_content_storage", {})
+        faq_storage = getattr(state, "faq_storage", {})
 
+        # Merge citation maps - simple dict merge since sequence numbers are already unique
+        merged_citation_map = {}
+        merged_citation_map.update(
+            lecture_content_storage.get("citation_content_map", {})
+        )
+        merged_citation_map.update(faq_storage.get("citation_content_map", {}))
+
+        if not merged_citation_map:
+            return result
+
+        user_language = state.user_language
+
+        # Enrich citations with keywords/summaries
         try:
-            # Add FAQ citations
-            faq_storage = getattr(state, "faq_storage", {})
-            if faq_storage.get("faqs"):
-                state.callback.in_progress("Adding FAQ references...")
-                base_url = (
-                    state.dto.settings.artemis_base_url if state.dto.settings else ""
-                )
-                result = self.citation_pipeline(
-                    faq_storage["faqs"],
-                    result,
-                    InformationType.FAQS,
-                    variant=state.variant.id,
-                    user_language=user_language,
-                    base_url=base_url,
-                )
-
-            # Add lecture content citations
-            lecture_content_storage = getattr(state, "lecture_content_storage", {})
-            if lecture_content_storage.get("content"):
-                state.callback.in_progress("Adding lecture references...")
-                base_url = (
-                    state.dto.settings.artemis_base_url if state.dto.settings else ""
-                )
-                result = self.citation_pipeline(
-                    lecture_content_storage["content"],
-                    result,
-                    InformationType.PARAGRAPHS,
-                    variant=state.variant.id,
-                    user_language=user_language,
-                    base_url=base_url,
-                )
-
-            # Track tokens from citation pipeline
-            if (
-                hasattr(self.citation_pipeline, "tokens")
-                and self.citation_pipeline.tokens
-            ):
-                for token in self.citation_pipeline.tokens:
-                    self._track_tokens(state, token)
-
-            return result
-
+            state.callback.in_progress("Adding references...")
+            result = self.citation_pipeline(
+                answer=result,
+                citation_content_map=merged_citation_map,
+                user_language=user_language,
+            )
         except Exception as e:
-            logger.error("Error adding citations", exc_info=e)
+            logger.error("Citation pipeline failed", exc_info=e)
             return result
+
+        # Track tokens
+        for token in getattr(self.citation_pipeline, "tokens", []):
+            self._track_tokens(state, token)
+
+        return result
 
     def _generate_session_title(
         self,
