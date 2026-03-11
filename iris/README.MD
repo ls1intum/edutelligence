@@ -44,6 +44,11 @@ their programming exercises on Artemis in a pedagogically meaningful way.
 - **Competency Generation**: Automates the generation of competencies for courses, reducing manual effort in creating
   Artemis competencies.
 
+- **MCQ Generation**: The course and lecture chat pipelines can generate interactive multiple-choice questions when
+  prompted by students. The LLM responds with a structured JSON object (`"type": "mcq"`) that Artemis renders as an
+  interactive quiz widget in the chat. This requires the corresponding Artemis client changes from the
+  `feature/iris/quiz-questions` branch.
+
 ## Setup
 
 ### Prerequisites
