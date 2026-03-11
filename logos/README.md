@@ -48,10 +48,11 @@ To deploy Logos locally or on a server:
 
    ```bash
    git clone https://github.com/ls1intum/edutelligence/
-   
+   ```
+
 2. Insert initial Provider Configuration
 
-   In docker-compose.yml, adjust the environment section of the logos-server 
+   In the docker-compose file, adjust the environment section of the logos-server
    container to specify the initial LLM provider that Logos should connect to after startup.
 
    Example Configuration:
@@ -63,16 +64,22 @@ To deploy Logos locally or on a server:
 
 3. Build and Run Logos
 
-   Now go to the root-directory of Edutelligence and execute the following commands:
-   
+   Logos provides two docker-compose configurations:
+
+   | File | Purpose |
+   |------|---------|
+   | `docker-compose.yaml` | **Production** - pulls pre-built images from GitHub Container Registry |
+   | `docker-compose.dev.yaml` | **Development** - builds images locally from source |
+
+   **For Production:**
+   ```bash
+   docker compose -f ./logos/docker-compose.yaml pull
+   docker compose -f ./logos/docker-compose.yaml up -d
    ```
-   docker compose -f ./logos/docker-compose.yaml build
-   ```
-   
-   and afterwards
-   
-   ```
-   docker compose -f ./logos/docker-compose.yaml up
+
+   **For Development:**
+   ```bash
+   docker compose -f ./logos/docker-compose.dev.yaml up -d --build
    ```
 
    After startup, Logos will print your initial root key in the logs—save this, as it is required for first login.
