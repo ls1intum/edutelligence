@@ -27,6 +27,7 @@ from memiris.llm.abstract_language_model import (
     WrappedChatResponse,
     WrappedEmbeddingResponse,
 )
+from memiris.llm.retry_config import call_with_retry
 
 
 class OpenAiLanguageModel(AbstractLanguageModel):
@@ -207,11 +208,13 @@ class OpenAiLanguageModel(AbstractLanguageModel):
             payload.update(kwargs)
         payload = {k: v for k, v in payload.items() if v is not None}
 
-        resp: ChatCompletion = self._client.chat.completions.create(
-            model=self._model,
-            messages=normalized,
-            response_format=rf or Omit(),
-            **payload,
+        resp: ChatCompletion = call_with_retry(
+            lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=normalized,
+                response_format=rf or Omit(),
+                **payload,
+            )
         )
 
         # If we wrapped a non-object schema, unwrap the key so downstream parsers
@@ -237,7 +240,9 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         return WrappedChatResponse.from_openai_chat(resp)
 
     def embed(self, text: str) -> WrappedEmbeddingResponse:
-        resp = self._client.embeddings.create(model=self._model, input=text)
+        resp = call_with_retry(
+            lambda: self._client.embeddings.create(model=self._model, input=text)
+        )
         return WrappedEmbeddingResponse.from_openai_embedding(resp)
 
     def langchain_client(self) -> Union[ChatOpenAI, AzureChatOpenAI]:
