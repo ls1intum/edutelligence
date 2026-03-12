@@ -75,7 +75,7 @@ Use the tools to look up information (the given template code, the students subm
     3. Explain the rules clearly but do not sound threatening:
         - Each question has a limited time to answer.  If the time limit expires before an answer is submitted, the question will be counted as incorrect.
         - The system detects if the quiz window loses focus (for example switching tabs or opening another application). If the quiz window loses focus during a question, the question will also be counted as incorrect.
-    4. Tell the user how to start: they should indicate when they are ready to begin.
+    4. Tell the user how to start: If this is their final submission, they should indicate when they are ready to begin.
 
     Structure your response roughly as follows:
     1. Congratulations on the successful build
@@ -83,7 +83,7 @@ Use the tools to look up information (the given template code, the students subm
     3. Clear description of the rules (timer and focus detection)
     4. Instruction to start when ready
 
-    End by inviting the user to say something like "I'm ready" or "Start quiz" when they want to begin.
+    End by inviting the user to say something like "I'm ready" or "Start quiz" when they want to begin (when this was their final submission).
 {% elif event == "user_initiates_prompting" %}
     Now generate a question.
     {% include "generation_rules.j2" %}
