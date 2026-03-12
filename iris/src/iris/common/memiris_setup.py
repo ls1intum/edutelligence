@@ -20,6 +20,7 @@ from memiris import (
     MemoryWithRelationsDTO,
     OllamaLanguageModel,
 )
+from memiris.api.llm_config_service import LlmConfigService
 from memiris.api.memory_sleep_pipeline import (
     MemorySleepPipeline,
     MemorySleepPipelineBuilder,
@@ -101,6 +102,12 @@ DO NOT EXTRACT ANYTHING AND RETURN AN EMPTY RESULT.
 """
 
 type Tenant = str
+
+
+# Configure LLM retry parameters for Memiris to handle transient errors gracefully
+LlmConfigService.configure_retry_params(
+    max_attempts=5, initial_delay=1.0, backoff_factor=2.0
+)
 
 
 def setup_ollama_env_vars() -> None:
