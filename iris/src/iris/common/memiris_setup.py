@@ -49,6 +49,14 @@ You should still focus on the user as a person and not the exact content of the 
 In fact the actual content of the conversation is not relevant at all and should not be part of the learnings \
 unless they specifically refer to the user.
 Keep the learnings short and concise. Better have multiple short learnings than one long learning.
+STAY ON TOPIC and only extract personal details about the user. Do not extract any information that is not a \
+personal detail about the user.
+You need to find high-quality personal details that can be used to improve the answers one gives to the user.
+It is better to find no personal details than to find low-quality personal details that are not actually useful to \
+improve the answers for the user.
+AGAIN: LIMITED INTERPRETATION, ONLY PERSONAL DETAILS THAT ARE EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER. \
+IF IT IS NOT EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER, THEN IT SHOULD NOT BE EXTRACTED AS A PERSONAL \
+DETAIL. OTHERWISE, DO NOT EXTRACT ANYTHING AND RETURN AN EMPTY RESULT.
 """
 
 _memiris_user_focus_requirements = """
@@ -62,6 +70,13 @@ In fact the actual content of the conversation is not relevant at all and should
 unless they specifically refer to the user.
 DO NOT extract how the user is communicating but rather how they expect answers to be communicated to them.
 Keep the learnings short and concise. Better have multiple short learnings than one long learning.
+STAY ON TOPIC and only extract requirements that the user has for answers to their questions.
+You need to find high-quality requirements that can be used to improve the answers one gives to the user.
+It is better to find no requirements than to find low-quality requirements that are not actually useful to \
+improve the answers for the user.
+AGAIN: LIMITED INTERPRETATION, ONLY REQUIREMENTS THAT ARE EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER. \
+IF IT IS NOT EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER, THEN IT SHOULD NOT BE EXTRACTED AS A REQUIREMENT. \
+OTHERWISE, DO NOT EXTRACT ANYTHING AND RETURN AN EMPTY RESULT.
 """
 
 _memiris_user_focus_facts = """
@@ -74,6 +89,15 @@ You should focus on the user and not the content of the conversation.
 In fact the actual content of the conversation is not relevant at all and should not be part of the learnings \
 unless they specifically refer to the user.
 Keep the learnings short and concise. Better have multiple short learnings than one long learning.
+DO NOT extract how the user is communicating but rather what hard facts about the user can be extracted from the \
+conversation.
+STAY ON TOPIC and only extract facts about the user. Do not extract any information that is not a fact about the user.
+You need to find high-quality facts that can be used to improve the answers one gives to the user.
+It is better to find no facts than to find low-quality facts that are not actually useful to \
+improve the answers for the user.
+AGAIN: NO INTERPRETATION, ONLY FACTS THAT ARE EXPLICITLY STATED BY THE USER. DO NOT GUESS OR INFER ANYTHING. \
+IF IT IS NOT EXPLICITLY STATED BY THE USER, THEN IT SHOULD NOT BE EXTRACTED AS A FACT. OTHERWISE, \
+DO NOT EXTRACT ANYTHING AND RETURN AN EMPTY RESULT.
 """
 
 type Tenant = str

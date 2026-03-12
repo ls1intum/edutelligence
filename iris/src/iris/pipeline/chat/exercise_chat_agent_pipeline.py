@@ -143,7 +143,7 @@ class ExerciseChatAgentPipeline(
         Returns:
             True if memory creation should be enabled, False otherwise.
         """
-        return False
+        return bool(state.dto.user and state.dto.user.memiris_enabled)
 
     def get_memiris_tenant(self, dto: ExerciseChatPipelineExecutionDTO) -> str:
         """
@@ -205,6 +205,8 @@ class ExerciseChatAgentPipeline(
             setattr(state, "lecture_content_storage", {})
         if not hasattr(state, "faq_storage"):
             setattr(state, "faq_storage", {})
+        if not hasattr(state, "accessed_memory_storage"):
+            setattr(state, "accessed_memory_storage", [])
 
         lecture_content_storage = getattr(state, "lecture_content_storage")
         faq_storage = getattr(state, "faq_storage")
@@ -256,6 +258,26 @@ class ExerciseChatAgentPipeline(
                 )
             )
 
+        # Add Memiris tools if available
+        allow_memiris_tool = bool(
+            state.dto.user
+            and state.dto.user.memiris_enabled
+            and state.memiris_wrapper
+            and state.memiris_wrapper.has_memories()
+        )
+
+        if allow_memiris_tool and state.memiris_wrapper:
+            tool_list.append(
+                state.memiris_wrapper.create_tool_memory_search(
+                    getattr(state, "accessed_memory_storage", [])
+                )
+            )
+            tool_list.append(
+                state.memiris_wrapper.create_tool_find_similar_memories(
+                    getattr(state, "accessed_memory_storage", [])
+                )
+            )
+
         return tool_list
 
     def build_system_message(
@@ -293,6 +315,14 @@ class ExerciseChatAgentPipeline(
             custom_instructions=dto.custom_instructions or ""
         )
 
+        # Get Memiris availability
+        allow_memiris_tool = bool(
+            state.dto.user
+            and state.dto.user.memiris_enabled
+            and state.memiris_wrapper
+            and state.memiris_wrapper.has_memories()
+        )
+
         # Build system prompt using Jinja2 template
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
@@ -304,6 +334,7 @@ class ExerciseChatAgentPipeline(
             "has_query": query is not None,
             "has_chat_history": len(state.message_history) > 0,
             "custom_instructions": custom_instructions,
+            "allow_memiris_tool": allow_memiris_tool,
         }
 
         return self.system_prompt_template.render(template_context)
@@ -358,6 +389,7 @@ class ExerciseChatAgentPipeline(
                 "Done!",
                 final_result=result,
                 tokens=state.tokens,
+                accessed_memories=getattr(state, "accessed_memory_storage", []),
                 session_title=session_title,
             )
 
