@@ -7,7 +7,7 @@ try:
 except ImportError:  # pragma: no cover
     from typing_extensions import deprecated
 
-from langfuse._client.observe import observe
+from langfuse import observe
 from weaviate.client import WeaviateClient
 
 from memiris.domain.learning import Learning

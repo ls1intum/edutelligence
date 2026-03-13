@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 import tempfile
 import threading
 from typing import List, Optional
@@ -8,7 +9,6 @@ import fitz
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -42,6 +42,52 @@ from . import Pipeline
 logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
+
+
+_UNICODE_BULLETS = (
+    "\u0095"  # BULLET (legacy Windows-1252)
+    "\u2022"  # BULLET
+    "\u2023"  # TRIANGULAR BULLET
+    "\u2043"  # HYPHEN BULLET
+    "\u3164"  # HANGUL FILLER
+    "\u204c"  # BLACK LEFTWARDS BULLET
+    "\u204d"  # BLACK RIGHTWARDS BULLET
+    "\u2219"  # BULLET OPERATOR
+    "\u25cb"  # WHITE CIRCLE
+    "\u25cf"  # BLACK CIRCLE
+    "\u25d8"  # INVERSE BULLET
+    "\u25e6"  # WHITE BULLET
+    "\u2619"  # REVERSED ROTATED FLORAL HEART BULLET
+    "\u2765"  # ROTATED HEAVY BLACK HEART BULLET
+    "\u2767"  # ROTATED FLORAL HEART BULLET
+    "\u29be"  # CIRCLED WHITE BULLET
+    "\u29bf"  # CIRCLED BULLET
+    "\u002d"  # HYPHEN-MINUS
+    "\u2013"  # EN DASH
+    "\u00b7"  # MIDDLE DOT
+    "\u2024"  # ONE DOT LEADER
+    "\u002a"  # ASTERISK
+)
+_BULLET_PATTERN = re.compile(
+    rf"^[^\S\n]*[{re.escape(_UNICODE_BULLETS)}][^\S\n]*",
+    flags=re.MULTILINE,
+)
+
+
+def clean_text(
+    text: str, *, bullets: bool = False, extra_whitespace: bool = False
+) -> str:
+    """Lightweight replacement for unstructured.cleaners.core.clean.
+
+    Bullets are stripped first so the multiline-anchored regex can match
+    line-leading bullets before newlines are collapsed by whitespace cleanup.
+    """
+    if bullets:
+        text = _BULLET_PATTERN.sub("", text)
+    if extra_whitespace:
+        text = re.sub(r"[\xa0\n]", " ", text)
+        text = re.sub(r" {2,}", " ", text).strip()
+    return text
 
 
 def cleanup_temporary_file(file_path):
@@ -364,7 +410,7 @@ class LectureUnitPageIngestionPipeline(
             image_interpretation=image_interpretation,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
-        clean_output = clean(
+        clean_output = clean_text(
             (prompt | self.pipeline).invoke({}),
             bullets=True,
             extra_whitespace=True,
