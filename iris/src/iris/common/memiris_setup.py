@@ -399,10 +399,12 @@ class MemirisWrapper:
         # TODO: Memiris maintainer - add LangFuse tracing inside Memiris library
         # for internal LLM calls (memory creation, consolidation, etc.)
         if use_cloud_models:
+            logging.info("Creating memories for tenant %s using OpenAI", self.tenant)
             return self.memory_creation_pipeline_openai.create_memories(
                 self.tenant, text, reference
             )
         else:
+            logging.info("Creating memories for tenant %s using Ollama", self.tenant)
             return self.memory_creation_pipeline_ollama.create_memories(
                 self.tenant, text, reference
             )
