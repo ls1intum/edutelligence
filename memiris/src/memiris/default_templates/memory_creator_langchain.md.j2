@@ -55,6 +55,16 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * The final message **must not** contain any tool calls, reflections, or explanations — only the JSON array of Memory objects.
 * Do not output JSON that does not conform to the schema.
 
+## Hard JSON Contract (must always hold)
+
+* Final response must be a **single top-level JSON array**.
+* First character must be `[` and last character must be `]`.
+* Use only valid JSON syntax: double-quoted keys/strings, no trailing commas, no comments.
+* No markdown fences, no leading/trailing text, no headings, no backticks.
+* Never output partial JSON drafts. Output only the complete final array.
+* If you detect invalid JSON internally, discard it and regenerate the full array before responding.
+* If uncertainty remains and a valid object cannot be guaranteed, return `[]` (still valid JSON).
+
 # Style for Memory Content
 
 * **Titles:** Short, specific, single-theme.
@@ -67,5 +77,6 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * [ ] Each memory centers on **one theme**; closely related sub-aspects acceptable; no unrelated blends.
 * [ ] No invented or altered UUIDs; all UUIDs exist in input.
 * [ ] Minimal duplication of the same learning across memories.
+* [ ] Output is parseable JSON (single top-level array, valid commas/quotes, no extra text).
 * [ ] No extraneous text; final message is a **JSON array only** that matches the above schema exactly.
 * [ ] Exploration phase completed with **multiple** tool calls; stop when further calls won’t change groupings.
