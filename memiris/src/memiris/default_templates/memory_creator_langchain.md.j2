@@ -54,6 +54,8 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * Produce the final JSON **only after** you have completed the exploration/thinking phase with multiple tool calls.
 * The final message **must not** contain any tool calls, reflections, or explanations — only the JSON array of Memory objects.
 * Do not output JSON that does not conform to the schema.
+* If there is exactly one memory, output `[ { ... } ]` (still an array), **never** a bare object.
+* Never output tool-argument objects or probe objects as the final answer (forbidden examples: `{"learning_id":"..."}`, `{"query":"..."}`, `{"id":"..."}`).
 
 ## Hard JSON Contract (must always hold)
 
@@ -64,6 +66,7 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * Never output partial JSON drafts. Output only the complete final array.
 * If you detect invalid JSON internally, discard it and regenerate the full array before responding.
 * If uncertainty remains and a valid object cannot be guaranteed, return `[]` (still valid JSON).
+* Before finalizing, silently re-check: "Is my full response a JSON array of Memory objects, not a single object and not a tool call payload?"
 
 # Style for Memory Content
 
