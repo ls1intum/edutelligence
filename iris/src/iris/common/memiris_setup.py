@@ -38,67 +38,73 @@ from iris.tracing import observe
 from iris.vector_database.database import VectorDatabase
 
 _memiris_user_focus_personal_details = """
-Find personal details about the user itself.
-Always start the content with 'The user'. \
-Never call the user by name only use 'the user'. \
-The exception would be a learning like 'The user is called John'.
-Similarly, use they/them pronouns instead of he/him or she/her. \
-The exception would be a learning like 'The user uses she/her pronouns'.
-Think about the meaning of the user's text and not just the words.
-You are encouraged to interpret the text and extract the most relevant information.
-You should still focus on the user as a person and not the exact content of the conversation.
-In fact the actual content of the conversation is not relevant at all and should not be part of the learnings \
-unless they specifically refer to the user.
-Keep the learnings short and concise. Better have multiple short learnings than one long learning.
-STAY ON TOPIC and only extract personal details about the user. Do not extract any information that is not a \
-personal detail about the user.
-You need to find high-quality personal details that can be used to improve the answers one gives to the user.
-It is better to find no personal details than to find low-quality personal details that are not actually useful to \
-improve the answers for the user.
-AGAIN: LIMITED INTERPRETATION, ONLY PERSONAL DETAILS THAT ARE EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER. \
-IF IT IS NOT EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER, THEN IT SHOULD NOT BE EXTRACTED AS A PERSONAL \
-DETAIL. OTHERWISE, DO NOT EXTRACT ANYTHING AND RETURN AN EMPTY RESULT.
+Find personal details about the user (e.g., name, education, proficiency level, personality).
+Always start with 'The user'. Use 'they/them' pronouns unless specified.
+Keep learnings atomic and concise.
+
+CRITICAL INSTRUCTIONS:
+1. DO NOT summarize the conversation content.
+2. DO NOT mention specific exercise topics (e.g., "HATEOAS", "Exercise 1") unless describing the user's skill level.
+3. Focus purely on the USER'S identity, skills, and personality.
+4. AVOID extracting temporary states (e.g., "The user is working on X", "The user is failing").
+5. Only extract details that persist beyond this conversation.
+
+EXAMPLES OF INPUTS WITH NO EXTRACTION (Output Nothing):
+- "Can you explain REST?" -> NOTHING (User goal, not personal detail)
+- "I am stuck on valid_move." -> NOTHING (Temporary state)
+- "The build failed." -> NOTHING (Event, not person)
+- "Thank you." -> NOTHING (Chit-chat)
+- "I'm working on the HATEOAS exercise and I don't understand how to link resources." -> NOTHING (Context/Confusion)
+- "I feel stupid because I can't solve this." -> NOTHING (Transient emotion)
+- "My professor said we should use Factory pattern." -> NOTHING (External constraint/instruction)
+
+High quality extraction means returning NOTHING when acceptable. Do not hallucinate details to fill space.
 """
 
 _memiris_user_focus_requirements = """
-Find out what requirements the user has for answers to their questions.
-Always start the content with 'The user'. \
-Never call the user by name only use 'the user'.
-Similarly, use they/them pronouns instead of he/him or she/her.
-You are encouraged to interpret the text and extract the most relevant information.
-You should still focus on the user as a person and not the exact content of the conversation.
-In fact the actual content of the conversation is not relevant at all and should not be part of the learnings \
-unless they specifically refer to the user.
-DO NOT extract how the user is communicating but rather how they expect answers to be communicated to them.
-Keep the learnings short and concise. Better have multiple short learnings than one long learning.
-STAY ON TOPIC and only extract requirements that the user has for answers to their questions.
-You need to find high-quality requirements that can be used to improve the answers one gives to the user.
-It is better to find no requirements than to find low-quality requirements that are not actually useful to \
-improve the answers for the user.
-AGAIN: LIMITED INTERPRETATION, ONLY REQUIREMENTS THAT ARE EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER. \
-IF IT IS NOT EXPLICITLY STATED OR VERY CLEARLY IMPLIED BY THE USER, THEN IT SHOULD NOT BE EXTRACTED AS A REQUIREMENT. \
-OTHERWISE, DO NOT EXTRACT ANYTHING AND RETURN AN EMPTY RESULT.
+Find specific preferences the user has for HOW they want to be answered (e.g., brevity, format, tone).
+Always start with 'The user'. Use 'they/them' pronouns unless specified.
+Keep learnings atomic and concise.
+
+CRITICAL INSTRUCTIONS:
+1. SEPARATE STYLE FROM CONTENT. Do not extract what the user is asking about (e.g. "User wants to know about REST").
+2. IGNORE standard questions. Asking "What is X?" does not mean "User prefers definitions". \
+It just means they asked a question.
+3. ONLY extract if the user explicitly REQUESTS a specific format, tone, or constraints.
+4. IGNORE implied preferences from single interactions.
+
+EXAMPLES OF INPUTS WITH NO EXTRACTION (Output Nothing):
+- "What is HATEOAS?" -> NOTHING (Standard question)
+- "Give me the solution." -> NOTHING (Standard request)
+- "Why is this wrong?" -> NOTHING (Standard debugging)
+- "Can you check if my implementation of the strategy pattern is correct?" -> NOTHING (Request for feedback)
+- "I need to pass the security tests." -> NOTHING (External goal)
+- "Why is the output not sorted?" -> NOTHING (Debugging question)
+
+EXTRACT ONLY IF: "Don't give me code", "Explain like I'm 5", "Give me a hint, not the answer".
+If the interaction is standard, output NOTHING. It is better to miss a weak signal than to extract noise.
 """
 
 _memiris_user_focus_facts = """
-Find out what hard facts about the user you can extract from the conversation.
-Always start the content with 'The user'.
-Never call the user by name only use 'the user'.
-Similarly, use they/them pronouns instead of he/him or she/her.
-You should not interpret the text but rather extract information that is explicitly stated by the user.
-You should focus on the user and not the content of the conversation.
-In fact the actual content of the conversation is not relevant at all and should not be part of the learnings \
-unless they specifically refer to the user.
-Keep the learnings short and concise. Better have multiple short learnings than one long learning.
-DO NOT extract how the user is communicating but rather what hard facts about the user can be extracted from the \
-conversation.
-STAY ON TOPIC and only extract facts about the user. Do not extract any information that is not a fact about the user.
-You need to find high-quality facts that can be used to improve the answers one gives to the user.
-It is better to find no facts than to find low-quality facts that are not actually useful to \
-improve the answers for the user.
-AGAIN: NO INTERPRETATION, ONLY FACTS THAT ARE EXPLICITLY STATED BY THE USER. DO NOT GUESS OR INFER ANYTHING. \
-IF IT IS NOT EXPLICITLY STATED BY THE USER, THEN IT SHOULD NOT BE EXTRACTED AS A FACT. OTHERWISE, \
-DO NOT EXTRACT ANYTHING AND RETURN AN EMPTY RESULT.
+Find hard, explicitly stated facts about the user (e.g., Operating System, IDE, language constraints).
+Always start with 'The user'. Use 'they/them' pronouns unless specified.
+Keep learnings atomic and concise.
+
+CRITICAL INSTRUCTIONS:
+1. EXTRACT ONLY EXPLICIT, PERMANENT FACTS stated by the user.
+2. NO INTERPRETATION. If the user says "I think it's a Mac", do NOT extract "User uses Mac".
+3. IGNORE conversation context. The fact that they are asking about Python does not mean "User uses Python" \
+(they might be learning it).
+4. IGNORE transient states ("I am confused", "I am working").
+
+EXAMPLES OF INPUTS WITH NO EXTRACTION (Output Nothing):
+- "My code isn't running." -> NOTHING (Transient)
+- "I need to install Java." -> NOTHING (Action, not attribute)
+- "I hate this exercise." -> NOTHING (Opinion)
+- "I think I might switch to VS Code later." -> NOTHING (Hypothetical/future plan)
+- "The tutorial uses Python 3.9." -> NOTHING (Context about material, not user)
+
+Most messages contain NO hard facts. Outputting NOTHING is the expected behavior for 99% of messages.
 """
 
 type Tenant = str
