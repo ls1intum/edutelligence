@@ -69,7 +69,7 @@ _UNICODE_BULLETS = (
     "\u002a"  # ASTERISK
 )
 _BULLET_PATTERN = re.compile(
-    rf"^\s*[{re.escape(_UNICODE_BULLETS)}]\s*",
+    rf"^[^\S\n]*[{re.escape(_UNICODE_BULLETS)}][^\S\n]*",
     flags=re.MULTILINE,
 )
 
