@@ -521,7 +521,14 @@ class MemirisWrapper:
             memories = self.memory_service.semantic_search(
                 tenant=self.tenant, vectors=vectors, limit=limit
             )
-            accessed_memory_storage.extend(memories)
+
+            # Deduplicate memories before adding to storage
+            existing_ids = {m.id for m in accessed_memory_storage}
+            for memory in memories:
+                if memory.id not in existing_ids:
+                    accessed_memory_storage.append(memory)
+                    existing_ids.add(memory.id)
+
             if len(memories) == 0:
                 return "No memories found for the given query."
 
@@ -588,7 +595,12 @@ class MemirisWrapper:
                 )
 
                 if len(memories) == limit:
-                    accessed_memory_storage.extend(memories)
+                    # Deduplicate memories before adding to storage
+                    existing_ids = {m.id for m in accessed_memory_storage}
+                    for memory in memories:
+                        if memory.id not in existing_ids:
+                            accessed_memory_storage.append(memory)
+                            existing_ids.add(memory.id)
                     return memories
 
             memories.extend(
@@ -599,7 +611,13 @@ class MemirisWrapper:
                 )
             )
 
-            accessed_memory_storage.extend(memories)
+            # Deduplicate memories before adding to storage
+            existing_ids = {m.id for m in accessed_memory_storage}
+            for memory in memories:
+                if memory.id not in existing_ids:
+                    accessed_memory_storage.append(memory)
+                    existing_ids.add(memory.id)
+
             return memories
 
         return memiris_find_similar_memories
