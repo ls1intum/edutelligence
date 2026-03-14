@@ -1,5 +1,5 @@
+import json
 import logging
-import re
 from typing import Any, Callable, List, Optional
 
 from jinja2 import Template
@@ -106,6 +106,164 @@ class MemoryCreatorLangChain(MemoryCreator):
             )
         return tools
 
+    def _normalize_output_text(self, output_text: str) -> str:
+        """Strip markdown code fences and surrounding whitespace from model output."""
+        text = output_text.strip()
+        if not text.startswith("```"):
+            return text
+
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[0].strip().lower() == "json":
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    def _extract_balanced_json_array(self, text: str) -> Optional[str]:
+        """Return the first balanced JSON array substring found in text."""
+        start = text.find("[")
+        if start < 0:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1].strip()
+
+        return None
+
+    def _extract_decoder_candidates(self, text: str) -> List[str]:
+        """Use stdlib decoder to recover top-level arrays with trailing garbage."""
+        decoder = json.JSONDecoder()
+        candidates: List[str] = []
+
+        for start, char in enumerate(text):
+            if char != "[":
+                continue
+
+            parsed: Any = None
+            end = 0
+            try:
+                parsed, end = decoder.raw_decode(text[start:])
+            except json.JSONDecodeError:
+                parsed = None
+
+            if isinstance(parsed, list):
+                candidates.append(text[start : start + end].strip())
+                candidates.append(json.dumps(parsed))
+                break
+
+        return candidates
+
+    def _extract_json_array_candidates(self, text: str) -> List[tuple[str, str]]:
+        """Build ordered parse candidates from strict to recovery-oriented."""
+        candidates: List[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def add(label: str, candidate: Optional[str]) -> None:
+            if not candidate:
+                return
+            normalized = candidate.strip()
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            candidates.append((label, normalized))
+
+        add("raw", text)
+        add("balanced-array", self._extract_balanced_json_array(text))
+
+        for index, decoded in enumerate(self._extract_decoder_candidates(text)):
+            add(f"decoder-{index}", decoded)
+
+        # Handle common corruption where one or more extra closing brackets are appended.
+        trimmed = text.rstrip()
+        while trimmed.endswith("]"):
+            trimmed = trimmed[:-1].rstrip()
+            if not trimmed:
+                break
+            add("trim-extra-bracket", trimmed)
+
+        return candidates
+
+    def _parse_memory_dlos(self, candidate: str) -> List[MemoryCreationDLO]:
+        return MemoryCreationDLO.json_array_type().validate_json(candidate)
+
+    def _convert_dlos_to_memories(
+        self, memory_dlos: List[MemoryCreationDLO], tenant: str
+    ) -> List[Memory]:
+        needed: List[Learning] = []
+        lookup_cache: dict[Any, Optional[Learning]] = {}
+
+        for memory_dlo in memory_dlos:
+            for learning_id in memory_dlo.learnings:
+                if learning_id not in lookup_cache:
+                    learning: Optional[Learning] = None
+                    try:
+                        learning = self.learning_repository.find(tenant, learning_id)
+                    except (
+                        Exception
+                    ) as exc:  # noqa: BLE001 - repository may raise various errors
+                        logger.debug(
+                            "Learning lookup failed for tenant=%s id=%s: %s",
+                            tenant,
+                            learning_id,
+                            exc,
+                        )
+                    lookup_cache[learning_id] = learning
+                resolved = lookup_cache.get(learning_id)
+                if resolved and resolved not in needed:
+                    needed.append(resolved)
+
+        return [
+            creation_dlo_to_memory(memory_dlo, needed) for memory_dlo in memory_dlos
+        ]
+
+    def _parse_memories_from_output(
+        self, output_text: str, tenant: str
+    ) -> List[Memory]:
+        text = self._normalize_output_text(output_text)
+
+        last_exception: Optional[Exception] = None
+        for strategy, candidate in self._extract_json_array_candidates(text):
+            try:
+                memory_dlos = self._parse_memory_dlos(candidate)
+                if strategy != "raw":
+                    logger.info(
+                        "Recovered parseable memory JSON using strategy=%s", strategy
+                    )
+                return self._convert_dlos_to_memories(memory_dlos, tenant)
+            except Exception as exc:  # noqa: BLE001 - parsing may raise pydantic errors
+                last_exception = exc
+                logger.info("Parse failed using strategy=%s: %s", strategy, exc)
+
+        logger.error(
+            "Could not parse agent output into MemoryCreationDLO array. Last error: %s. Truncated preview: %s",
+            last_exception,
+            text[:2000],
+        )
+        return []
+
     @observe(name="memory-creation-langchain")
     def create(
         self, learnings: List[Learning], tenant: str, **kwargs: Any
@@ -155,49 +313,5 @@ class MemoryCreatorLangChain(MemoryCreator):
         )
 
         result = agent_executor.invoke({"input": learnings_string})
-
         output_text = (result or {}).get("output", "") or ""
-        text = output_text.strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json\n"):
-                text = text[5:]
-
-        def parse_and_convert(candidate: str) -> List[Memory]:
-            memory_dlos = MemoryCreationDLO.json_array_type().validate_json(candidate)
-            needed: List[Learning] = []
-            for md in memory_dlos:
-                for lid in md.learnings:
-                    learning: Optional[Learning] = None
-                    try:
-                        learning = self.learning_repository.find(tenant, lid)
-                    except (
-                        Exception
-                    ) as exc:  # noqa: BLE001 - repository may raise various errors
-                        logger.debug(
-                            "Learning lookup failed for tenant=%s id=%s: %s",
-                            tenant,
-                            lid,
-                            exc,
-                        )
-                    if learning:
-                        needed.append(learning)
-            return [creation_dlo_to_memory(md, needed) for md in memory_dlos]
-
-        try:
-            return parse_and_convert(text)
-        except Exception as exc:  # noqa: BLE001 - parsing may raise pydantic errors
-            logger.info("Primary parse failed, attempting regex extraction: %s", exc)
-            match = re.search(r"\[\s*\{[\s\S]*}\s*]", text)
-            if match:
-                for i, group in enumerate(match.groups()):
-                    logger.info("Regex group %d: %s", i, group[:1000])
-                    try:
-                        return parse_and_convert(group)
-                    except Exception as exc_inner:
-                        logger.info("Parse failed for regex group %d: %s", i, exc_inner)
-            logger.error(
-                "Could not parse agent output into MemoryCreationDLO array. Truncated preview: %s",
-                text[:2000],
-            )
-            return []
+        return self._parse_memories_from_output(output_text, tenant)

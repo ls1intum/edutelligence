@@ -16,6 +16,7 @@ from memiris.llm.abstract_language_model import (
     WrappedChatResponse,
     WrappedEmbeddingResponse,
 )
+from memiris.llm.retry_config import call_with_retry
 
 
 @dataclass
@@ -63,20 +64,22 @@ class OllamaLanguageModel(AbstractLanguageModel):
             model_parameters=options,
         ) as generation:
             think = "high" if self._model.startswith("gpt-oss") else None
-            response = self._client.chat(
-                self._model,
-                messages=messages,
-                format=response_format,
-                keep_alive=keep_alive,
-                options=options,
-                think=think,  # type: ignore
-                **kwargs,
+            response = call_with_retry(
+                lambda: self._client.chat(
+                    self._model,
+                    messages=messages,
+                    format=response_format,
+                    keep_alive=keep_alive,
+                    options=options,
+                    think=think,  # type: ignore
+                    **kwargs,
+                )
             )
             generation.update(output=response.message, metadata=response)
         return WrappedChatResponse.from_ollama_response(response)
 
     def embed(self, text: str) -> WrappedEmbeddingResponse:
-        response = self._client.embed(self._model, text)
+        response = call_with_retry(lambda: self._client.embed(self._model, text))
         return WrappedEmbeddingResponse.from_ollama_response(response)
 
     def langchain_client(self) -> ChatOllama:

@@ -119,48 +119,51 @@ class MemorySleeper:
 
         # 1. Load recent memories
         recent_memories = self.memory_repository.find_unslept_memories(tenant)
-        logging.debug(
+        logging.info(
             "Loaded %s unslept memories for tenant %s", len(recent_memories), tenant
         )
-        if not recent_memories:
-            logging.warning("No unslept memories found for tenant %s", tenant)
+
+        if recent_memories:
+            recent_memories = self._general_cleanup(tenant, recent_memories)
+
+            for recent_memory in recent_memories:
+                if recent_memory.id:
+                    self.memory_cache[recent_memory.id] = recent_memory
+
+            # 2. Connect memories with each other
+            logging.debug("Connecting memories for tenant %s", tenant)
+            connection_dlos = self._create_memory_connections(recent_memories, **kwargs)
+
+            connections = self._save_memory_connections(
+                connection_dlos, tenant, **kwargs
+            )
+
+            logging.debug(
+                "Created %s connections for %s recent memories in tenant %s",
+                len(connections),
+                len(recent_memories),
+                tenant,
+            )
+
+            # Mark recent memories as slept on once connection pass has completed.
+            for memory in recent_memories:
+                memory.slept_on = True
+
+            self.memory_repository.save_all(tenant, recent_memories)
+        else:
+            logging.warning(
+                "No unslept memories found for tenant %s; continuing with historical duplicate deduplication.",
+                tenant,
+            )
+
+        # 3. Deduplicate using all duplicate connections (including older runs).
+        all_duplicate_connections = self._load_active_duplicate_connections(tenant)
+        if not all_duplicate_connections:
+            logging.warning("No active duplicate connections found for deduplication.")
             return
 
-        recent_memories = self._general_cleanup(tenant, recent_memories)
-
-        for recent_memory in recent_memories:
-            if recent_memory.id:
-                self.memory_cache[recent_memory.id] = recent_memory
-
-        # 2. Connect memories with each other
-        logging.debug("Connecting memories for tenant %s", tenant)
-        connection_dlos = self._create_memory_connections(recent_memories, **kwargs)
-
-        connections = self._save_memory_connections(connection_dlos, tenant, **kwargs)
-
-        logging.debug(
-            "Created %s connections for %s recent memories in tenant %s",
-            len(connections),
-            len(recent_memories),
-            tenant,
-        )
-
-        duplicate_connections = [
-            connection
-            for connection in connections
-            if connection.connection_type == ConnectionType.DUPLICATE
-        ]
-
-        # 3. Mark recent memories as slept on
-        for memory in recent_memories:
-            memory.slept_on = True
-
-        self.memory_repository.save_all(tenant, recent_memories)
-
-        # 4. TODO: Filter out connections that contain memories with a CONFLICT connection
-
-        # 5. Deduplicate memories using LLM
-        self._deduplicate_memories(duplicate_connections, tenant, **kwargs)
+        self._data_caching(all_duplicate_connections, tenant)
+        self._deduplicate_memories(all_duplicate_connections, tenant, **kwargs)
 
     @observe(name="memory-cleanup")
     def _general_cleanup(self, tenant: str, memories: List[Memory]) -> List[Memory]:
@@ -182,16 +185,71 @@ class MemorySleeper:
                 logging.warning(
                     "Memory %s has no learnings, permanently deleting.", memory.id
                 )
-                self.memory_repository.delete(tenant, memory.id)  # type: ignore
+                self.memory_repository.delete(tenant, memory.id)  # type: ignore[arg-type]
             else:
                 updated_memories.append(memory)
 
         return updated_memories
 
+    @observe(name="load-active-duplicate-connections")
+    def _load_active_duplicate_connections(self, tenant: str) -> List[MemoryConnection]:
+        """Load all duplicate connections and drop deleted/stale memory references."""
+        duplicate_connections = (
+            self.memory_connection_repository.find_by_connection_type(
+                tenant, ConnectionType.DUPLICATE.value
+            )
+        )
+        if not duplicate_connections:
+            return []
+
+        all_memory_ids = {
+            memory_id
+            for connection in duplicate_connections
+            for memory_id in connection.memories
+        }
+
+        active_memories = {
+            memory.id: memory
+            for memory in self.memory_repository.find_by_ids(
+                tenant, list(all_memory_ids)
+            )
+            if memory.id and not memory.deleted
+        }
+
+        filtered_connections: List[MemoryConnection] = []
+        for connection in duplicate_connections:
+            unique_active_ids: list[UUID] = []
+            seen_ids: set[UUID] = set()
+            for memory_id in connection.memories:
+                if memory_id not in active_memories or memory_id in seen_ids:
+                    continue
+                seen_ids.add(memory_id)
+                unique_active_ids.append(memory_id)
+
+            if len(unique_active_ids) < 2:
+                continue
+
+            filtered_connections.append(
+                MemoryConnection(
+                    uid=connection.id,
+                    connection_type=connection.connection_type,
+                    memories=unique_active_ids,
+                    description=connection.description,
+                    context=connection.context,
+                    weight=connection.weight,
+                )
+            )
+
+        logging.info(
+            "Loaded %s duplicate connections for tenant %s, kept %s after filtering deleted/stale memories.",
+            len(duplicate_connections),
+            tenant,
+            len(filtered_connections),
+        )
+        return filtered_connections
+
     @observe(name="memory-data-caching")
-    def _data_caching(
-        self, duplicate_connections: List[MemoryConnectionDLO], tenant: str
-    ):
+    def _data_caching(self, duplicate_connections: List[MemoryConnection], tenant: str):
         all_memory_ids = set(
             memory_id
             for connection in duplicate_connections
@@ -204,20 +262,24 @@ class MemorySleeper:
             else []
         )
 
-        for memory in all_memories:
-            self.memory_cache[memory.id] = memory  # type: ignore
+        active_memories = [
+            memory
+            for memory in all_memories
+            if memory.id is not None and not memory.deleted
+        ]
+
+        for memory in active_memories:
+            self.memory_cache[memory.id] = memory  # type: ignore[index]
 
         all_learning_ids = set(
             learning_id
-            for connection in duplicate_connections
-            for memory_id in connection.memories
-            if memory_id in self.memory_cache
-            for learning_id in self.memory_cache[memory_id].learnings
+            for memory in active_memories
+            for learning_id in memory.learnings
         )
 
         logging.debug(
-            "Found %s learning IDs across %s connections for tenant %s",
-            len(set(all_learning_ids)),
+            "Found %s learning IDs across %s duplicate connections for tenant %s",
+            len(all_learning_ids),
             len(duplicate_connections),
             tenant,
         )
@@ -230,7 +292,7 @@ class MemorySleeper:
         )
 
         for learning in all_learnings:
-            self.learning_cache[learning.id] = learning  # type: ignore
+            self.learning_cache[learning.id] = learning  # type: ignore[index]
 
     @observe(name="memory-deduplication")
     def _deduplicate_memories(
@@ -275,9 +337,17 @@ class MemorySleeper:
         current_group: list[MemoryDeduplicationInputDLO] = []
 
         for connection in duplicate_connections:
-            if len(connection.memories) < 2:
+            active_memory_ids = [
+                memory_id
+                for memory_id in dict.fromkeys(connection.memories)
+                if memory_id in self.memory_cache
+                and not self.memory_cache[memory_id].deleted
+            ]
+
+            if len(active_memory_ids) < 2:
                 logging.warning(
-                    "Skipping connection with less than 2 memories: %s", connection
+                    "Skipping connection with less than 2 active memories: %s",
+                    connection,
                 )
                 continue
 
@@ -293,9 +363,10 @@ class MemorySleeper:
                             content=self.learning_cache[learning_id].content,
                         )
                         for learning_id in self.memory_cache[memory_id].learnings
+                        if learning_id in self.learning_cache
                     ],
                 )
-                for memory_id in connection.memories
+                for memory_id in active_memory_ids
             ]
 
             if len(current_group) > self.group_size:
@@ -622,22 +693,42 @@ class MemorySleeper:
                 continue
 
             # Create a new connection with the seen memories
+            # Ensure unique IDs in the connection
+            unique_memory_ids = sorted(list(set([memory_id] + ids)))  # type: ignore
             new_connection = MemoryConnectionDLO(
                 connection_type=ConnectionType.DUPLICATE,
-                memories=[memory_id] + ids,
+                memories=unique_memory_ids,  # type: ignore
                 description="Automatically deduplicated connection",
                 weight=1.0,
             )
             final_connections.append(new_connection)
 
             for other_memory in ids:
-                seen_connections[other_memory].remove(memory_id)
+                if other_memory in seen_connections:
+                    if memory_id in seen_connections[other_memory]:
+                        seen_connections[other_memory].remove(memory_id)
 
-        return final_connections
+        # De-duplicate final connections themselves just in case
+        # (Since seen_connections logic might produce overlapping/duplicate sets if graphs are disjoint but connected)
+        # Actually the loop removes inverse links: seen_connections[other_memory].remove(memory_id)
+        # But let's be safe.
+
+        # A simple unique filter based on sorted memory IDs tuple
+        unique_final_connections = []
+        seen_final_tuples = set()
+        for conn in final_connections:
+            t = tuple(sorted(conn.memories))  # type: ignore
+            if t not in seen_final_tuples:
+                seen_final_tuples.add(t)  # type: ignore
+                unique_final_connections.append(conn)
+
+        return unique_final_connections
 
     @observe(name="process-memory-connections-other")
     def _process_other_connection_types(
-        self, connections: List[MemoryConnectionDLO]
+        self,
+        connections: List[MemoryConnectionDLO],
+        duplicate_connections: Optional[List[MemoryConnectionDLO]] = None,
     ) -> List[MemoryConnectionDLO]:
         """
         Process other connection types (RELATED, CONTRADICTS, SAME_TOPIC).
@@ -675,6 +766,19 @@ class MemorySleeper:
 
         # Remove duplicates from the processed connections
         seen_connections: set[Tuple[UUID, UUID]] = set()
+
+        if duplicate_connections:
+            for dup_conn in duplicate_connections:
+                if len(dup_conn.memories) < 2:
+                    continue
+                # Mark all pairs in this duplicate cluster as seen
+                for i in range(len(dup_conn.memories)):
+                    for j in range(i + 1, len(dup_conn.memories)):
+                        pair = tuple(
+                            sorted((dup_conn.memories[i], dup_conn.memories[j]))
+                        )
+                        seen_connections.add(pair)  # type: ignore
+
         unique_connections: List[MemoryConnectionDLO] = []
 
         # Sort by weight
@@ -903,7 +1007,9 @@ class MemorySleeper:
         # Process the connections to handle duplicates and other types
         logging.debug("Processing connections to handle duplicates and other types.")
         duplicate_connections = self._process_connection_type_duplicate(all_connections)
-        other_connections = self._process_other_connection_types(all_connections)
+        other_connections = self._process_other_connection_types(
+            all_connections, duplicate_connections
+        )
         all_connections = duplicate_connections + other_connections
 
         logging.debug(

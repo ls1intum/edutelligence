@@ -533,6 +533,9 @@ class MemoryCreationPipeline:
         for extractor in self._learning_extractors:
             learnings.extend(extractor.extract(content, **kwargs))
 
+        if not learnings:
+            return []
+
         deduplicated_learnings: list[Learning] = []
         if len(self._learning_extractors) > 1:
             for deduplicator in self._learning_deduplicators:
@@ -541,6 +544,9 @@ class MemoryCreationPipeline:
                 )
         else:
             deduplicated_learnings = learnings
+
+        if not deduplicated_learnings:
+            return []
 
         for learning in deduplicated_learnings:
             learning.vectors = self._vectorizer.vectorize(learning.content)
@@ -553,6 +559,9 @@ class MemoryCreationPipeline:
         memories = self._memory_creator.create(
             learnings=saved_learnings, tenant=tenant, **kwargs
         )
+
+        if not memories:
+            return []
 
         for memory in memories:
             memory.vectors = self._vectorizer.vectorize(memory.content)

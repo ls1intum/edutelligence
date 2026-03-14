@@ -7,17 +7,23 @@ class ConnectionType(str, Enum):
     """
     Enum representing the type of connection between memories.
 
-    RELATED: General relation between memories
-    CONTRADICTS: Memories have contradicting information
-    SAME_TOPIC: Memories are about the same topic but not duplicates
-    DUPLICATE: Memories contain duplicate information
-    CREATED_FROM: One memory was created from another. NEVER USE THIS MANUALLY.
+    CONTRADICTS: Use when memories make incompatible factual claims that cannot both be true in the same \
+        context/time (for example, opposite preferences or conflicting personal facts).
+    DUPLICATE: Highest-priority overlap class. Use for exact duplicates, partial duplicates, \
+        near-duplicates, or same-topic memories whose information can be meaningfully merged/deduplicated.
+    SAME_TOPIC: Use when memories are about the same specific topic/entity but should remain separate because \
+        each contributes distinct, non-redundant information that is not sensibly deduplicated.
+    RELATED: Lowest-priority fallback for distinct memories with a useful contextual relationship (same \
+        broader situation/theme) when they are not contradictions, not deduplicable overlap, and not a \
+        SAME_TOPIC case.
+    CREATED_FROM: Lineage link indicating one memory was derived/generated from another memory during \
+        system processing. NEVER USE THIS MANUALLY.
     """
 
-    RELATED = "related"
     CONTRADICTS = "contradicts"
-    SAME_TOPIC = "same_topic"
     DUPLICATE = "duplicate"
+    SAME_TOPIC = "same_topic"
+    RELATED = "related"
     CREATED_FROM = "created_from"
 
 

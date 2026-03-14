@@ -312,6 +312,12 @@ class ExerciseChatStatusCallback(StatusCallback):
                 name="Creating suggestions",
                 internal=True,
             ),
+            StageDTO(
+                weight=STAGE_WEIGHT_SECONDARY,
+                state=StageStateEnum.NOT_STARTED,
+                name="Extracting memories",
+                internal=True,
+            ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
