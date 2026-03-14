@@ -47,11 +47,13 @@ class LectureSearchAnswerPipeline(SubPipeline):
         self.tokens = []
         self.retriever = LectureGlobalSearchRetrieval(client)
 
-        hyde_model = "gpt-oss:120b" if local else "gpt-5-nano"
-        answer_model = "gpt-oss:120b" if local else "gpt-5-mini"
+        hyde_model = "gpt-oss:120b" if local else "gpt-4.1-nano"
+        answer_model = "gpt-oss:120b" if local else "gpt-4.1-mini"
 
         hyde_completion_args = CompletionArguments(temperature=0.7)
-        answer_completion_args = CompletionArguments(temperature=0.3)
+        answer_completion_args = CompletionArguments(
+            temperature=0.3, response_format="JSON"
+        )
         self.hyde_llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=hyde_model),
             completion_args=hyde_completion_args,
@@ -103,9 +105,12 @@ class LectureSearchAnswerPipeline(SubPipeline):
             )
         )
 
-        # Step 3: Generate the real answer using numbered context
+        # Step 3: Generate the real answer using numbered context (with metadata so the
+        # model knows the course/lecture name and can reference them explicitly)
         context = "\n\n".join(
-            f"[{i + 1}] {s.snippet}" for i, s in enumerate(sources) if s.snippet
+            f"[{i + 1}] [{s.course.name} — {s.lecture.name}, Slide {s.lecture_unit.page_number}]\n{s.snippet}"
+            for i, s in enumerate(sources)
+            if s.snippet
         )
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
             {"context": context, "query": query}
