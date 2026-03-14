@@ -523,6 +523,9 @@ class MemirisWrapper:
                 tenant=self.tenant, vectors=vectors, limit=limit
             )
 
+            for memory in memories:
+                memory.vectors = {}
+
             logging.info(
                 "Memory search for tenant %s with query '%s' returned %d results",
                 self.tenant,
@@ -610,6 +613,9 @@ class MemirisWrapper:
                             accessed_memory_storage.append(memory)
                             existing_ids.add(memory.id)
 
+                    for memory in memories:
+                        memory.vectors = {}
+
                     logging.info(
                         "Found %d similar memories for memory ID %s based on connections for tenant %s",
                         len(memories),
@@ -626,6 +632,9 @@ class MemirisWrapper:
                     limit=limit - len(memories),
                 )
             )
+
+            for memory in memories:
+                memory.vectors = {}
 
             logging.info(
                 "Found %d similar memories for memory ID %s based on semantic search for tenant %s",
