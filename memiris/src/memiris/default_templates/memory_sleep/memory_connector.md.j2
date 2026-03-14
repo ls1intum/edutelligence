@@ -32,8 +32,9 @@ Provide a list of memory connections in this JSON schema:
 8. Each connection should contain at least 2 memory IDs
 9. Connection-type priority (high to low): CONTRADICTS (when factual conflict exists) -> DUPLICATE -> SAME_TOPIC -> RELATED
 10. Prefer DUPLICATE whenever memories overlap strongly: exact duplicates, partial duplicates, very high similarity, or same-topic items that can be sensibly merged/deduplicated
-11. Use SAME_TOPIC only when memories are clearly about the same topic but should remain separate because merging/deduplication would not be sensible
+11. Use SAME_TOPIC only when memories are clearly about the same topic but should remain separate because merging/deduplication would not be sensibly
 12. Use RELATED only as a lowest-priority fallback for distinct memories that are contextually useful together but not duplicates, not same-topic in the above sense, and not contradictions
 13. Never choose RELATED when DUPLICATE or SAME_TOPIC is a reasonable fit
+14. **Exclusivity:** Do not create multiple connections between the same set of memories. If memories fit multiple types, output ONLY the single highest-priority connection.
 
 Please remember that high-quality connections are more valuable than quantity. Only create connections when there's a clear, meaningful relationship between memories.
