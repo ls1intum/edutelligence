@@ -511,6 +511,7 @@ class MemirisWrapper:
             This function performs a semantic search for memories that match the query.
             Only use this tool to search for new memories, not to find similar memories.
             The query can be a natural language question or statement.
+            USE IT FREQUENTLY AND MULTIPLE TIMES!
 
             Args:
                 query (str): The query string to search for memories.
@@ -520,6 +521,13 @@ class MemirisWrapper:
             vectors = self.vectorizer.vectorize(query)
             memories = self.memory_service.semantic_search(
                 tenant=self.tenant, vectors=vectors, limit=limit
+            )
+
+            logging.info(
+                "Memory search for tenant %s with query '%s' returned %d results",
+                self.tenant,
+                query,
+                len(memories),
             )
 
             # Deduplicate memories before adding to storage
@@ -601,6 +609,14 @@ class MemirisWrapper:
                         if memory.id not in existing_ids:
                             accessed_memory_storage.append(memory)
                             existing_ids.add(memory.id)
+
+                    logging.info(
+                        "Found %d similar memories for memory ID %s based on connections for tenant %s",
+                        len(memories),
+                        memory_id,
+                        self.tenant,
+                    )
+
                     return memories
 
             memories.extend(
@@ -609,6 +625,13 @@ class MemirisWrapper:
                     vectors=memory.vectors,
                     limit=limit - len(memories),
                 )
+            )
+
+            logging.info(
+                "Found %d similar memories for memory ID %s based on semantic search for tenant %s",
+                len(memories),
+                memory_id,
+                self.tenant,
             )
 
             # Deduplicate memories before adding to storage
