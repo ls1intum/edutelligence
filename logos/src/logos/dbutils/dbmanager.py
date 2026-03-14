@@ -353,8 +353,9 @@ class DBManager:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         provider_type = (provider_type or "").strip().lower()
-        if provider_type == "node_controller":
-            provider_type = "node"
+        # Legacy fallback likely not needed anymore, but keeping for backward compatibility with existing provider entries
+        if provider_type in {"node", "node_controller", "ollama", "logos_worker_node"}:
+            provider_type = "logosnode"
         if not provider_type:
             return {"error": "provider_type is required"}, 400
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,

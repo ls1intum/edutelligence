@@ -1,0 +1,62 @@
+# This is the local mac ollama logos-workernode. It runs in ollama only.
+worker:
+  name: logos-workernode
+  port: 8444
+  api_key: 8befa151f5753b8a6d770f695f8eda80c09a5cdb5c03fb6a
+  tls_enabled: false
+  tls_cert_path: certs/cert.pem
+  tls_key_path: certs/key.pem
+  gpu_poll_interval: 5
+  lane_port_start: 11436
+  lane_port_end: 11499
+
+logos:
+  enabled: true
+  logos_url: http://host.docker.internal:18080
+  allow_insecure_http: true
+  provider_id: 12
+  shared_key: MTIbDQeHt0ICewr2y3yjoc01XFcTiAKe3XvNafkNwSads8GILOBEcRsNiGRiTVkO
+  worker_id: kubaj-laptop-node
+  capabilities_models:
+    - gemma2:2b
+    - llama3.1:latest
+  heartbeat_interval_seconds: 5
+  reconnect_backoff_seconds: 3
+
+engines:
+  ollama:
+    ollama_binary: /usr/local/bin/ollama
+    gpu_devices: all
+    max_queue: 512
+    sched_spread: false
+    multiuser_cache: false
+    gpu_overhead_bytes: 0
+    load_timeout: ""
+    origins: []
+    noprune: false
+    llm_library: cuda_v12
+    models_path: /usr/share/ollama/.ollama/models
+    env_overrides: {}
+  vllm:
+    metrics_path: /metrics
+    metrics_timeout_seconds: 5
+
+lanes:
+  - lane_id: gemma2-2b-l1
+    model: gemma2:2b
+    vllm: false
+    num_parallel: 4
+    context_length: 4096
+    keep_alive: 5m
+    kv_cache_type: q8_0
+    flash_attention: true
+    gpu_devices: ""
+  - lane_id: llama3-1-l1
+    model: llama3.1:latest
+    vllm: false
+    num_parallel: 4
+    context_length: 4096
+    keep_alive: 5m
+    kv_cache_type: q8_0
+    flash_attention: true
+    gpu_devices: ""

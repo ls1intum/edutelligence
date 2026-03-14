@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict
 
 from logos.queue.priority_queue import PriorityQueueManager, Priority
-from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
+from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 
 from .scheduler_interface import SchedulerInterface, SchedulingResult
@@ -26,12 +26,12 @@ class BaseScheduler(SchedulerInterface):
     def __init__(
         self,
         queue_manager: PriorityQueueManager,
-        ollama_facade: OllamaSchedulingDataFacade,
+        logosnode_facade: LogosNodeSchedulingDataFacade,
         azure_facade: AzureSchedulingDataFacade,
         model_registry: Dict[tuple[int, int], str] | None = None,
     ):
         self._queue_mgr = queue_manager
-        self._ollama = ollama_facade
+        self._logosnode = logosnode_facade
         self._azure = azure_facade
         self._model_registry = model_registry or {}
         self._logger = logging.getLogger(__name__)
@@ -52,20 +52,20 @@ class BaseScheduler(SchedulerInterface):
         priority_str = Priority.from_int(priority_int).name.lower()
         is_cold_start = False
 
-        if provider_type == 'ollama':
+        if provider_type == 'logosnode':
             priority = Priority.from_int(priority_int)
             queue_state = self._queue_mgr.get_state(model_id, provider_id)
             queue_depth = queue_state.total
 
             try:
-                status = self._ollama.get_model_status(model_id, provider_id)
+                status = self._logosnode.get_model_status(model_id, provider_id)
                 utilization = float(status.active_requests)
                 is_cold_start = not status.is_loaded
             except ValueError:
                 utilization = 0.0
                 is_cold_start = True
 
-            self._ollama.on_request_start(
+            self._logosnode.on_request_start(
                 request_id,
                 model_id=model_id,
                 provider_id=provider_id,
@@ -74,7 +74,7 @@ class BaseScheduler(SchedulerInterface):
 
             if not was_queued:
                 try:
-                    self._ollama.on_request_begin_processing(
+                    self._logosnode.on_request_begin_processing(
                         request_id,
                         increment_active=False,
                         provider_id=provider_id,
@@ -84,9 +84,9 @@ class BaseScheduler(SchedulerInterface):
 
         provider_metrics = {}
 
-        if provider_type == 'ollama':
+        if provider_type == 'logosnode':
             try:
-                cap = self._ollama.get_capacity_info(provider_id)
+                cap = self._logosnode.get_capacity_info(provider_id)
                 provider_metrics['available_vram_mb'] = cap.available_vram_mb
             except Exception:
                 pass
@@ -141,9 +141,9 @@ class BaseScheduler(SchedulerInterface):
 
         has_waiters = next_task is not None
 
-        if provider_type == 'ollama':
+        if provider_type == 'logosnode':
             try:
-                self._ollama.on_request_complete(
+                self._logosnode.on_request_complete(
                     request_id,
                     was_cold_start=False,
                     duration_ms=0,
@@ -167,15 +167,15 @@ class BaseScheduler(SchedulerInterface):
                 provider_metrics = {}
                 is_cold_start = None
 
-                if provider_type == 'ollama':
+                if provider_type == 'logosnode':
                     try:
-                        status = self._ollama.get_model_status(model_id, provider_id)
+                        status = self._logosnode.get_model_status(model_id, provider_id)
                         is_cold_start = not status.is_loaded
                     except ValueError:
                         is_cold_start = None
 
                     try:
-                        cap = self._ollama.get_capacity_info(provider_id)
+                        cap = self._logosnode.get_capacity_info(provider_id)
                         provider_metrics['available_vram_mb'] = cap.available_vram_mb
                     except Exception:
                         pass
@@ -230,7 +230,7 @@ class BaseScheduler(SchedulerInterface):
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider-specific statistics (e.g., rate limits) from response headers.
-        Currently only Azure uses response headers for rate-limits; Ollama is no-op.
+        Currently only Azure uses response headers for rate-limits; logosnode is no-op.
         """
         provider_type = self._model_registry.get((model_id, provider_id))
         if not provider_type:

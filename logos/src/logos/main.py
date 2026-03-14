@@ -33,13 +33,12 @@ from logos.pipeline.fcfs_scheduler import FcfScheduler
 from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
 from logos.queue.priority_queue import PriorityQueueManager
-from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
+from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
-from logos.monitoring.ollama_monitor import OllamaProviderMonitor
-from logos.node_controller_registry import (
-    NodeControllerCommandError,
-    NodeControllerOfflineError,
-    NodeControllerRuntimeRegistry,
+from logos.logosnode_registry import (
+    LogosNodeCommandError,
+    LogosNodeOfflineError,
+    LogosNodeRuntimeRegistry,
 )
 from scripts import setup_proxy
 
@@ -48,8 +47,24 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
-_ollama_monitor: Optional[OllamaProviderMonitor] = None
-_node_registry = NodeControllerRuntimeRegistry()
+_logosnode_registry = LogosNodeRuntimeRegistry()
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+_LOGOSNODE_INFER_TIMEOUT_SECONDS = _env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120)
+_LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
+    "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
+    _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+)
 
 
 def _record_azure_rate_limits(
@@ -96,16 +111,10 @@ async def lifespan(app: FastAPI):
         force=True
     )
     logging.getLogger("logos").setLevel(logging.INFO)
-    logging.getLogger("logos.sdi.providers.ollama_provider").setLevel(logging.DEBUG)
+    logging.getLogger("logos.sdi.providers.logosnode_provider").setLevel(logging.DEBUG)
 
     # Start Pipeline
     await start_pipeline()
-
-    # Start Ollama provider monitoring
-    global _ollama_monitor
-    _ollama_monitor = OllamaProviderMonitor()
-    await _ollama_monitor.start()
-    logger.info("Ollama provider monitoring started")
 
     # Start gRPC server
     global _grpc_server
@@ -117,10 +126,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
-    # Stop Ollama provider monitoring
-    if _ollama_monitor:
-        await _ollama_monitor.stop()
-
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -216,18 +221,18 @@ def _require_root_access(logos_key: str) -> None:
 
 def _normalize_provider_type(provider_type: str | None) -> str:
     normalized = (provider_type or "").strip().lower()
-    if normalized in {"node", "node_controller"}:
-        return "node"
+    if normalized in {"node", "node_controller", "ollama", "logos_worker_node", "logos-workernode", "logosnode"}:
+        return "logosnode"
     return normalized
 
 
-def _node_insecure_dev_mode_enabled() -> bool:
+def _logosnode_insecure_dev_mode_enabled() -> bool:
     raw = os.getenv("LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP", "")
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _is_tls_request(request: Request) -> bool:
-    if _node_insecure_dev_mode_enabled():
+    if _logosnode_insecure_dev_mode_enabled():
         return True
     if request.url.scheme == "https":
         return True
@@ -238,19 +243,19 @@ def _is_tls_request(request: Request) -> bool:
 
 def _require_tls_request(request: Request) -> None:
     if not _is_tls_request(request):
-        raise HTTPException(status_code=400, detail="TLS is required for node provider auth/session endpoints")
+        raise HTTPException(status_code=400, detail="TLS is required for logosnode auth/session endpoints")
 
 
-def _build_node_ws_url(request: Request, token: str) -> str:
+def _build_logosnode_ws_url(request: Request, token: str) -> str:
     _require_tls_request(request)
-    ws_scheme = "ws" if _node_insecure_dev_mode_enabled() else "wss"
+    ws_scheme = "ws" if _logosnode_insecure_dev_mode_enabled() else "wss"
     host = request.headers.get("host", "")
     if not host:
         raise HTTPException(status_code=400, detail="Missing Host header for websocket URL generation")
-    return f"{ws_scheme}://{host}/logosdb/providers/node/session?token={token}"
+    return f"{ws_scheme}://{host}/logosdb/providers/logosnode/session?token={token}"
 
 
-async def _filter_node_deployments(deployments: list[Deployment]) -> list[Deployment]:
+async def _filter_logosnode_deployments(deployments: list[Deployment]) -> list[Deployment]:
     """
     Enforce provider model scope intersection:
     DB deployment assignment AND node capabilities.
@@ -264,7 +269,7 @@ async def _filter_node_deployments(deployments: list[Deployment]) -> list[Deploy
     with DBManager() as db:
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
-            if provider_type != "node":
+            if provider_type != "logosnode":
                 filtered.append({**deployment, "type": provider_type or deployment.get("type", "")})
                 continue
 
@@ -277,33 +282,33 @@ async def _filter_node_deployments(deployments: list[Deployment]) -> list[Deploy
             if not model_name:
                 continue
 
-            allowed = await _node_registry.is_model_allowed(
+            allowed = await _logosnode_registry.is_model_allowed(
                 int(deployment["provider_id"]),
                 model_name,
             )
             if allowed:
-                filtered.append({**deployment, "type": "node"})
+                filtered.append({**deployment, "type": "logosnode"})
 
     return filtered
 
 
 async def start_pipeline():
     """Initialize the new request pipeline components."""
-    global _pipeline, _queue_mgr, _ollama_facade, _azure_facade, _context_resolver
+    global _pipeline, _queue_mgr, _logosnode_facade, _azure_facade, _context_resolver
 
     logger.info("Initializing Request Pipeline...")
 
     _queue_mgr = PriorityQueueManager()
 
-    _ollama_facade = OllamaSchedulingDataFacade(_queue_mgr, None)
+    _logosnode_facade = LogosNodeSchedulingDataFacade(_queue_mgr, None, runtime_registry=_logosnode_registry)
     _azure_facade = AzureSchedulingDataFacade(None)
 
-    await _register_models_with_facades(_ollama_facade, _azure_facade)
+    await _register_models_with_facades(_logosnode_facade, _azure_facade)
 
     model_registry = _build_model_registry()
     scheduler = FcfScheduler(
         queue_manager=_queue_mgr,
-        ollama_facade=_ollama_facade,
+        logosnode_facade=_logosnode_facade,
         azure_facade=_azure_facade,
         model_registry=model_registry
     )
@@ -312,7 +317,7 @@ async def start_pipeline():
     executor = Executor()
 
     # 6. Context Resolver
-    _context_resolver = ContextResolver(node_registry=_node_registry)
+    _context_resolver = ContextResolver(logosnode_registry=_logosnode_registry)
 
     # 7. Classifier
     clf = classifier()
@@ -328,7 +333,7 @@ async def start_pipeline():
     logger.info("Request Pipeline Initialized. with SDI-aware scheduling")
 
 
-async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacade, azure_facade: AzureSchedulingDataFacade):
+async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDataFacade, azure_facade: AzureSchedulingDataFacade):
     """Register all models with their respective SDI facades."""
     with DBManager() as db:
         deployments = db.get_all_deployments()
@@ -342,7 +347,7 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
         for deployment in deployments:
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
-            provider_type = (deployment.get("type") or "").lower()
+            provider_type = _normalize_provider_type(deployment.get("type"))
 
             if model_id not in model_cache:
                 model_info = db.get_model(model_id)
@@ -370,13 +375,11 @@ async def _register_models_with_facades(ollama_facade: OllamaSchedulingDataFacad
                 )
                 continue
 
-            provider_type = provider_type.lower()
-
-            if provider_type == "ollama":
-                _ollama_facade.register_model(
+            if provider_type == "logosnode":
+                logosnode_facade.register_model(
                     model_id=model_id,
                     provider_name=provider_name,
-                    ollama_admin_url=provider_config.get("ollama_admin_url"),
+                    logosnode_admin_url=(provider_config.get("ollama_admin_url") or provider_info.get("base_url")),
                     model_name=model_name,
                     total_vram_mb=provider_config.get("total_vram_mb", 65536),
                     provider_id=provider_id,
@@ -407,7 +410,7 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
         for deployment in db.get_all_deployments():
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
-            provider_type = deployment.get("type")
+            provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type:
                 registry[(model_id, provider_id)] = provider_type
     return registry
@@ -476,18 +479,17 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
             # Prepare headers and payload using context resolver
             headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
-            if context.provider_type == "node":
-                if not context.lane_id:
-                    raise RuntimeError("node execution context missing lane_id")
+            if context.provider_type == "logosnode" and context.lane_id:
                 stream_payload = {
                     **prepared_payload,
                     "stream": True,
                     "stream_options": {"include_usage": True},
                 }
-                chunk_iter = _node_registry.send_stream_command(
+                chunk_iter = _logosnode_registry.send_stream_command(
                     provider_id=provider_id,
                     action="infer_stream",
                     params={"lane_id": context.lane_id, "payload": stream_payload},
+                    timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
                 )
             else:
                 chunk_iter = _pipeline.executor.execute_streaming(
@@ -600,15 +602,14 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
         error_message = None
         status_override = None
 
-        if context.provider_type == "node":
-            if not context.lane_id:
-                raise RuntimeError("node execution context missing lane_id")
+        if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = {**prepared_payload, "stream": False}
             try:
-                rpc_result = await _node_registry.send_command(
+                rpc_result = await _logosnode_registry.send_command(
                     provider_id=provider_id,
                     action="infer",
                     params={"lane_id": context.lane_id, "payload": sync_payload},
+                    timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
                 )
                 status_override = int(rpc_result.get("status_code", 200))
                 response_payload = rpc_result.get("body")
@@ -618,7 +619,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     response_payload = {"response": response_payload}
                 rpc_error = str(rpc_result.get("error") or "").strip() or None
                 if status_override >= 400 and rpc_error is None:
-                    rpc_error = f"node infer returned HTTP {status_override}"
+                    rpc_error = f"logosnode infer returned HTTP {status_override}"
                 exec_result = ExecutionResult(
                     success=status_override < 400,
                     response=response_payload,
@@ -629,7 +630,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     if isinstance(rpc_result.get("headers"), dict)
                     else None,
                 )
-            except NodeControllerOfflineError as exc:
+            except LogosNodeOfflineError as exc:
                 status_override = 503
                 exec_result = ExecutionResult(
                     success=False,
@@ -639,7 +640,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     is_streaming=False,
                     headers=None,
                 )
-            except NodeControllerCommandError as exc:
+            except LogosNodeCommandError as exc:
                 status_override = 502
                 exec_result = ExecutionResult(
                     success=False,
@@ -875,7 +876,8 @@ async def _execute_proxy_mode(
     if not model_deployments:
         raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
 
-    # Proxy mode reuses the execution from RESOURCE mode with single allowed model -> effectively skipping the classification
+    # Proxy mode still routes through classification/scheduling with a single allowed model.
+    # This preserves policy screening while constraining execution to the requested model.
     return await _execute_resource_mode(
         deployments=model_deployments,
         body=body,
@@ -884,7 +886,7 @@ async def _execute_proxy_mode(
         log_id=log_id,
         is_async_job=is_async_job,
         allowed_models_override=[model_id],
-        profile_id=profile_id
+        profile_id=profile_id,
     )
 
 
@@ -1115,7 +1117,7 @@ async def handle_sync_request(path: str, request: Request):
     # Get available deployments (model, provider tuple) for THIS profile - profile_id EXPLICITLY passed
     try:
         deployments = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
-        deployments = await _filter_node_deployments(deployments)
+        deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
@@ -1286,7 +1288,7 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     # Get available models for this profile - profile_id EXPLICITLY passed
     try:
         models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
-        models = await _filter_node_deployments(models)
+        models = await _filter_logosnode_deployments(models)
     except PermissionError as e:
         return {"status_code": 401, "data": {"error": str(e)}}
     except ValueError as e:
@@ -1304,12 +1306,12 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
 
 
 # ============================================================================
-# NODE PROVIDER ENDPOINTS
+# LOGOSNODE PROVIDER ENDPOINTS
 # ============================================================================
 
 
 def _is_tls_websocket(websocket: WebSocket) -> bool:
-    if _node_insecure_dev_mode_enabled():
+    if _logosnode_insecure_dev_mode_enabled():
         return True
     if websocket.url.scheme in {"wss", "https"}:
         return True
@@ -1318,12 +1320,10 @@ def _is_tls_websocket(websocket: WebSocket) -> bool:
     return "https" in forwarded_values or "wss" in forwarded_values
 
 
-@app.post("/logosdb/providers/node/register")
-@app.post("/logosdb/providers/node-controller/register", deprecated=True)
-async def node_register(data: NodeControllerRegisterRequest):
+@app.post("/logosdb/providers/logosnode/register")
+async def logosnode_register(data: LogosNodeRegisterRequest):
     """
-    Root-only provider bootstrap endpoint.
-    Creates a node provider row and generates a shared key.
+    Root-only provider bootstrap endpoint for LogosWorkerNode providers.
     """
     _require_root_access(data.logos_key)
 
@@ -1340,7 +1340,7 @@ async def node_register(data: NodeControllerRegisterRequest):
             api_key=shared_key,
             auth_name="",
             auth_format="{}",
-            provider_type="node",
+            provider_type="logosnode",
         )
 
     if code != 200:
@@ -1349,16 +1349,15 @@ async def node_register(data: NodeControllerRegisterRequest):
     return {
         "provider_id": result.get("provider-id"),
         "provider_name": provider_name,
-        "provider_type": "node",
+        "provider_type": "logosnode",
         "shared_key": shared_key,
     }
 
 
-@app.post("/logosdb/providers/node/auth")
-@app.post("/logosdb/providers/node-controller/auth", deprecated=True)
-async def node_auth(data: NodeControllerAuthRequest, request: Request):
+@app.post("/logosdb/providers/logosnode/auth")
+async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     """
-    Pre-provisioned provider authentication for node.
+    Pre-provisioned provider authentication for LogosWorkerNode.
     """
     _require_tls_request(request)
     with DBManager() as db:
@@ -1367,42 +1366,41 @@ async def node_auth(data: NodeControllerAuthRequest, request: Request):
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
     provider_type = _normalize_provider_type(provider.get("provider_type"))
-    if provider_type != "node":
-        raise HTTPException(status_code=403, detail="Provider is not configured as node")
+    if provider_type != "logosnode":
+        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
 
     expected = str(provider.get("api_key") or "")
     presented = data.shared_key or ""
     if not expected or not hmac.compare_digest(presented, expected):
         raise HTTPException(status_code=403, detail="Invalid provider shared key")
 
-    node_id = data.node_id.strip() if data.node_id else f"node-{data.provider_id}"
-    token = await _node_registry.issue_ticket(
+    worker_id = data.worker_id.strip() if data.worker_id else f"worker-{data.provider_id}"
+    token = await _logosnode_registry.issue_ticket(
         provider_id=data.provider_id,
-        node_id=node_id,
+        worker_id=worker_id,
         capabilities_models=data.capabilities_models,
         ttl_seconds=60,
     )
     return {
         "session_token": token,
-        "ws_url": _build_node_ws_url(request, token),
+        "ws_url": _build_logosnode_ws_url(request, token),
         "expires_in_seconds": 60,
     }
 
 
-@app.websocket("/logosdb/providers/node/session")
-@app.websocket("/logosdb/providers/node-controller/session")
-async def node_session(websocket: WebSocket, token: str):
+@app.websocket("/logosdb/providers/logosnode/session")
+async def logosnode_session(websocket: WebSocket, token: str):
     if not _is_tls_websocket(websocket):
         await websocket.close(code=1008, reason="TLS required")
         return
 
-    ticket = await _node_registry.consume_ticket(token)
+    ticket = await _logosnode_registry.consume_ticket(token)
     if ticket is None:
         await websocket.close(code=1008, reason="Invalid or expired token")
         return
 
     await websocket.accept()
-    await _node_registry.attach_session(ticket, websocket)
+    await _logosnode_registry.attach_session(ticket, websocket)
 
     try:
         while True:
@@ -1410,118 +1408,123 @@ async def node_session(websocket: WebSocket, token: str):
             if not isinstance(payload, dict):
                 continue
             msg_type = payload.get("type")
-            if msg_type == "status_update":
-                await _node_registry.update_status(
+            if msg_type == "hello":
+                await _logosnode_registry.on_hello(
                     provider_id=ticket.provider_id,
-                    status=payload.get("status") if isinstance(payload.get("status"), dict) else {},
+                    worker_id=str(payload.get("worker_id", "")).strip() or ticket.worker_id,
                     capabilities_models=payload.get("capabilities_models")
                     if isinstance(payload.get("capabilities_models"), list)
                     else None,
                 )
+            elif msg_type == "status":
+                await _logosnode_registry.update_runtime(
+                    provider_id=ticket.provider_id,
+                    runtime=payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {},
+                    capabilities_models=payload.get("capabilities_models")
+                    if isinstance(payload.get("capabilities_models"), list)
+                    else None,
+                )
+            elif msg_type == "event":
+                await _logosnode_registry.append_event(
+                    provider_id=ticket.provider_id,
+                    event=payload.get("event") if isinstance(payload.get("event"), dict) else {},
+                )
             elif msg_type == "heartbeat":
-                await _node_registry.mark_heartbeat(ticket.provider_id)
+                await _logosnode_registry.mark_heartbeat(ticket.provider_id)
             elif msg_type == "command_result":
-                await _node_registry.on_command_result(ticket.provider_id, payload)
+                await _logosnode_registry.on_command_result(ticket.provider_id, payload)
             elif msg_type == "stream_start":
-                await _node_registry.on_stream_start(ticket.provider_id, payload)
+                await _logosnode_registry.on_stream_start(ticket.provider_id, payload)
             elif msg_type == "stream_chunk":
-                await _node_registry.on_stream_chunk(ticket.provider_id, payload)
+                await _logosnode_registry.on_stream_chunk(ticket.provider_id, payload)
             elif msg_type == "stream_end":
-                await _node_registry.on_stream_end(ticket.provider_id, payload)
+                await _logosnode_registry.on_stream_end(ticket.provider_id, payload)
     except WebSocketDisconnect:
         pass
     finally:
-        await _node_registry.detach_session(ticket.provider_id, websocket)
+        await _logosnode_registry.detach_session(ticket.provider_id, websocket)
 
 
-@app.post("/logosdb/providers/node/status")
-@app.post("/logosdb/providers/node-controller/status", deprecated=True)
-async def node_status(data: NodeControllerStatusRequest):
+@app.post("/logosdb/providers/logosnode/status")
+async def logosnode_status(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
-        return await _node_registry.get_runtime_snapshot(data.provider_id)
-    except NodeControllerOfflineError as exc:
+        return await _logosnode_registry.get_runtime_snapshot(data.provider_id)
+    except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
 
-@app.post("/logosdb/providers/node/gpu")
-@app.post("/logosdb/providers/node-controller/gpu", deprecated=True)
-async def node_gpu(data: NodeControllerStatusRequest):
+@app.post("/logosdb/providers/logosnode/devices")
+async def logosnode_devices(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
-        return await _node_registry.get_gpu(data.provider_id)
-    except NodeControllerOfflineError as exc:
+        return {"devices": await _logosnode_registry.get_devices(data.provider_id)}
+    except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
 
-@app.post("/logosdb/providers/node/lanes")
-@app.post("/logosdb/providers/node-controller/lanes", deprecated=True)
-async def node_lanes(data: NodeControllerStatusRequest):
+@app.post("/logosdb/providers/logosnode/lanes")
+async def logosnode_lanes(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
-        return {"lanes": await _node_registry.get_lanes(data.provider_id)}
-    except NodeControllerOfflineError as exc:
+        return {"lanes": await _logosnode_registry.get_lanes(data.provider_id)}
+    except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
 
-async def _dispatch_node_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
+async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
     try:
-        return await _node_registry.send_command(provider_id, action=action, params=params or {})
-    except NodeControllerOfflineError as exc:
+        return await _logosnode_registry.send_command(provider_id, action=action, params=params or {})
+    except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
-    except NodeControllerCommandError as exc:
+    except LogosNodeCommandError as exc:
         return JSONResponse(status_code=502, content={"error": str(exc)})
 
 
-@app.post("/logosdb/providers/node/lanes/apply")
-@app.post("/logosdb/providers/node-controller/lanes/apply", deprecated=True)
-async def node_apply_lanes(data: NodeControllerApplyLanesRequest):
+@app.post("/logosdb/providers/logosnode/lanes/apply")
+async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
     _require_root_access(data.logos_key)
-    return await _dispatch_node_command(
+    return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="apply_lanes",
         params={"lanes": data.lanes},
     )
 
 
-@app.post("/logosdb/providers/node/lanes/sleep")
-@app.post("/logosdb/providers/node-controller/lanes/sleep", deprecated=True)
-async def node_sleep_lane(data: NodeControllerSleepLaneRequest):
+@app.post("/logosdb/providers/logosnode/lanes/sleep")
+async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
     _require_root_access(data.logos_key)
-    return await _dispatch_node_command(
+    return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="sleep_lane",
         params={"lane_id": data.lane_id, "level": data.level, "mode": data.mode},
     )
 
 
-@app.post("/logosdb/providers/node/lanes/wake")
-@app.post("/logosdb/providers/node-controller/lanes/wake", deprecated=True)
-async def node_wake_lane(data: NodeControllerWakeLaneRequest):
+@app.post("/logosdb/providers/logosnode/lanes/wake")
+async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
     _require_root_access(data.logos_key)
-    return await _dispatch_node_command(
+    return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="wake_lane",
         params={"lane_id": data.lane_id},
     )
 
 
-@app.post("/logosdb/providers/node/lanes/delete")
-@app.post("/logosdb/providers/node-controller/lanes/delete", deprecated=True)
-async def node_delete_lane(data: NodeControllerDeleteLaneRequest):
+@app.post("/logosdb/providers/logosnode/lanes/delete")
+async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     _require_root_access(data.logos_key)
-    return await _dispatch_node_command(
+    return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",
         params={"lane_id": data.lane_id},
     )
 
 
-@app.post("/logosdb/providers/node/lanes/reconfigure")
-@app.post("/logosdb/providers/node-controller/lanes/reconfigure", deprecated=True)
-async def node_reconfigure_lane(data: NodeControllerReconfigureLaneRequest):
+@app.post("/logosdb/providers/logosnode/lanes/reconfigure")
+async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
     _require_root_access(data.logos_key)
-    return await _dispatch_node_command(
+    return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="reconfigure_lane",
         params={"lane_id": data.lane_id, "updates": data.updates},
@@ -1832,17 +1835,17 @@ async def request_event_stats_options():
 @app.get("/logosdb/scheduler_state")
 async def scheduler_state(request: Request):
     """
-    Debug endpoint to inspect in-memory scheduler and Ollama capacity state.
+    Debug endpoint to inspect in-memory scheduler and LogosWorkerNode capacity state.
     """
     headers = dict(request.headers)
     authenticate_logos_key(headers)
 
-    if not _pipeline or not _ollama_facade:
+    if not _pipeline or not _logosnode_facade:
         return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
 
     payload = {
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
-        "ollama": _ollama_facade.debug_state(),
+        "logosnode": _logosnode_facade.debug_state(),
     }
     return JSONResponse(content=payload, status_code=200)
 

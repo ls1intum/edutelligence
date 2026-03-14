@@ -1,0 +1,31 @@
+services:
+  logos-workernode:
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
+        INSTALL_VLLM: ${INSTALL_VLLM:-0}
+        VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
+    container_name: logos-workernode
+    restart: unless-stopped
+    environment:
+      LOGOS_WORKER_NODE_CONFIG: /app/config.yml
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8444:8444"
+      - "11436-11499:11436-11499"
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      - ./certs:/app/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8444/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  ollama-models:

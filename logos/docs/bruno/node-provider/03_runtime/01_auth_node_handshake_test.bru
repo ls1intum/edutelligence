@@ -5,7 +5,7 @@ meta {
 }
 
 post {
-  url: {{baseUrl}}/logosdb/providers/node/auth
+  url: {{baseUrl}}/logosdb/providers/logosnode/auth
   body: json
   auth: none
 }
@@ -18,7 +18,7 @@ body:json {
   {
     "provider_id": "{{providerId}}",
     "shared_key": "{{sharedKey}}",
-    "node_id": "{{nodeId}}",
+    "worker_id": "{{workerId}}",
     "capabilities_models": ["{{modelName}}"]
   }
 }

@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, Tuple
 import logging
 
 from logos.dbutils.dbmanager import DBManager
-from logos.node_controller_registry import NodeControllerRuntimeRegistry
+from logos.logosnode_registry import LogosNodeRuntimeRegistry
 
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,8 @@ class ContextResolver:
     - Making HTTP calls (that's the Executor's job)
     """
 
-    def __init__(self, node_registry: Optional[NodeControllerRuntimeRegistry] = None):
-        self._node_registry = node_registry
+    def __init__(self, logosnode_registry: Optional[LogosNodeRuntimeRegistry] = None):
+        self._logosnode_registry = logosnode_registry
 
     async def resolve_context(
         self,
@@ -78,43 +78,36 @@ class ContextResolver:
                 logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}, profile={profile_id}")
                 return None
 
+            provider_type_raw = (auth_info.get("provider_type") or "").lower()
+            provider_type = "logosnode" if provider_type_raw in {"logosnode", "node", "node_controller", "ollama", "logos_worker_node"} else provider_type_raw
             auth_name = (auth_info.get("auth_name") or "").strip()
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
 
-            if not api_key and (auth_name or auth_format):
+            if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
                 logger.error(f"No API key for model {model_id} / provider {provider_id}")
                 return None
 
         provider_name = auth_info["provider_name"]
-        provider_type_raw = (auth_info.get("provider_type") or "").lower()
-        provider_type = "node" if provider_type_raw in {"node", "node_controller"} else provider_type_raw
         model_name = auth_info["model_name"]
         endpoint = auth_info["endpoint"]
         base_url = auth_info["base_url"]
         lane_id: Optional[str] = None
 
-        if provider_type == "node":
-            if self._node_registry is None:
-                logger.error(
-                    "Node provider selected but registry is not configured (provider_id=%s)",
-                    provider_id,
-                )
-                return None
-            lane = await self._node_registry.select_lane_for_model(provider_id, model_name)
-            if lane is None:
-                logger.warning(
-                    "No active lane available for node provider=%s model=%s",
-                    provider_id,
-                    model_name,
-                )
-                return None
-            lane_id = str(lane.get("lane_id", "")).strip()
-            if not lane_id:
-                logger.error("Node lane missing lane_id for provider=%s", provider_id)
-                return None
-            # Node uses websocket RPC for both control and data plane.
-            forward_url = f"node://provider/{provider_id}/lane/{lane_id}"
+        if provider_type == "logosnode":
+            if self._logosnode_registry is not None:
+                lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                if lane is not None:
+                    lane_id = str(lane.get("lane_id", "")).strip()
+                    if lane_id:
+                        forward_url = f"logosnode://provider/{provider_id}/lane/{lane_id}"
+                    else:
+                        logger.error("logosnode lane missing lane_id for provider=%s", provider_id)
+                        return None
+                else:
+                    forward_url = self._merge_url(base_url, endpoint)
+            else:
+                forward_url = self._merge_url(base_url, endpoint)
         else:
             forward_url = self._merge_url(base_url, endpoint)
 
@@ -151,7 +144,7 @@ class ContextResolver:
             headers[context.auth_header] = context.auth_value
 
         # OpenWebUI requires model name injection
-        if context.provider_type in {"ollama", "node"} or "openwebui" in context.provider_name.lower():
+        if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
             payload = {**payload, "model": context.model_name}
 
         return headers, payload

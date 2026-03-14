@@ -29,11 +29,11 @@ class UtilizationAwareScheduler(BaseScheduler):
     def __init__(
         self,
         queue_manager,
-        ollama_facade,
+        logosnode_facade,
         azure_facade,
         model_registry,
     ):
-        super().__init__(queue_manager, ollama_facade, azure_facade, model_registry)
+        super().__init__(queue_manager, logosnode_facade, azure_facade, model_registry)
 
     async def schedule(self, request: SchedulingRequest) -> Optional[SchedulingResult]:
         """
@@ -94,16 +94,16 @@ class UtilizationAwareScheduler(BaseScheduler):
             timeout = request.timeout_s if request.timeout_s else 300  # Increased to 5 minutes for queue wait
             result = await asyncio.wait_for(future, timeout=timeout)
 
-            if provider_type == 'ollama':
+            if provider_type == 'logosnode':
                 try:
                     if result.was_queued:
-                        self._ollama.on_request_start(
+                        self._logosnode.on_request_start(
                             request.request_id,
                             model_id=result.model_id,
                             provider_id=provider_id,
                             priority=priority.name.lower(),
                         )
-                    self._ollama.on_request_begin_processing(
+                    self._logosnode.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
                         provider_id=provider_id,
@@ -154,16 +154,16 @@ class UtilizationAwareScheduler(BaseScheduler):
         scored_candidates.sort(key=lambda x: x[3], reverse=True)
 
         for model_id, provider_id, provider_type, score, priority_int in scored_candidates:
-            if provider_type == 'ollama':
-                if self._ollama.try_reserve_capacity(model_id, provider_id, request_id):
+            if provider_type == 'logosnode':
+                if self._logosnode.try_reserve_capacity(model_id, provider_id, request_id):
                     logger.info(
-                        "Reserved capacity on Ollama model %s (score=%.2f)",
+                        "Reserved capacity on logosnode model %s (score=%.2f)",
                         model_id,
                         score,
                     )
                     return (model_id, provider_id, provider_type, score, priority_int)
                 logger.debug(
-                    "Failed to reserve capacity on Ollama model %s, skipping",
+                    "Failed to reserve capacity on logosnode model %s, skipping",
                     model_id,
                 )
             elif provider_type == 'azure':
@@ -176,12 +176,12 @@ class UtilizationAwareScheduler(BaseScheduler):
         Returns availability bonus score, or None if model is unavailable.
 
         Scoring:
-        - Ollama: +10 if loaded, -5 per queued request
+        - logosnode: +10 if loaded, -5 per queued request
         - Azure: +5 if has capacity, None if rate-limited
         """
-        if provider_type == 'ollama':
+        if provider_type == 'logosnode':
             try:
-                status = self._ollama.get_model_status(model_id, provider_id)
+                status = self._logosnode.get_model_status(model_id, provider_id)
             except ValueError:
                 return None
 

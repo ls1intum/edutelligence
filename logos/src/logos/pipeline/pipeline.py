@@ -202,22 +202,88 @@ class RequestPipeline:
         )
         
         # 3. Resolve execution context (with authorization check)
-        exec_context = await self._context_resolver.resolve_context(
-                model_id=scheduling_result.model_id,
-                provider_id=scheduling_result.provider_id,
-                logos_key=request.logos_key,
-                profile_id=request.profile_id,
+        try:
+            exec_context = await self._context_resolver.resolve_context(
+                    model_id=scheduling_result.model_id,
+                    provider_id=scheduling_result.provider_id,
+                    logos_key=request.logos_key,
+                    profile_id=request.profile_id,
 
-        )
-
-        if not exec_context:
+            )
+        except Exception as exc:  # noqa: BLE001
+            try:
+                self._scheduler.release(
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                    scheduling_result.provider_type,
+                    request_id,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Failed to release scheduler reservation after context resolution exception "
+                    "(request_id=%s, model_id=%s, provider_id=%s)",
+                    request_id,
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                )
+            logger.warning(
+                "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
+                request_id,
+                scheduling_result.model_id,
+                scheduling_result.provider_id,
+                exc,
+            )
             return PipelineResult(
                 success=False,
                 model_id=scheduling_result.model_id,
-                provider_id=None,
+                provider_id=scheduling_result.provider_id,
                 execution_context=None,
                 classification_stats=classification_result.stats,
-                scheduling_stats={"model_id": scheduling_result.model_id},
+                scheduling_stats={
+                    "request_id": request_id,
+                    "model_id": scheduling_result.model_id,
+                    "provider_id": scheduling_result.provider_id,
+                    "provider_type": scheduling_result.provider_type,
+                    "queue_depth": scheduling_result.queue_depth_at_schedule,
+                    "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
+                    "utilization_at_arrival": scheduling_result.utilization_at_arrival,
+                    "is_cold_start": scheduling_result.is_cold_start,
+                },
+                error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
+            )
+
+        if not exec_context:
+            try:
+                self._scheduler.release(
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                    scheduling_result.provider_type,
+                    request_id,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Failed to release scheduler reservation after context resolution failure "
+                    "(request_id=%s, model_id=%s, provider_id=%s)",
+                    request_id,
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                )
+            return PipelineResult(
+                success=False,
+                model_id=scheduling_result.model_id,
+                provider_id=scheduling_result.provider_id,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={
+                    "request_id": request_id,
+                    "model_id": scheduling_result.model_id,
+                    "provider_id": scheduling_result.provider_id,
+                    "provider_type": scheduling_result.provider_type,
+                    "queue_depth": scheduling_result.queue_depth_at_schedule,
+                    "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
+                    "utilization_at_arrival": scheduling_result.utilization_at_arrival,
+                    "is_cold_start": scheduling_result.is_cold_start,
+                },
                 error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
             )
         

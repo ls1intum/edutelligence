@@ -157,45 +157,45 @@ class AddBillingRequest(LogosKeyModel):
     valid_from: str
 
 
-class NodeControllerAuthRequest(BaseModel):
+class LogosNodeAuthRequest(BaseModel):
     provider_id: int
     shared_key: str
-    node_id: str = ""
+    worker_id: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
 
 
-class NodeControllerRegisterRequest(LogosKeyModel):
+class LogosNodeRegisterRequest(LogosKeyModel):
     provider_name: str
     base_url: str = ""
 
 
-class NodeControllerStatusRequest(LogosKeyModel):
+class LogosNodeStatusRequest(LogosKeyModel):
     provider_id: int
 
 
-class NodeControllerApplyLanesRequest(LogosKeyModel):
+class LogosNodeApplyLanesRequest(LogosKeyModel):
     provider_id: int
     lanes: list[dict[str, Any]]
 
 
-class NodeControllerSleepLaneRequest(LogosKeyModel):
+class LogosNodeSleepLaneRequest(LogosKeyModel):
     provider_id: int
     lane_id: str
     level: int = 1
     mode: str = "wait"
 
 
-class NodeControllerWakeLaneRequest(LogosKeyModel):
+class LogosNodeWakeLaneRequest(LogosKeyModel):
     provider_id: int
     lane_id: str
 
 
-class NodeControllerDeleteLaneRequest(LogosKeyModel):
+class LogosNodeDeleteLaneRequest(LogosKeyModel):
     provider_id: int
     lane_id: str
 
 
-class NodeControllerReconfigureLaneRequest(LogosKeyModel):
+class LogosNodeReconfigureLaneRequest(LogosKeyModel):
     provider_id: int
     lane_id: str
     updates: dict[str, Any]

@@ -38,7 +38,7 @@ class ModelStatus:
     expires_at: Optional[datetime]
     queue_state: Optional[QueueStatePerPriority]  # None for cloud providers
     active_requests: int
-    provider_type: str  # 'ollama' | 'azure'
+    provider_type: str  # 'logosnode' | 'azure'
 
     @property
     def queue_depth(self) -> int:

@@ -30,8 +30,10 @@ class LauraEmbeddingClassifier:
         with open(self.db_path, "wb") as f:
             pickle.dump(self.model_db, f)
 
-    def encode_text(self, text: str, prefix="query:") -> torch.Tensor:
-        full_text = f"{prefix} {text.strip()}"
+    def encode_text(self, text: str | None, prefix="query:") -> torch.Tensor:
+        # Model descriptions can come from nullable DB fields; treat missing text as empty input.
+        normalized = text.strip() if isinstance(text, str) else ""
+        full_text = f"{prefix} {normalized}".strip()
         embedding = self.model.encode(full_text, convert_to_tensor=True, normalize_embeddings=True)
         return embedding
 

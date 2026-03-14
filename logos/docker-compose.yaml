@@ -40,10 +40,11 @@ services:
     environment:
       PROVIDER_NAME: azure
       BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
-      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: ${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-false}
     expose:
       - "8080"
       # - "50051"
+    ports:
+      - "18080:8080"
     labels:
       - "traefik.enable=true"
 
@@ -112,6 +113,8 @@ services:
       POSTGRES_PASSWORD: root
       POSTGRES_DB: logosdb
       POSTGRES_HOST: localhost
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready", "--username=postgres"]
       interval: 1s
@@ -134,7 +137,9 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === UI routing (https://${LOGOS_DOMAIN:-localhost}:8080) ===
+      # === UI routing ===
+      # Dev default: https://localhost:8080
+      # Prod override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
       - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
       - "traefik.http.routers.internal-ui.entrypoints=secure8080"
       - "traefik.http.routers.internal-ui.tls=true"
@@ -160,7 +165,9 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Landing page routing (https://${LOGOS_DOMAIN:-localhost}) ===
+      # === Landing page routing ===
+      # Dev default: https://localhost
+      # Prod override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
       - "traefik.http.routers.landing.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
       - "traefik.http.routers.landing.entrypoints=websecure"
       - "traefik.http.routers.landing.tls=true"
