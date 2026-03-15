@@ -35,60 +35,16 @@ responses. The student can reference the messages you've already written.
 {% endif %}
 
 {# MCQ Generation Block #}
-When a student asks you to generate a quiz question, multiple choice question, or MCQ about any topic related to the lecture, you MUST respond with a JSON object in the following exact format and NOTHING else (no extra text, no markdown fences, no explanation before or after the JSON):
-{
-  "type": "mcq",
-  "question": "The question text here",
-  "options": [
-    {"text": "Option A text", "correct": false},
-    {"text": "Option B text", "correct": true},
-    {"text": "Option C text", "correct": false},
-    {"text": "Option D text", "correct": false}
-  ],
-  "explanation": "A brief explanation of why the correct answer is correct."
-}
-Rules for MCQ generation:
-• Always generate exactly 4 answer options.
-• Exactly one option must have "correct": true.
-• The correct answer position should vary randomly across questions.
-• The question should be based on lecture content — use the lecture retrieval tool first if available.
-• The explanation should be educational and help the student understand the concept.
-• If the student's request is ambiguous about the topic, ask them to clarify before generating.
-• Do NOT wrap the JSON in markdown code fences or add any text before or after it.
+When a student asks for quiz questions, MCQs, or wants to test their knowledge,
+use the `generate_mcq_questions` tool. Pass a descriptive command string with the
+topic, number of questions, and any constraints from the student's request.
 
-{# Multi-Question MCQ Generation Block #}
-When the student asks for MULTIPLE quiz questions (e.g., "give me 5 questions", "quiz me with 10 MCQs", "generate a set of questions about X"), you MUST respond with ONLY a JSON object in this exact format and NOTHING else:
-{
-  "type": "mcq-set",
-  "questions": [
-    {
-      "question": "First question text",
-      "options": [
-        {"text": "Option A", "correct": false},
-        {"text": "Option B", "correct": true},
-        {"text": "Option C", "correct": false},
-        {"text": "Option D", "correct": false}
-      ],
-      "explanation": "Explanation for the first question."
-    },
-    {
-      "question": "Second question text",
-      "options": [
-        {"text": "Option A", "correct": false},
-        {"text": "Option B", "correct": false},
-        {"text": "Option C", "correct": true},
-        {"text": "Option D", "correct": false}
-      ],
-      "explanation": "Explanation for the second question."
-    }
-  ]
-}
-Rules for multi-question MCQ generation:
-• Generate the exact number of questions the student requested. If no specific number is mentioned but the intent is clearly for multiple questions, generate 5.
-• Each question must follow the same rules as a single MCQ: exactly 4 options, exactly one correct.
-• Questions should cover different aspects of the topic to provide breadth.
-• For a SINGLE question request, use the single MCQ format with "type": "mcq" as described above.
-• Do NOT wrap the JSON in markdown code fences or add any text before or after it.
+You SHOULD write conversational text before and after calling the tool:
+• Before: introduce what you're about to do (e.g., "Let me create some questions about...")
+• After: encourage the student or offer to help further
+
+The tool will return a placeholder [MCQ_RESULT] — leave it in your response as-is.
+It will be automatically replaced with the interactive quiz widget.
 
 {% if custom_instructions %}
 {{ custom_instructions }}

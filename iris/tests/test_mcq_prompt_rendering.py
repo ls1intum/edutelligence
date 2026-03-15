@@ -53,59 +53,39 @@ def _minimal_lecture_chat_context() -> dict:
     }
 
 
-def test_course_chat_prompt_contains_mcq_block():
+def test_course_chat_prompt_references_mcq_tool():
     rendered = _render_template(
         "course_chat_system_prompt.j2", _minimal_course_chat_context()
     )
-    assert '"type": "mcq"' in rendered
-    assert '"correct": false' in rendered
-    assert '"correct": true' in rendered
-    assert "Rules for MCQ generation:" in rendered
+    assert "generate_mcq_questions" in rendered
+    assert "[MCQ_RESULT]" in rendered
+    # Old JSON blocks should no longer be present
+    assert '"type": "mcq"' not in rendered
+    assert "Rules for MCQ generation:" not in rendered
 
 
-def test_lecture_chat_prompt_contains_mcq_block():
+def test_lecture_chat_prompt_references_mcq_tool():
     rendered = _render_template(
         "lecture_chat_system_prompt.j2", _minimal_lecture_chat_context()
     )
-    assert '"type": "mcq"' in rendered
-    assert '"correct": false' in rendered
-    assert '"correct": true' in rendered
-    assert "Rules for MCQ generation:" in rendered
+    assert "generate_mcq_questions" in rendered
+    assert "[MCQ_RESULT]" in rendered
+    # Old JSON blocks should no longer be present
+    assert '"type": "mcq"' not in rendered
+    assert "Rules for MCQ generation:" not in rendered
 
 
-def test_course_chat_mcq_json_braces_not_interpreted_as_jinja():
-    rendered = _render_template(
-        "course_chat_system_prompt.j2", _minimal_course_chat_context()
-    )
-    assert '{"text": "Option A text", "correct": false}' in rendered
-    assert (
-        '"explanation": "A brief explanation of why the correct answer is correct."'
-        in rendered
-    )
-
-
-def test_lecture_chat_mcq_json_braces_not_interpreted_as_jinja():
-    rendered = _render_template(
-        "lecture_chat_system_prompt.j2", _minimal_lecture_chat_context()
-    )
-    assert '{"text": "Option A text", "correct": false}' in rendered
-    assert (
-        '"explanation": "A brief explanation of why the correct answer is correct."'
-        in rendered
-    )
-
-
-def test_course_chat_mcq_block_present_with_custom_instructions():
+def test_course_chat_mcq_tool_with_custom_instructions():
     context = _minimal_course_chat_context()
     context["custom_instructions"] = "Always be polite."
     rendered = _render_template("course_chat_system_prompt.j2", context)
-    assert '"type": "mcq"' in rendered
+    assert "generate_mcq_questions" in rendered
     assert "Always be polite." in rendered
 
 
-def test_lecture_chat_mcq_block_present_with_custom_instructions():
+def test_lecture_chat_mcq_tool_with_custom_instructions():
     context = _minimal_lecture_chat_context()
     context["custom_instructions"] = "Always be polite."
     rendered = _render_template("lecture_chat_system_prompt.j2", context)
-    assert '"type": "mcq"' in rendered
+    assert "generate_mcq_questions" in rendered
     assert "Always be polite." in rendered
