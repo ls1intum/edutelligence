@@ -104,14 +104,22 @@ class StatusCallback(ABC):
         # Return the next stage
         return self.status.stages[self.current_stage_index]
 
-    def in_progress(self, message: Optional[str] = None):
+    def in_progress(
+        self,
+        message: Optional[str] = None,
+        chat_message: Optional[str] = None,
+    ):
         """Transition the current stage to IN_PROGRESS and update the status."""
         if self.stage.state == StageStateEnum.NOT_STARTED:
             self.stage.state = StageStateEnum.IN_PROGRESS
             self.stage.message = message
+            if chat_message is not None:
+                self.stage.chat_message = chat_message
             self.on_status_update()
         elif self.stage.state == StageStateEnum.IN_PROGRESS:
             self.stage.message = message
+            if chat_message is not None:
+                self.stage.chat_message = chat_message
             self.on_status_update()
         else:
             raise ValueError(
