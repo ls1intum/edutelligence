@@ -465,7 +465,10 @@ class LectureChatPipeline(
                             )
                 if collected_questions:
                     mcq_set = json.dumps(
-                        {"type": "mcq-set", "questions": collected_questions}
+                        {
+                            "type": "mcq-set",
+                            "questions": collected_questions[:mcq_count],
+                        }
                     )
                     state.result = state.result + "\n" + mcq_set
 

@@ -8,14 +8,17 @@ Context:
 {{ chat_history_text }}
 {% endif %}
 
-Respond with ONLY valid JSON. For a single question:
+Respond with ONLY valid JSON.
+
+For a single question (default):
 {"type":"mcq","question":"...","options":[{"text":"...","correct":false},{"text":"...","correct":true},{"text":"...","correct":false},{"text":"...","correct":false}],"explanation":"One sentence why the correct answer is correct."}
 
-For multiple questions:
+For multiple questions (ONLY if the task explicitly requests more than 1):
 {"type":"mcq-set","questions":[...same structure per question...]}
 
 Rules:
-- Exactly 4 options, exactly 1 correct. Vary the correct answer position.
+- Generate EXACTLY the number of questions requested. No more, no less. If no number is specified, generate exactly 1.
+- Exactly 4 options per question, each with a "text" string and a "correct" boolean. Exactly 1 must be true.
+- Vary the correct answer position.
 - Do NOT prefix options with A/B/C/D.
-- Use "mcq-set" only when explicitly asked for multiple questions.
 - Keep the explanation to 1-2 sentences.

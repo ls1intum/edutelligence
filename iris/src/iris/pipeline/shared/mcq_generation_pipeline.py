@@ -209,11 +209,11 @@ class McqGenerationPipeline(SubPipeline):
         # cannot be called concurrently from multiple threads.
         worker_contexts = [contextvars.copy_context() for _ in range(count)]
 
-        def _generate_one(worker, subtopic, index, ctx):
+        def _generate_one(worker, subtopic, ctx):
             single_command = (
-                f"{command}\n\n"
-                f"Generate exactly 1 question specifically about: {subtopic}\n"
-                f"This is question {index + 1} of {count}."
+                f"Generate exactly 1 multiple-choice question about: {subtopic}\n"
+                f"Use the single MCQ format (type: mcq), NOT mcq-set.\n"
+                f"Topic context: {command}"
             )
 
             def _run():
@@ -234,7 +234,7 @@ class McqGenerationPipeline(SubPipeline):
         ) as pool:
             futures = {
                 pool.submit(
-                    _generate_one, workers[i], subtopics[i], i, worker_contexts[i]
+                    _generate_one, workers[i], subtopics[i], worker_contexts[i]
                 ): i
                 for i in range(count)
             }
