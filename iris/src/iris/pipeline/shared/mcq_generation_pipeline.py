@@ -1,10 +1,14 @@
+import contextvars
 import json
 import os
+import random
+from queue import Queue
+from threading import Thread
 from typing import List, Optional
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
@@ -36,7 +40,7 @@ class McqGenerationPipeline(SubPipeline):
 
         # Create LLM
         request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-5-mini"
+            version="gpt-oss:120b" if local else "gpt-5-nano"
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
@@ -60,10 +64,23 @@ class McqGenerationPipeline(SubPipeline):
         :param callback: Status callback for dynamic chat messages
         :return: JSON string with MCQ data
         """
+        preparing_messages = [
+            "Looking through the material...",
+            "Reviewing relevant topics...",
+            "Gathering key concepts...",
+            "Identifying important areas to test...",
+        ]
+        generating_messages = [
+            "Writing the question and answer options...",
+            "Putting together a good challenge...",
+            "Formulating the question...",
+            "Creating answer choices...",
+        ]
+
         if callback:
             callback.in_progress(
                 "Generating questions...",
-                chat_message="Reviewing course materials...",
+                chat_message=random.choice(preparing_messages),  # nosec B311
             )
 
         # Build chat history text for template context
@@ -79,16 +96,125 @@ class McqGenerationPipeline(SubPipeline):
         if callback:
             callback.in_progress(
                 "Generating questions...",
-                chat_message="Crafting questions and explanations...",
+                chat_message=random.choice(generating_messages),  # nosec B311
             )
 
-        prompt = ChatPromptTemplate.from_messages([("system", rendered_prompt)])
-        response = (prompt | self.pipeline).invoke({})
+        response = self.pipeline.invoke([SystemMessage(content=rendered_prompt)])
         self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
 
         # Validate JSON
         result = self._extract_and_validate_json(response)
         return result
+
+    def run_in_thread(
+        self,
+        command: str,
+        chat_history: Optional[List[PyrisMessage]],
+        user_language: str,
+        callback: Optional[StatusCallback],
+        result_storage: dict,
+        count: int = 1,
+    ) -> Thread:
+        """
+        Run MCQ generation in a background thread.
+
+        Uses contextvars.copy_context() to preserve the Langfuse observation
+        stack across the thread boundary (same pattern as memiris_setup).
+
+        Results are communicated via a Queue stored in result_storage["queue"].
+        Each item is a tuple of ("mcq", json_str), ("error", msg), or ("done", None).
+        For single-question mode, also stores the result under "mcq_json" for
+        backward compatibility.
+
+        :param command: Free-text instruction describing what to generate
+        :param chat_history: Recent chat history for context
+        :param user_language: "en" or "de"
+        :param callback: Status callback for dynamic chat messages
+        :param result_storage: Mutable dict for inter-thread communication
+        :param count: Number of questions to generate (1 = single, >1 = one-by-one)
+        :return: The started Thread handle
+        """
+        q: Queue = Queue()
+        result_storage["queue"] = q
+        result_storage["count"] = count
+        ctx = contextvars.copy_context()
+
+        def _generate():
+            try:
+                if count > 1:
+                    self._generate_multiple(
+                        command, chat_history, user_language, count, q
+                    )
+                else:
+                    result = self(
+                        command=command,
+                        chat_history=chat_history,
+                        user_language=user_language,
+                        callback=callback,
+                    )
+                    result_storage["mcq_json"] = result
+                    q.put(("mcq", result))
+            except Exception as e:
+                logger.error("MCQ generation failed in thread", exc_info=e)
+                result_storage["error"] = str(e)
+                q.put(("error", str(e)))
+            finally:
+                q.put(("done", None))
+
+        thread = Thread(
+            name="McqGenerationThread",
+            target=lambda: ctx.run(_generate),
+        )
+        thread.start()
+        return thread
+
+    def _generate_multiple(
+        self,
+        command: str,
+        chat_history: Optional[List[PyrisMessage]],
+        user_language: str,
+        count: int,
+        q: Queue,
+    ) -> None:
+        """Generate multiple MCQ questions one-by-one, pushing each to the queue."""
+        previous_questions: list[str] = []
+
+        for i in range(count):
+            dedup_context = ""
+            if previous_questions:
+                dedup_context = (
+                    "\n\nQuestions already generated (do NOT repeat these):\n"
+                    + "\n".join(f"- {pq}" for pq in previous_questions)
+                )
+            single_command = (
+                f"{command}\n\n"
+                f"Generate exactly 1 question (question {i + 1} of {count}). "
+                f"Cover a different aspect or subtopic than previous questions."
+                f"{dedup_context}"
+            )
+            try:
+                result = self(
+                    command=single_command,
+                    chat_history=chat_history,
+                    user_language=user_language,
+                    callback=None,  # avoid thread-safety issues with shared callback
+                )
+                # Track question text for deduplication
+                try:
+                    parsed = json.loads(result)
+                    if parsed.get("question"):
+                        previous_questions.append(parsed["question"])
+                except (json.JSONDecodeError, KeyError):
+                    pass
+                q.put(("mcq", result))
+            except Exception as e:
+                logger.error(
+                    "MCQ generation failed for question %d of %d",
+                    i + 1,
+                    count,
+                    exc_info=e,
+                )
+                q.put(("error", str(e)))
 
     @staticmethod
     def _serialize_chat_history(

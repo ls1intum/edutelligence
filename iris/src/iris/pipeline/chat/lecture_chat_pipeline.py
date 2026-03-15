@@ -1,4 +1,6 @@
 import os
+import random
+import re
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
@@ -170,21 +172,22 @@ class LectureChatPipeline(
                 )
             )
 
-        # MCQ generation tool
-        if not hasattr(state, "mcq_result_storage"):
-            setattr(state, "mcq_result_storage", {})
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
-        tool_list.append(
-            create_tool_generate_mcq_questions(
-                self.mcq_pipeline,
-                state.dto.chat_history,
-                callback,
-                getattr(state, "mcq_result_storage", {}),
-                user_language,
+        # MCQ generation tool — only if parallel generation is NOT active
+        if not getattr(state, "mcq_parallel", False):
+            if not hasattr(state, "mcq_result_storage"):
+                setattr(state, "mcq_result_storage", {})
+            user_language = "en"
+            if state.dto.user and state.dto.user.lang_key:
+                user_language = state.dto.user.lang_key
+            tool_list.append(
+                create_tool_generate_mcq_questions(
+                    self.mcq_pipeline,
+                    state.dto.chat_history,
+                    callback,
+                    getattr(state, "mcq_result_storage", {}),
+                    user_language,
+                )
             )
-        )
 
         return tool_list
 
@@ -197,9 +200,19 @@ class LectureChatPipeline(
         """
         Return a system message for the chat prompt.
 
+        Also detects MCQ intent and sets flags on state BEFORE get_tools() runs,
+        since the abstract pipeline calls build_system_message before get_tools.
+
         Returns:
             str: The system message content
         """
+        # Detect MCQ intent early — flags must be set before get_tools() runs
+        user_message = self.get_text_of_latest_user_message(state)
+        is_mcq, count = self._detect_mcq_intent(user_message)
+        if is_mcq:
+            setattr(state, "mcq_parallel", True)
+            setattr(state, "mcq_count", count)
+
         # Extract user language with fallback
         user_language = "en"
         if state.dto.user and state.dto.user.lang_key:
@@ -227,6 +240,7 @@ class LectureChatPipeline(
             "allow_memiris_tool": allow_memiris_tool,
             "has_chat_history": bool(state.message_history),
             "custom_instructions": custom_instructions,
+            "mcq_parallel": getattr(state, "mcq_parallel", False),
         }
 
         return self.system_prompt_template.render(template_context)
@@ -265,8 +279,12 @@ class LectureChatPipeline(
         )
 
     @staticmethod
-    def _detect_mcq_intent(user_message: str) -> bool:
-        """Quick keyword check for MCQ generation intent."""
+    def _detect_mcq_intent(user_message: str) -> tuple[bool, int]:
+        """Quick keyword check for MCQ generation intent.
+
+        Returns:
+            Tuple of (is_mcq_intent, question_count). Count defaults to 1.
+        """
         message_lower = user_message.lower()
         mcq_keywords = [
             "quiz",
@@ -277,7 +295,12 @@ class LectureChatPipeline(
             "generate a question",
             "generate questions",
         ]
-        return any(kw in message_lower for kw in mcq_keywords)
+        if not any(kw in message_lower for kw in mcq_keywords):
+            return False, 0
+        count_match = re.search(r"(\d+)\s*(question|mcq|quiz)", message_lower)
+        if count_match:
+            return True, int(count_match.group(1))
+        return True, 1
 
     def pre_agent_hook(
         self,
@@ -285,13 +308,43 @@ class LectureChatPipeline(
             LectureChatPipelineExecutionDTO, LectureChatVariant
         ],
     ) -> None:
-        """Send a contextual loading message if MCQ generation intent is detected."""
+        """Spawn parallel MCQ generation thread if intent was detected in build_system_message."""
+        if not getattr(state, "mcq_parallel", False):
+            return
+
+        preparing_messages = [
+            "Preparing to generate questions...",
+            "Getting your quiz ready...",
+            "Setting up a challenge for you...",
+            "Putting together some questions...",
+        ]
+        state.callback.in_progress(
+            "Preparing quiz...",
+            chat_message=random.choice(preparing_messages),  # nosec B311
+        )
+
+        if not hasattr(state, "mcq_result_storage"):
+            setattr(state, "mcq_result_storage", {})
+
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+
         user_message = self.get_text_of_latest_user_message(state)
-        if self._detect_mcq_intent(user_message):
-            state.callback.in_progress(
-                "Preparing quiz...",
-                chat_message="Preparing to generate questions...",
-            )
+        count = getattr(state, "mcq_count", 1)
+
+        setattr(
+            state,
+            "mcq_thread",
+            self.mcq_pipeline.run_in_thread(
+                command=user_message,
+                chat_history=state.dto.chat_history,
+                user_language=user_language,
+                callback=state.callback,
+                result_storage=getattr(state, "mcq_result_storage", {}),
+                count=count,
+            ),
+        )
 
     def on_agent_step(
         self,
@@ -319,17 +372,29 @@ class LectureChatPipeline(
         """
         Post-processing after agent execution including citations.
 
+        For parallel MCQ:
+        - Single question: join thread, integrate MCQ into the agent's message
+        - Multiple questions: send agent intro first, then stream each MCQ one-by-one
+
         Returns:
             str: The final result
         """
-        # Replace MCQ placeholder with actual JSON
-        mcq_storage = getattr(state, "mcq_result_storage", {})
-        if mcq_storage.get("mcq_json"):
-            state.result = state.result.replace("[MCQ_RESULT]", mcq_storage["mcq_json"])
-            # Track subpipeline tokens
-            for token in self.mcq_pipeline.tokens:
-                self._track_tokens(state, token)
-            self.mcq_pipeline.tokens.clear()
+        mcq_thread = getattr(state, "mcq_thread", None)
+        mcq_parallel = getattr(state, "mcq_parallel", False)
+        mcq_count = getattr(state, "mcq_count", 1)
+
+        # For non-parallel MCQ (tool-calling fallback): replace placeholder inline
+        if not mcq_parallel:
+            mcq_storage = getattr(state, "mcq_result_storage", {})
+            if mcq_storage.get("mcq_json"):
+                mcq_json = mcq_storage["mcq_json"]
+                if "[MCQ_RESULT]" in state.result:
+                    state.result = state.result.replace("[MCQ_RESULT]", mcq_json)
+                else:
+                    state.result = state.result + "\n" + mcq_json
+                for token in self.mcq_pipeline.tokens:
+                    self._track_tokens(state, token)
+                self.mcq_pipeline.tokens.clear()
 
         if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
             state.result = self._process_citations(
@@ -343,6 +408,21 @@ class LectureChatPipeline(
 
         session_title = self._generate_session_title(state, state.result, state.dto)
 
+        # For single parallel MCQ: wait for thread and integrate into the message
+        if mcq_thread and mcq_count == 1:
+            mcq_thread.join(timeout=120)
+            mcq_storage = getattr(state, "mcq_result_storage", {})
+            mcq_queue = mcq_storage.get("queue")
+            if mcq_queue:
+                while not mcq_queue.empty():
+                    msg_type, data = mcq_queue.get_nowait()
+                    if msg_type == "mcq":
+                        state.result = state.result + "\n" + data
+            for token in self.mcq_pipeline.tokens:
+                self._track_tokens(state, token)
+            self.mcq_pipeline.tokens.clear()
+
+        # Send the agent's text response (with MCQ integrated for single question)
         state.callback.done(
             "Response created",
             final_result=state.result,
@@ -350,6 +430,29 @@ class LectureChatPipeline(
             session_title=session_title,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
         )
+
+        # For multi-question parallel MCQ: stream each question as a separate message
+        if mcq_thread and mcq_count > 1:
+            mcq_storage = getattr(state, "mcq_result_storage", {})
+            mcq_queue = mcq_storage.get("queue")
+            if mcq_queue:
+                while True:
+                    try:
+                        msg_type, data = mcq_queue.get(timeout=120)
+                    except Exception:
+                        logger.error("Timed out waiting for MCQ generation")
+                        break
+                    if msg_type == "done":
+                        break
+                    elif msg_type == "mcq":
+                        state.callback.done(final_result=data, tokens=state.tokens)
+                    elif msg_type == "error":
+                        logger.error(
+                            "MCQ generation error for multi-question: %s", data
+                        )
+            for token in self.mcq_pipeline.tokens:
+                self._track_tokens(state, token)
+            self.mcq_pipeline.tokens.clear()
 
         return state.result
 

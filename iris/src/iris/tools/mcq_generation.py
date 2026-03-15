@@ -33,8 +33,9 @@ def create_tool_generate_mcq_questions(
         Generate interactive multiple-choice questions for the student.
         Use this tool when the student asks for quiz questions, MCQs, or
         wants to test their knowledge. Pass a command describing what to
-        generate (topic, number of questions, any constraints from the
-        student's request).
+        generate (topic and any constraints from the student's request).
+        Default to 1 question unless the student explicitly asks for
+        multiple questions or specifies a number.
 
         Args:
             command: Free-text instruction describing what to generate.

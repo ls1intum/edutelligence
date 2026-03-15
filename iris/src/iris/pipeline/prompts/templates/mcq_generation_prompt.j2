@@ -15,10 +15,10 @@ If generating a SINGLE question, use this exact format:
   "type": "mcq",
   "question": "The question text here",
   "options": [
-    {"text": "Option A text", "correct": false},
-    {"text": "Option B text", "correct": true},
-    {"text": "Option C text", "correct": false},
-    {"text": "Option D text", "correct": false}
+    {"text": "First option text", "correct": false},
+    {"text": "Second option text", "correct": true},
+    {"text": "Third option text", "correct": false},
+    {"text": "Fourth option text", "correct": false}
   ],
   "explanation": "A brief explanation of why the correct answer is correct."
 }
@@ -30,10 +30,10 @@ If generating MULTIPLE questions, use this exact format:
     {
       "question": "First question text",
       "options": [
-        {"text": "Option A", "correct": false},
-        {"text": "Option B", "correct": true},
-        {"text": "Option C", "correct": false},
-        {"text": "Option D", "correct": false}
+        {"text": "First option", "correct": false},
+        {"text": "Second option", "correct": true},
+        {"text": "Third option", "correct": false},
+        {"text": "Fourth option", "correct": false}
       ],
       "explanation": "Explanation for the first question."
     }
@@ -42,10 +42,11 @@ If generating MULTIPLE questions, use this exact format:
 
 Rules:
 - Always generate exactly 4 answer options per question.
+- Do NOT prefix option text with letters like "A.", "B.", "C.", "D." or numbers — the UI adds labels automatically.
 - Exactly one option must have "correct": true.
 - The correct answer position should vary randomly across questions.
 - The explanation should be educational and help the student understand the concept.
 - Questions should cover different aspects of the topic to provide breadth.
-- If multiple questions are requested, generate the exact number requested. If no specific number is given, generate 5.
-- For a single question request, use "type": "mcq". For multiple questions, use "type": "mcq-set".
+- Generate exactly 1 question unless the command explicitly asks for multiple or specifies a number.
+- Only use "type": "mcq-set" when the command explicitly requests more than 1 question. Otherwise always use "type": "mcq".
 - Do NOT wrap the JSON in markdown code fences or add any text before or after it.

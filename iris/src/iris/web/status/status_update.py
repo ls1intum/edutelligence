@@ -76,8 +76,12 @@ class StatusCallback(ABC):
         self.stage = stage
         self.current_stage_index = current_stage_index
 
-    def on_status_update(self):
-        """Send a status update to the Artemis API."""
+    def on_status_update(self) -> bool:
+        """Send a status update to the Artemis API.
+
+        Returns:
+            True if the status update was sent successfully, False otherwise.
+        """
         try:
             requests.post(
                 self.url,
@@ -88,9 +92,11 @@ class StatusCallback(ABC):
                 json=self.status.model_dump(by_alias=True),
                 timeout=200,
             ).raise_for_status()
+            return True
         except requests.exceptions.RequestException as e:
             logger.error("Error sending status update: %s", e)
             capture_exception(e)
+            return False
 
     def get_next_stage(self):
         """Return the next stage in the status, or None if there are no more stages."""
@@ -151,6 +157,7 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.DONE
         self.stage.message = message
+        self.stage.chat_message = None
         self.status.tokens = tokens or self.status.tokens
         self.status.result = final_result
         if hasattr(self.status, "session_title"):
@@ -188,23 +195,26 @@ class StatusCallback(ABC):
             if start_next_stage:
                 self.stage.state = StageStateEnum.IN_PROGRESS
 
-        self.on_status_update()
+        success = self.on_status_update()
 
-        self.status.result = None
-        if hasattr(self.status, "session_title"):
-            self.status.session_title = None
-        if hasattr(self.status, "suggestions"):
-            self.status.suggestions = None
-        if hasattr(self.status, "inconsistencies"):
-            self.status.inconsistencies = None
-        if hasattr(self.status, "accessed_memories"):
-            self.status.accessed_memories = None
-        if hasattr(self.status, "created_memories"):
-            self.status.created_memories = None
-        if hasattr(self.status, "confidence"):
-            self.status.confidence = None
-        if hasattr(self.status, "should_post_directly"):
-            self.status.should_post_directly = False
+        # Only clear transient fields if the update was delivered successfully.
+        # If the POST failed, keep the result so it can be retried on the next update.
+        if success:
+            self.status.result = None
+            if hasattr(self.status, "session_title"):
+                self.status.session_title = None
+            if hasattr(self.status, "suggestions"):
+                self.status.suggestions = None
+            if hasattr(self.status, "inconsistencies"):
+                self.status.inconsistencies = None
+            if hasattr(self.status, "accessed_memories"):
+                self.status.accessed_memories = None
+            if hasattr(self.status, "created_memories"):
+                self.status.created_memories = None
+            if hasattr(self.status, "confidence"):
+                self.status.confidence = None
+            if hasattr(self.status, "should_post_directly"):
+                self.status.should_post_directly = False
 
     def error(
         self,
