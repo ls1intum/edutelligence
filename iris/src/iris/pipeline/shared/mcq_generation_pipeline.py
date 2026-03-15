@@ -2,6 +2,7 @@ import contextvars
 import json
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from threading import Thread
 from typing import List, Optional
@@ -27,6 +28,7 @@ class McqGenerationPipeline(SubPipeline):
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="mcq_generation_pipeline")
         self.tokens = []
+        self.local = local
 
         # Load Jinja2 template
         template_dir = os.path.join(
@@ -40,7 +42,7 @@ class McqGenerationPipeline(SubPipeline):
 
         # Create LLM
         request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-5-nano"
+            version="gpt-oss:120b" if local else "gpt-4.1-nano"
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
@@ -111,7 +113,6 @@ class McqGenerationPipeline(SubPipeline):
         command: str,
         chat_history: Optional[List[PyrisMessage]],
         user_language: str,
-        callback: Optional[StatusCallback],
         result_storage: dict,
         count: int = 1,
     ) -> Thread:
@@ -129,7 +130,6 @@ class McqGenerationPipeline(SubPipeline):
         :param command: Free-text instruction describing what to generate
         :param chat_history: Recent chat history for context
         :param user_language: "en" or "de"
-        :param callback: Status callback for dynamic chat messages
         :param result_storage: Mutable dict for inter-thread communication
         :param count: Number of questions to generate (1 = single, >1 = one-by-one)
         :return: The started Thread handle
@@ -150,7 +150,7 @@ class McqGenerationPipeline(SubPipeline):
                         command=command,
                         chat_history=chat_history,
                         user_language=user_language,
-                        callback=callback,
+                        callback=None,  # pre_agent_hook already sent status
                     )
                     result_storage["mcq_json"] = result
                     q.put(("mcq", result))
@@ -176,7 +176,157 @@ class McqGenerationPipeline(SubPipeline):
         count: int,
         q: Queue,
     ) -> None:
-        """Generate multiple MCQ questions one-by-one, pushing each to the queue."""
+        """Generate multiple MCQ questions in parallel using subtopic extraction.
+
+        1. Fast LLM call to extract N distinct subtopics
+        2. Spawn N threads, each generating 1 question for its subtopic
+        3. Results are pushed to the queue as they complete
+
+        Falls back to sequential generation if subtopic extraction fails.
+        """
+        # Step 1: Extract subtopics
+        try:
+            subtopics = self._extract_subtopics(command, chat_history, count)
+        except Exception as e:
+            logger.warning(
+                "Subtopic extraction failed, falling back to sequential",
+                exc_info=e,
+            )
+            self._generate_multiple_sequential(
+                command, chat_history, user_language, count, q
+            )
+            return
+
+        # Pad if we got fewer subtopics than requested
+        while len(subtopics) < count:
+            subtopics.append(
+                f"another aspect of the topic (question {len(subtopics) + 1})"
+            )
+
+        # Step 2: Create isolated worker pipelines (each has its own LLM instance)
+        workers = [McqGenerationPipeline(local=self.local) for _ in range(count)]
+        # Each worker needs its OWN context copy — a single Context.run()
+        # cannot be called concurrently from multiple threads.
+        worker_contexts = [contextvars.copy_context() for _ in range(count)]
+
+        def _generate_one(worker, subtopic, index, ctx):
+            single_command = (
+                f"{command}\n\n"
+                f"Generate exactly 1 question specifically about: {subtopic}\n"
+                f"This is question {index + 1} of {count}."
+            )
+
+            def _run():
+                return worker(
+                    command=single_command,
+                    chat_history=chat_history,
+                    user_language=user_language,
+                    callback=None,
+                )
+
+            return ctx.run(_run)
+
+        # Step 3: Run in parallel with bounded concurrency
+        max_workers = min(count, 10)
+        successful_results: list[str] = []
+        with ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="McqWorker"
+        ) as pool:
+            futures = {
+                pool.submit(
+                    _generate_one, workers[i], subtopics[i], i, worker_contexts[i]
+                ): i
+                for i in range(count)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    result = future.result()
+                    successful_results.append(result)
+                except Exception as e:
+                    logger.error(
+                        "MCQ generation failed for question %d of %d",
+                        idx + 1,
+                        count,
+                        exc_info=e,
+                    )
+
+        # Retry missing questions sequentially (up to 2 retries per missing)
+        missing = count - len(successful_results)
+        if missing > 0:
+            logger.info("Retrying %d missing MCQ question(s) sequentially", missing)
+            for i in range(missing):
+                try:
+                    result = self(
+                        command=f"{command}\n\nGenerate exactly 1 question.",
+                        chat_history=chat_history,
+                        user_language=user_language,
+                        callback=None,
+                    )
+                    successful_results.append(result)
+                except Exception as e:
+                    logger.error("MCQ retry failed", exc_info=e)
+
+        # Push all successful results to the queue
+        for result in successful_results:
+            q.put(("mcq", result))
+
+        # Aggregate tokens from worker pipelines
+        for worker in workers:
+            for token in worker.tokens:
+                self.tokens.append(token)
+            worker.tokens.clear()
+
+    def _extract_subtopics(
+        self,
+        command: str,
+        chat_history: Optional[List[PyrisMessage]],
+        count: int,
+    ) -> list[str]:
+        """Use a fast LLM call to extract N distinct subtopics for question generation."""
+        chat_history_text = self._serialize_chat_history(chat_history)
+
+        prompt = (
+            "You are a teaching assistant preparing quiz questions.\n"
+            f'Student request: "{command}"\n'
+        )
+        if chat_history_text:
+            prompt += f"\nConversation context:\n{chat_history_text}\n"
+        prompt += (
+            f"\nGenerate exactly {count} distinct subtopics or aspects of the topic "
+            f"that would each make a good multiple-choice question. "
+            f"Each subtopic should test a different concept or fact.\n"
+            f"Respond with ONLY a JSON array of short strings, nothing else. "
+            f'Example: ["definition of X", "difference between X and Y", '
+            f'"application of Z"]\n'
+        )
+
+        response = self.pipeline.invoke([SystemMessage(content=prompt)])
+        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
+
+        # Parse response
+        cleaned = response.strip()
+        if cleaned.startswith("```") and "\n" in cleaned:
+            first_newline = cleaned.index("\n")
+            last_fence = cleaned.rfind("```")
+            if last_fence > first_newline:
+                start = first_newline + 1
+                cleaned = cleaned[start:last_fence].strip()
+
+        subtopics = json.loads(cleaned)
+        if not isinstance(subtopics, list):
+            raise ValueError("Expected a JSON array of subtopics")
+        return [str(s) for s in subtopics[:count]]
+
+    def _generate_multiple_sequential(
+        self,
+        command: str,
+        chat_history: Optional[List[PyrisMessage]],
+        user_language: str,
+        count: int,
+        q: Queue,
+    ) -> None:
+        """Fallback: generate questions sequentially when subtopic extraction fails."""
         previous_questions: list[str] = []
 
         for i in range(count):
@@ -197,9 +347,8 @@ class McqGenerationPipeline(SubPipeline):
                     command=single_command,
                     chat_history=chat_history,
                     user_language=user_language,
-                    callback=None,  # avoid thread-safety issues with shared callback
+                    callback=None,
                 )
-                # Track question text for deduplication
                 try:
                     parsed = json.loads(result)
                     if parsed.get("question"):
@@ -224,7 +373,7 @@ class McqGenerationPipeline(SubPipeline):
         if not chat_history:
             return ""
         lines = []
-        for msg in chat_history[-10:]:
+        for msg in chat_history[-5:]:
             role = msg.sender.value
             for content in msg.contents:
                 if hasattr(content, "text_content") and content.text_content:
@@ -245,6 +394,9 @@ class McqGenerationPipeline(SubPipeline):
 
         parsed = json.loads(cleaned)
 
+        # Repair: auto-fill missing "correct" fields before validation
+        _repair_mcq(parsed)
+
         # Validate structure
         mcq_type = parsed.get("type")
         if mcq_type == "mcq":
@@ -261,13 +413,43 @@ class McqGenerationPipeline(SubPipeline):
         return json.dumps(parsed)
 
 
+def _repair_mcq(mcq: dict) -> None:
+    """Auto-repair common LLM omissions so the JSON passes Artemis validation."""
+    if mcq.get("type") == "mcq-set":
+        for q in mcq.get("questions", []):
+            _repair_single_mcq(q)
+    else:
+        _repair_single_mcq(mcq)
+
+
+def _repair_single_mcq(mcq: dict) -> None:
+    """Fill missing 'correct' fields with False on options that lack them."""
+    for opt in mcq.get("options", []):
+        if "correct" not in opt:
+            opt["correct"] = False
+
+
 def _validate_single_mcq(mcq: dict) -> None:
-    """Validate a single MCQ question structure."""
-    if "question" not in mcq:
+    """Validate a single MCQ question structure.
+
+    Ensures the JSON matches what the Artemis client expects:
+    - non-empty "question" string
+    - "options" array with exactly 4 entries, each with "text" (str) and "correct" (bool)
+    - exactly one option with correct=True
+    - non-empty "explanation" string
+    """
+    if "question" not in mcq or not mcq["question"]:
         raise ValueError("MCQ missing 'question' field")
+    if "explanation" not in mcq or not mcq["explanation"]:
+        raise ValueError("MCQ missing 'explanation' field")
     options = mcq.get("options", [])
     if len(options) != 4:
         raise ValueError(f"MCQ must have exactly 4 options, got {len(options)}")
-    correct_count = sum(1 for opt in options if opt.get("correct"))
+    for i, opt in enumerate(options):
+        if "text" not in opt or not opt["text"]:
+            raise ValueError(f"Option {i} missing 'text' field")
+        if "correct" not in opt or not isinstance(opt["correct"], bool):
+            raise ValueError(f"Option {i} missing or invalid 'correct' field")
+    correct_count = sum(1 for opt in options if opt["correct"])
     if correct_count != 1:
         raise ValueError(f"MCQ must have exactly 1 correct option, got {correct_count}")

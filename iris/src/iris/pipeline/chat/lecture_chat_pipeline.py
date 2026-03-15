@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import re
@@ -280,27 +281,46 @@ class LectureChatPipeline(
 
     @staticmethod
     def _detect_mcq_intent(user_message: str) -> tuple[bool, int]:
-        """Quick keyword check for MCQ generation intent.
+        """Detect MCQ generation intent from user message.
 
         Returns:
             Tuple of (is_mcq_intent, question_count). Count defaults to 1.
         """
         message_lower = user_message.lower()
+
+        # Check for explicit count patterns (e.g., "5 questions", "another 3")
+        count_patterns = [
+            r"(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)",
+            r"(?:another|more|give me|generate|create)\s+(\d+)",
+        ]
+        for pattern in count_patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                return True, int(match.group(1))
+
+        # Then check keyword phrases
         mcq_keywords = [
             "quiz",
             "mcq",
             "multiple choice",
             "test me",
             "quiz me",
+            "test my knowledge",
             "generate a question",
             "generate questions",
+            "ask me a question",
+            "ask me questions",
+            "ask me some questions",
+            "give me a question",
+            "give me questions",
+            "another question",
+            "more questions",
+            "one more",
         ]
-        if not any(kw in message_lower for kw in mcq_keywords):
-            return False, 0
-        count_match = re.search(r"(\d+)\s*(question|mcq|quiz)", message_lower)
-        if count_match:
-            return True, int(count_match.group(1))
-        return True, 1
+        if any(kw in message_lower for kw in mcq_keywords):
+            return True, 1
+
+        return False, 0
 
     def pre_agent_hook(
         self,
@@ -340,7 +360,6 @@ class LectureChatPipeline(
                 command=user_message,
                 chat_history=state.dto.chat_history,
                 user_language=user_language,
-                callback=state.callback,
                 result_storage=getattr(state, "mcq_result_storage", {}),
                 count=count,
             ),
@@ -408,21 +427,53 @@ class LectureChatPipeline(
 
         session_title = self._generate_session_title(state, state.result, state.dto)
 
-        # For single parallel MCQ: wait for thread and integrate into the message
-        if mcq_thread and mcq_count == 1:
+        # For parallel MCQ: join thread and integrate into the message
+        if mcq_thread:
             mcq_thread.join(timeout=120)
             mcq_storage = getattr(state, "mcq_result_storage", {})
             mcq_queue = mcq_storage.get("queue")
-            if mcq_queue:
-                while not mcq_queue.empty():
-                    msg_type, data = mcq_queue.get_nowait()
-                    if msg_type == "mcq":
-                        state.result = state.result + "\n" + data
+
+            if mcq_count == 1:
+                # Single question: append directly
+                if mcq_queue:
+                    while not mcq_queue.empty():
+                        msg_type, data = mcq_queue.get_nowait()
+                        if msg_type == "mcq":
+                            state.result = state.result + "\n" + data
+            else:
+                # Multiple questions: collect all, bundle as mcq-set for carousel
+                collected_questions: list[dict] = []
+                if mcq_queue:
+                    while not mcq_queue.empty():
+                        msg_type, data = mcq_queue.get_nowait()
+                        if msg_type == "mcq":
+                            try:
+                                parsed = json.loads(data)
+                                # Flatten: if a worker returned mcq-set, extract individual questions
+                                if parsed.get("type") == "mcq-set":
+                                    collected_questions.extend(
+                                        parsed.get("questions", [])
+                                    )
+                                else:
+                                    collected_questions.append(parsed)
+                            except json.JSONDecodeError:
+                                logger.error("Invalid MCQ JSON received: %s", data)
+                        elif msg_type == "error":
+                            logger.error(
+                                "MCQ generation error for multi-question: %s",
+                                data,
+                            )
+                if collected_questions:
+                    mcq_set = json.dumps(
+                        {"type": "mcq-set", "questions": collected_questions}
+                    )
+                    state.result = state.result + "\n" + mcq_set
+
             for token in self.mcq_pipeline.tokens:
                 self._track_tokens(state, token)
             self.mcq_pipeline.tokens.clear()
 
-        # Send the agent's text response (with MCQ integrated for single question)
+        # Send the complete response (text + MCQ integrated)
         state.callback.done(
             "Response created",
             final_result=state.result,
@@ -430,29 +481,6 @@ class LectureChatPipeline(
             session_title=session_title,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
         )
-
-        # For multi-question parallel MCQ: stream each question as a separate message
-        if mcq_thread and mcq_count > 1:
-            mcq_storage = getattr(state, "mcq_result_storage", {})
-            mcq_queue = mcq_storage.get("queue")
-            if mcq_queue:
-                while True:
-                    try:
-                        msg_type, data = mcq_queue.get(timeout=120)
-                    except Exception:
-                        logger.error("Timed out waiting for MCQ generation")
-                        break
-                    if msg_type == "done":
-                        break
-                    elif msg_type == "mcq":
-                        state.callback.done(final_result=data, tokens=state.tokens)
-                    elif msg_type == "error":
-                        logger.error(
-                            "MCQ generation error for multi-question: %s", data
-                        )
-            for token in self.mcq_pipeline.tokens:
-                self._track_tokens(state, token)
-            self.mcq_pipeline.tokens.clear()
 
         return state.result
 

@@ -191,7 +191,7 @@ def test_prompt_curly_braces_not_parsed_as_variables():
     messages = captured_input["messages"]
     assert len(messages) == 1
     assert isinstance(messages[0], SystemMessage)
-    assert '"type": "mcq"' in messages[0].content
+    assert '"type":"mcq"' in messages[0].content
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,6 @@ def test_run_in_thread_single_question():
         command="Generate a question about math",
         chat_history=None,
         user_language="en",
-        callback=None,
         result_storage=storage,
         count=1,
     )
@@ -235,7 +234,6 @@ def test_run_in_thread_error_on_failure():
         command="Generate a question",
         chat_history=None,
         user_language="en",
-        callback=None,
         result_storage=storage,
         count=1,
     )
@@ -250,24 +248,6 @@ def test_run_in_thread_error_on_failure():
     assert items[-1] == ("done", None)
 
 
-def test_run_in_thread_with_callback():
-    """run_in_thread should forward callback to the pipeline for single question."""
-    pipeline = _make_pipeline(VALID_SINGLE_MCQ)
-    callback = MagicMock()
-    storage = {}
-    thread = pipeline.run_in_thread(
-        command="Generate a question",
-        chat_history=None,
-        user_language="en",
-        callback=callback,
-        result_storage=storage,
-        count=1,
-    )
-    thread.join(timeout=10)
-    assert "mcq_json" in storage
-    assert callback.in_progress.call_count >= 2
-
-
 def test_run_in_thread_multiple_questions():
     """run_in_thread with count>1 should generate multiple questions via queue."""
     pipeline = _make_pipeline(VALID_SINGLE_MCQ)
@@ -276,7 +256,6 @@ def test_run_in_thread_multiple_questions():
         command="Generate 3 questions about math",
         chat_history=None,
         user_language="en",
-        callback=None,
         result_storage=storage,
         count=3,
     )
