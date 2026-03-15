@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
@@ -405,12 +404,8 @@ class CourseChatPipeline(
     # ========================================
 
     @staticmethod
-    def _detect_mcq_intent(user_message: str) -> tuple[bool, int]:
-        """Quick keyword check for MCQ generation intent.
-
-        Returns:
-            A tuple of (is_mcq_intent, question_count).
-        """
+    def _detect_mcq_intent(user_message: str) -> bool:
+        """Quick keyword check for MCQ generation intent."""
         message_lower = user_message.lower()
         mcq_keywords = [
             "quiz",
@@ -421,12 +416,7 @@ class CourseChatPipeline(
             "generate a question",
             "generate questions",
         ]
-        if not any(kw in message_lower for kw in mcq_keywords):
-            return False, 0
-        count_match = re.search(r"(\d+)\s*(question|mcq|quiz)", message_lower)
-        if count_match:
-            return True, int(count_match.group(1))
-        return True, 1
+        return any(kw in message_lower for kw in mcq_keywords)
 
     def pre_agent_hook(
         self,
@@ -436,14 +426,11 @@ class CourseChatPipeline(
     ) -> None:
         """Send a contextual loading message if MCQ generation intent is detected."""
         user_message = self.get_text_of_latest_user_message(state)
-        is_mcq, count = self._detect_mcq_intent(user_message)
-        if is_mcq:
-            if count > 1:
-                state.callback.in_progress(
-                    f"Generating {count} multiple choice questions..."
-                )
-            else:
-                state.callback.in_progress("Generating a multiple choice question...")
+        if self._detect_mcq_intent(user_message):
+            state.callback.in_progress(
+                "Preparing quiz...",
+                chat_message="Preparing to generate questions...",
+            )
 
     def on_agent_step(
         self,
