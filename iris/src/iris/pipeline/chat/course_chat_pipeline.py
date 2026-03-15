@@ -28,6 +28,7 @@ from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...tools import (
     create_tool_faq_content_retrieval,
+    create_tool_generate_mcq_questions,
     create_tool_get_competency_list,
     create_tool_get_course_details,
     create_tool_get_exercise_list,
@@ -43,6 +44,7 @@ from ..abstract_agent_pipeline import (
     AgentPipelineExecutionState,
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.mcq_generation_pipeline import McqGenerationPipeline
 from ..shared.utils import (
     datetime_to_string,
     format_custom_instructions,
@@ -89,6 +91,7 @@ class CourseChatPipeline(
             variant="course", local=local
         )
         self.citation_pipeline = CitationPipeline(local=local)
+        self.mcq_pipeline = McqGenerationPipeline(local=local)
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -238,6 +241,22 @@ class CourseChatPipeline(
                     getattr(state, "accessed_memory_storage", [])
                 )
             )
+
+        # MCQ generation tool
+        if not hasattr(state, "mcq_result_storage"):
+            setattr(state, "mcq_result_storage", {})
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+        tool_list.append(
+            create_tool_generate_mcq_questions(
+                self.mcq_pipeline,
+                state.dto.chat_history,
+                callback,
+                getattr(state, "mcq_result_storage", {}),
+                user_language,
+            )
+        )
 
         return tool_list
 
@@ -456,6 +475,15 @@ class CourseChatPipeline(
         Returns:
             str: The final result
         """
+        # Replace MCQ placeholder with actual JSON
+        mcq_storage = getattr(state, "mcq_result_storage", {})
+        if mcq_storage.get("mcq_json"):
+            state.result = state.result.replace("[MCQ_RESULT]", mcq_storage["mcq_json"])
+            # Track subpipeline tokens
+            for token in self.mcq_pipeline.tokens:
+                self._track_tokens(state, token)
+            self.mcq_pipeline.tokens.clear()
+
         # Process citations if we have them
         if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
             state.result = self._process_citations(
