@@ -284,3 +284,31 @@ class TestWeaviateMemoryRepository(WeaviateTest):
 
         assert retrieved_memory is not None
         assert len(retrieved_memory.learnings) == 0
+
+    def test_delete_all_for_tenant(self, memory_repository, learning_repository):
+        """Test deleting all memories for a tenant."""
+        memory1 = self._create_test_memory(memory_repository, learning_repository)
+        memory2 = self._create_test_memory(memory_repository, learning_repository)
+        memory3 = self._create_test_memory(memory_repository, learning_repository)
+
+        # Verify objects exist
+        all_before = memory_repository.all("test")
+        ids_before = [m.id for m in all_before]
+        assert memory1.id in ids_before
+        assert memory2.id in ids_before
+        assert memory3.id in ids_before
+
+        # Delete all
+        memory_repository.delete_all_for_tenant("test")
+
+        # Verify all objects are gone
+        all_after = memory_repository.all("test")
+        ids_after = [m.id for m in all_after]
+        assert memory1.id not in ids_after
+        assert memory2.id not in ids_after
+        assert memory3.id not in ids_after
+
+    def test_delete_all_for_tenant_nonexistent(self, memory_repository):
+        """Test that delete_all_for_tenant does not raise for a non-existent tenant."""
+        # Should not raise even if the tenant does not exist
+        memory_repository.delete_all_for_tenant("tenant_that_does_not_exist")
