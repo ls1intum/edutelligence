@@ -13,3 +13,4 @@ class StageDTO(BaseModel):
     internal: bool = Field(
         default=False
     )  # An internal stage is not shown in the UI and hidden from the user
+    chat_message: Optional[str] = Field(alias="chatMessage", default=None)
