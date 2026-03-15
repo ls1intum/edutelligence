@@ -645,6 +645,36 @@ class MemirisWrapper:
             memory=memory_dto, learnings=learning_dtos, connections=connection_dtos
         )
 
+    def delete_all_for_tenant(self) -> None:
+        """
+        Delete all memory data (memories, learnings, and connections) for the tenant
+        efficiently without loading them first.
+
+        This method deletes all memory-related data for the current tenant by directly
+        deleting from the underlying repositories.
+        """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, skipping delete operation.")
+            return
+
+        logging.info("Deleting all memory data for tenant %s", self.tenant)
+        try:
+            # Delete all memories, learnings, and connections for the tenant
+            self.memory_service.delete_all_for_tenant(self.tenant)
+            self.learning_service.delete_all_for_tenant(self.tenant)
+            self.memory_connection_service.delete_all_for_tenant(self.tenant)
+            logging.info(
+                "Successfully deleted all memory data for tenant %s", self.tenant
+            )
+        except Exception as e:
+            logging.error(
+                "Failed to delete all memory data for tenant %s: %s",
+                self.tenant,
+                e,
+                exc_info=True,
+            )
+            raise
+
 
 def memory_sleep_task():
     """
