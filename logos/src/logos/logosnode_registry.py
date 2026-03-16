@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import secrets
@@ -43,6 +44,7 @@ class ProviderSession:
     last_heartbeat: datetime = field(default_factory=_utc_now)
     latest_runtime: dict[str, Any] = field(default_factory=dict)
     latest_events: list[dict[str, Any]] = field(default_factory=list)
+    recent_samples: deque[dict[str, Any]] = field(default_factory=deque)
     pending_commands: dict[str, asyncio.Future] = field(default_factory=dict)
     pending_streams: dict[str, asyncio.Queue] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -58,6 +60,8 @@ class LogosNodeRuntimeRegistry:
         self._tickets: dict[str, AuthTicket] = {}
         self._sessions: dict[int, ProviderSession] = {}
         self._lock = asyncio.Lock()
+        self._recent_sample_window = timedelta(hours=1)
+        self._recent_sample_max = 5000
 
     async def issue_ticket(
         self,
@@ -151,6 +155,34 @@ class LogosNodeRuntimeRegistry:
         session.last_heartbeat = _utc_now()
         if capabilities_models is not None:
             session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+
+    async def record_runtime_sample(self, provider_id: int, sample: dict[str, Any]) -> None:
+        session = await self._get_session(provider_id)
+        if session is None or not isinstance(sample, dict):
+            return
+        session.recent_samples.append(dict(sample))
+        self._trim_recent_samples(session)
+
+    def peek_recent_samples(
+        self,
+        provider_id: int,
+        *,
+        after_snapshot_id: int = 0,
+    ) -> list[dict[str, Any]]:
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return []
+        self._trim_recent_samples(session)
+        cursor = int(after_snapshot_id or 0)
+        result: list[dict[str, Any]] = []
+        for sample in session.recent_samples:
+            if not isinstance(sample, dict):
+                continue
+            snapshot_id = int(sample.get("snapshot_id") or 0)
+            if snapshot_id and snapshot_id <= cursor:
+                continue
+            result.append(dict(sample))
+        return result
 
     async def append_event(self, provider_id: int, event: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
@@ -386,3 +418,27 @@ class LogosNodeRuntimeRegistry:
         if session.is_stale(stale_after_seconds):
             raise LogosNodeOfflineError("logosnode worker session is stale")
         return session
+
+    def _trim_recent_samples(self, session: ProviderSession) -> None:
+        cutoff = _utc_now() - self._recent_sample_window
+        while session.recent_samples:
+            first = session.recent_samples[0]
+            timestamp = self._sample_timestamp(first)
+            if timestamp is None or timestamp >= cutoff:
+                break
+            session.recent_samples.popleft()
+        while len(session.recent_samples) > self._recent_sample_max:
+            session.recent_samples.popleft()
+
+    @staticmethod
+    def _sample_timestamp(sample: dict[str, Any]) -> datetime | None:
+        raw = sample.get("timestamp")
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)

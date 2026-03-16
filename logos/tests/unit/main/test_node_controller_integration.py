@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, Request
 import pytest
@@ -50,6 +50,35 @@ async def test_registry_selects_least_active_lane():
     selected = await registry.select_lane_for_model(11, "model-a")
     assert selected is not None
     assert selected["lane_id"] == "lane-1"
+
+
+@pytest.mark.asyncio
+async def test_registry_recent_samples_respect_cursor():
+    registry = LogosNodeRuntimeRegistry()
+    ticket = await registry.consume_ticket(await registry.issue_ticket(21, "worker-history", []))
+    assert ticket is not None
+
+    ws = _FakeWebSocket()
+    await registry.attach_session(ticket, ws)
+    base_ts = datetime.now(timezone.utc)
+    await registry.record_runtime_sample(
+        21,
+        {
+            "snapshot_id": 10,
+            "timestamp": base_ts.isoformat(),
+            "used_vram_mb": 1024,
+        },
+    )
+    await registry.record_runtime_sample(
+        21,
+        {
+            "snapshot_id": 11,
+            "timestamp": (base_ts + timedelta(seconds=5)).isoformat(),
+            "used_vram_mb": 2048,
+        },
+    )
+
+    assert [sample["snapshot_id"] for sample in registry.peek_recent_samples(21, after_snapshot_id=10)] == [11]
 
 
 @pytest.mark.asyncio

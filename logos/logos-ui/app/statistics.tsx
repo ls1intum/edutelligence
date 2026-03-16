@@ -152,17 +152,28 @@ const BYTES_PER_GB_DECIMAL = 1_000_000_000;
 const toDecimalGb = (bytes: number) =>
   Number((bytes / BYTES_PER_GB_DECIMAL).toFixed(2));
 
+const getLoadedModelSizeBytes = (model: any): number => {
+  if (typeof model?.size_vram === "number" && model.size_vram > 0) {
+    return model.size_vram;
+  }
+  if (typeof model?.size_vram_mb === "number" && model.size_vram_mb > 0) {
+    return model.size_vram_mb * BYTES_PER_MIB;
+  }
+  if (typeof model?.size === "number" && model.size > 0) {
+    return model.size;
+  }
+  if (typeof model?.size_mb === "number" && model.size_mb > 0) {
+    return model.size_mb * BYTES_PER_MIB;
+  }
+  return 0;
+};
+
 const getLoadedModelsFromRaw = (
   raw: any
 ): Array<{ name: string; size_gb: number }> =>
   (raw?.loaded_models || [])
     .map((m: any) => {
-      const sizeBytes =
-        typeof m?.size_vram === "number"
-          ? m.size_vram
-          : typeof m?.size_vram_mb === "number"
-            ? m.size_vram_mb * BYTES_PER_MIB
-            : 0;
+      const sizeBytes = getLoadedModelSizeBytes(m);
       return {
         name: m?.name ?? m?.model ?? "model",
         size_gb: toDecimalGb(sizeBytes),
@@ -673,13 +684,36 @@ export default function Statistics() {
       setSelectedVramProvider(null);
       return;
     }
+    const source = usePlotlyWeb ? vramRawDataByProvider : vramDataByProvider;
+    const rankedProviders = [...vramProviders].sort((left, right) => {
+      const leftMeta = vramProviderMetaByName[left];
+      const rightMeta = vramProviderMetaByName[right];
+      const leftConnected =
+        leftMeta?.connection_state !== "offline" && leftMeta?.connected !== false;
+      const rightConnected =
+        rightMeta?.connection_state !== "offline" && rightMeta?.connected !== false;
+      const leftHasSamples = (source[left] || []).length > 0;
+      const rightHasSamples = (source[right] || []).length > 0;
+      const leftScore = (leftHasSamples ? 2 : 0) + (leftConnected ? 1 : 0);
+      const rightScore = (rightHasSamples ? 2 : 0) + (rightConnected ? 1 : 0);
+      if (leftScore !== rightScore) return rightScore - leftScore;
+      return left.localeCompare(right);
+    });
+
     if (
       !selectedVramProvider ||
       !vramProviders.includes(selectedVramProvider)
     ) {
-      setSelectedVramProvider(vramProviders[0]);
+      setSelectedVramProvider(rankedProviders[0]);
     }
-  }, [vramProviders, selectedVramProvider]);
+  }, [
+    selectedVramProvider,
+    usePlotlyWeb,
+    vramDataByProvider,
+    vramProviderMetaByName,
+    vramProviders,
+    vramRawDataByProvider,
+  ]);
 
   const latestVramSample = useMemo(() => {
     if (!selectedVramProvider) return null;
@@ -722,35 +756,46 @@ export default function Statistics() {
     const totalGb = latestVramSample?.total_vram_gb ?? usedGb + remainingGb;
     if (totalGb <= 0) return [];
 
-    const modelSlices =
-      latestVramSample?.loaded_models?.map((model, index) => ({
-        value: model.size_gb,
+    const reportedModels = latestVramSample?.loaded_models ?? [];
+    const rawModelSlices = reportedModels
+      .map((model, index) => ({
+        value: Number(model.size_gb || 0),
         color: MODEL_SLICE_COLORS[index % MODEL_SLICE_COLORS.length],
         text: model.name,
-      })) || [];
+      }))
+      .filter((slice) => slice.value > 0);
 
-    const modeledUsed = modelSlices.reduce(
+    const attributedUsedGb = rawModelSlices.reduce(
       (sum, slice) => sum + slice.value,
       0
     );
-    const otherUsed = Math.max(0, usedGb - modeledUsed);
+    const modelScale =
+      attributedUsedGb > usedGb && attributedUsedGb > 0
+        ? usedGb / attributedUsedGb
+        : 1;
+    const modelSlices = rawModelSlices.map((slice) => ({
+      ...slice,
+      value: Number((slice.value * modelScale).toFixed(3)),
+    }));
+    const modeledUsedGb = modelSlices.reduce((sum, slice) => sum + slice.value, 0);
+    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
 
-    const slices = [...modelSlices];
-    if (otherUsed > 0.1) {
-      slices.push({
-        value: otherUsed,
+    return [
+      ...modelSlices,
+      {
+        value: otherUsedGb,
         color: OTHER_SLICE_COLOR,
-        text: modelSlices.length ? "Other" : "Used",
-      });
-    }
-
-    slices.push({
-      value: remainingGb,
-      color: FREE_SLICE_COLOR,
-      text: "Free",
-    });
-
-    return slices;
+        text:
+          modelSlices.length > 0
+            ? "Other used"
+            : "Used",
+      },
+      {
+        value: remainingGb,
+        color: FREE_SLICE_COLOR,
+        text: "Free",
+      },
+    ].filter((slice) => slice.value > 0);
   }, [latestVramSample]);
 
   const vramSummary = useMemo(() => {
@@ -1714,8 +1759,8 @@ export default function Statistics() {
               <View className="mx-4 hidden w-px self-stretch bg-outline-200 xl:flex" />
               <View className="w-full xl:flex-1">
                 <ChartCard
-                  title="VRAM Utilization"
-                  subtitle="Latest snapshot per Ollama provider"
+                  title="Provider Memory Utilization"
+                  subtitle="Latest local runtime snapshot per provider"
                 >
                   {(width) => {
                     if (isVramLoading) {
@@ -1748,8 +1793,8 @@ export default function Statistics() {
                           message={
                             selectedVramProviderMeta?.connection_state ===
                               "offline" || selectedVramProviderMeta?.connected === false
-                              ? `No live VRAM telemetry: ${selectedVramProvider} is offline.`
-                              : "No utilization data for the selected provider."
+                              ? `No live memory telemetry: ${selectedVramProvider} is offline.`
+                              : "No live memory telemetry for the selected provider yet."
                           }
                         />
                       );
@@ -1796,6 +1841,8 @@ export default function Statistics() {
                               height={260}
                               pieScale={0.85}
                               legendPosition="right"
+                              hoverValueSuffix=" GB"
+                              hoverValueDecimals={2}
                               centerText={{
                                 top: "Free",
                                 middle: `${vramSummary.freePct}%`,
@@ -1874,6 +1921,45 @@ export default function Statistics() {
                             );
                           })()
                         )}
+
+                        <VStack className="mt-4 space-y-1">
+                          <Text className="text-xs font-semibold text-typography-500 dark:text-typography-400">
+                            Loaded models
+                          </Text>
+                          {vramSummary.models.length > 0 ? (
+                            vramSummary.models.map((model, index) => (
+                              <HStack
+                                key={`${model.name}-${index}`}
+                                space="xs"
+                                className="items-center justify-between"
+                              >
+                                <HStack space="xs" className="items-center">
+                                  <View
+                                    style={{
+                                      width: 10,
+                                      height: 10,
+                                      borderRadius: 5,
+                                      backgroundColor:
+                                        MODEL_SLICE_COLORS[
+                                          index % MODEL_SLICE_COLORS.length
+                                        ],
+                                    }}
+                                  />
+                                  <Text className="text-xs text-typography-700">
+                                    {model.name}
+                                  </Text>
+                                </HStack>
+                                <Text className="text-xs text-typography-500 dark:text-typography-400">
+                                  {model.size_gb.toFixed(2)} GB
+                                </Text>
+                              </HStack>
+                            ))
+                          ) : (
+                            <Text className="text-xs text-typography-500 dark:text-typography-400">
+                              No models reported
+                            </Text>
+                          )}
+                        </VStack>
                       </VStack>
                     );
                   }}
@@ -2002,6 +2088,8 @@ export default function Statistics() {
                             width={width}
                             height={260}
                             legendPosition="right"
+                            hoverValueSuffix=" requests"
+                            hoverValueDecimals={0}
                             centerText={{
                               middle: `${total}`,
                               bottom: "requests",
@@ -2081,6 +2169,8 @@ export default function Statistics() {
                             width={width}
                             height={260}
                             legendPosition="right"
+                            hoverValueSuffix=" requests"
+                            hoverValueDecimals={0}
                             centerText={{
                               middle: `${total}`,
                               bottom: "requests",
@@ -2143,7 +2233,10 @@ export default function Statistics() {
 
             <View className="my-8 h-[1px] w-full bg-outline-200" />
 
-            <ChartCard title="VRAM Remaining" subtitle="Per Ollama-Provider">
+            <ChartCard
+              title="Remaining Memory"
+              subtitle="Per local provider. Uses VRAM when available, runtime memory otherwise."
+            >
               {(width) =>
                 usePlotlyWeb ? (
                   <PlotlyVramChart

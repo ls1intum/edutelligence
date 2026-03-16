@@ -1356,9 +1356,13 @@ class DBManager:
         total_models_loaded: int,
         total_vram_used_bytes: int,
         loaded_models: List[Dict[str, Any]],
+        snapshot_ts: Optional[datetime.datetime] = None,
+        total_memory_bytes: Optional[int] = None,
+        free_memory_bytes: Optional[int] = None,
+        snapshot_source: Optional[str] = None,
         poll_success: bool = True,
         error_message: Optional[str] = None
-    ) -> None:
+    ) -> int:
         """
         Insert Ollama provider snapshot into monitoring table.
 
@@ -1367,36 +1371,54 @@ class DBManager:
             total_models_loaded: Number of models currently loaded
             total_vram_used_bytes: Total VRAM used by all loaded models (in bytes)
             loaded_models: List of model details (name, size_vram, expires_at)
+            snapshot_ts: Snapshot timestamp from worker/runtime
+            total_memory_bytes: Total runtime memory capacity in bytes
+            free_memory_bytes: Free runtime memory in bytes
+            snapshot_source: Telemetry source label
             poll_success: Whether the poll was successful
             error_message: Error message if poll failed
         """
         sql = text("""
             INSERT INTO ollama_provider_snapshots (
                 provider_id,
+                snapshot_ts,
                 total_models_loaded,
                 total_vram_used_bytes,
+                total_memory_bytes,
+                free_memory_bytes,
                 loaded_models,
+                snapshot_source,
                 poll_success,
                 error_message
             ) VALUES (
                 :provider_id,
+                COALESCE(:snapshot_ts, CURRENT_TIMESTAMP),
                 :total_models_loaded,
                 :total_vram_used_bytes,
+                :total_memory_bytes,
+                :free_memory_bytes,
                 :loaded_models,
+                :snapshot_source,
                 :poll_success,
                 :error_message
             )
+            RETURNING id
         """)
 
-        self.session.execute(sql, {
+        result = self.session.execute(sql, {
             "provider_id": provider_id,
+            "snapshot_ts": snapshot_ts,
             "total_models_loaded": total_models_loaded,
             "total_vram_used_bytes": total_vram_used_bytes,
+            "total_memory_bytes": int(total_memory_bytes) if total_memory_bytes is not None else None,
+            "free_memory_bytes": int(free_memory_bytes) if free_memory_bytes is not None else None,
             "loaded_models": json.dumps(loaded_models),
+            "snapshot_source": snapshot_source or "unknown",
             "poll_success": poll_success,
             "error_message": error_message
-        })
+        }).fetchone()
         self.session.commit()
+        return int(result[0]) if result is not None else 0
 
     def get_ollama_vram_stats(
         self,
@@ -1439,14 +1461,17 @@ class DBManager:
 
         sql = text("""
             SELECT
+                s.id,
                 s.provider_id,
                 p.name AS provider_name,
                 s.snapshot_ts,
                 s.total_vram_used_bytes,
+                s.total_memory_bytes,
+                s.free_memory_bytes,
                 s.total_models_loaded,
                 s.loaded_models,
                 p.total_vram_mb,
-                MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
             FROM ollama_provider_snapshots s
             LEFT JOIN providers p
               ON p.id = s.provider_id
@@ -1463,20 +1488,37 @@ class DBManager:
 
             providers_data: Dict[int, Dict[str, Any]] = {}
 
-            for pid, provider_name, ts, used_bytes, models_loaded, loaded_models, total_vram_mb, capacity_bytes in rows:
+            for (
+                snapshot_id,
+                pid,
+                provider_name,
+                ts,
+                used_bytes,
+                total_memory_bytes,
+                free_memory_bytes,
+                models_loaded,
+                loaded_models,
+                total_vram_mb,
+                capacity_bytes,
+            ) in rows:
                 used = int(used_bytes or 0)
-                configured_mb = int(total_vram_mb or 0)
-                cap = configured_mb * 1024 * 1024 if configured_mb > 0 else int(capacity_bytes or 0)
-                remaining_bytes = (cap - used) if cap and cap > used else None
+                configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
+                cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
+                remaining_bytes = (
+                    int(free_memory_bytes)
+                    if free_memory_bytes is not None
+                    else max(cap - used, 0)
+                )
                 if pid not in providers_data:
                     providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
                 providers_data[pid]["data"].append({
+                    "snapshot_id": int(snapshot_id or 0),
                     "timestamp": ts.isoformat() if ts else None,
                     "vram_mb": used // (1024 * 1024),
                     "vram_bytes": used,
                     "used_vram_mb": used // (1024 * 1024),
-                    "remaining_vram_mb": (remaining_bytes // (1024 * 1024)) if isinstance(remaining_bytes, int) else None,
-                    "total_vram_mb": configured_mb if configured_mb > 0 else None,
+                    "remaining_vram_mb": remaining_bytes // (1024 * 1024),
+                    "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
                     "models_loaded": models_loaded,
                     "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
                 })
@@ -1543,10 +1585,12 @@ class DBManager:
                     p.name AS provider_name,
                     s.snapshot_ts,
                     s.total_vram_used_bytes,
+                    s.total_memory_bytes,
+                    s.free_memory_bytes,
                     s.total_models_loaded,
                     s.loaded_models,
                     p.total_vram_mb,
-                    MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
@@ -1564,10 +1608,12 @@ class DBManager:
                     p.name AS provider_name,
                     s.snapshot_ts,
                     s.total_vram_used_bytes,
+                    s.total_memory_bytes,
+                    s.free_memory_bytes,
                     s.total_models_loaded,
                     s.loaded_models,
                     p.total_vram_mb,
-                    MAX(s.total_vram_used_bytes) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
@@ -1595,6 +1641,8 @@ class DBManager:
                 provider_name,
                 ts,
                 used_bytes,
+                total_memory_bytes,
+                free_memory_bytes,
                 models_loaded,
                 loaded_models,
                 total_vram_mb,
@@ -1605,9 +1653,13 @@ class DBManager:
                     last_snapshot_id = snapshot_id_int
 
                 used = int(used_bytes or 0)
-                configured_mb = int(total_vram_mb or 0)
-                cap = configured_mb * 1024 * 1024 if configured_mb > 0 else int(capacity_bytes or 0)
-                remaining_bytes = (cap - used) if cap and cap > used else None
+                configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
+                cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
+                remaining_bytes = (
+                    int(free_memory_bytes)
+                    if free_memory_bytes is not None
+                    else max(cap - used, 0)
+                )
 
                 if pid not in providers_data:
                     providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
@@ -1618,8 +1670,8 @@ class DBManager:
                     "vram_mb": used // (1024 * 1024),
                     "vram_bytes": used,
                     "used_vram_mb": used // (1024 * 1024),
-                    "remaining_vram_mb": (remaining_bytes // (1024 * 1024)) if isinstance(remaining_bytes, int) else None,
-                    "total_vram_mb": configured_mb if configured_mb > 0 else None,
+                    "remaining_vram_mb": remaining_bytes // (1024 * 1024),
+                    "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
                     "models_loaded": models_loaded,
                     "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
                 })

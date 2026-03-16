@@ -163,7 +163,7 @@ def _runtime_modes_for_lanes(lanes: list[dict[str, Any]]) -> list[str]:
 
 
 def _build_live_local_provider_sample(
-    provider: Dict[str, Any],
+    provider: Optional[Dict[str, Any]],
     snapshot: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     if not _logosnode_snapshot_is_connected(snapshot):
@@ -183,7 +183,7 @@ def _build_live_local_provider_sample(
         used_vram_mb = float(capacity.get("total_effective_vram_mb") or 0.0)
 
     total_vram_mb = float(devices.get("total_memory_mb") or 0.0)
-    if total_vram_mb <= 0 and provider.get("total_vram_mb") is not None:
+    if total_vram_mb <= 0 and isinstance(provider, dict) and provider.get("total_vram_mb") is not None:
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
@@ -205,7 +205,7 @@ def _build_live_local_provider_sample(
     return {
         "timestamp": timestamp,
         "snapshot_source": "logosnode-runtime",
-        "provider_type": provider.get("provider_type"),
+        "provider_type": provider.get("provider_type") if isinstance(provider, dict) else "logosnode",
         "connection_state": "online",
         "connected": True,
         "transport_connected": bool(transport.get("connected", True)),
@@ -219,10 +219,104 @@ def _build_live_local_provider_sample(
     }
 
 
+def _sample_snapshot_id(sample: Dict[str, Any]) -> int:
+    try:
+        return int(sample.get("snapshot_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _sample_sort_key(sample: Dict[str, Any]) -> tuple[int, str]:
+    return (_sample_snapshot_id(sample), str(sample.get("timestamp") or ""))
+
+
+def _merge_provider_samples(
+    existing_samples: list[Dict[str, Any]],
+    extra_samples: list[Dict[str, Any]],
+) -> list[Dict[str, Any]]:
+    by_key: dict[str, Dict[str, Any]] = {}
+    for sample in list(existing_samples) + list(extra_samples):
+        if not isinstance(sample, dict):
+            continue
+        key = str(sample.get("snapshot_id") or sample.get("timestamp") or "")
+        if not key:
+            continue
+        by_key[key] = {**by_key.get(key, {}), **sample}
+    return sorted(by_key.values(), key=_sample_sort_key)
+
+
+def _load_persisted_local_provider_vram_payload(
+    logos_key: str,
+    *,
+    day: str,
+    after_snapshot_id: int = 0,
+) -> Dict[str, Any]:
+    with DBManager() as db:
+        if int(after_snapshot_id or 0) > 0:
+            payload, status = db.get_ollama_vram_deltas(
+                logos_key,
+                day=day,
+                after_snapshot_id=int(after_snapshot_id or 0),
+            )
+        elif str(day).strip().lower() == "all":
+            payload, status = db.get_ollama_vram_deltas(logos_key, day="all", after_snapshot_id=0)
+        else:
+            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+    if status != 200 or not isinstance(payload, dict):
+        return {
+            "providers": [],
+            "last_snapshot_id": int(after_snapshot_id or 0),
+        }
+    payload.setdefault("providers", [])
+    payload.setdefault("last_snapshot_id", int(after_snapshot_id or 0))
+    return payload
+
+
+def _capture_logosnode_provider_snapshot(
+    provider_id: int,
+    runtime: Dict[str, Any],
+) -> None:
+    sample = _build_live_local_provider_sample(None, {
+        "last_heartbeat": runtime.get("timestamp"),
+        "runtime": runtime,
+    })
+    if sample is None:
+        return
+
+    timestamp = _parse_iso_datetime(sample.get("timestamp"))
+    used_bytes = int(float(sample.get("used_vram_mb") or 0.0) * 1024 * 1024)
+    total_vram_mb = sample.get("total_vram_mb")
+    total_bytes = None
+    if total_vram_mb is not None:
+        total_bytes = int(float(total_vram_mb or 0.0) * 1024 * 1024)
+    free_vram_mb = sample.get("remaining_vram_mb")
+    free_bytes = None
+    if free_vram_mb is not None:
+        free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
+
+    with DBManager() as db:
+        snapshot_id = db.insert_provider_snapshot(
+            provider_id=provider_id,
+            snapshot_ts=timestamp,
+            total_models_loaded=int(sample.get("models_loaded") or 0),
+            total_vram_used_bytes=used_bytes,
+            total_memory_bytes=total_bytes,
+            free_memory_bytes=free_bytes,
+            loaded_models=list(sample.get("loaded_models") or []),
+            snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
+            poll_success=True,
+        )
+
+    sample["snapshot_id"] = snapshot_id
+    asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
+
+
 def _merge_local_provider_vram_payload(
     logos_key: str,
     payload: Dict[str, Any],
     *,
+    day: str,
+    after_snapshot_id: int = 0,
     include_live_runtime: bool,
 ) -> Dict[str, Any]:
     providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
@@ -285,21 +379,21 @@ def _merge_local_provider_vram_payload(
         if transport:
             entry["transport_connected"] = bool(transport.get("connected", connected))
 
-        if include_live_runtime:
-            live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
-            if live_sample is not None:
-                data = list(entry.get("data") or [])
-                replaced = False
-                live_ts = live_sample.get("timestamp")
-                for idx, sample in enumerate(data):
-                    if isinstance(sample, dict) and sample.get("timestamp") == live_ts:
-                        data[idx] = {**sample, **live_sample}
-                        replaced = True
-                        break
-                if not replaced:
-                    data.append(live_sample)
-                data.sort(key=lambda sample: str(sample.get("timestamp") or ""))
-                entry["data"] = data
+        data = list(entry.get("data") or [])
+
+        if include_live_runtime and _is_today_or_all_utc(day):
+            recent_samples = _logosnode_registry.peek_recent_samples(
+                provider_id,
+                after_snapshot_id=int(after_snapshot_id or 0),
+            )
+            if recent_samples:
+                data = _merge_provider_samples(data, recent_samples)
+            elif connected:
+                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
+                if live_sample is not None:
+                    data = _merge_provider_samples(data, [live_sample])
+
+        entry["data"] = data
 
     merged = list(providers_by_id.values()) + unnamed_providers
     merged.sort(key=lambda item: str(item.get("name") or "").lower())
@@ -308,13 +402,31 @@ def _merge_local_provider_vram_payload(
     return next_payload
 
 
-def _build_live_local_provider_vram_payload(logos_key: str) -> Dict[str, Any]:
+def _build_live_local_provider_vram_payload(
+    logos_key: str,
+    *,
+    day: str,
+    after_snapshot_id: int = 0,
+) -> Dict[str, Any]:
+    payload = _load_persisted_local_provider_vram_payload(
+        logos_key,
+        day=day,
+        after_snapshot_id=after_snapshot_id,
+    )
     payload = _merge_local_provider_vram_payload(
         logos_key,
-        {"providers": []},
+        payload,
+        day=day,
+        after_snapshot_id=after_snapshot_id,
         include_live_runtime=True,
     )
-    payload["last_snapshot_id"] = int(time.time())
+    last_snapshot_id = int(payload.get("last_snapshot_id") or after_snapshot_id or 0)
+    for provider in payload.get("providers") or []:
+        for sample in provider.get("data") or []:
+            sample_id = _sample_snapshot_id(sample)
+            if sample_id > last_snapshot_id:
+                last_snapshot_id = sample_id
+    payload["last_snapshot_id"] = last_snapshot_id
     return payload
 
 
@@ -1795,13 +1907,15 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     else None,
                 )
             elif msg_type == "status":
+                runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
                 await _logosnode_registry.update_runtime(
                     provider_id=ticket.provider_id,
-                    runtime=payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {},
+                    runtime=runtime,
                     capabilities_models=payload.get("capabilities_models")
                     if isinstance(payload.get("capabilities_models"), list)
                     else None,
                 )
+                _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
@@ -2259,14 +2373,18 @@ async def get_ollama_vram_stats(request: Request):
     headers = dict(request.headers)
     logos_key, _ = authenticate_logos_key(headers)
 
+    day = _today_utc()
+
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
-        await request.json()
+        body = await request.json()
+        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
+            day = body["day"].strip()
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key),
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
         status_code=200,
     )
 
@@ -2525,7 +2643,8 @@ def _build_vram_signature(providers: list) -> str:
             for m in (last.get("loaded_models") or [])
         ) if isinstance(last.get("loaded_models"), list) else ""
         parts.append(
-            f"{p.get('name', '')}::{last.get('timestamp', '')}::"
+            f"{p.get('name', '')}::{p.get('connection_state', '')}::"
+            f"{(p.get('runtime_modes') or [])}::{last.get('timestamp', '')}::"
             f"{last.get('used_vram_mb', last.get('vram_mb', ''))}::"
             f"{last.get('remaining_vram_mb', '')}::"
             f"{last.get('total_vram_mb', '')}::{models_str}"
@@ -2597,9 +2716,8 @@ async def ws_stats(websocket: WebSocket):
         nonlocal prev_vram_sig, vram_day
         day = vram_day or _today_utc()
         try:
-            with DBManager() as db:
-                payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
-            if status == 200 and payload.get("providers"):
+            payload = _build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0)
+            if payload.get("providers"):
                 sig = _build_vram_signature(payload["providers"])
                 if sig != prev_vram_sig:
                     prev_vram_sig = sig
@@ -2762,8 +2880,13 @@ async def ws_stats_v2(websocket: WebSocket):
         return True, None
 
     async def _send_vram_init() -> None:
+        nonlocal vram_cursor
         try:
-            payload = _build_live_local_provider_vram_payload(logos_key)
+            payload = _build_live_local_provider_vram_payload(
+                logos_key,
+                day=vram_day,
+                after_snapshot_id=0,
+            )
             vram_cursor = int(payload.get("last_snapshot_id") or 0)
             await websocket.send_json({"type": "vram_init", "payload": payload})
         except Exception as exc:
@@ -2774,10 +2897,17 @@ async def ws_stats_v2(websocket: WebSocket):
             })
 
     async def _push_vram_delta() -> None:
+        nonlocal vram_cursor
         try:
-            payload = _build_live_local_provider_vram_payload(logos_key)
+            payload = _build_live_local_provider_vram_payload(
+                logos_key,
+                day=vram_day,
+                after_snapshot_id=vram_cursor,
+            )
             providers = payload.get("providers") or []
-            if providers:
+            next_cursor = int(payload.get("last_snapshot_id") or vram_cursor or 0)
+            if providers or next_cursor != vram_cursor:
+                vram_cursor = next_cursor
                 await websocket.send_json({"type": "vram_delta", "payload": payload})
         except Exception as exc:
             logger.warning("[ws/stats/v2] VRAM delta push error: %s", exc)
