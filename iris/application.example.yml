@@ -82,6 +82,12 @@ llm_configuration:
         local: oai-gpt-41
         cloud: oai-gpt-41
 
+  autonomous_tutor_pipeline:
+    default:
+      chat:
+        local: gpt-oss
+        cloud: oai-gpt-41-mini
+
   tutor_suggestion_pipeline:
     default:
       chat:
