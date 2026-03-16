@@ -133,7 +133,7 @@ class LectureSearchAnswerPipeline(SubPipeline):
                 if isinstance(i, int) and i >= 1
             }
             used_sources = [s for i, s in enumerate(sources) if i in used_indices]
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
             logger.warning(
                 "Failed to parse structured answer response, returning all sources"
             )
