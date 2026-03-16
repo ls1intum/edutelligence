@@ -83,8 +83,10 @@ class LectureGlobalSearchRetrieval:
         # Collect unique lecture_unit_ids and fetch all metadata in one batch query
         unit_ids = list(
             {
-                obj.properties[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
+                obj.properties.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
                 for obj in results
+                if obj.properties.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
+                is not None
             }
         )
         lu_by_id = self._fetch_lecture_units(unit_ids)

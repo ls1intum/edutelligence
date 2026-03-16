@@ -77,7 +77,7 @@ class LectureSearchAnswerPipeline(SubPipeline):
 
     @observe(name="Lecture Search Answer Pipeline")
     def __call__(
-        self, query: str, limit: int = 5, **kwargs
+        self, query: str, limit: int = 5, **_kwargs
     ) -> LectureSearchAskResponseDTO:
         """
         Answer a student's question using lecture content retrieved via HyDE.
