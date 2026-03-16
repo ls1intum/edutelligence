@@ -7,7 +7,7 @@ from iris.common.logging_config import get_logger
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
-from iris.domain.variant.autonomous_tutor_variant import AutonomousTutorVariant
+from iris.domain.variant.variant import Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -36,17 +36,27 @@ logger = get_logger(__name__)
 
 
 class AutonomousTutorPipeline(
-    AbstractAgentPipeline[AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant]
+    AbstractAgentPipeline[AutonomousTutorPipelineExecutionDTO, Variant]
 ):
     """
     The AutonomousTutorPipeline autonomously responds to student posts.
     It analyzes the post and generates a helpful response based on available context.
     """
 
+    PIPELINE_ID = "autonomous_tutor_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Default autonomous tutor variant.",
+        ),
+    ]
+
     DIRECT_POST_CONFIDENCE_THRESHOLD = 0.95
 
     def __init__(self):
-        super().__init__(implementation_id="autonomous_tutor_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
         self.faq_retriever = None
 
@@ -67,7 +77,7 @@ class AutonomousTutorPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> list[Callable]:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -148,7 +158,7 @@ class AutonomousTutorPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> str:
         post = state.dto.post
@@ -196,7 +206,7 @@ class AutonomousTutorPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> bool:
         """Memory creation is disabled for autonomous tutor pipeline."""
@@ -207,7 +217,7 @@ class AutonomousTutorPipeline(
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> str:
         """Send the final response back to Artemis with confidence score."""
@@ -241,7 +251,7 @@ class AutonomousTutorPipeline(
     def _estimate_confidence(
         self,
         state: AgentPipelineExecutionState[  # pylint: disable=unused-argument
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> float:
         """
@@ -279,7 +289,7 @@ class AutonomousTutorPipeline(
     def __call__(
         self,
         dto: AutonomousTutorPipelineExecutionDTO,
-        variant: AutonomousTutorVariant,
+        variant: Variant,
         callback: AutonomousTutorCallback,
     ):
         """Run the autonomous tutor pipeline."""
@@ -295,16 +305,3 @@ class AutonomousTutorPipeline(
                 "An error occurred while running the autonomous tutor pipeline.",
                 tokens=self.tokens,
             )
-
-    @classmethod
-    def get_variants(cls) -> List[AutonomousTutorVariant]:
-        """Returns available variants for the AutonomousTutorPipeline."""
-        return [
-            AutonomousTutorVariant(
-                variant_id="default",
-                name="Default",
-                description="Default autonomous tutor variant using the OpenAI GPT-OSS 120B model.",
-                cloud_agent_model="gpt-5-mini",
-                local_agent_model="gpt-oss:120b",
-            ),
-        ]
