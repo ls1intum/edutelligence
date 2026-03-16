@@ -57,6 +57,7 @@ MIGRATIONS=(
     "020_normalize_local_provider_types_to_logosnode.sql"
     "021_collapse_request_events_into_log_entry.sql"
     "022_drop_request_events_table.sql"
+    "023_extend_provider_snapshots_for_worker_runtime.sql"
 )
 
 FAILED=0

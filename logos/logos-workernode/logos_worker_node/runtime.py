@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -13,6 +14,39 @@ from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary,
 SERVICE_VERSION = "2.0.0"
 
 
+def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
+    """Read Linux memory totals in MiB from /proc/meminfo for degraded telemetry mode."""
+    meminfo_path = Path("/proc/meminfo")
+    if not meminfo_path.exists():
+        return None
+
+    values_kb: dict[str, float] = {}
+    try:
+        for raw_line in meminfo_path.read_text(encoding="utf-8").splitlines():
+            if ":" not in raw_line:
+                continue
+            key, raw_value = raw_line.split(":", 1)
+            parts = raw_value.strip().split()
+            if not parts:
+                continue
+            try:
+                values_kb[key] = float(parts[0])
+            except ValueError:
+                continue
+    except OSError:
+        return None
+
+    total_kb = values_kb.get("MemTotal")
+    available_kb = values_kb.get("MemAvailable")
+    if not total_kb or available_kb is None:
+        return None
+
+    total_mb = total_kb / 1024.0
+    free_mb = max(available_kb / 1024.0, 0.0)
+    used_mb = max(total_mb - free_mb, 0.0)
+    return total_mb, used_mb, free_mb
+
+
 def _build_derived_device_summary(lanes) -> DeviceSummary:
     usage_by_device: dict[str, float] = defaultdict(float)
     for lane in lanes:
@@ -20,29 +54,51 @@ def _build_derived_device_summary(lanes) -> DeviceSummary:
         key = selector if selector not in {"", "all", "none"} else "derived"
         usage_by_device[key] += float(lane.effective_vram_mb or 0.0)
 
-    devices = [
-        DeviceInfo(
-            device_id=device_id,
-            kind="derived",
-            name=f"derived:{device_id}",
-            memory_used_mb=used,
-            memory_total_mb=used,
-            memory_free_mb=0.0,
-        )
-        for device_id, used in sorted(usage_by_device.items())
-        if used > 0
-    ]
-    total = sum(device.memory_total_mb for device in devices)
-    used = sum(device.memory_used_mb for device in devices)
+    meminfo = _read_proc_meminfo_mb()
+    if meminfo is not None:
+        total, used, free = meminfo
+        devices = [
+            DeviceInfo(
+                device_id="system",
+                kind="derived",
+                name="system-memory",
+                memory_used_mb=used,
+                memory_total_mb=total,
+                memory_free_mb=free,
+                extra={
+                    "source": "proc-meminfo",
+                    "lane_effective_vram_mb": sum(float(v or 0.0) for v in usage_by_device.values()),
+                },
+            )
+        ]
+        degraded_reason = "derived from lane telemetry and system memory"
+    else:
+        devices = [
+            DeviceInfo(
+                device_id=device_id,
+                kind="derived",
+                name=f"derived:{device_id}",
+                memory_used_mb=used,
+                memory_total_mb=used,
+                memory_free_mb=0.0,
+            )
+            for device_id, used in sorted(usage_by_device.items())
+            if used > 0
+        ]
+        total = sum(device.memory_total_mb for device in devices)
+        used = sum(device.memory_used_mb for device in devices)
+        free = 0.0
+        degraded_reason = "derived from lane telemetry"
+
     return DeviceSummary(
         timestamp=datetime.now(timezone.utc),
         mode="derived" if devices else "none",
         nvidia_smi_available=False,
-        degraded_reason="derived from lane telemetry",
+        degraded_reason=degraded_reason,
         devices=devices,
         total_memory_mb=total,
         used_memory_mb=used,
-        free_memory_mb=0.0,
+        free_memory_mb=free,
     )
 
 

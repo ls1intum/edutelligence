@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import datetime
 import json
 import logging
 import os
@@ -7,9 +8,8 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Set, Optional
+from typing import Any, Dict, Set, Optional, Tuple
 import grpc
-
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -66,6 +66,7 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
     "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
     _LOGOSNODE_INFER_TIMEOUT_SECONDS,
 )
+_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
 
 
 def _record_azure_rate_limits(
@@ -96,6 +97,337 @@ def _record_azure_rate_limits(
 
     if provider_metrics:
         _pipeline.record_provider_metrics(request_id, provider_metrics)
+
+
+def _parse_iso_datetime(raw: Any) -> Optional[datetime.datetime]:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_today_or_all_utc(day: str) -> bool:
+    normalized = str(day or "").strip().lower()
+    if normalized == "all":
+        return True
+    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+
+def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    last_heartbeat = _parse_iso_datetime(snapshot.get("last_heartbeat"))
+    if last_heartbeat is None:
+        return False
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return (now - last_heartbeat) <= datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS)
+
+
+def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for lane in lanes:
+        if not isinstance(lane, dict):
+            continue
+        lane_model = str(lane.get("model") or "").strip()
+        loaded_models = lane.get("loaded_models") or []
+        if not isinstance(loaded_models, list):
+            loaded_models = []
+        for item in loaded_models:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or lane_model).strip()
+            if not name:
+                continue
+            size_vram = int(item.get("size_vram") or 0)
+            size_bytes = int(item.get("size") or 0)
+            current = deduped.get(name)
+            candidate = {
+                "name": name,
+                "size": size_bytes,
+                "size_vram": size_vram,
+            }
+            if current is None or candidate["size_vram"] > current["size_vram"]:
+                deduped[name] = candidate
+    return sorted(deduped.values(), key=lambda item: item["name"].lower())
+
+
+def _runtime_modes_for_lanes(lanes: list[dict[str, Any]]) -> list[str]:
+    modes: set[str] = set()
+    for lane in lanes:
+        if not isinstance(lane, dict):
+            continue
+        modes.add("vllm" if bool(lane.get("vllm")) else "ollama")
+    return sorted(modes)
+
+
+def _build_live_local_provider_sample(
+    provider: Optional[Dict[str, Any]],
+    snapshot: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not _logosnode_snapshot_is_connected(snapshot):
+        return None
+
+    runtime = snapshot.get("runtime") if isinstance(snapshot, dict) else {}
+    if not isinstance(runtime, dict):
+        return None
+
+    lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
+    devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+
+    used_vram_mb = float(devices.get("used_memory_mb") or 0.0)
+    if used_vram_mb <= 0:
+        used_vram_mb = float(capacity.get("total_effective_vram_mb") or 0.0)
+
+    total_vram_mb = float(devices.get("total_memory_mb") or 0.0)
+    if total_vram_mb <= 0 and isinstance(provider, dict) and provider.get("total_vram_mb") is not None:
+        total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
+
+    remaining_vram_mb: Optional[float] = None
+    if devices.get("nvidia_smi_available"):
+        remaining_vram_mb = float(devices.get("free_memory_mb") or 0.0)
+    elif total_vram_mb > 0:
+        remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)
+
+    loaded_models = _normalize_loaded_models(lanes)
+    runtime_modes = _runtime_modes_for_lanes(lanes)
+
+    if remaining_vram_mb is None and not loaded_models and used_vram_mb <= 0:
+        return None
+
+    timestamp = runtime.get("timestamp") or snapshot.get("last_heartbeat")
+    if not isinstance(timestamp, str) or not timestamp.strip():
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    return {
+        "timestamp": timestamp,
+        "snapshot_source": "logosnode-runtime",
+        "provider_type": provider.get("provider_type") if isinstance(provider, dict) else "logosnode",
+        "connection_state": "online",
+        "connected": True,
+        "transport_connected": bool(transport.get("connected", True)),
+        "runtime_modes": runtime_modes,
+        "vram_mb": used_vram_mb,
+        "used_vram_mb": used_vram_mb,
+        "remaining_vram_mb": remaining_vram_mb,
+        "total_vram_mb": total_vram_mb if total_vram_mb > 0 else None,
+        "models_loaded": len(loaded_models),
+        "loaded_models": loaded_models,
+    }
+
+
+def _sample_snapshot_id(sample: Dict[str, Any]) -> int:
+    try:
+        return int(sample.get("snapshot_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _sample_sort_key(sample: Dict[str, Any]) -> tuple[int, str]:
+    return (_sample_snapshot_id(sample), str(sample.get("timestamp") or ""))
+
+
+def _merge_provider_samples(
+    existing_samples: list[Dict[str, Any]],
+    extra_samples: list[Dict[str, Any]],
+) -> list[Dict[str, Any]]:
+    by_key: dict[str, Dict[str, Any]] = {}
+    for sample in list(existing_samples) + list(extra_samples):
+        if not isinstance(sample, dict):
+            continue
+        key = str(sample.get("snapshot_id") or sample.get("timestamp") or "")
+        if not key:
+            continue
+        by_key[key] = {**by_key.get(key, {}), **sample}
+    return sorted(by_key.values(), key=_sample_sort_key)
+
+
+def _load_persisted_local_provider_vram_payload(
+    logos_key: str,
+    *,
+    day: str,
+    after_snapshot_id: int = 0,
+) -> Dict[str, Any]:
+    with DBManager() as db:
+        if int(after_snapshot_id or 0) > 0:
+            payload, status = db.get_ollama_vram_deltas(
+                logos_key,
+                day=day,
+                after_snapshot_id=int(after_snapshot_id or 0),
+            )
+        elif str(day).strip().lower() == "all":
+            payload, status = db.get_ollama_vram_deltas(logos_key, day="all", after_snapshot_id=0)
+        else:
+            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+    if status != 200 or not isinstance(payload, dict):
+        return {
+            "providers": [],
+            "last_snapshot_id": int(after_snapshot_id or 0),
+        }
+    payload.setdefault("providers", [])
+    payload.setdefault("last_snapshot_id", int(after_snapshot_id or 0))
+    return payload
+
+
+def _capture_logosnode_provider_snapshot(
+    provider_id: int,
+    runtime: Dict[str, Any],
+) -> None:
+    sample = _build_live_local_provider_sample(None, {
+        "last_heartbeat": runtime.get("timestamp"),
+        "runtime": runtime,
+    })
+    if sample is None:
+        return
+
+    timestamp = _parse_iso_datetime(sample.get("timestamp"))
+    used_bytes = int(float(sample.get("used_vram_mb") or 0.0) * 1024 * 1024)
+    total_vram_mb = sample.get("total_vram_mb")
+    total_bytes = None
+    if total_vram_mb is not None:
+        total_bytes = int(float(total_vram_mb or 0.0) * 1024 * 1024)
+    free_vram_mb = sample.get("remaining_vram_mb")
+    free_bytes = None
+    if free_vram_mb is not None:
+        free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
+
+    with DBManager() as db:
+        snapshot_id = db.insert_provider_snapshot(
+            provider_id=provider_id,
+            snapshot_ts=timestamp,
+            total_models_loaded=int(sample.get("models_loaded") or 0),
+            total_vram_used_bytes=used_bytes,
+            total_memory_bytes=total_bytes,
+            free_memory_bytes=free_bytes,
+            loaded_models=list(sample.get("loaded_models") or []),
+            snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
+            poll_success=True,
+        )
+
+    sample["snapshot_id"] = snapshot_id
+    asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
+
+
+def _merge_local_provider_vram_payload(
+    logos_key: str,
+    payload: Dict[str, Any],
+    *,
+    day: str,
+    after_snapshot_id: int = 0,
+    include_live_runtime: bool,
+) -> Dict[str, Any]:
+    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
+    providers_by_id: Dict[int, Dict[str, Any]] = {}
+    unnamed_providers: list[Dict[str, Any]] = []
+
+    for provider in providers:
+        if not isinstance(provider, dict):
+            continue
+        entry = dict(provider)
+        entry["data"] = list(entry.get("data") or [])
+        provider_id = entry.get("provider_id")
+        if isinstance(provider_id, int):
+            providers_by_id[provider_id] = entry
+        else:
+            unnamed_providers.append(entry)
+
+    with DBManager() as db:
+        inventory, status = db.get_local_provider_inventory(logos_key)
+    if status != 200 or not isinstance(inventory, list):
+        merged = list(providers_by_id.values()) + unnamed_providers
+        merged.sort(key=lambda item: str(item.get("name") or "").lower())
+        next_payload = dict(payload)
+        next_payload["providers"] = merged
+        return next_payload
+
+    for provider in inventory:
+        if not isinstance(provider, dict):
+            continue
+        provider_id = int(provider.get("provider_id") or 0)
+        if provider_id <= 0:
+            continue
+        entry = providers_by_id.get(provider_id)
+        if entry is None:
+            entry = {
+                "provider_id": provider_id,
+                "name": provider.get("name") or f"Provider {provider_id}",
+                "data": [],
+            }
+            providers_by_id[provider_id] = entry
+
+        entry["provider_type"] = provider.get("provider_type")
+        entry["base_url"] = provider.get("base_url")
+        entry["parallel_capacity"] = provider.get("parallel_capacity")
+        if provider.get("total_vram_mb") is not None:
+            entry["configured_total_vram_mb"] = provider.get("total_vram_mb")
+
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
+        entry["connected"] = connected
+        entry["connection_state"] = "online" if connected else "offline"
+        entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
+
+        runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
+        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
+        runtime_modes = _runtime_modes_for_lanes(lanes)
+        if runtime_modes:
+            entry["runtime_modes"] = runtime_modes
+        transport = runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
+        if transport:
+            entry["transport_connected"] = bool(transport.get("connected", connected))
+
+        data = list(entry.get("data") or [])
+
+        if include_live_runtime and _is_today_or_all_utc(day):
+            recent_samples = _logosnode_registry.peek_recent_samples(
+                provider_id,
+                after_snapshot_id=int(after_snapshot_id or 0),
+            )
+            if recent_samples:
+                data = _merge_provider_samples(data, recent_samples)
+            elif connected:
+                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
+                if live_sample is not None:
+                    data = _merge_provider_samples(data, [live_sample])
+
+        entry["data"] = data
+
+    merged = list(providers_by_id.values()) + unnamed_providers
+    merged.sort(key=lambda item: str(item.get("name") or "").lower())
+    next_payload = dict(payload)
+    next_payload["providers"] = merged
+    return next_payload
+
+
+def _build_live_local_provider_vram_payload(
+    logos_key: str,
+    *,
+    day: str,
+    after_snapshot_id: int = 0,
+) -> Dict[str, Any]:
+    payload = _load_persisted_local_provider_vram_payload(
+        logos_key,
+        day=day,
+        after_snapshot_id=after_snapshot_id,
+    )
+    payload = _merge_local_provider_vram_payload(
+        logos_key,
+        payload,
+        day=day,
+        after_snapshot_id=after_snapshot_id,
+        include_live_runtime=True,
+    )
+    last_snapshot_id = int(payload.get("last_snapshot_id") or after_snapshot_id or 0)
+    for provider in payload.get("providers") or []:
+        for sample in provider.get("data") or []:
+            sample_id = _sample_snapshot_id(sample)
+            if sample_id > last_snapshot_id:
+                last_snapshot_id = sample_id
+    payload["last_snapshot_id"] = last_snapshot_id
+    return payload
 
 
 def _record_log_failure(
@@ -1575,13 +1907,15 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     else None,
                 )
             elif msg_type == "status":
+                runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
                 await _logosnode_registry.update_runtime(
                     provider_id=ticket.provider_id,
-                    runtime=payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {},
+                    runtime=runtime,
                     capabilities_models=payload.get("capabilities_models")
                     if isinstance(payload.get("capabilities_models"), list)
                     else None,
                 )
+                _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
@@ -2015,12 +2349,12 @@ async def scheduler_state(request: Request):
 @app.post("/logosdb/get_ollama_vram_stats")
 async def get_ollama_vram_stats(request: Request):
     """
-    Return time-series VRAM usage from ollama_provider_snapshots table.
+    Return live LogosWorkerNode provider VRAM usage for dashboards.
 
     Request body:
     {
-        "day": "2025-01-05",                    # Required: fetch a single UTC day
-        "bucket_seconds": 5                     # Optional (ignored): kept for compatibility
+        "day": "2025-01-05",                    # Optional, ignored for runtime-backed stats
+        "bucket_seconds": 5                     # Optional, ignored for compatibility
     }
 
     Response:
@@ -2039,23 +2373,20 @@ async def get_ollama_vram_stats(request: Request):
     headers = dict(request.headers)
     logos_key, _ = authenticate_logos_key(headers)
 
-    # Parse request body for date filters (tolerate empty/no-body requests)
+    day = _today_utc()
+
+    # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
+        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
+            day = body["day"].strip()
     except json.JSONDecodeError:
-        body = {}
-    day = body.get("day")
-    if not day:
-        return JSONResponse(content={"error": "Parameter 'day' is required (YYYY-MM-DD)."}, status_code=400)
-    bucket_seconds = body.get("bucket_seconds", 5)  # Default 5s buckets to match UI expectation
+        pass
 
-    with DBManager() as db:
-        payload, status = db.get_ollama_vram_stats(
-            logos_key,
-            day=day,
-            bucket_seconds=bucket_seconds,
-        )
-        return JSONResponse(content=payload, status_code=status)
+    return JSONResponse(
+        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
+        status_code=200,
+    )
 
 
 @app.options("/logosdb/get_ollama_vram_stats")
@@ -2279,3 +2610,506 @@ async def latest_requests_options():
             "Access-Control-Allow-Methods": "POST, OPTIONS",
         },
     )
+
+
+# ============================================================================
+# WEBSOCKET: Unified stats stream  (/ws/stats)
+# ============================================================================
+# Replaces the three polling HTTP calls from the statistics page with a single
+# persistent WebSocket connection that pushes lightweight delta updates.
+#
+# Protocol (server → client):
+#   { "type": "vram",     "payload": <same shape as GET /logosdb/get_ollama_vram_stats> }
+#   { "type": "requests", "payload": <same shape as POST /logosdb/latest_requests> }
+#
+# Protocol (client → server):
+#   { "action": "set_vram_day", "day": "2025-06-15" }  – change the VRAM day filter
+#   { "action": "ping" }                                – keepalive (server replies pong)
+#
+# Auth: pass `?key=<logos_key>` as a query parameter when opening the socket.
+# ============================================================================
+
+_ws_stats_connections: Set[WebSocket] = set()
+
+
+def _build_vram_signature(providers: list) -> str:
+    """Deterministic signature of VRAM provider data for change detection."""
+    parts = []
+    for p in sorted(providers, key=lambda x: x.get("name", "")):
+        data = p.get("data", [])
+        last = data[-1] if data else {}
+        models_str = "|".join(
+            f"{m.get('name', '')}:{m.get('size_vram_mb', m.get('size_vram', ''))}"
+            for m in (last.get("loaded_models") or [])
+        ) if isinstance(last.get("loaded_models"), list) else ""
+        parts.append(
+            f"{p.get('name', '')}::{p.get('connection_state', '')}::"
+            f"{(p.get('runtime_modes') or [])}::{last.get('timestamp', '')}::"
+            f"{last.get('used_vram_mb', last.get('vram_mb', ''))}::"
+            f"{last.get('remaining_vram_mb', '')}::"
+            f"{last.get('total_vram_mb', '')}::{models_str}"
+        )
+    return "||".join(parts)
+
+
+def _requests_signature(requests_list: list) -> str:
+    """Quick hash of request IDs + statuses + timestamps for change detection."""
+    parts = []
+    for r in requests_list:
+        rid = str(r.get("request_id", ""))
+        status = str(r.get("status", ""))
+        sched = str(r.get("scheduled_ts", ""))
+        done = str(r.get("request_complete_ts", ""))
+        parts.append(f"{rid}:{status}:{sched}:{done}")
+    return ",".join(parts)
+
+
+def _parse_iso_utc(value: Optional[str]) -> Optional[datetime.datetime]:
+    """Parse an ISO timestamp into UTC datetime (or return None on invalid input)."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def _default_timeline_window() -> Tuple[str, str, int]:
+    """Default timeline window: trailing 30 days, target 120 buckets."""
+    end_dt = datetime.datetime.now(datetime.timezone.utc)
+    start_dt = end_dt - datetime.timedelta(days=30)
+    return start_dt.isoformat(), end_dt.isoformat(), 120
+
+
+@app.websocket("/ws/stats")
+async def ws_stats(websocket: WebSocket):
+    """
+    Unified WebSocket endpoint for statistics page.
+    Streams VRAM snapshots and latest-requests with change detection so only
+    actual updates are pushed.
+    """
+    # --- Auth via query param ---
+    key = websocket.query_params.get("key", "")
+    if not key:
+        await websocket.close(code=4001, reason="Missing key query parameter")
+        return
+
+    try:
+        logos_key, _ = authenticate_logos_key({"logos_key": key})
+    except HTTPException:
+        await websocket.close(code=4003, reason="Invalid logos key")
+        return
+
+    await websocket.accept()
+    _ws_stats_connections.add(websocket)
+    logger.info("[ws/stats] Client connected (%d total)", len(_ws_stats_connections))
+
+    # Per-connection state
+    vram_day: Optional[str] = None  # Will be set by client or default to today
+    prev_vram_sig = ""
+    prev_req_sig = ""
+
+    async def _push_vram():
+        nonlocal prev_vram_sig, vram_day
+        day = vram_day or _today_utc()
+        try:
+            payload = _build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0)
+            if payload.get("providers"):
+                sig = _build_vram_signature(payload["providers"])
+                if sig != prev_vram_sig:
+                    prev_vram_sig = sig
+                    await websocket.send_json({"type": "vram", "payload": payload})
+        except Exception as exc:
+            logger.warning("[ws/stats] VRAM push error: %s", exc)
+
+    async def _push_requests():
+        nonlocal prev_req_sig
+        try:
+            with DBManager() as db:
+                payload, status = db.get_latest_requests(logos_key, limit=10)
+            if status == 200:
+                reqs = payload.get("requests", [])
+                sig = _requests_signature(reqs)
+                if sig != prev_req_sig:
+                    prev_req_sig = sig
+                    await websocket.send_json({"type": "requests", "payload": payload})
+        except Exception as exc:
+            logger.warning("[ws/stats] Requests push error: %s", exc)
+
+    # Background push loop
+    async def _push_loop():
+        tick = 0
+        while True:
+            try:
+                # Push latest requests every 2s, VRAM every 5s
+                await _push_requests()
+                if tick % 5 == 0:
+                    await _push_vram()
+                tick += 1
+                await asyncio.sleep(1)
+            except (WebSocketDisconnect, RuntimeError):
+                break
+            except Exception as exc:
+                logger.warning("[ws/stats] Push loop error: %s", exc)
+                await asyncio.sleep(2)
+
+    push_task = asyncio.create_task(_push_loop())
+
+    try:
+        # Listen for client messages (day changes, pings)
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            action = msg.get("action")
+            if action == "set_vram_day":
+                new_day = msg.get("day")
+                if new_day and isinstance(new_day, str):
+                    vram_day = new_day
+                    prev_vram_sig = ""  # Force re-push on day change
+                    await _push_vram()
+            elif action == "ping":
+                await websocket.send_json({"type": "pong"})
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        push_task.cancel()
+        _ws_stats_connections.discard(websocket)
+        logger.info("[ws/stats] Client disconnected (%d remaining)", len(_ws_stats_connections))
+
+
+_ws_stats_v2_connections: Set[WebSocket] = set()
+
+
+@app.websocket("/ws/stats/v2")
+async def ws_stats_v2(websocket: WebSocket):
+    """
+    Incremental websocket stream for statistics (v2).
+
+    Messages (server -> client):
+      - vram_init: full VRAM day snapshot with cursor
+      - vram_delta: only new VRAM rows since cursor
+      - timeline_init: request_log_stats payload for selected range
+      - timeline_delta: enqueue-event deltas since cursor
+      - requests: latest requests list (same shape as v1)
+      - pong
+
+    Client init options:
+      - timeline_deltas (bool, default true): when false, the server skips
+        periodic timeline delta polling for this connection.
+    """
+    key = websocket.query_params.get("key", "")
+    if not key:
+        await websocket.close(code=4001, reason="Missing key query parameter")
+        return
+
+    try:
+        logos_key, _ = authenticate_logos_key({"logos_key": key})
+    except HTTPException:
+        await websocket.close(code=4003, reason="Invalid logos key")
+        return
+
+    await websocket.accept()
+    _ws_stats_v2_connections.add(websocket)
+    logger.info("[ws/stats/v2] Client connected (%d total)", len(_ws_stats_v2_connections))
+
+    vram_day: str = "all"
+    vram_cursor: int = 0
+
+    timeline_start_iso, timeline_end_iso, timeline_target_buckets = _default_timeline_window()
+    timeline_window_seconds = 30 * 24 * 3600.0
+    timeline_bucket_seconds = 60
+    timeline_live = True
+    timeline_deltas_enabled = False
+    timeline_cursor_ts = timeline_end_iso
+    timeline_cursor_request_id = ""
+
+    prev_req_sig = ""
+    stats_initialized = False
+
+    def _coerce_bool(value: Any, default: bool = True) -> bool:
+        """Best-effort boolean parser for websocket client flags."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return default
+
+    def _set_timeline_state(start_iso: str, end_iso: str, target_buckets: Any) -> Tuple[bool, Optional[str]]:
+        nonlocal timeline_start_iso, timeline_end_iso
+        nonlocal timeline_target_buckets, timeline_window_seconds
+        nonlocal timeline_live, timeline_cursor_ts, timeline_cursor_request_id
+
+        start_dt = _parse_iso_utc(start_iso)
+        end_dt = _parse_iso_utc(end_iso)
+        if not start_dt or not end_dt:
+            return False, "Invalid start/end timestamp format"
+        if start_dt >= end_dt:
+            return False, "Timeline start must be before end"
+
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        if end_dt > now_dt:
+            end_dt = now_dt
+            if start_dt >= end_dt:
+                start_dt = end_dt - datetime.timedelta(minutes=1)
+
+        timeline_start_iso = start_dt.isoformat()
+        timeline_end_iso = end_dt.isoformat()
+        try:
+            parsed_target_buckets = int(target_buckets or 120)
+        except (TypeError, ValueError):
+            parsed_target_buckets = 120
+
+        timeline_target_buckets = max(1, parsed_target_buckets)
+        timeline_window_seconds = (end_dt - start_dt).total_seconds()
+        timeline_live = (now_dt - end_dt) <= datetime.timedelta(minutes=2)
+        timeline_cursor_ts = timeline_end_iso
+        timeline_cursor_request_id = ""
+        return True, None
+
+    async def _send_vram_init() -> None:
+        nonlocal vram_cursor
+        try:
+            payload = _build_live_local_provider_vram_payload(
+                logos_key,
+                day=vram_day,
+                after_snapshot_id=0,
+            )
+            vram_cursor = int(payload.get("last_snapshot_id") or 0)
+            await websocket.send_json({"type": "vram_init", "payload": payload})
+        except Exception as exc:
+            logger.warning("[ws/stats/v2] VRAM init error: %s", exc)
+            await websocket.send_json({
+                "type": "vram_init",
+                "payload": {"error": "Failed to load VRAM data"},
+            })
+
+    async def _push_vram_delta() -> None:
+        nonlocal vram_cursor
+        try:
+            payload = _build_live_local_provider_vram_payload(
+                logos_key,
+                day=vram_day,
+                after_snapshot_id=vram_cursor,
+            )
+            providers = payload.get("providers") or []
+            next_cursor = int(payload.get("last_snapshot_id") or vram_cursor or 0)
+            if providers or next_cursor != vram_cursor:
+                vram_cursor = next_cursor
+                await websocket.send_json({"type": "vram_delta", "payload": payload})
+        except Exception as exc:
+            logger.warning("[ws/stats/v2] VRAM delta push error: %s", exc)
+
+    async def _send_timeline_init() -> None:
+        nonlocal timeline_bucket_seconds
+        nonlocal timeline_cursor_ts, timeline_cursor_request_id
+        try:
+            with DBManager() as db:
+                payload, status = db.get_request_log_stats(
+                    logos_key,
+                    start_date=timeline_start_iso,
+                    end_date=timeline_end_iso,
+                    target_buckets=timeline_target_buckets,
+                )
+                events_payload, events_status = db.get_request_enqueues_in_range(
+                    logos_key,
+                    start_ts=timeline_start_iso,
+                    end_ts=timeline_end_iso,
+                    limit=200000,
+                )
+            if status != 200:
+                await websocket.send_json({
+                    "type": "timeline_init",
+                    "payload": {"error": payload.get("error", "Failed to load timeline data")},
+                })
+                return
+
+            timeline_bucket_seconds = int(payload.get("bucketSeconds") or timeline_bucket_seconds)
+            timeline_cursor_ts = timeline_end_iso
+            timeline_cursor_request_id = ""
+            payload["cursor"] = {
+                "enqueue_ts": timeline_cursor_ts,
+                "request_id": timeline_cursor_request_id,
+            }
+            payload["events"] = events_payload.get("events", []) if events_status == 200 else []
+            await websocket.send_json({"type": "timeline_init", "payload": payload})
+        except Exception as exc:
+            logger.warning("[ws/stats/v2] Timeline init error: %s", exc)
+            await websocket.send_json({
+                "type": "timeline_init",
+                "payload": {"error": "Failed to load timeline data"},
+            })
+
+    async def _push_timeline_delta() -> None:
+        nonlocal timeline_start_iso, timeline_end_iso
+        nonlocal timeline_cursor_ts, timeline_cursor_request_id
+        if not timeline_live:
+            return
+
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        until_iso = now_dt.isoformat()
+
+        try:
+            with DBManager() as db:
+                payload, status = db.get_request_enqueues_deltas(
+                    logos_key,
+                    after_enqueue_ts=timeline_cursor_ts,
+                    after_request_id=timeline_cursor_request_id,
+                    until_ts=until_iso,
+                    limit=5000,
+                )
+            if status != 200:
+                return
+
+            cursor = payload.get("cursor") or {}
+            if cursor.get("enqueue_ts") is not None:
+                timeline_cursor_ts = cursor.get("enqueue_ts")
+            if cursor.get("request_id") is not None:
+                timeline_cursor_request_id = str(cursor.get("request_id") or "")
+
+            events = payload.get("events") or []
+            if not events:
+                return
+
+            timeline_end_iso = until_iso
+            start_dt = now_dt - datetime.timedelta(seconds=timeline_window_seconds)
+            timeline_start_iso = start_dt.isoformat()
+
+            await websocket.send_json({
+                "type": "timeline_delta",
+                "payload": {
+                    "events": events,
+                    "cursor": {
+                        "enqueue_ts": timeline_cursor_ts,
+                        "request_id": timeline_cursor_request_id,
+                    },
+                    "bucketSeconds": timeline_bucket_seconds,
+                    "range": {
+                        "start": timeline_start_iso,
+                        "end": timeline_end_iso,
+                    },
+                },
+            })
+        except Exception as exc:
+            logger.warning("[ws/stats/v2] Timeline delta push error: %s", exc)
+
+    async def _push_requests(force: bool = False) -> None:
+        nonlocal prev_req_sig
+        try:
+            with DBManager() as db:
+                payload, status = db.get_latest_requests(logos_key, limit=10)
+            if status != 200:
+                return
+
+            reqs = payload.get("requests", [])
+            sig = _requests_signature(reqs)
+            if force or sig != prev_req_sig:
+                prev_req_sig = sig
+                await websocket.send_json({"type": "requests", "payload": payload})
+        except Exception as exc:
+            logger.warning("[ws/stats/v2] Requests push error: %s", exc)
+
+    async def _push_loop():
+        nonlocal stats_initialized
+        tick = 0
+        while True:
+            try:
+                if not stats_initialized:
+                    await asyncio.sleep(1)
+                    continue
+                if tick % 2 == 0:
+                    await _push_requests()
+                    if timeline_deltas_enabled:
+                        await _push_timeline_delta()
+                if tick % 5 == 0:
+                    await _push_vram_delta()
+
+                tick += 1
+                await asyncio.sleep(1)
+            except (WebSocketDisconnect, RuntimeError):
+                break
+            except Exception as exc:
+                logger.warning("[ws/stats/v2] Push loop error: %s", exc)
+                await asyncio.sleep(2)
+
+    push_task = asyncio.create_task(_push_loop())
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            action = msg.get("action")
+            if action == "init":
+                stats_initialized = False
+                requested_day = msg.get("vram_day")
+                if isinstance(requested_day, str) and requested_day.strip():
+                    vram_day = requested_day
+                vram_cursor = 0
+                timeline_deltas_enabled = _coerce_bool(msg.get("timeline_deltas"), default=True)
+
+                timeline_cfg = msg.get("timeline") or {}
+                start_iso = timeline_cfg.get("start")
+                end_iso = timeline_cfg.get("end")
+                target_buckets = timeline_cfg.get("target_buckets", 120)
+                if not start_iso or not end_iso:
+                    start_iso, end_iso, target_buckets = _default_timeline_window()
+                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
+                if not ok:
+                    await websocket.send_json({
+                        "type": "timeline_init",
+                        "payload": {"error": err_msg or "Invalid timeline range"},
+                    })
+                else:
+                    await _send_timeline_init()
+
+                await _send_vram_init()
+                await _push_requests(force=True)
+                stats_initialized = True
+            elif action == "set_vram_day":
+                new_day = msg.get("day")
+                if isinstance(new_day, str) and new_day.strip():
+                    vram_day = new_day
+                    vram_cursor = 0
+                    await _send_vram_init()
+            elif action == "set_timeline_range":
+                start_iso = msg.get("start")
+                end_iso = msg.get("end")
+                target_buckets = msg.get("target_buckets", 120)
+                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
+                if not ok:
+                    await websocket.send_json({
+                        "type": "timeline_init",
+                        "payload": {"error": err_msg or "Invalid timeline range"},
+                    })
+                else:
+                    await _send_timeline_init()
+            elif action == "ping":
+                await websocket.send_json({"type": "pong"})
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        push_task.cancel()
+        _ws_stats_v2_connections.discard(websocket)
+        logger.info("[ws/stats/v2] Client disconnected (%d remaining)", len(_ws_stats_v2_connections))
+
+
+def _today_utc() -> str:
+    """Return today's date as YYYY-MM-DD in UTC."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
