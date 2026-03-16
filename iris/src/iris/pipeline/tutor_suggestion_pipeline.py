@@ -9,7 +9,6 @@ from iris.common.pyris_message import IrisMessageRole
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.domain.data.post_dto import PostDTO
 from iris.domain.variant.variant import Dep, Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
