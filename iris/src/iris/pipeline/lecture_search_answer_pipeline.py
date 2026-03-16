@@ -113,10 +113,16 @@ class LectureSearchAnswerPipeline(SubPipeline):
 
         # Step 3: Generate the real answer using numbered context (with metadata so the
         # model knows the course/lecture name and can reference them explicitly)
+        grounded_sources = [s for s in sources if s.snippet]
+        if not grounded_sources:
+            return LectureSearchAskResponseDTO(
+                answer="No relevant course material was found for this query.",
+                sources=[],
+            )
+
         context = "\n\n".join(
             f"[{i + 1}] [{s.course.name} — {s.lecture.name}, Slide {s.lecture_unit.page_number}]\n{s.snippet}"
-            for i, s in enumerate(sources)
-            if s.snippet
+            for i, s in enumerate(grounded_sources)
         )
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
             {"context": context, "query": query}
@@ -132,13 +138,15 @@ class LectureSearchAnswerPipeline(SubPipeline):
                 for i in parsed.get("used_sources", [])
                 if isinstance(i, int) and i >= 1
             }
-            used_sources = [s for i, s in enumerate(sources) if i in used_indices]
+            used_sources = [
+                s for i, s in enumerate(grounded_sources) if i in used_indices
+            ]
         except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
             logger.warning(
                 "Failed to parse structured answer response, returning all sources"
             )
             answer = raw
-            used_sources = sources
+            used_sources = grounded_sources
 
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_LECTURE_SEARCH_ANSWER_PIPELINE
