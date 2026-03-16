@@ -72,11 +72,11 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         if local:
             completion_args = CompletionArguments(
-                temperature=0.3, max_tokens=500, response_format="JSON"
+                temperature=0.3, response_format="JSON"
             )
         else:
             completion_args = CompletionArguments(
-                temperature=0.6, max_tokens=2000, response_format="JSON"
+                temperature=0.6, response_format="JSON"
             )
 
         self.llm = IrisLangchainChatModel(
@@ -132,16 +132,7 @@ class InteractionSuggestionPipeline(SubPipeline):
             language_instruction = "\nGenerate questions in English."
 
         try:
-            logger.info(
-                "Running interaction suggestion pipeline (local=%s)...",
-                self.local,
-            )
-
-            # Skip suggestions for local models for this PR
-            if self.local:
-                logger.info("Skipping interaction suggestions for local model")
-                self.tokens = None
-                return []
+            logger.info("Running interaction suggestion pipeline...")
 
             history: List[PyrisMessage] = dto.chat_history or []
 

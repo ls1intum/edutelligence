@@ -35,7 +35,7 @@ class SessionTitleGenerationPipeline(SubPipeline):
         pipeline_id = "session_title_generation_pipeline"
         model = resolve_model(pipeline_id, "default", "chat", local=local)
         request_handler = LlmRequestHandler(model_id=model)
-        completion_args = CompletionArguments(temperature=0.0, max_tokens=128)
+        completion_args = CompletionArguments(temperature=0.0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=completion_args,

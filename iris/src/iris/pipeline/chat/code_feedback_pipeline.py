@@ -60,9 +60,7 @@ class CodeFeedbackPipeline(SubPipeline):
         self.variant = variant
 
         # Set up the language model
-        completion_args = CompletionArguments(
-            temperature=0, max_tokens=1024, response_format="text"
-        )
+        completion_args = CompletionArguments(temperature=0, response_format="TEXT")
 
         pipeline_id = "code_feedback_pipeline"
         model = resolve_model(pipeline_id, variant, "chat", local=local)

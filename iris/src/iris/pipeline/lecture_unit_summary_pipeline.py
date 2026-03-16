@@ -44,7 +44,7 @@ class LectureUnitSummaryPipeline(SubPipeline):
         pipeline_id = "lecture_unit_summary_pipeline"
         chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0)
 
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

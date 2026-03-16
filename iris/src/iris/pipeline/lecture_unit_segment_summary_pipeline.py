@@ -72,7 +72,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         self.llm_embedding = LlmRequestHandler(embedding_model)
 
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

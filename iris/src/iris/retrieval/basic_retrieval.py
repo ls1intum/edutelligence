@@ -18,6 +18,7 @@ from iris.llm import (
 )
 from iris.llm.llm_configuration import resolve_model
 from iris.tracing import TracedThreadPoolExecutor, observe
+
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -90,7 +91,7 @@ class BaseRetrieval(SubPipeline, ABC):
             pipeline_id, "default", "embedding", local=False
         )
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

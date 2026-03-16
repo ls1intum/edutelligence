@@ -370,7 +370,7 @@ class ExerciseChatAgentPipeline(
                 {"problem_statement": problem_statement}
             )
 
-            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            completion_args = CompletionArguments(temperature=0.5)
             refinement_model = state.variant.model("chat", state.local)
             llm_small = IrisLangchainChatModel(
                 request_handler=LlmRequestHandler(model_id=refinement_model),

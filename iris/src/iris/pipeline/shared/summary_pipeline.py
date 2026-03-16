@@ -31,9 +31,7 @@ class SummaryPipeline(SubPipeline):
         pipeline_id = "summary_pipeline"
         model = resolve_model(pipeline_id, "default", "chat", local=local)
         request_handler = LlmRequestHandler(model_id=model)
-        self.llm = IrisLangchainCompletionModel(
-            request_handler=request_handler, max_tokens=1000
-        )
+        self.llm = IrisLangchainCompletionModel(request_handler=request_handler)
         # Load the prompt from a file
         dirname = os.path.dirname(__file__)
         with open(

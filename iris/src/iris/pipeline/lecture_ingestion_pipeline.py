@@ -130,7 +130,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.llm_chat = LlmRequestHandler(chat_model)
         self.llm_embedding = LlmRequestHandler(embedding_model)
         request_handler = LlmRequestHandler(chat_model)
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0.2)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -317,7 +317,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             response = self.llm_chat.chat(
                 [iris_message],
-                CompletionArguments(temperature=0, max_tokens=512),
+                CompletionArguments(temperature=0),
                 tools=[],
             )
             self._append_tokens(
@@ -376,7 +376,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         response = self.llm_chat.chat(
             [iris_message],
-            CompletionArguments(temperature=0, max_tokens=20),
+            CompletionArguments(temperature=0),
             tools=[],
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
