@@ -38,6 +38,7 @@ class PipelineRequest:
     deployments: list[Deployment]
     policy: Optional[Dict[str, Any]] = None
     profile_id: Optional[int] = None  # NEW: Profile ID for authorization
+    request_id: Optional[str] = None
 
 
 @dataclass
@@ -112,18 +113,23 @@ class RequestPipeline:
             `PipelineResult` containing the execution context (if successful) or error details.
             The result also includes classification and scheduling statistics for logging.
         """
-        request_id = str(uuid.uuid4())
+        request_id = request.request_id or str(uuid.uuid4())
         
         # 1. Classification
         classification_result = self._classify(request)
         if not classification_result.candidates:
+            self.record_completion(
+                request_id=request_id,
+                result_status="error",
+                error_message="No models passed classification",
+            )
             return PipelineResult(
                 success=False,
                 model_id=None,
                 provider_id=None,
                 execution_context=None,
                 classification_stats=classification_result.stats,
-                scheduling_stats={},
+                scheduling_stats={"request_id": request_id},
                 error="No models passed classification",
             )
         
@@ -170,7 +176,12 @@ class RequestPipeline:
                 provider_id=exc.provider_id,
                 execution_context=None,
                 classification_stats=classification_result.stats,
-                scheduling_stats={"error": "Queue wait timeout"},
+                scheduling_stats={
+                    "request_id": request_id,
+                    "model_id": exc.model_id,
+                    "provider_id": exc.provider_id,
+                    "error": "Queue wait timeout",
+                },
                 error=str(exc),
             )
 
@@ -187,7 +198,7 @@ class RequestPipeline:
                 provider_id=None,
                 execution_context=None,
                 classification_stats=classification_result.stats,
-                scheduling_stats={"error": "No available model"},
+                scheduling_stats={"request_id": request_id, "error": "No available model"},
                 error="All candidate models unavailable (rate-limited or no capacity)",
             )
         

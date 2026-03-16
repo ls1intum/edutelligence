@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         global_config=cfg.engines.ollama,
         lane_port_start=cfg.worker.lane_port_start,
         lane_port_end=cfg.worker.lane_port_end,
+        nvidia_smi_available=lambda: gpu_collector.available,
     )
 
     if cfg.lanes:
@@ -47,10 +48,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             result = await lane_manager.apply_lanes(cfg.lanes)
             if result.errors:
-                for err in result.errors:
-                    logger.error("Lane apply error: %s", err)
+                raise RuntimeError("; ".join(result.errors))
         except Exception:
             logger.exception("Failed to apply lanes from config")
+            await lane_manager.close()
+            await gpu_collector.stop()
+            raise
 
     app.state.config = cfg
     app.state.gpu_collector = gpu_collector

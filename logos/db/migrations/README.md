@@ -1,6 +1,6 @@
 # Database Migrations
 
-This directory contains SQL migration scripts for upgrading the Logos database schema from the `main` branch to the `logos/scheduling-data-interface` branch.
+This directory contains the incremental schema changes for Logos.
 
 ## Migration Scripts
 
@@ -11,10 +11,14 @@ This directory contains SQL migration scripts for upgrading the Logos database s
 | `003a_drop_provider_ssh_columns.sql` | Remove SSH connectivity columns from providers | providers: DROP ssh_host, ssh_user, ssh_port, ssh_key_path, ssh_remote_ollama_port |
 | `003b_create_model_provider_config.sql` | Create per-model per-provider config table (deprecated) | NEW TABLE: model_provider_config |
 | `004_add_log_entry_sdi_columns.sql` | Add SDI metrics to log entries | log_entry: priority, queue_depth_at_arrival, utilization_at_arrival, queue_wait_ms, was_cold_start, load_duration_ms |
-| `005_create_request_events_table.sql` | Create request monitoring table | NEW TABLE: request_events, NEW TYPE: result_status_enum |
+| `005_create_request_events_table.sql` | Create legacy request monitoring table | NEW TABLE: request_events, NEW TYPE: result_status_enum |
 | `006_update_model_endpoints_to_local_ollama.sql` | Point TUM GPU endpoints to local Ollama | models: UPDATE endpoint for TUM GPU models |
 | `007_rename_openwebui_to_ollama_no_auth.sql` | Rename openwebui provider to ollama and clear auth | providers: UPDATE name, auth_name, auth_format |
 | `008_create_ollama_provider_snapshots.sql` | Create Ollama provider monitoring table | NEW TABLE: ollama_provider_snapshots |
+| `019_add_request_id_to_log_entry.sql` | Add request correlation key to log entries | log_entry: request_id |
+| `020_normalize_local_provider_types_to_logosnode.sql` | Normalize local worker provider types | providers: provider_type |
+| `021_collapse_request_events_into_log_entry.sql` | Collapse request lifecycle/perf metrics into log_entry | log_entry: request lifecycle/perf columns, backfill from request_events |
+| `022_drop_request_events_table.sql` | Remove legacy request_events table | DROP TABLE: request_events |
 
 ## Running Migrations
 
@@ -41,6 +45,10 @@ docker exec -i logos-db psql -U postgres -d logosdb < 006_update_model_endpoints
 docker exec -i logos-db psql -U postgres -d logosdb < 007_rename_openwebui_to_ollama_no_auth.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 008_create_ollama_provider_snapshots.sql
 docker exec -i logos-db psql -U postgres -d logosdb < 018_drop_model_provider_config.sql
+docker exec -i logos-db psql -U postgres -d logosdb < 019_add_request_id_to_log_entry.sql
+docker exec -i logos-db psql -U postgres -d logosdb < 020_normalize_local_provider_types_to_logosnode.sql
+docker exec -i logos-db psql -U postgres -d logosdb < 021_collapse_request_events_into_log_entry.sql
+docker exec -i logos-db psql -U postgres -d logosdb < 022_drop_request_events_table.sql
 ```
 
 ### Option 2: Apply Specific Migration
@@ -63,7 +71,7 @@ All migration scripts are designed to be:
 - **Idempotent**: Safe to run multiple times without errors
 - **Atomic**: Each migration uses IF EXISTS/IF NOT EXISTS checks to prevent conflicts
 - **Safe**: Use ADD COLUMN IF NOT EXISTS and CREATE TABLE IF NOT EXISTS patterns
-- **Minimal impact**: Most migrations only add new columns/tables; the only destructive migration (003a) removes unused SSH columns
+- **Minimal impact**: Most migrations only add new columns/tables; destructive migrations remove retired schema only after replacement is in place
 
 ## Verification
 

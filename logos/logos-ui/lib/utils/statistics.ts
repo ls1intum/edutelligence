@@ -1,4 +1,4 @@
-import type { RequestEventStats } from "@/components/statistics/types";
+import type { RequestLogStats } from "@/components/statistics/types";
 
 export function formatRangeLabel(range: { start: Date; end: Date }) {
   const f = (d: Date) =>
@@ -9,10 +9,10 @@ export function formatRangeLabel(range: { start: Date; end: Date }) {
 };
 
 export const applyTimeSeriesLabels = (
-  series: RequestEventStats["timeSeries"],
+  series: RequestLogStats["timeSeries"],
   rangeStart: Date,
   rangeEnd: Date
-): RequestEventStats["timeSeries"] => {
+): RequestLogStats["timeSeries"] => {
   if (!series.length) return [];
 
   const durationMs = Math.max(rangeEnd.getTime() - rangeStart.getTime(), 0);

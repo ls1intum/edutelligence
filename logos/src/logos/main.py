@@ -6,6 +6,7 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, Dict, Set, Optional
 import grpc
 
@@ -95,6 +96,150 @@ def _record_azure_rate_limits(
 
     if provider_metrics:
         _pipeline.record_provider_metrics(request_id, provider_metrics)
+
+
+def _record_log_failure(
+    log_id: Optional[int],
+    request_id: Optional[str],
+    error_message: str,
+    *,
+    result_status: str = "error",
+    provider_id: Optional[int] = None,
+    model_id: Optional[int] = None,
+    classification_stats: Optional[Dict[str, Any]] = None,
+    scheduling_stats: Optional[Dict[str, Any]] = None,
+) -> None:
+    if not log_id:
+        return
+
+    payload = {"error": error_message} if error_message else None
+    scheduling_stats = scheduling_stats or {}
+    classification_stats = classification_stats or {}
+
+    try:
+        with DBManager() as db:
+            db.set_response_payload(
+                log_id,
+                payload,
+                provider_id,
+                model_id,
+                {},
+                -1,
+                classification_stats,
+                request_id=request_id,
+                queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival"),
+                utilization_at_arrival=scheduling_stats.get("utilization_at_arrival"),
+            )
+            db.update_log_entry_metrics(
+                log_id=log_id,
+                request_id=request_id,
+                model_id=model_id,
+                provider_id=provider_id,
+                result_status=result_status,
+                error_message=error_message,
+                cold_start=scheduling_stats.get("is_cold_start"),
+            )
+    except Exception:
+        logger.exception("Failed to record terminal log failure (log_id=%s, request_id=%s)", log_id, request_id)
+
+
+@dataclass
+class _StreamingLogAccumulator:
+    """
+    Line-buffered SSE parser for request logging.
+
+    Network chunk boundaries are not aligned with SSE event boundaries, especially on the
+    logosnode websocket path. Buffer until complete lines are available so streamed usage
+    metadata is not lost when it arrives split across chunks.
+    """
+
+    buffer: str = ""
+    full_text: str = ""
+    first_chunk: Optional[Dict[str, Any]] = None
+    last_chunk: Optional[Dict[str, Any]] = None
+
+    def feed(self, chunk: bytes | str) -> None:
+        if isinstance(chunk, bytes):
+            text = chunk.decode("utf-8", errors="replace")
+        else:
+            text = str(chunk)
+        self.buffer += text
+        self._consume_complete_lines()
+
+    def finish(self) -> None:
+        if not self.buffer:
+            return
+        remainder = self.buffer
+        self.buffer = ""
+        for line in remainder.splitlines():
+            self._consume_line(line.rstrip("\r"))
+
+    def usage(self) -> Dict[str, Any]:
+        if isinstance(self.last_chunk, dict):
+            usage = self.last_chunk.get("usage")
+            if isinstance(usage, dict):
+                return usage
+        return {}
+
+    def response_payload(self) -> Dict[str, Any]:
+        usage = self.usage()
+        response_payload: Dict[str, Any] = {"content": self.full_text}
+        base_payload = None
+
+        if self.first_chunk:
+            base_payload = self.first_chunk.copy()
+        if self.last_chunk:
+            if base_payload is None:
+                base_payload = self.last_chunk.copy()
+            else:
+                for key, value in self.last_chunk.items():
+                    if key not in base_payload:
+                        base_payload[key] = value
+
+        if base_payload:
+            response_payload = base_payload
+            if "choices" in response_payload and response_payload["choices"]:
+                response_payload["choices"][0]["delta"] = {"content": self.full_text}
+        if usage:
+            response_payload["usage"] = usage
+        return response_payload
+
+    def _consume_complete_lines(self) -> None:
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            self._consume_line(line.rstrip("\r"))
+
+    def _consume_line(self, line: str) -> None:
+        stripped = line.strip()
+        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
+            return
+        try:
+            blob = json.loads(stripped[6:])
+        except json.JSONDecodeError:
+            return
+        if not isinstance(blob, dict):
+            return
+
+        self.last_chunk = blob
+        if self.first_chunk is None:
+            self.first_chunk = blob
+
+        choices = blob.get("choices")
+        if isinstance(choices, list) and choices:
+            delta = choices[0].get("delta", {})
+            if isinstance(delta, dict):
+                content = delta.get("content", "")
+                if content:
+                    self.full_text += content
+
+
+def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
+    if not isinstance(response_payload, dict):
+        return {}
+    usage = response_payload.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    return extract_token_usage(usage)
 
 
 @asynccontextmanager
@@ -458,9 +603,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
     from fastapi.responses import StreamingResponse
 
     async def streamer():
-        full_text = ""
-        first_chunk = None
-        last_chunk = None
+        stream_log = _StreamingLogAccumulator()
         error_message = None
         timed_out = False
         ttft_recorded = False
@@ -507,49 +650,16 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                             db.set_time_at_first_token(log_id)
                     ttft_recorded = True
 
-                # Parse chunk for logging
-                line = chunk.decode().strip()
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        blob = json.loads(line[6:])
-                        last_chunk = blob  # Keep track of last chunk (may have usage)
-                        if first_chunk is None:
-                            first_chunk = blob
-                        if "choices" in blob and blob["choices"]:
-                            delta = blob["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                full_text += content
-                    except json.JSONDecodeError:
-                        pass
+                stream_log.feed(chunk)
         except Exception as e:
             error_message = str(e)
             raise e
         finally:
             # Log completion with detailed token usage
             if log_id:
-                # Extract usage from last chunk (OpenAI includes it with stream_options)
-                usage = last_chunk.get("usage", {}) if last_chunk else {}
-                usage_tokens = extract_token_usage(usage) if usage else {}
-
-                # Build response payload
-                response_payload = {"content": full_text}
-                base_payload = None
-                if first_chunk:
-                    base_payload = first_chunk.copy()
-                if last_chunk:
-                    if base_payload is None:
-                        base_payload = last_chunk.copy()
-                    else:
-                        for key, value in last_chunk.items():
-                            if key not in base_payload:
-                                base_payload[key] = value
-                if base_payload:
-                    response_payload = base_payload
-                    if "choices" in response_payload and response_payload["choices"]:
-                        response_payload["choices"][0]["delta"] = {"content": full_text}
-                if usage:
-                    response_payload["usage"] = usage
+                stream_log.finish()
+                response_payload = stream_log.response_payload()
+                usage_tokens = _usage_tokens_from_payload(response_payload)
 
                 with DBManager() as db:
                     db.set_response_payload(
@@ -674,13 +784,11 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
             )
 
         if log_id:
-            # Extract detailed token usage
-            usage = response_payload.get("usage", {}) if response_payload else {}
-            usage_tokens = extract_token_usage(usage) if usage else {}
+            usage_tokens = _usage_tokens_from_payload(response_payload)
 
             with DBManager() as db:
-                db.set_time_at_first_token(log_id)
-                db.set_response_timestamp(log_id)
+                if exec_result.success:
+                    db.set_time_at_first_token(log_id)
                 db.set_response_payload(
                     log_id,
                     response_payload,
@@ -734,10 +842,9 @@ def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: di
     import datetime
 
     async def streamer():
-        full_text = ""
-        first_chunk = None
-        last_chunk = None
+        stream_log = _StreamingLogAccumulator()
         ttft = None
+        error_message = None
 
         try:
             async for chunk in _pipeline.executor.execute_streaming(
@@ -752,51 +859,30 @@ def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: di
 
                 yield chunk
 
-                # Parse chunk for logging
-                line = chunk.decode().strip()
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        blob = json.loads(line[6:])
-                        last_chunk = blob
-                        if first_chunk is None:
-                            first_chunk = blob
-                        if "choices" in blob and blob["choices"]:
-                            delta = blob["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                full_text += content
-                    except json.JSONDecodeError:
-                        pass
+                stream_log.feed(chunk)
+        except Exception as exc:  # noqa: BLE001
+            error_message = str(exc)
+            raise
         finally:
             # Log completion
             if log_id:
-                usage = last_chunk.get("usage", {}) if last_chunk else {}
-                usage_tokens = extract_token_usage(usage) if usage else {}
-
-                response_payload = {"content": full_text}
-                base_payload = None
-                if first_chunk:
-                    base_payload = first_chunk.copy()
-                if last_chunk:
-                    if base_payload is None:
-                        base_payload = last_chunk.copy()
-                    else:
-                        for key, value in last_chunk.items():
-                            if key not in base_payload:
-                                base_payload[key] = value
-                if base_payload:
-                    response_payload = base_payload
-                    if "choices" in response_payload and response_payload["choices"]:
-                        response_payload["choices"][0]["delta"] = {"content": full_text}
-                if usage:
-                    response_payload["usage"] = usage
+                stream_log.finish()
+                response_payload = stream_log.response_payload()
+                usage_tokens = _usage_tokens_from_payload(response_payload)
 
                 with DBManager() as db:
-                    if ttft is None:
+                    if ttft is None and stream_log.first_chunk is not None and not error_message:
                         db.set_time_at_first_token(log_id)
                     db.set_response_payload(
                         log_id, response_payload, provider_id, model_id,
                         usage_tokens, policy_id, classified
+                    )
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        result_status="error" if error_message else "success",
+                        error_message=error_message,
                     )
 
     return StreamingResponse(streamer(), media_type="text/event-stream")
@@ -819,14 +905,21 @@ async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: d
         response_payload = {"error": exec_result.error}
 
     if log_id:
-        usage_tokens = extract_token_usage(exec_result.usage) if exec_result.usage else {}
+        usage_tokens = _usage_tokens_from_payload(response_payload)
 
         with DBManager() as db:
-            db.set_time_at_first_token(log_id)
-            db.set_response_timestamp(log_id)
+            if exec_result.success:
+                db.set_time_at_first_token(log_id)
             db.set_response_payload(
                 log_id, response_payload, provider_id, model_id,
                 usage_tokens, policy_id, classified
+            )
+            db.update_log_entry_metrics(
+                log_id=log_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                result_status="success" if exec_result.success else "error",
+                error_message=None if exec_result.success else exec_result.error,
             )
 
     # Return dict for async jobs, JSONResponse for sync endpoints
@@ -843,7 +936,8 @@ async def _execute_proxy_mode(
     deployments: list[Deployment],
     log_id: Optional[int],
     is_async_job: bool,
-    profile_id: Optional[int] = None
+    profile_id: Optional[int] = None,
+    request_id: Optional[str] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -887,6 +981,7 @@ async def _execute_proxy_mode(
         is_async_job=is_async_job,
         allowed_models_override=[model_id],
         profile_id=profile_id,
+        request_id=request_id,
     )
 
 
@@ -898,7 +993,8 @@ async def _execute_resource_mode(
     log_id: Optional[int],
     is_async_job: bool,
     allowed_models_override: Optional[list] = None,
-    profile_id: Optional[int] = None
+    profile_id: Optional[int] = None,
+    request_id: Optional[str] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -947,6 +1043,7 @@ async def _execute_resource_mode(
         logos_key=logos_key or "anon",
         payload=body,
         headers=headers,
+        request_id=request_id,
         policy=policy,
         allowed_models=allowed_models,
         deployments=deployments,
@@ -958,6 +1055,16 @@ async def _execute_resource_mode(
 
     if not result.success:
         error_msg = result.error or "Pipeline processing failed"
+        _record_log_failure(
+            log_id,
+            result.scheduling_stats.get("request_id") or request_id,
+            error_msg,
+            model_id=result.model_id,
+            provider_id=result.provider_id,
+            classification_stats=result.classification_stats,
+            scheduling_stats=result.scheduling_stats,
+            result_status="timeout" if "timeout" in error_msg.lower() else "error",
+        )
         if is_async_job:
             return {"status_code": 503, "data": {"error": error_msg}}
         else:
@@ -1013,6 +1120,16 @@ async def _execute_resource_mode(
         except Exception as record_err:
             logger.error(f"Failed to record completion: {record_err}")
 
+        _record_log_failure(
+            log_id,
+            result.scheduling_stats.get("request_id") or request_id,
+            str(e),
+            model_id=result.model_id,
+            provider_id=result.provider_id,
+            classification_stats=result.classification_stats,
+            scheduling_stats=result.scheduling_stats,
+        )
+
         if is_async_job:
             return {"status_code": 500, "data": {"error": str(e)}}
         else:
@@ -1027,7 +1144,8 @@ async def route_and_execute(
     path: str,
     log_id: Optional[int],
     is_async_job: bool = False,
-    profile_id: Optional[int] = None
+    profile_id: Optional[int] = None,
+    request_id: Optional[str] = None,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -1077,6 +1195,7 @@ async def route_and_execute(
     """
     # No models available → ERROR
     if not deployments:
+        _record_log_failure(log_id, request_id, "No models available for this user.", result_status="error")
         if is_async_job:
             return {"status_code": 404, "data": {"error": "No models available for this user."}}
         else:
@@ -1088,13 +1207,35 @@ async def route_and_execute(
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
-            return await _execute_proxy_mode(body, headers, logos_key, deployments, log_id, is_async_job, profile_id=profile_id)
+            return await _execute_proxy_mode(
+                body,
+                headers,
+                logos_key,
+                deployments,
+                log_id,
+                is_async_job,
+                profile_id=profile_id,
+                request_id=request_id,
+            )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
-        return await _execute_resource_mode(deployments, body, headers, logos_key, log_id, is_async_job, profile_id=profile_id)
+        return await _execute_resource_mode(
+            deployments,
+            body,
+            headers,
+            logos_key,
+            log_id,
+            is_async_job,
+            profile_id=profile_id,
+            request_id=request_id,
+        )
     except HTTPException as exc:
+        _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
         if is_async_job:
             return {"status_code": exc.status_code, "data": {"error": exc.detail}}
+        raise
+    except Exception as exc:
+        _record_log_failure(log_id, request_id, str(exc), result_status="error")
         raise
 
 
@@ -1113,23 +1254,35 @@ async def handle_sync_request(path: str, request: Request):
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+    request_id = secrets.token_urlsafe(16)
+    if log_id:
+        with DBManager() as db:
+            db.update_log_entry_metrics(
+                log_id=log_id,
+                request_id=request_id,
+                timeout_s=body.get("timeout_s"),
+            )
 
     # Get available deployments (model, provider tuple) for THIS profile - profile_id EXPLICITLY passed
     try:
         deployments = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
         deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
+        _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
+        _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=400, detail=str(e))
 
     if not deployments:
+        _record_log_failure(log_id, request_id, "No available model deployments for this profile", result_status="error")
         raise HTTPException(status_code=404, detail="No available model deployments for this profile")
 
     # Route and execute request with profile context
     return await route_and_execute(
         deployments, body, headers, auth.logos_key, path, log_id,
-        profile_id=auth.profile_id
+        profile_id=auth.profile_id,
+        request_id=request_id,
     )
 
 
@@ -1278,20 +1431,24 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
 
     # Log usage (at process level for billing)
     usage_id = None
+    request_id = secrets.token_urlsafe(16)
     with DBManager() as db:
-        r, c = db.log_usage(auth.process_id, client_ip, json_data, headers)
+        r, c = db.log_usage(auth.process_id, client_ip, json_data, headers, request_id=request_id)
         if c != 200:
             logging.info("Error while logging a request: %s", r)
         else:
             usage_id = int(r["log-id"])
+            db.update_log_entry_metrics(log_id=usage_id, timeout_s=json_data.get("timeout_s"))
 
     # Get available models for this profile - profile_id EXPLICITLY passed
     try:
         models = request_setup(headers, auth.logos_key, profile_id=auth.profile_id)
         models = await _filter_logosnode_deployments(models)
     except PermissionError as e:
+        _record_log_failure(usage_id, request_id, str(e), result_status="error")
         return {"status_code": 401, "data": {"error": str(e)}}
     except ValueError as e:
+        _record_log_failure(usage_id, request_id, str(e), result_status="error")
         return {"status_code": 400, "data": {"error": str(e)}}
 
     # Force non-streaming for jobs
@@ -1301,7 +1458,8 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     return await route_and_execute(
         models, json_data, headers, auth.logos_key, path, usage_id,
         is_async_job=True,
-        profile_id=auth.profile_id
+        profile_id=auth.profile_id,
+        request_id=request_id,
     )
 
 
@@ -1767,10 +1925,9 @@ async def generalstats(data: LogosKeyModel):
         return db.generalstats(**data.dict())
 
 
-@app.post("/logosdb/request_event_stats")
-async def request_event_stats(request: Request):
+async def _build_request_log_stats_response(request: Request) -> JSONResponse:
     """
-    Aggregate request_events metrics for dashboards.
+    Aggregate request log metrics for dashboards.
 
     Args:
         request: FastAPI request; must include authentication headers.
@@ -1784,7 +1941,7 @@ async def request_event_stats(request: Request):
         - `Authorization: Bearer <logos_key>`
 
     Returns:
-        Tuple[dict, int]: (payload, status) from DBManager.get_request_event_stats.
+        Tuple[dict, int]: (payload, status) from DBManager.get_request_log_stats.
     """
     headers = dict(request.headers)
     logos_key, _ = authenticate_logos_key(headers)
@@ -1799,7 +1956,7 @@ async def request_event_stats(request: Request):
     target_buckets = body.get("target_buckets", 120)
 
     with DBManager() as db:
-        payload, status = db.get_request_event_stats(
+        payload, status = db.get_request_log_stats(
             logos_key,
             start_date=start_date,
             end_date=end_date,
@@ -1816,8 +1973,13 @@ async def request_event_stats(request: Request):
         )
 
 
-@app.options("/logosdb/request_event_stats")
-async def request_event_stats_options():
+@app.post("/logosdb/request_log_stats")
+async def request_log_stats(request: Request):
+    return await _build_request_log_stats_response(request)
+
+
+@app.options("/logosdb/request_log_stats")
+async def request_log_stats_options():
     """
     Local testing helper to dodge CORS preflight failures.
     Safe to remove once Traefik/CORS is sorted.

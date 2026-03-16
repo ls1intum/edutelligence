@@ -36,8 +36,8 @@ import { RotateCw } from "lucide-react-native";
 
 
 import type {
-  RequestEventResponse,
-  RequestEventStats,
+  RequestLogResponse,
+  RequestLogStats,
 } from "@/components/statistics/types";
 import ChartCard from "@/components/statistics/chart-card";
 import EmptyState from "@/components/statistics/empty-state";
@@ -142,7 +142,7 @@ export default function Statistics() {
   }, [latestRequests]);
 
   // Data
-  const [stats, setStats] = useState<RequestEventStats | null>(null);
+  const [stats, setStats] = useState<RequestLogStats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [chartsRefreshing, setChartsRefreshing] = useState(false);
 
@@ -416,7 +416,7 @@ export default function Statistics() {
 
       try {
         const response = await fetch(
-          `${API_BASE}/logosdb/request_event_stats`,
+          `${API_BASE}/logosdb/request_log_stats`,
           {
             method: "POST",
             headers: {
@@ -437,7 +437,7 @@ export default function Statistics() {
           throw new Error(`Backend returned ${response.status}`);
         }
 
-        const data: RequestEventResponse = await response.json();
+        const data: RequestLogResponse = await response.json();
 
         if (data?.stats) {
           const rangeStart = data.range?.start

@@ -133,6 +133,53 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_apply_lanes_rejects_vllm_without_nvidia_smi() -> None:
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15000,
+        lane_port_end=15010,
+        nvidia_smi_available=lambda: False,
+    )
+
+    with pytest.raises(RuntimeError, match="nvidia-smi"):
+        await manager.apply_lanes(
+            [
+                LaneConfig(
+                    model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+                    vllm=True,
+                    vllm_config=VllmConfig(),
+                )
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> None:
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15010,
+        lane_port_end=15020,
+        nvidia_smi_available=lambda: False,
+    )
+    lane = LaneConfig(model="qwen2.5-coder:32b")
+    lane_id = "qwen2.5-coder_32b"
+
+    class FakeOllamaHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15010
+            self.lane_config = lane
+
+    manager._handles[lane_id] = FakeOllamaHandle()  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="nvidia-smi"):
+        await manager.reconfigure_lane(
+            lane_id,
+            {"vllm": True, "vllm_config": VllmConfig().model_dump()},
+        )
+
+
+@pytest.mark.asyncio
 async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
     manager = LaneManager(OllamaConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
     lane = LaneConfig(

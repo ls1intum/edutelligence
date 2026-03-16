@@ -1,9 +1,9 @@
 """
 Lightweight request monitoring recorder.
 
-Writes one row per request_id into the `request_events` table using DBManager.
-Designed to be optional and non-intrusive: failures are logged and never
-propagate back into scheduling/request handling.
+Writes request performance fields onto the existing `log_entry` row keyed by
+request_id. Designed to be optional and non-intrusive: failures are logged and
+never propagate back into scheduling/request handling.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class MonitoringRecorder:
     """
-    Minimal recorder that upserts request lifecycle fields into request_events.
+    Minimal recorder that updates request lifecycle fields on log_entry.
     """
 
     def __init__(self, db_factory: Callable[[], DBManager] = DBManager) -> None:
@@ -40,7 +40,6 @@ class MonitoringRecorder:
             "provider_id": provider_id,
             "initial_priority": initial_priority,
             "queue_depth_at_enqueue": queue_depth,
-            "enqueue_ts": datetime.datetime.now(datetime.timezone.utc),
             "timeout_s": timeout_s,
         }
         self._write(request_id, **payload)
@@ -118,6 +117,6 @@ class MonitoringRecorder:
     def _write(self, request_id: str, **fields: object) -> None:
         try:
             with self._db_factory() as db:
-                db.upsert_request_event(request_id, **fields)
+                db.update_request_log_metrics(request_id=request_id, **fields)
         except Exception as exc:  # pragma: no cover - monitoring must not break prod
             logger.debug("Failed to record monitoring event for %s: %s", request_id, exc)

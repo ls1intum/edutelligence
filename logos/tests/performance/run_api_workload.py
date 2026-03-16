@@ -96,7 +96,7 @@ class LogRecord:
     model_id: Optional[int]
     model_name: Optional[str]
     response_payload: Optional[dict]
-    # Scheduling metrics from request_events (joined by request_id)
+    # Scheduling metrics from log_entry, correlated by request_id
     enqueue_ts: Optional[datetime] = None
     scheduled_ts: Optional[datetime] = None
     complete_ts: Optional[datetime] = None
@@ -274,6 +274,7 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                     le.id,
                     le.request_id,
                     le.timestamp_request,
+                    le.timestamp_forwarding,
                     le.time_at_first_token,
                     le.timestamp_response,
                     le.provider_id,
@@ -281,15 +282,11 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                     le.model_id,
                     models.name AS model_name,
                     le.response_payload,
-                    re.enqueue_ts,
-                    re.scheduled_ts,
-                    re.request_complete_ts,
-                    re.cold_start,
-                    re.result_status
+                    le.was_cold_start,
+                    le.result_status
                 FROM log_entry le
                 LEFT JOIN providers ON le.provider_id = providers.id
                 LEFT JOIN models ON le.model_id = models.id
-                LEFT JOIN request_events re ON re.request_id = le.request_id
                 WHERE le.process_id = :pid
                   AND le.id > :start_id
                 ORDER BY le.id ASC
@@ -318,10 +315,10 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 model_id=row.model_id,
                 model_name=row.model_name,
                 response_payload=payload,
-                enqueue_ts=row.enqueue_ts,
-                scheduled_ts=row.scheduled_ts,
-                complete_ts=row.request_complete_ts,
-                cold_start=row.cold_start,
+                enqueue_ts=row.timestamp_request,
+                scheduled_ts=row.timestamp_forwarding,
+                complete_ts=row.timestamp_response,
+                cold_start=row.was_cold_start,
                 result_status=row.result_status,
             )
         )

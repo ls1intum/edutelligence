@@ -34,6 +34,9 @@ lanes:
 Notes:
 - `num_parallel`, `keep_alive`, `kv_cache_type`, and `flash_attention` are Ollama-lane settings.
 - vLLM lanes use continuous batching, so runtime status reports `num_parallel: 0` for `vllm: true`.
+- For vLLM, the saved lane config `num_parallel` is still used by Logos as a scheduling-capacity hint.
+- vLLM requires a working `nvidia-smi`. If any configured lane has `vllm: true` and `nvidia-smi` is unavailable, worker startup and lane apply/reconfigure now fail immediately.
+- Without `nvidia-smi`, use Ollama lanes only. Derived-device mode is not accepted for vLLM anymore.
 
 ## Runtime states
 - `cold`: process exists but the model is not warm

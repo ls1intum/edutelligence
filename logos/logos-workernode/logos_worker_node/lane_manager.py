@@ -6,7 +6,7 @@ import asyncio
 import logging
 import socket
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from logos_worker_node.models import (
     LaneAction,
@@ -154,8 +154,10 @@ class LaneManager:
         lane_port_start: int = _DEFAULT_PORT_START,
         lane_port_end: int = _DEFAULT_PORT_END,
         reserved_ports: Iterable[int] | None = None,
+        nvidia_smi_available: Callable[[], bool] | None = None,
     ) -> None:
         self._global_config = global_config
+        self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -169,6 +171,24 @@ class LaneManager:
         self._starting_deadlines: dict[str, float] = {}
         self._status_revision = 0
         self._status_event = asyncio.Event()
+
+    def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
+        vllm_lane_ids = [
+            _lane_id_from_config(lane)
+            for lane in lanes
+            if lane.vllm
+        ]
+        if not vllm_lane_ids:
+            return
+        if self._nvidia_smi_available():
+            return
+        lane_list = ", ".join(vllm_lane_ids)
+        raise RuntimeError(
+            "vLLM lanes require a working nvidia-smi setup on this worker. "
+            "nvidia-smi is mandatory for vLLM startup because LogosWorkerNode uses it for "
+            "GPU/VRAM accounting and safe scheduling. "
+            f"Configure nvidia-smi correctly or disable vLLM for these lanes: {lane_list}"
+        )
 
     # ------------------------------------------------------------------
     # Declarative API
@@ -188,6 +208,7 @@ class LaneManager:
 
         Returns a result with all actions taken and final lane statuses.
         """
+        self._validate_vllm_runtime_requirements(desired)
         async with self._lock:
             actions: list[LaneAction] = []
             errors: list[str] = []
@@ -324,6 +345,7 @@ class LaneManager:
     async def add_lane(self, lane_config: LaneConfig) -> LaneStatus:
         """Add a single lane."""
         lid = _lane_id_from_config(lane_config)
+        self._validate_vllm_runtime_requirements([lane_config])
         async with self._lock:
             if lid in self._handles:
                 raise ValueError(f"Lane '{lid}' already exists")
@@ -359,6 +381,7 @@ class LaneManager:
                 return await self._get_status_unlocked(lane_id)
 
             new_lc = LaneConfig(**current_data)
+            self._validate_vllm_runtime_requirements([new_lc])
             if _lane_needs_restart(current, new_lc):
                 old_handle = await self._hot_swap_lane_unlocked(lane_id, new_lc)
                 await old_handle.close()

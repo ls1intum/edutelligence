@@ -23,6 +23,11 @@ For Ollama lanes:
 For vLLM lanes:
 - set `vllm: true`
 - add `vllm_config`
+- ensure `nvidia-smi` works on the worker host before startup
+
+Important:
+- `nvidia-smi` is mandatory for vLLM mode.
+- If any configured lane uses `vllm: true` and `nvidia-smi` is unavailable, LogosWorkerNode now fails startup with a clear error instead of running with optimistic VRAM accounting.
 
 ## 3. Start it
 Local dev:

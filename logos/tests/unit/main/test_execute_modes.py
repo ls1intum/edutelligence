@@ -79,11 +79,22 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
 
     called = {}
 
-    async def fake_resource_mode(deployments, body, headers, logos_key, log_id, is_async_job, allowed_models_override=None, profile_id=None):  # noqa: ARG001
+    async def fake_resource_mode(  # noqa: ARG001
+        deployments,
+        body,
+        headers,
+        logos_key,
+        log_id,
+        is_async_job,
+        allowed_models_override=None,
+        profile_id=None,
+        request_id=None,
+    ):
         called["deployments"] = deployments
         called["body"] = body
         called["allowed_models_override"] = allowed_models_override
         called["profile_id"] = profile_id
+        called["request_id"] = request_id
         return {"status": "resource"}
 
     monkeypatch.setattr(main, "DBManager", DummyDB)
@@ -107,6 +118,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     assert called["body"]["model"] == "gemma2:2b"
     assert called["allowed_models_override"] == [27]
     assert called["profile_id"] == 1
+    assert called["request_id"] is None
 
 
 async def test_pipeline_releases_capacity_when_context_resolution_fails():

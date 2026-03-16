@@ -193,13 +193,23 @@ class LogosNodeDataProvider:
                 continue
 
             matched_lanes += 1
-            if bool(lane.get("vllm")):
-                capacity = int(lane.get("num_parallel") or 1)
-            else:
-                capacity = int(lane.get("num_parallel") or 1)
-            total_capacity += max(1, capacity)
+            capacity_hint = lane.get("num_parallel")
+            if bool(lane.get("vllm")) and not capacity_hint:
+                lane_config = lane.get("lane_config")
+                if isinstance(lane_config, dict):
+                    # vLLM runtime status reports num_parallel=0 because concurrency is continuous,
+                    # but the saved lane config still provides the scheduling capacity hint.
+                    capacity_hint = lane_config.get("num_parallel")
 
-        if matched_lanes == 0:
+            try:
+                capacity = int(capacity_hint) if capacity_hint is not None else 0
+            except (TypeError, ValueError):
+                capacity = 0
+
+            if capacity > 0:
+                total_capacity += capacity
+
+        if matched_lanes == 0 or total_capacity <= 0:
             return None, "config"
         return max(1, total_capacity), "runtime"
 
@@ -241,7 +251,7 @@ class LogosNodeDataProvider:
             snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
             runtime = (snap or {}).get("runtime") or {}
             devices = runtime.get("devices") or {}
-            if isinstance(devices, dict):
+            if isinstance(devices, dict) and bool(devices.get("nvidia_smi_available")):
                 runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
         with self._lock:
             total_used_bytes = sum(info["size_vram"] for info in self._loaded_models.values())

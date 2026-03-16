@@ -124,12 +124,21 @@ class DBManager:
         self.session.commit()
         return result.inserted_primary_key[0]
 
-    def upsert_request_event(self, request_id: str, **fields: Any) -> None:
+    def update_log_entry_metrics(
+        self,
+        *,
+        log_id: Optional[int] = None,
+        request_id: Optional[str] = None,
+        **fields: Any,
+    ) -> None:
         """
-        Insert or update a request_events row identified by request_id.
+        Update scheduler/runtime/completion metrics on a log_entry row.
 
-        Only provided fields are updated; omitted fields remain unchanged.
+        The log row can be targeted either by `log_id` or by `request_id`.
         """
+        if log_id is None and not request_id:
+            raise ValueError("Either log_id or request_id must be provided")
+
         allowed_fields = {
             "model_id",
             "provider_id",
@@ -138,7 +147,6 @@ class DBManager:
             "queue_depth_at_enqueue",
             "queue_depth_at_schedule",
             "timeout_s",
-            "enqueue_ts",
             "scheduled_ts",
             "request_complete_ts",
             "available_vram_mb",
@@ -147,28 +155,91 @@ class DBManager:
             "cold_start",
             "result_status",
             "error_message",
+            "queue_depth_at_arrival",
+            "utilization_at_arrival",
+            "queue_wait_ms",
         }
 
         payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
-        columns = ["request_id"] + list(payload.keys())
-        params = {"request_id": request_id, **payload}
+        update_data: Dict[str, Any] = {}
 
-        if payload:
-            assignments = ", ".join(f"{col}=EXCLUDED.{col}" for col in payload.keys())
-            placeholders = ", ".join(f":{col}" for col in columns)
-            sql = text(
-                f"INSERT INTO request_events ({', '.join(columns)}) "
-                f"VALUES ({placeholders}) "
-                f"ON CONFLICT (request_id) DO UPDATE SET {assignments}"
+        if request_id:
+            update_data["request_id"] = request_id
+
+        field_map = {
+            "model_id": "model_id",
+            "provider_id": "provider_id",
+            "initial_priority": "initial_priority",
+            "priority_when_scheduled": "priority_when_scheduled",
+            "queue_depth_at_enqueue": "queue_depth_at_enqueue",
+            "queue_depth_at_schedule": "queue_depth_at_schedule",
+            "timeout_s": "timeout_s",
+            "scheduled_ts": "timestamp_forwarding",
+            "request_complete_ts": "timestamp_response",
+            "available_vram_mb": "available_vram_mb",
+            "azure_rate_remaining_requests": "azure_rate_remaining_requests",
+            "azure_rate_remaining_tokens": "azure_rate_remaining_tokens",
+            "cold_start": "was_cold_start",
+            "result_status": "result_status",
+            "error_message": "error_message",
+            "queue_depth_at_arrival": "queue_depth_at_arrival",
+            "utilization_at_arrival": "utilization_at_arrival",
+            "queue_wait_ms": "queue_wait_ms",
+        }
+
+        for src_key, dst_key in field_map.items():
+            if src_key in payload:
+                value = payload[src_key]
+                if src_key == "result_status" and isinstance(value, ResultStatus):
+                    value = value.value
+                update_data[dst_key] = value
+
+        if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
+            lookup_sql = text(
+                "SELECT timestamp_request FROM log_entry "
+                + ("WHERE id = :log_id" if log_id is not None else "WHERE request_id = :request_id")
             )
+            lookup_params = {"log_id": log_id} if log_id is not None else {"request_id": request_id}
+            row = self.session.execute(lookup_sql, lookup_params).mappings().first()
+            timestamp_request = row.get("timestamp_request") if row else None
+            scheduled_ts = payload.get("scheduled_ts")
+            if timestamp_request and isinstance(scheduled_ts, datetime.datetime):
+                delta_ms = (scheduled_ts - timestamp_request).total_seconds() * 1000
+                update_data["queue_wait_ms"] = max(0.0, delta_ms)
+
+        if not update_data:
+            return
+
+        assignments = ", ".join(f"{col} = :{col}" for col in update_data.keys())
+        params = dict(update_data)
+        if log_id is not None:
+            params["log_id"] = log_id
+            where_clause = "id = :log_id"
         else:
-            sql = text(
-                "INSERT INTO request_events (request_id) VALUES (:request_id) "
-                "ON CONFLICT (request_id) DO NOTHING"
-            )
+            params["lookup_request_id"] = request_id
+            where_clause = "request_id = :lookup_request_id"
 
+        sql = text(f"UPDATE log_entry SET {assignments} WHERE {where_clause}")
         self.session.execute(sql, params)
         self.session.commit()
+
+    def update_request_log_metrics(
+        self,
+        *,
+        log_id: Optional[int] = None,
+        request_id: Optional[str] = None,
+        **fields: Any,
+    ) -> None:
+        """
+        Clearer alias for request lifecycle/performance updates on `log_entry`.
+        """
+        self.update_log_entry_metrics(log_id=log_id, request_id=request_id, **fields)
+
+    def upsert_request_log(self, request_id: str, **fields: Any) -> None:
+        """
+        Canonical upsert helper for request lifecycle/performance data on `log_entry`.
+        """
+        self.update_request_log_metrics(request_id=request_id, **fields)
 
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
@@ -687,7 +758,7 @@ class DBManager:
             "requests": request_count
         }, 200
 
-    def get_request_event_stats(
+    def get_request_log_stats(
         self,
         logos_key: str,
         start_date: Optional[str] = None,
@@ -695,7 +766,7 @@ class DBManager:
         target_buckets: int = 120
     ):
         """
-        Aggregate request_events metrics for a given time range.
+        Aggregate request performance metrics for a given time range.
 
         Args:
             logos_key: authentication key
@@ -725,11 +796,11 @@ class DBManager:
             "end_ts": end_dt,
             "bucket_seconds": bucket_seconds
         }
-        ts_expr = "COALESCE(scheduled_ts, enqueue_ts, request_complete_ts)"
+        ts_expr = "COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)"
 
         # Last event timestamp
         last_ts = self.session.execute(
-            text(f"SELECT MAX({ts_expr}) AS last_ts FROM request_events WHERE {ts_expr} BETWEEN :start_ts AND :end_ts"),
+            text(f"SELECT MAX({ts_expr}) AS last_ts FROM log_entry WHERE {ts_expr} BETWEEN :start_ts AND :end_ts"),
             params
         ).scalar()
         last_event_ts = last_ts.isoformat() if last_ts else None
@@ -746,14 +817,14 @@ class DBManager:
                 AVG(run_seconds) AS avg_run_seconds
             FROM (
                 SELECT
-                    re.cold_start,
+                    le.was_cold_start AS cold_start,
                     CASE WHEN m.weight_privacy = 'LOCAL' THEN FALSE ELSE TRUE END AS is_cloud,
-                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
-                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
-                FROM request_events re
-                LEFT JOIN models m ON m.id = re.model_id
+                    CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END AS queue_seconds,
+                    CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END AS run_seconds
+                FROM log_entry le
+                LEFT JOIN models m ON m.id = le.model_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             ) stats
         """), params).mappings().first() or {}
@@ -771,7 +842,7 @@ class DBManager:
         # Status counts
         status_rows = self.session.execute(text(f"""
             SELECT COALESCE(result_status::text, 'unknown') AS status, COUNT(*) AS count
-            FROM request_events
+            FROM log_entry
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             GROUP BY COALESCE(result_status::text, 'unknown')
         """), params).mappings().all()
@@ -787,17 +858,17 @@ class DBManager:
                 COUNT(*) AS request_count,
                 AVG(queue_seconds) AS avg_queue_seconds,
                 AVG(run_seconds) AS avg_run_seconds,
-                SUM(CASE WHEN re.cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
-                SUM(CASE WHEN re.cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
+                SUM(CASE WHEN re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
+                SUM(CASE WHEN re.was_cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
                 SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success' OR (re.error_message IS NOT NULL AND re.error_message != '') THEN 1 ELSE 0 END) AS error_count
             FROM (
                 SELECT
-                    re.*,
-                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
-                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
-                FROM request_events re
+                    le.*,
+                    CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END AS queue_seconds,
+                    CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END AS run_seconds
+                FROM log_entry le
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             ) re
             LEFT JOIN models m ON m.id = re.model_id
@@ -832,10 +903,10 @@ class DBManager:
                     COUNT(*) AS total,
                     SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 0 ELSE 1 END) AS cloud,
                     SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 1 ELSE 0 END) AS local,
-                    AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds,
+                    AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,
                     AVG(re.available_vram_mb) AS avg_vram
-                FROM request_events re
+                FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
                 GROUP BY 1
@@ -868,7 +939,7 @@ class DBManager:
                 AVG(queue_depth_at_schedule) AS avg_schedule,
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_enqueue) AS p95_enqueue,
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_schedule) AS p95_schedule
-            FROM request_events re
+            FROM log_entry re
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
               AND (queue_depth_at_enqueue IS NOT NULL OR queue_depth_at_schedule IS NOT NULL)
         """), params).mappings().first()
@@ -884,11 +955,11 @@ class DBManager:
         # Runtime by cold/warm
         runtime_rows = self.session.execute(text(f"""
             SELECT
-                CASE WHEN cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
+                CASE WHEN was_cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
                 COUNT(*) AS count,
-                AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds
-            FROM request_events re
+                AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds
+            FROM log_entry re
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             GROUP BY kind
         """), params).mappings().all()
@@ -918,41 +989,42 @@ class DBManager:
 
     def get_latest_requests(self, logos_key: str, limit: int = 10):
         """
-        Fetch the most recent request events.
+        Fetch the most recent request logs with scheduling/performance metadata.
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
 
         sql = text("""
             SELECT
-                re.request_id,
-                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
-                COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
-                re.result_status,
-                re.enqueue_ts,
-                re.scheduled_ts,
-                re.request_complete_ts,
-                CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                     THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts))
+                le.request_id,
+                COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
+                COALESCE(p.name, CONCAT('Provider ', le.provider_id::text)) AS provider_name,
+                le.result_status,
+                le.timestamp_request AS enqueue_ts,
+                le.timestamp_forwarding AS scheduled_ts,
+                le.timestamp_response AS request_complete_ts,
+                CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
                      ELSE NULL
                 END AS run_seconds,
-                CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
-                     THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts))
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
                      ELSE NULL
                 END AS queue_seconds,
-                CASE WHEN re.enqueue_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                     THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.enqueue_ts))
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
                      ELSE NULL
                 END AS total_seconds,
-                re.cold_start,
-                re.initial_priority,
-                re.priority_when_scheduled,
-                re.queue_depth_at_enqueue,
-                re.error_message
-            FROM request_events re
-            LEFT JOIN models m ON m.id = re.model_id
-            LEFT JOIN providers p ON p.id = re.provider_id
-            ORDER BY re.enqueue_ts DESC NULLS LAST
+                le.was_cold_start AS cold_start,
+                le.initial_priority,
+                le.priority_when_scheduled,
+                le.queue_depth_at_enqueue,
+                le.error_message
+            FROM log_entry le
+            LEFT JOIN models m ON m.id = le.model_id
+            LEFT JOIN providers p ON p.id = le.provider_id
+            WHERE le.request_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC NULLS LAST
             LIMIT :limit
         """)
 
@@ -1303,7 +1375,8 @@ class DBManager:
         """
         Return per-provider VRAM snapshots for a single UTC day. No bucketing/zero-fill; raw rows only.
 
-        `day` is required (YYYY-MM-DD or ISO date). If no rows exist for that day, an error is returned.
+        `day` is required (YYYY-MM-DD or ISO date). If no rows exist for that day, return
+        an empty payload instead of an HTTP error so dashboards can render an empty state.
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
@@ -1354,7 +1427,7 @@ class DBManager:
         try:
             rows = self.session.execute(sql, params).fetchall()
             if not rows:
-                return {"error": "No VRAM data available for the requested day."}, 404
+                return {"providers": []}, 200
 
             providers_data: Dict[int, Dict[str, Any]] = {}
 
@@ -1800,6 +1873,50 @@ class DBManager:
             "api_key": result.api_key,
         }
 
+    def get_local_provider_inventory(self, logos_key: str) -> Tuple[Any, int]:
+        """
+        Return all local/self-hosted providers for dashboards and operator tooling.
+
+        Local provider types were historically named in several ways. Normalize them at the
+        query layer so statistics views can reason about all worker-backed providers uniformly.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        sql = text("""
+            SELECT
+                id,
+                name,
+                provider_type,
+                base_url,
+                ollama_admin_url,
+                total_vram_mb,
+                parallel_capacity
+            FROM providers
+            WHERE LOWER(provider_type) IN (
+                'logosnode',
+                'ollama',
+                'node',
+                'node_controller',
+                'logos_worker_node'
+            )
+            ORDER BY LOWER(name), id
+        """)
+
+        rows = self.session.execute(sql).fetchall()
+        return [
+            {
+                "provider_id": row.id,
+                "name": row.name,
+                "provider_type": row.provider_type,
+                "base_url": row.base_url,
+                "ollama_admin_url": row.ollama_admin_url,
+                "total_vram_mb": row.total_vram_mb,
+                "parallel_capacity": row.parallel_capacity,
+            }
+            for row in rows
+        ], 200
+
     def get_provider_to_model(self, model_id: int):
         sql = text("""
                    SELECT provider_id
@@ -1839,7 +1956,7 @@ class DBManager:
             return False
         return result.log
 
-    def log_usage(self, process_id: int, client_ip: str = None, input_payload=None, headers=None):
+    def log_usage(self, process_id: int, client_ip: str = None, input_payload=None, headers=None, request_id: str | None = None):
         # Hole log_level für den Prozess
         log_level_result = self.session.execute(
             text("SELECT log FROM process WHERE id = :pid"),
@@ -1853,9 +1970,9 @@ class DBManager:
 
         sql = text("""
                    INSERT INTO log_entry (timestamp_request, process_id, client_ip, input_payload, headers,
-                                          privacy_level)
+                                          privacy_level, request_id)
                    VALUES (:timestamp_request, :process_id, :client_ip, :input_payload, :headers,
-                           :privacy_level) RETURNING id
+                           :privacy_level, :request_id) RETURNING id
                    """)
         result = self.session.execute(sql, {
             "timestamp_request": datetime.datetime.now(datetime.timezone.utc),
@@ -1863,7 +1980,8 @@ class DBManager:
             "client_ip": client_ip if log_level == "FULL" else None,
             "input_payload": json.dumps(input_payload) if log_level == "FULL" else None,
             "headers": json.dumps(headers) if log_level == "FULL" else None,
-            "privacy_level": log_level
+            "privacy_level": log_level,
+            "request_id": request_id,
         })
 
         log_id = result.scalar()

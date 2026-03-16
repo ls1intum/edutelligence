@@ -31,6 +31,11 @@ Use the GPU compose overlay when the host exposes NVIDIA runtime support:
 ./start.sh --gpu
 ```
 
+vLLM requirement:
+- vLLM lanes require a working `nvidia-smi`.
+- This is not just a telemetry improvement. LogosWorkerNode now blocks vLLM startup when `nvidia-smi` is unavailable or misconfigured.
+- If you want to run without `nvidia-smi`, use Ollama lanes only.
+
 ## Docs
 - Setup: [QUICKSTART.md](/Users/kubaj/edutelligence/logos/logos-workernode/QUICKSTART.md)
 - Lane operations: [LANES.md](/Users/kubaj/edutelligence/logos/logos-workernode/LANES.md)

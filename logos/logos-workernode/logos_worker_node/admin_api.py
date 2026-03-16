@@ -50,7 +50,10 @@ async def get_runtime(request: Request) -> WorkerRuntimeStatus:
 )
 async def apply_lanes(request: Request, req: LaneSetRequest) -> LaneApplyResult:
     lane_manager = request.app.state.lane_manager
-    result = await lane_manager.apply_lanes(req.lanes)
+    try:
+        result = await lane_manager.apply_lanes(req.lanes)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     if result.success:
         request.app.state.config.lanes = req.lanes
         save_lanes_config(req.lanes)
@@ -105,7 +108,7 @@ async def patch_lane(request: Request, lane_id: str, req: LaneReconfigureRequest
         lane = await request.app.state.lane_manager.reconfigure_lane(lane_id, updates)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     cfg = request.app.state.config

@@ -105,3 +105,118 @@ def test_logosnode_runtime_parallel_capacity_overrides_static_config(monkeypatch
     assert provider.try_reserve_capacity(101, "req-3") is True
     assert provider.try_reserve_capacity(101, "req-4") is True
     assert provider.try_reserve_capacity(101, "req-5") is False
+
+
+def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
+            return {
+                "runtime": {
+                    "devices": {
+                        "nvidia_smi_available": True,
+                        "free_memory_mb": 24576,
+                    },
+                    "lanes": [],
+                }
+            }
+
+    queue_mgr = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_mgr, runtime_registry=_FakeRegistry())
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {},
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: {"models": []},
+    )
+
+    facade.register_model(101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12)
+    cap = facade.get_capacity_info(12)
+    assert cap.available_vram_mb == 24576
+
+
+def test_logosnode_capacity_falls_back_to_static_total_when_runtime_is_derived(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
+            return {
+                "runtime": {
+                    "devices": {
+                        "mode": "derived",
+                        "nvidia_smi_available": False,
+                        "free_memory_mb": 0,
+                    },
+                    "lanes": [
+                        {
+                            "lane_id": "lane-1",
+                            "model": "llama3.1:latest",
+                            "runtime_state": "loaded",
+                            "vllm": False,
+                            "num_parallel": 4,
+                            "effective_vram_mb": 8192,
+                            "loaded_models": [{"name": "llama3.1:latest"}],
+                        }
+                    ],
+                }
+            }
+
+    queue_mgr = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_mgr, runtime_registry=_FakeRegistry())
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {},
+    )
+
+    facade.register_model(101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12)
+    cap = facade.get_capacity_info(12)
+    assert cap.available_vram_mb == 65536 - 8192
+    assert cap.loaded_models == ["llama3.1:latest"]
+
+
+def test_logosnode_runtime_vllm_lane_uses_lane_config_capacity_hint(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
+            return {
+                "runtime": {
+                    "lanes": [
+                        {
+                            "lane_id": "lane-1",
+                            "model": "Qwen/Qwen3-8B",
+                            "runtime_state": "loaded",
+                            "vllm": True,
+                            "num_parallel": 0,
+                            "lane_config": {"num_parallel": 6},
+                            "effective_vram_mb": 12288,
+                            "loaded_models": [{"name": "Qwen/Qwen3-8B"}],
+                        }
+                    ]
+                }
+            }
+
+    queue_mgr = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_mgr, runtime_registry=_FakeRegistry())
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {"parallel_capacity": 1},
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: {"models": []},
+    )
+
+    facade.register_model(202, "logosnode", "http://fake", "Qwen/Qwen3-8B", 65536, provider_id=12)
+    provider = facade._providers[12]
+
+    status = provider.get_model_status(202)
+    debug_state = provider.get_debug_state()
+
+    assert status.is_loaded is True
+    assert status.vram_mb == 12288
+    assert debug_state[202]["max_capacity"] == 6
+    assert debug_state[202]["capacity_source"] == "runtime"
