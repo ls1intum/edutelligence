@@ -105,6 +105,12 @@ class LectureSearchAnswerPipeline(SubPipeline):
             )
         )
 
+        if not sources:
+            return LectureSearchAskResponseDTO(
+                answer="No relevant course material was found for this query.",
+                sources=[],
+            )
+
         # Step 3: Generate the real answer using numbered context (with metadata so the
         # model knows the course/lecture name and can reference them explicitly)
         context = "\n\n".join(
@@ -122,7 +128,9 @@ class LectureSearchAnswerPipeline(SubPipeline):
             parsed = json.loads(cleaned)
             answer = parsed.get("answer", raw)
             used_indices = {
-                i - 1 for i in parsed.get("used_sources", []) if isinstance(i, int)
+                i - 1
+                for i in parsed.get("used_sources", [])
+                if isinstance(i, int) and i >= 1
             }
             used_sources = [s for i, s in enumerate(sources) if i in used_indices]
         except (json.JSONDecodeError, ValueError):
