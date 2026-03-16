@@ -264,3 +264,39 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
 
         retrieved_memory2 = memory_repository.find("test", memory2.id)
         assert len(retrieved_memory2.connections) == 0
+
+    def test_delete_all_for_tenant(
+        self, memory_repository, memory_connection_repository
+    ):
+        """Test deleting all memory connections for a tenant."""
+        connection1 = self._create_test_connection(
+            memory_repository, memory_connection_repository
+        )
+        connection2 = self._create_test_connection(
+            memory_repository, memory_connection_repository
+        )
+        connection3 = self._create_test_connection(
+            memory_repository, memory_connection_repository
+        )
+
+        # Verify objects exist
+        all_before = memory_connection_repository.all("test")
+        ids_before = [c.id for c in all_before]
+        assert connection1.id in ids_before
+        assert connection2.id in ids_before
+        assert connection3.id in ids_before
+
+        # Delete all
+        memory_connection_repository.delete_all_for_tenant("test")
+
+        # Verify all objects are gone
+        all_after = memory_connection_repository.all("test")
+        ids_after = [c.id for c in all_after]
+        assert connection1.id not in ids_after
+        assert connection2.id not in ids_after
+        assert connection3.id not in ids_after
+
+    def test_delete_all_for_tenant_nonexistent(self, memory_connection_repository):
+        """Test that delete_all_for_tenant does not raise for a non-existent tenant."""
+        # Should not raise even if the tenant does not exist
+        memory_connection_repository.delete_all_for_tenant("tenant_that_does_not_exist")
