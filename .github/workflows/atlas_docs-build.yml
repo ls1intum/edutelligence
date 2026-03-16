@@ -44,7 +44,7 @@ jobs:
 
       - name: Restore Atlas docs from cache
         id: cache-atlas
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: atlas/docs/build
           key: atlas-docs-${{ hashFiles('atlas/docs/**') }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Save Atlas docs to cache
         if: needs.detect-changes.outputs.changed == 'true' || steps.cache-atlas.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: atlas/docs/build
           key: atlas-docs-${{ hashFiles('atlas/docs/**') }}
