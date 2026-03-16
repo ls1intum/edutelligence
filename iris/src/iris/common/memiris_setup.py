@@ -44,45 +44,56 @@ Keep learnings atomic and concise.
 
 CRITICAL INSTRUCTIONS:
 1. DO NOT summarize the conversation content.
-2. DO NOT mention specific exercise topics (e.g., "HATEOAS", "Exercise 1") unless describing the user's skill level.
+2. DO NOT mention specific exercise topics (e.g., "HATEOAS") unless describing the user's skill level.
 3. Focus purely on the USER'S identity, skills, and personality.
-4. AVOID extracting temporary states (e.g., "The user is working on X", "The user is failing").
+4. EXTRACT persistent traits, NOT temporary states.
+   - "I am confused about this loop" -> NOTHING (Temporary).
+   - "I always struggle with recursion" -> EXTRACT: "The user struggles with recursion."
 5. Only extract details that persist beyond this conversation.
 
 EXAMPLES OF INPUTS WITH NO EXTRACTION (Output Nothing):
-- "Can you explain REST?" -> NOTHING (User goal, not personal detail)
+- "Can you explain REST?" -> NOTHING (User goal)
 - "I am stuck on valid_move." -> NOTHING (Temporary state)
-- "The build failed." -> NOTHING (Event, not person)
-- "Thank you." -> NOTHING (Chit-chat)
-- "I'm working on the HATEOAS exercise and I don't understand how to link resources." -> NOTHING (Context/Confusion)
-- "I feel stupid because I can't solve this." -> NOTHING (Transient emotion)
-- "My professor said we should use Factory pattern." -> NOTHING (External constraint/instruction)
+- "The build failed." -> NOTHING (Event)
+- "I feel stupid." -> NOTHING (Transient emotion)
+
+POSITIVE EXAMPLES (Valid Extraction):
+- "I am a beginner." -> "The user is a beginner."
+- "I am bad at math." -> "The user is bad at math."
+- "I always forget to check nulls." -> "The user tends to forget null checks."
+- "My name is Sarah." -> "The user is named Sarah."
 
 High quality extraction means returning NOTHING when acceptable. Do not hallucinate details to fill space.
 """
 
 _memiris_user_focus_requirements = """
-Find specific preferences the user has for HOW they want to be answered (e.g., brevity, format, tone).
+Find specific preferences the user has for HOW they want to be answered \
+(e.g., brevity, format, tone, connection to context).
 Always start with 'The user'. Use 'they/them' pronouns unless specified.
 Keep learnings atomic and concise.
 
 CRITICAL INSTRUCTIONS:
-1. SEPARATE STYLE FROM CONTENT. Do not extract what the user is asking about (e.g. "User wants to know about REST").
-2. IGNORE standard questions. Asking "What is X?" does not mean "User prefers definitions". \
-It just means they asked a question.
-3. ONLY extract if the user explicitly REQUESTS a specific format, tone, or constraints.
-4. IGNORE implied preferences from single interactions.
+1. SEPARATE STYLE FROM CONTENT. Do not extract the topic (e.g. "User wants to know about REST"), but DO extract the \
+desired explanation method.
+2. IGNORE standard questions ("What is X?").
+3. EXTRACT if the user explicitly REQUESTS a way of explaining or solving.
+   - "How does this apply to my code?" -> EXTRACT: "The user prefers concepts to be applied to their code."
+   - "Please ensure to explain such things." -> EXTRACT: "The user prefers explicit explanations of connections."
+4. LOOK FOR requests about depth, tone, or format.
 
 EXAMPLES OF INPUTS WITH NO EXTRACTION (Output Nothing):
 - "What is HATEOAS?" -> NOTHING (Standard question)
 - "Give me the solution." -> NOTHING (Standard request)
 - "Why is this wrong?" -> NOTHING (Standard debugging)
-- "Can you check if my implementation of the strategy pattern is correct?" -> NOTHING (Request for feedback)
-- "I need to pass the security tests." -> NOTHING (External goal)
-- "Why is the output not sorted?" -> NOTHING (Debugging question)
 
-EXTRACT ONLY IF: "Don't give me code", "Explain like I'm 5", "Give me a hint, not the answer".
-If the interaction is standard, output NOTHING. It is better to miss a weak signal than to extract noise.
+POSITIVE EXAMPLES (Valid Extraction):
+- "Don't give me code." -> "The user prefers not to receive code."
+- "Explain like I'm 5." -> "The user prefers simplified explanations."
+- "Give me a hint, not the answer." -> "The user prefers hints over solutions."
+- "How exactly would that map to this exercise? Ensure to explain that." -> "The user prefers concepts to be \
+explicitly mapped to the current exercise."
+
+If the interaction is standard, output NOTHING. But if they ask for a specific *kind* of answer, extract it.
 """
 
 _memiris_user_focus_facts = """
@@ -92,17 +103,19 @@ Keep learnings atomic and concise.
 
 CRITICAL INSTRUCTIONS:
 1. EXTRACT ONLY EXPLICIT, PERMANENT FACTS stated by the user.
-2. NO INTERPRETATION. If the user says "I think it's a Mac", do NOT extract "User uses Mac".
-3. IGNORE conversation context. The fact that they are asking about Python does not mean "User uses Python" \
-(they might be learning it).
-4. IGNORE transient states ("I am confused", "I am working").
+2. NO INTERPRETATION of ambiguity.
+3. IGNORE conversation context or transient states.
 
 EXAMPLES OF INPUTS WITH NO EXTRACTION (Output Nothing):
 - "My code isn't running." -> NOTHING (Transient)
-- "I need to install Java." -> NOTHING (Action, not attribute)
+- "I need to install Java." -> NOTHING (Action)
 - "I hate this exercise." -> NOTHING (Opinion)
-- "I think I might switch to VS Code later." -> NOTHING (Hypothetical/future plan)
-- "The tutorial uses Python 3.9." -> NOTHING (Context about material, not user)
+
+POSITIVE EXAMPLES (Valid Extraction):
+- "I use IntelliJ." -> "The user uses IntelliJ."
+- "I have a visual impairment." -> "The user has a visual impairment."
+- "I am on macOS." -> "The user uses macOS."
+- "We are required to use Python 3.9." -> "The user is required to use Python 3.9."
 
 Most messages contain NO hard facts. Outputting NOTHING is the expected behavior for 99% of messages.
 """
