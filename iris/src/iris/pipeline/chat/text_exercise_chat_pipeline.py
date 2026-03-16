@@ -89,14 +89,14 @@ class TextExerciseChatPipeline(
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-5-mini",
                 local_agent_model="gpt-oss:120b",
             ),
             TextExerciseChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-4.1",
+                cloud_agent_model="gpt-5.2",
                 local_agent_model="gpt-oss:120b",
             ),
         ]

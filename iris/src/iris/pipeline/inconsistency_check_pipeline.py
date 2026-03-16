@@ -46,7 +46,7 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(
-                version="gpt-oss:120b" if local else "gpt-o3-mini"
+                version="gpt-oss:120b" if local else "gpt-5-mini"
             ),
             completion_args=completion_args,
         )
@@ -141,7 +141,7 @@ class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
                 variant_id="default",
                 name="Default",
                 description="Standard inconsistency check implementation with efficient model usage",
-                cloud_solver_model="gpt-o3-mini",
+                cloud_solver_model="gpt-5-mini",
                 local_solver_model="gpt-oss:120b",
             ),
         ]

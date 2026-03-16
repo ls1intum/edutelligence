@@ -148,19 +148,15 @@ def memiris_create_user_memory_creation_pipeline_openai(
         if isinstance(model, OpenAIChatModel) and model.model == "gpt-5-mini":
             model_to_use = model
             break
-    else:
-        for model in llm_manager.entries:
-            if isinstance(model, OpenAIChatModel) and model.model == "gpt-4.1-mini":
-                model_to_use = model
-                break
-        else:
-            logging.error(
-                "No OpenAIChatModel with model 'gpt-5-mini' or 'gpt-4.1-mini' found in LlmManager."
-                "Using Ollama for Memiris instead."
-            )
-            return memiris_create_user_memory_creation_pipeline_ollama(
-                weaviate_client, vectorizer
-            )
+
+    if model_to_use is None:
+        logging.warning(
+            "No OpenAIChatModel with model 'gpt-5-mini' found in LlmManager. "
+            "Using Ollama for Memiris instead."
+        )
+        return memiris_create_user_memory_creation_pipeline_ollama(
+            weaviate_client, vectorizer
+        )
 
     memiris_llm = OpenAiLanguageModel(
         model=model_to_use.model,
@@ -236,19 +232,15 @@ def memiris_create_user_memory_sleep_pipeline_openai(
         if isinstance(model, OpenAIChatModel) and model.model == "gpt-5-mini":
             model_to_use = model
             break
-    else:
-        for model in llm_manager.entries:
-            if isinstance(model, OpenAIChatModel) and model.model == "gpt-4.1-mini":
-                model_to_use = model
-                break
-        else:
-            logging.error(
-                "No OpenAIChatModel with model 'gpt-5-mini' or 'gpt-4.1-mini' found in LlmManager."
-                "Using Ollama for Memiris instead."
-            )
-            return memiris_create_user_memory_sleep_pipeline_ollama(
-                weaviate_client, vectorizer
-            )
+
+    if model_to_use is None:
+        logging.warning(
+            "No OpenAIChatModel with model 'gpt-5-mini' found in LlmManager. "
+            "Using Ollama for Memiris instead."
+        )
+        return memiris_create_user_memory_sleep_pipeline_ollama(
+            weaviate_client, vectorizer
+        )
 
     memiris_llm = OpenAiLanguageModel(
         model=model_to_use.model,
@@ -652,6 +644,36 @@ class MemirisWrapper:
         return MemoryWithRelationsDTO(
             memory=memory_dto, learnings=learning_dtos, connections=connection_dtos
         )
+
+    def delete_all_for_tenant(self) -> None:
+        """
+        Delete all memory data (memories, learnings, and connections) for the tenant
+        efficiently without loading them first.
+
+        This method deletes all memory-related data for the current tenant by directly
+        deleting from the underlying repositories.
+        """
+        if not self.enabled:
+            logging.warning("MemirisWrapper is disabled, skipping delete operation.")
+            return
+
+        logging.info("Deleting all memory data for tenant %s", self.tenant)
+        try:
+            # Delete all memories, learnings, and connections for the tenant
+            self.memory_service.delete_all_for_tenant(self.tenant)
+            self.learning_service.delete_all_for_tenant(self.tenant)
+            self.memory_connection_service.delete_all_for_tenant(self.tenant)
+            logging.info(
+                "Successfully deleted all memory data for tenant %s", self.tenant
+            )
+        except Exception as e:
+            logging.error(
+                "Failed to delete all memory data for tenant %s: %s",
+                self.tenant,
+                e,
+                exc_info=True,
+            )
+            raise
 
 
 def memory_sleep_task():
