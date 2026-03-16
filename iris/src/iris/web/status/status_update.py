@@ -275,6 +275,7 @@ class CourseChatStatusCallback(StatusCallback):
                 weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Creating suggestions",
+                internal=True,
             ),
             StageDTO(
                 weight=STAGE_WEIGHT_SECONDARY,
@@ -309,6 +310,7 @@ class ExerciseChatStatusCallback(StatusCallback):
                 weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Creating suggestions",
+                internal=True,
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
