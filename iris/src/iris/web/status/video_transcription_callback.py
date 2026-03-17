@@ -36,7 +36,7 @@ class VideoTranscriptionCallback(StatusCallback):
         )
 
         current_stage_index = len(initial_stages) if initial_stages else 0
-        stages = initial_stages or []
+        stages = list(initial_stages) if initial_stages else []
         stages += [
             StageDTO(
                 weight=10,
