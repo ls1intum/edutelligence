@@ -57,8 +57,6 @@ class TranscriptionWorker:
             self.dto.lecture_unit_id,
         )
         self._acquire_slot()
-
-        self._slot_acquired = True
         try:
             self._run_pipeline()
         finally:
@@ -79,6 +77,8 @@ class TranscriptionWorker:
                 MAX_SLOTS,
             )
             self.semaphore.acquire(block=True)
+        # Set the flag here so SIGTERM always sees it regardless of which acquire path was taken
+        self._slot_acquired = True
 
     def _release_slot(self):
         with self.active_count.get_lock():
