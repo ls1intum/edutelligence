@@ -549,12 +549,19 @@ class LectureChatPipeline(
 
             if mcq_count == 1:
                 # Single question: append directly
+                found_mcq = False
                 if mcq_queue:
                     while not mcq_queue.empty():
                         msg_type, data = mcq_queue.get_nowait()
                         if msg_type == "mcq":
                             data = self._add_mcq_citations(data, lecture_units_meta)
                             state.result = state.result + "\n" + data
+                            found_mcq = True
+                        elif msg_type == "error":
+                            logger.error("MCQ generation error: %s", data)
+                if not found_mcq:
+                    logger.warning("No MCQ was produced by the parallel thread")
+                    state.result += "\n\nSorry, I was unable to generate the question. Please try again."
             else:
                 # Multiple questions: collect all, bundle as mcq-set for carousel
                 collected_questions: list[dict] = []
@@ -587,6 +594,12 @@ class LectureChatPipeline(
                         }
                     )
                     state.result = state.result + "\n" + mcq_set
+                else:
+                    logger.warning(
+                        "No MCQ questions collected for mcq-set (requested %d)",
+                        mcq_count,
+                    )
+                    state.result += "\n\nSorry, I was unable to generate the questions. Please try again."
 
             for token in self.mcq_pipeline.tokens:
                 self._track_tokens(state, token)

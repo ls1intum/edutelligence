@@ -703,6 +703,7 @@ class CourseChatPipeline(
                             logger.error("MCQ generation error: %s", data)
                 if not found_mcq:
                     logger.warning("No MCQ was produced by the parallel thread")
+                    state.result += "\n\nSorry, I was unable to generate the question. Please try again."
             else:
                 # Multiple questions: collect all, bundle as mcq-set for carousel
                 collected_questions: list[dict] = []
@@ -740,6 +741,7 @@ class CourseChatPipeline(
                         "No MCQ questions collected for mcq-set (requested %d)",
                         mcq_count,
                     )
+                    state.result += "\n\nSorry, I was unable to generate the questions. Please try again."
 
             for token in self.mcq_pipeline.tokens:
                 self._track_tokens(state, token)
