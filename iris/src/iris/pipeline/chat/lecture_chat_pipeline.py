@@ -7,6 +7,7 @@ from typing import Any, Callable, List, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
 from iris.pipeline.session_title_generation_pipeline import (
@@ -30,6 +31,8 @@ from ...tools import (
     create_tool_get_course_details,
     create_tool_lecture_content_retrieval,
 )
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import LectureChatCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
@@ -130,7 +133,7 @@ class LectureChatPipeline(
         ]
 
         query_text = self.get_text_of_latest_user_message(state)
-        if allow_lecture_tool:
+        if allow_lecture_tool and not getattr(state, "mcq_parallel", False):
             self.lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
@@ -322,6 +325,109 @@ class LectureChatPipeline(
 
         return False, 0
 
+    def _retrieve_lecture_content_for_mcq(
+        self,
+        state: AgentPipelineExecutionState[
+            LectureChatPipelineExecutionDTO, LectureChatVariant
+        ],
+    ) -> tuple[Optional[str], list[dict]]:
+        """Fetch lecture unit summaries directly from Weaviate for MCQ generation.
+
+        Uses a simple filtered fetch instead of the full RAG pipeline
+        (query rewriting, HyDE, reranking) to keep MCQ generation fast.
+
+        Returns:
+            Tuple of (formatted content string, list of lecture unit metadata dicts)
+        """
+        if not should_allow_lecture_tool(state.db, state.dto.course.id):
+            return None, []
+        try:
+            # Fetch actual page text content (not summaries) to avoid hallucinated content
+            chunk_filter = Filter.by_property(
+                LectureUnitPageChunkSchema.COURSE_ID.value
+            ).equal(state.dto.course.id)
+
+            # Narrow to specific lecture if available
+            if state.dto.lecture and state.dto.lecture.id is not None:
+                chunk_filter &= Filter.by_property(
+                    LectureUnitPageChunkSchema.LECTURE_ID.value
+                ).equal(state.dto.lecture.id)
+
+            chunks = state.db.lectures.query.fetch_objects(
+                filters=chunk_filter,
+                return_properties=[
+                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
+                    LectureUnitPageChunkSchema.LECTURE_ID.value,
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
+                ],
+            )
+
+            if not chunks.objects:
+                return None, []
+
+            # Also fetch lecture unit names for metadata
+            unit_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                state.dto.course.id
+            )
+            unit_results = state.db.lecture_units.query.fetch_objects(
+                filters=unit_filter,
+                return_properties=[
+                    LectureUnitSchema.LECTURE_UNIT_ID.value,
+                    LectureUnitSchema.LECTURE_NAME.value,
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value,
+                ],
+            )
+            unit_name_map: dict[int, dict] = {}
+            for obj in unit_results.objects:
+                props = obj.properties
+                lu_id = props.get(LectureUnitSchema.LECTURE_UNIT_ID.value)
+                if lu_id is not None:
+                    unit_name_map[lu_id] = {
+                        "lecture_name": props.get(
+                            LectureUnitSchema.LECTURE_NAME.value, ""
+                        ),
+                        "unit_name": props.get(
+                            LectureUnitSchema.LECTURE_UNIT_NAME.value, ""
+                        ),
+                    }
+
+            content = ""
+            units_data: dict[int, dict] = {}
+            for obj in chunks.objects:
+                props = obj.properties
+                lu_id = props.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
+                page = props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value, 1)
+                text = props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")
+                names = unit_name_map.get(lu_id, {})
+                lecture_name = names.get("lecture_name", "")
+                unit_name = names.get("unit_name", "")
+
+                if text:
+                    content += f"Lecture: {lecture_name}, Unit: {unit_name}, Page {page}\n{text}\n\n"
+
+                if lu_id is not None:
+                    if lu_id not in units_data:
+                        units_data[lu_id] = {
+                            "lecture_unit_id": lu_id,
+                            "lecture_name": lecture_name,
+                            "unit_name": unit_name,
+                            "pages": set(),
+                        }
+                    units_data[lu_id]["pages"].add(page)
+
+            lecture_units_meta = []
+            for data in units_data.values():
+                pages = sorted(data["pages"])
+                data["first_page"] = str(pages[0]) if pages else "1"
+                del data["pages"]
+                lecture_units_meta.append(data)
+
+            return (content if content.strip() else None), lecture_units_meta
+        except Exception as e:
+            logger.warning("Failed to fetch lecture summaries for MCQ: %s", str(e))
+            return None, []
+
     def pre_agent_hook(
         self,
         state: AgentPipelineExecutionState[
@@ -353,6 +459,12 @@ class LectureChatPipeline(
         user_message = self.get_text_of_latest_user_message(state)
         count = getattr(state, "mcq_count", 1)
 
+        # Retrieve lecture content before spawning MCQ thread
+        lecture_content, lecture_units_meta = self._retrieve_lecture_content_for_mcq(
+            state
+        )
+        setattr(state, "mcq_lecture_units_meta", lecture_units_meta)
+
         setattr(
             state,
             "mcq_thread",
@@ -362,6 +474,7 @@ class LectureChatPipeline(
                 user_language=user_language,
                 result_storage=getattr(state, "mcq_result_storage", {}),
                 count=count,
+                lecture_content=lecture_content,
             ),
         )
 
@@ -432,6 +545,7 @@ class LectureChatPipeline(
             mcq_thread.join(timeout=120)
             mcq_storage = getattr(state, "mcq_result_storage", {})
             mcq_queue = mcq_storage.get("queue")
+            lecture_units_meta = getattr(state, "mcq_lecture_units_meta", [])
 
             if mcq_count == 1:
                 # Single question: append directly
@@ -439,6 +553,7 @@ class LectureChatPipeline(
                     while not mcq_queue.empty():
                         msg_type, data = mcq_queue.get_nowait()
                         if msg_type == "mcq":
+                            data = self._add_mcq_citations(data, lecture_units_meta)
                             state.result = state.result + "\n" + data
             else:
                 # Multiple questions: collect all, bundle as mcq-set for carousel
@@ -448,6 +563,7 @@ class LectureChatPipeline(
                         msg_type, data = mcq_queue.get_nowait()
                         if msg_type == "mcq":
                             try:
+                                data = self._add_mcq_citations(data, lecture_units_meta)
                                 parsed = json.loads(data)
                                 # Flatten: if a worker returned mcq-set, extract individual questions
                                 if parsed.get("type") == "mcq-set":
@@ -486,6 +602,66 @@ class LectureChatPipeline(
         )
 
         return state.result
+
+    @staticmethod
+    def _add_mcq_citations(mcq_json_str: str, lecture_units_meta: list[dict]) -> str:
+        """Add citation markers to MCQ explanations and strip them from options.
+
+        Uses the LLM-generated "source" field to match the correct lecture unit.
+        Same citation format as the regular citation pipeline:
+        [cite:L:<lecture_unit_id>:<page>:<start>:<end>:<keyword>:<summary>]
+        """
+        if not lecture_units_meta:
+            return mcq_json_str
+        try:
+            parsed = json.loads(mcq_json_str)
+        except (json.JSONDecodeError, TypeError):
+            return mcq_json_str
+
+        citation_re = re.compile(r"\[cite:[^\]]*\]")
+
+        def _find_matching_unit(source: str) -> Optional[dict]:
+            """Match the LLM source field to a lecture unit."""
+            if not lecture_units_meta:
+                return None
+            if len(lecture_units_meta) == 1:
+                return lecture_units_meta[0]
+            if source:
+                source_lower = source.lower().strip()
+                for meta in lecture_units_meta:
+                    unit_name = (meta.get("unit_name") or "").lower()
+                    if source_lower in unit_name or unit_name in source_lower:
+                        return meta
+                    lecture_name = (meta.get("lecture_name") or "").lower()
+                    if source_lower in lecture_name or lecture_name in source_lower:
+                        return meta
+            return None
+
+        def _process_question(q: dict) -> None:
+            for opt in q.get("options", []):
+                if "text" in opt:
+                    opt["text"] = citation_re.sub("", opt["text"]).strip()
+            if "question" in q:
+                q["question"] = citation_re.sub("", q["question"]).strip()
+
+            source = q.pop("source", "")
+            meta = _find_matching_unit(source)
+            if meta:
+                lu_id = meta.get("lecture_unit_id", "")
+                unit_name = meta.get("unit_name", "")
+                page = meta.get("first_page", "1")
+                q["explanation"] = (
+                    q.get("explanation", "")
+                    + f" [cite:L:{lu_id}:{page}:::{unit_name}:{unit_name}]"
+                )
+
+        if parsed.get("type") == "mcq-set":
+            for q in parsed.get("questions", []):
+                _process_question(q)
+        elif parsed.get("type") == "mcq":
+            _process_question(parsed)
+
+        return json.dumps(parsed)
 
     def _process_citations(
         self,
