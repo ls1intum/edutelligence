@@ -56,6 +56,7 @@ class McqGenerationPipeline(SubPipeline):
         chat_history: Optional[List[PyrisMessage]] = None,
         user_language: str = "en",
         callback: Optional[StatusCallback] = None,
+        lecture_content: Optional[str] = None,
     ) -> str:
         """
         Generate MCQ questions as a JSON string.
@@ -64,6 +65,7 @@ class McqGenerationPipeline(SubPipeline):
         :param chat_history: Recent chat history for context
         :param user_language: "en" or "de"
         :param callback: Status callback for dynamic chat messages
+        :param lecture_content: Pre-retrieved lecture content to base questions on
         :return: JSON string with MCQ data
         """
         preparing_messages = [
@@ -93,6 +95,7 @@ class McqGenerationPipeline(SubPipeline):
             command=command,
             chat_history_text=chat_history_text,
             user_language=user_language,
+            lecture_content=lecture_content,
         )
 
         if callback:
@@ -115,6 +118,7 @@ class McqGenerationPipeline(SubPipeline):
         user_language: str,
         result_storage: dict,
         count: int = 1,
+        lecture_content: Optional[str] = None,
     ) -> Thread:
         """
         Run MCQ generation in a background thread.
@@ -132,6 +136,7 @@ class McqGenerationPipeline(SubPipeline):
         :param user_language: "en" or "de"
         :param result_storage: Mutable dict for inter-thread communication
         :param count: Number of questions to generate (1 = single, >1 = one-by-one)
+        :param lecture_content: Pre-retrieved lecture content to base questions on
         :return: The started Thread handle
         """
         q: Queue = Queue()
@@ -143,7 +148,12 @@ class McqGenerationPipeline(SubPipeline):
             try:
                 if count > 1:
                     self._generate_multiple(
-                        command, chat_history, user_language, count, q
+                        command,
+                        chat_history,
+                        user_language,
+                        count,
+                        q,
+                        lecture_content=lecture_content,
                     )
                 else:
                     result = self(
@@ -151,6 +161,7 @@ class McqGenerationPipeline(SubPipeline):
                         chat_history=chat_history,
                         user_language=user_language,
                         callback=None,  # pre_agent_hook already sent status
+                        lecture_content=lecture_content,
                     )
                     result_storage["mcq_json"] = result
                     q.put(("mcq", result))
@@ -175,6 +186,7 @@ class McqGenerationPipeline(SubPipeline):
         user_language: str,
         count: int,
         q: Queue,
+        lecture_content: Optional[str] = None,
     ) -> None:
         """Generate multiple MCQ questions in parallel using subtopic extraction.
 
@@ -186,14 +198,21 @@ class McqGenerationPipeline(SubPipeline):
         """
         # Step 1: Extract subtopics
         try:
-            subtopics = self._extract_subtopics(command, chat_history, count)
+            subtopics = self._extract_subtopics(
+                command, chat_history, count, lecture_content=lecture_content
+            )
         except Exception as e:
             logger.warning(
                 "Subtopic extraction failed, falling back to sequential",
                 exc_info=e,
             )
             self._generate_multiple_sequential(
-                command, chat_history, user_language, count, q
+                command,
+                chat_history,
+                user_language,
+                count,
+                q,
+                lecture_content=lecture_content,
             )
             return
 
@@ -222,6 +241,7 @@ class McqGenerationPipeline(SubPipeline):
                     chat_history=chat_history,
                     user_language=user_language,
                     callback=None,
+                    lecture_content=lecture_content,
                 )
 
             return ctx.run(_run)
@@ -262,6 +282,7 @@ class McqGenerationPipeline(SubPipeline):
                         chat_history=chat_history,
                         user_language=user_language,
                         callback=None,
+                        lecture_content=lecture_content,
                     )
                     successful_results.append(result)
                 except Exception as e:
@@ -282,6 +303,7 @@ class McqGenerationPipeline(SubPipeline):
         command: str,
         chat_history: Optional[List[PyrisMessage]],
         count: int,
+        lecture_content: Optional[str] = None,
     ) -> list[str]:
         """Use a fast LLM call to extract N distinct subtopics for question generation."""
         chat_history_text = self._serialize_chat_history(chat_history)
@@ -292,8 +314,14 @@ class McqGenerationPipeline(SubPipeline):
         )
         if chat_history_text:
             prompt += f"\nConversation context:\n{chat_history_text}\n"
+        if lecture_content:
+            prompt += (
+                f"\nLecture material (subtopics MUST come from this material):\n"
+                f"{lecture_content}\n"
+            )
         prompt += (
-            f"\nGenerate exactly {count} distinct subtopics or aspects of the topic "
+            f"\nGenerate exactly {count} distinct subtopics or aspects "
+            f"{"from the lecture material above " if lecture_content else ""}"
             f"that would each make a good multiple-choice question. "
             f"Each subtopic should test a different concept or fact.\n"
             f"Respond with ONLY a JSON array of short strings, nothing else. "
@@ -325,6 +353,7 @@ class McqGenerationPipeline(SubPipeline):
         user_language: str,
         count: int,
         q: Queue,
+        lecture_content: Optional[str] = None,
     ) -> None:
         """Fallback: generate questions sequentially when subtopic extraction fails."""
         previous_questions: list[str] = []
@@ -348,6 +377,7 @@ class McqGenerationPipeline(SubPipeline):
                     chat_history=chat_history,
                     user_language=user_language,
                     callback=None,
+                    lecture_content=lecture_content,
                 )
                 try:
                     parsed = json.loads(result)

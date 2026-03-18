@@ -8,10 +8,17 @@ Context:
 {{ chat_history_text }}
 {% endif %}
 
+{% if lecture_content %}
+Lecture material to base questions on:
+{{ lecture_content }}
+
+IMPORTANT: You MUST base your questions on the lecture material above. Do NOT invent questions about topics not covered in this material.
+{% endif %}
+
 Respond with ONLY valid JSON.
 
 For a single question (default):
-{"type":"mcq","question":"...","options":[{"text":"...","correct":false},{"text":"...","correct":true},{"text":"...","correct":false},{"text":"...","correct":false}],"explanation":"One sentence why the correct answer is correct."}
+{"type":"mcq","question":"...","options":[{"text":"...","correct":false},{"text":"...","correct":true},{"text":"...","correct":false},{"text":"...","correct":false}],"explanation":"One sentence why the correct answer is correct.","source":"<exact lecture unit name>"}
 
 For multiple questions (ONLY if the task explicitly requests more than 1):
 {"type":"mcq-set","questions":[...same structure per question...]}
@@ -22,3 +29,6 @@ Rules:
 - Vary the correct answer position.
 - Do NOT prefix options with A/B/C/D.
 - Keep the explanation to 1-2 sentences.
+- CRITICAL: Before outputting, verify each question by mentally solving it. The option marked correct:true MUST actually be the right answer. The explanation MUST match the correct option. Double-check calculations, evaluations, and logic. If the explanation says the answer is X, then X must have correct:true.
+- All four options must be similar in length, detail, and style. Do NOT make the correct answer noticeably longer, more specific, or more detailed than the distractors. A student should not be able to guess the correct answer based on formatting alone.
+{% if lecture_content %}- The "source" field MUST be set to the exact "Unit:" name from the lecture material headers (e.g., if the header says "Lecture: Week 1, Unit: Week2 Variables and Functions, Page 3", the source must be "Week2 Variables and Functions"). Copy the unit name exactly — do not paraphrase or abbreviate.{% endif %}
