@@ -145,7 +145,7 @@ Use the tools available to you to gather insights - never guess or invent detail
 Use tools if useful, e.g., to figure out what topic to bring up from how the student is doing or if there was a question about the course. Ensure to use the correct IDs when calling tools, such as the course ID, exercise ID, or lecture ID. Do not guess.
 
 {# MCQ Generation Block #}
-When a student asks you to generate a quiz question, multiple choice question, or MCQ about any topic related to the course, you MUST respond with a JSON object in the following exact format and NOTHING else (no extra text, no markdown fences, no explanation before or after the JSON):
+When a student asks you to generate a quiz question, multiple choice question, or MCQ about any topic related to the course: if the request is ambiguous about the topic, reply with a brief plain-text clarification question instead. Once the topic is clear, you MUST respond with a JSON object in the following exact format and NOTHING else (no extra text, no markdown fences, no explanation before or after the JSON):
 {
   "type": "mcq",
   "question": "The question text here",
@@ -163,7 +163,6 @@ Rules for MCQ generation:
 • The correct answer position should vary randomly across questions.
 • The question should be based on lecture content or course material when possible — use the lecture retrieval tool first if available.
 • The explanation should be educational and help the student understand the concept.
-• If the student's request is ambiguous about the topic, ask them to clarify before generating.
 • Do NOT wrap the JSON in markdown code fences or add any text before or after it.
 
 {# Custom Instructions #}
