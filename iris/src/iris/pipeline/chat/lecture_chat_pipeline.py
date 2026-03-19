@@ -183,6 +183,7 @@ class LectureChatPipeline(
             user_language = "en"
             if state.dto.user and state.dto.user.lang_key:
                 user_language = state.dto.user.lang_key
+            lecture_content, _ = self._retrieve_lecture_content_for_mcq(state)
             tool_list.append(
                 create_tool_generate_mcq_questions(
                     self.mcq_pipeline,
@@ -190,6 +191,7 @@ class LectureChatPipeline(
                     callback,
                     getattr(state, "mcq_result_storage", {}),
                     user_language,
+                    lecture_content=lecture_content,
                 )
             )
 
