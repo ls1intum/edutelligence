@@ -29,12 +29,15 @@ from memiris.service.vectorizer import Vectorizer
 from memiris.util.uuid_util import is_valid_uuid, to_uuid
 from weaviate import WeaviateClient
 
+from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.llm import AzureOpenAIChatModel, OllamaModel
 from iris.llm.external.openai_chat import OpenAIChatModel
 from iris.llm.llm_manager import LlmManager
 from iris.tracing import observe
 from iris.vector_database.database import VectorDatabase
+
+logger = get_logger(__name__)
 
 _memiris_user_focus_personal_details = """
 Find personal details about the user itself.
@@ -478,10 +481,19 @@ class MemirisWrapper:
             Returns:
                 Sequence[Memory]: A list of Memory objects that most closely match the query.
             """
-            vectors = self.vectorizer.vectorize(query)
-            memories = self.memory_service.semantic_search(
-                tenant=self.tenant, vectors=vectors, limit=limit
-            )
+            try:
+                vectors = self.vectorizer.vectorize(query)
+                memories = self.memory_service.semantic_search(
+                    tenant=self.tenant, vectors=vectors, limit=limit
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to search for memories for tenant %s", self.tenant
+                )
+                return (
+                    "Memory retrieval is temporarily unavailable. "
+                    "Continue without using memory results."
+                )
             accessed_memory_storage.extend(memories)
             if len(memories) == 0:
                 return "No memories found for the given query."
@@ -520,47 +532,83 @@ class MemirisWrapper:
             else:
                 return "Invalid memory ID provided. Please provide a valid UUID."
 
-            memory = self.memory_service.get_memory_by_id(self.tenant, memory_uuid)
+            try:
+                memory = self.memory_service.get_memory_by_id(self.tenant, memory_uuid)
+            except Exception:
+                logger.exception(
+                    "Failed to fetch memory %s for tenant %s", memory_id, self.tenant
+                )
+                return (
+                    "Memory retrieval is temporarily unavailable. "
+                    "Continue without using memory results."
+                )
 
             if memory is None:
                 return f"Memory with ID {memory_uuid} not found. Please provide a valid memory ID."
 
             memories: list[Memory] = []
+            retrieval_succeeded = False
 
             if memory.connections:
-                connections = (
-                    self.memory_connection_service.get_memory_connections_by_ids(
-                        self.tenant, memory.connections
+                try:
+                    connections = (
+                        self.memory_connection_service.get_memory_connections_by_ids(
+                            self.tenant, memory.connections
+                        )
+                    )
+                    memory_ids: list[UUID] = []
+                    for connection in sorted(
+                        connections, key=lambda x: x.weight, reverse=True
+                    ):
+                        for mid in connection.memories:
+                            if mid not in memory_ids:
+                                memory_ids.append(mid)
+
+                    if len(memory_ids) > limit:
+                        memory_ids = memory_ids[:limit]
+
+                    memories.extend(
+                        self.memory_service.get_memories_by_ids(self.tenant, memory_ids)
+                    )
+                    retrieval_succeeded = True
+
+                    if len(memories) == limit:
+                        accessed_memory_storage.extend(memories)
+                        return memories
+                except Exception:
+                    logger.exception(
+                        "Failed to fetch memory connections for memory %s "
+                        "(tenant %s)",
+                        memory_id,
+                        self.tenant,
+                    )
+
+            try:
+                memories.extend(
+                    self.memory_service.semantic_search(
+                        tenant=self.tenant,
+                        vectors=memory.vectors,
+                        limit=limit - len(memories),
                     )
                 )
-                memory_ids: list[UUID] = []
-                for connection in sorted(
-                    connections, key=lambda x: x.weight, reverse=True
-                ):
-                    for mid in connection.memories:
-                        if mid not in memory_ids:
-                            memory_ids.append(mid)
-
-                if len(memory_ids) > limit:
-                    memory_ids = memory_ids[:limit]
-
-                memories.extend(
-                    self.memory_service.get_memories_by_ids(self.tenant, memory_ids)
+                retrieval_succeeded = True
+            except Exception:
+                logger.exception(
+                    "Failed semantic search for similar memories of %s " "(tenant %s)",
+                    memory_id,
+                    self.tenant,
                 )
-
-                if len(memories) == limit:
-                    accessed_memory_storage.extend(memories)
-                    return memories
-
-            memories.extend(
-                self.memory_service.semantic_search(
-                    tenant=self.tenant,
-                    vectors=memory.vectors,
-                    limit=limit - len(memories),
-                )
-            )
 
             accessed_memory_storage.extend(memories)
+
+            if not retrieval_succeeded:
+                return (
+                    "Memory retrieval is temporarily unavailable. "
+                    "Continue without using memory results."
+                )
+            if len(memories) == 0:
+                return "No similar memories found."
+
             return memories
 
         return memiris_find_similar_memories
