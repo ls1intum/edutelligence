@@ -27,12 +27,18 @@ def _make_lane(
         "num_parallel": num_parallel,
         "effective_vram_mb": effective_vram_mb,
         "backend_metrics": backend_metrics or {},
+        "lane_config": {
+            "vllm_config": {
+                "gpu_memory_utilization": 0.7,
+                "tensor_parallel_size": 2,
+            }
+        } if vllm else {},
         "loaded_models": loaded_models or [{"name": model}],
     }
     return lane
 
 
-def _make_registry(lanes, devices=None, model_profiles=None):
+def _make_registry(lanes, devices=None, model_profiles=None, recent_samples=None):
     """Create a fake registry that returns the given lanes."""
 
     class _FakeRegistry:
@@ -44,12 +50,13 @@ def _make_registry(lanes, devices=None, model_profiles=None):
                     **({"model_profiles": model_profiles} if model_profiles else {}),
                 }
             }
+            self._recent_samples = recent_samples or []
 
         def peek_runtime_snapshot(self, provider_id):  # noqa: ARG002
             return self._snapshot
 
         def peek_recent_samples(self, provider_id, *, after_snapshot_id=0):  # noqa: ARG002
-            return []
+            return list(self._recent_samples)
 
     return _FakeRegistry()
 
@@ -126,6 +133,8 @@ def test_scheduler_view_loaded_vllm_and_sleeping_ollama(monkeypatch):
     assert vllm_lane.is_vllm is True
     assert vllm_lane.requests_running == 2.0
     assert vllm_lane.gpu_cache_usage_percent == 45.0
+    assert vllm_lane.gpu_memory_utilization == 0.7
+    assert vllm_lane.tensor_parallel_size == 2
 
     ollama_lane = next(l for l in view.lanes if l.lane_id == "ollama-1")
     assert ollama_lane.is_vllm is False
@@ -315,6 +324,9 @@ def test_get_model_profiles_reads_from_snapshot(monkeypatch):
             "loaded_vram_mb": 8192.0,
             "sleeping_residual_mb": 512.0,
             "disk_size_bytes": 4_000_000_000,
+            "base_residency_mb": 4300.0,
+            "kv_budget_mb": 3892.0,
+            "engine": "ollama",
             "measurement_count": 5,
             "last_measured_epoch": 1710000000.0,
         },
@@ -322,6 +334,12 @@ def test_get_model_profiles_reads_from_snapshot(monkeypatch):
             "loaded_vram_mb": 6000.0,
             "sleeping_residual_mb": None,
             "disk_size_bytes": None,
+            "base_residency_mb": 4500.0,
+            "kv_budget_mb": 1500.0,
+            "engine": "vllm",
+            "observed_gpu_memory_utilization": 0.7,
+            "min_gpu_memory_utilization_to_load": 0.65,
+            "tensor_parallel_size": 2,
             "measurement_count": 1,
             "last_measured_epoch": 1710000100.0,
         },
@@ -337,11 +355,20 @@ def test_get_model_profiles_reads_from_snapshot(monkeypatch):
     assert llama.loaded_vram_mb == 8192.0
     assert llama.sleeping_residual_mb == 512.0
     assert llama.disk_size_bytes == 4_000_000_000
+    assert llama.base_residency_mb == 4300.0
+    assert llama.kv_budget_mb == 3892.0
+    assert llama.engine == "ollama"
     assert llama.measurement_count == 5
 
     qwen = profiles["qwen3:8b"]
     assert qwen.loaded_vram_mb == 6000.0
     assert qwen.sleeping_residual_mb is None
+    assert qwen.base_residency_mb == 4500.0
+    assert qwen.kv_budget_mb == 1500.0
+    assert qwen.engine == "vllm"
+    assert qwen.observed_gpu_memory_utilization == 0.7
+    assert qwen.min_gpu_memory_utilization_to_load == 0.65
+    assert qwen.tensor_parallel_size == 2
 
 
 def test_get_model_profiles_empty_when_no_profiles(monkeypatch):
@@ -351,6 +378,39 @@ def test_get_model_profiles_empty_when_no_profiles(monkeypatch):
 
     profiles = facade.get_model_profiles(provider_id=12)
     assert profiles == {}
+
+
+def test_get_model_profiles_backfills_vllm_metadata_from_recent_samples(monkeypatch):
+    profiles_data = {
+        "Qwen/Qwen2.5-Coder-7B-Instruct": {
+            "loaded_vram_mb": 30508.0,
+            "sleeping_residual_mb": None,
+            "disk_size_bytes": None,
+            "measurement_count": 10,
+            "last_measured_epoch": 1710000100.0,
+        },
+    }
+    recent_samples = [
+        {
+            "runtime_payload": {
+                "lanes": [
+                    _make_lane(
+                        lane_id="qwen-v1",
+                        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+                        vllm=True,
+                    )
+                ]
+            }
+        }
+    ]
+    registry = _make_registry(lanes=[], model_profiles=profiles_data, recent_samples=recent_samples)
+    facade = _build_facade(registry, 101, "Qwen/Qwen2.5-Coder-7B-Instruct", monkeypatch)
+
+    profiles = facade.get_model_profiles(provider_id=12)
+    qwen = profiles["Qwen/Qwen2.5-Coder-7B-Instruct"]
+    assert qwen.engine == "vllm"
+    assert qwen.observed_gpu_memory_utilization == 0.7
+    assert qwen.tensor_parallel_size == 2
 
 
 def test_model_profile_estimate_vram_mb():
@@ -367,6 +427,9 @@ def test_model_profile_estimate_vram_mb():
     # Nothing available: fallback 4096
     p3 = ModelProfile(model_name="m3")
     assert p3.estimate_vram_mb() == 4096.0
+
+    p4 = ModelProfile(model_name="Qwen/Qwen2.5-Coder-7B-Instruct")
+    assert p4.estimate_base_residency_mb() is not None
 
 
 # ---------------------------------------------------------------------------

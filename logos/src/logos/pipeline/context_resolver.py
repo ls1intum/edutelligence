@@ -43,8 +43,13 @@ class ContextResolver:
     - Making HTTP calls (that's the Executor's job)
     """
 
-    def __init__(self, logosnode_registry: Optional[LogosNodeRuntimeRegistry] = None):
+    def __init__(
+        self,
+        logosnode_registry: Optional[LogosNodeRuntimeRegistry] = None,
+        lane_preparer: Optional[Any] = None,
+    ):
         self._logosnode_registry = logosnode_registry
+        self._lane_preparer = lane_preparer
 
     async def resolve_context(
         self,
@@ -95,8 +100,24 @@ class ContextResolver:
         lane_id: Optional[str] = None
 
         if provider_type == "logosnode":
+            prepared_lane: Optional[Dict[str, Any]] = None
+            if self._lane_preparer is not None:
+                try:
+                    prepared_lane = await self._lane_preparer.prepare_lane_for_request(
+                        provider_id,
+                        model_name,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Request-time lane preparation failed for provider=%s model=%s: %s",
+                        provider_id,
+                        model_name,
+                        exc,
+                    )
             if self._logosnode_registry is not None:
-                lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                lane = prepared_lane
+                if lane is None:
+                    lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:

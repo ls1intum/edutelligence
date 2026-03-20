@@ -672,6 +672,49 @@ async def test_context_resolver_uses_logosnode_lane_selection(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_context_resolver_prefers_request_time_prepared_lane(monkeypatch):
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_auth_info_to_deployment(model_id: int, provider_id: int, profile_id=None):  # noqa: ARG002
+            return {
+                "model_id": model_id,
+                "model_name": "model-a",
+                "endpoint": "",
+                "provider_id": provider_id,
+                "provider_name": "logosnode-provider",
+                "provider_type": "logosnode",
+                "base_url": "https://node.example",
+                "auth_name": "Authorization",
+                "auth_format": "Bearer {}",
+                "api_key": "shared-secret",
+            }
+
+    class _FakeRegistry:
+        async def select_lane_for_model(self, provider_id: int, model_name: str):  # noqa: ARG002
+            return {"lane_id": "lane-fallback"}
+
+    class _FakeLanePreparer:
+        async def prepare_lane_for_request(self, provider_id: int, model_name: str):  # noqa: ARG002
+            return {"lane_id": "lane-prepared"}
+
+    monkeypatch.setattr("logos.pipeline.context_resolver.DBManager", _FakeDB)
+    resolver = ContextResolver(
+        logosnode_registry=_FakeRegistry(),
+        lane_preparer=_FakeLanePreparer(),
+    )
+    ctx = await resolver.resolve_context(1, 77)
+    assert ctx is not None
+    assert ctx.lane_id == "lane-prepared"
+    assert ctx.forward_url == "logosnode://provider/77/lane/lane-prepared"
+
+
+@pytest.mark.asyncio
 async def test_context_resolver_allows_logosnode_without_api_key(monkeypatch):
     class _FakeDB:
         def __enter__(self):

@@ -15,12 +15,34 @@ from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileR
 
 def test_record_loaded_vram_first_sets_value():
     registry = ModelProfileRegistry()
-    registry.record_loaded_vram("llama3:8b", 8000.0)
+    registry.record_loaded_vram(
+        "llama3:8b",
+        8000.0,
+        engine="vllm",
+        observed_gpu_memory_utilization=0.7,
+        tensor_parallel_size=2,
+    )
 
     profile = registry.get_profile("llama3:8b")
     assert profile is not None
     assert profile.loaded_vram_mb == 8000.0
+    assert profile.engine == "vllm"
+    assert profile.observed_gpu_memory_utilization == 0.7
+    assert profile.tensor_parallel_size == 2
     assert profile.measurement_count == 1
+    assert profile.base_residency_mb is not None
+    assert profile.kv_budget_mb is not None
+
+
+def test_record_successful_load_util_tracks_lowest_known_good_value():
+    registry = ModelProfileRegistry()
+    registry.record_successful_load_util("qwen-coder", 0.8)
+    registry.record_successful_load_util("qwen-coder", 0.7)
+    registry.record_successful_load_util("qwen-coder", 0.75)
+
+    profile = registry.get_profile("qwen-coder")
+    assert profile is not None
+    assert profile.min_gpu_memory_utilization_to_load == 0.7
 
 
 def test_record_loaded_vram_subsequent_uses_ema():
@@ -90,6 +112,13 @@ def test_estimate_vram_disk_heuristic():
     assert abs(p.estimate_vram_mb() - expected) < 1.0
 
 
+def test_estimate_base_residency_from_model_name():
+    p = ModelProfileRecord()
+    estimated = p.estimate_base_residency_mb("Qwen/Qwen2.5-Coder-7B-Instruct")
+    assert estimated is not None
+    assert estimated > 10_000
+
+
 def test_estimate_vram_fallback():
     """Conservative 4096 MB fallback when nothing available."""
     p = ModelProfileRecord()
@@ -124,7 +153,14 @@ def test_persist_and_reload(tmp_path):
     config_path = tmp_path / "config.yml"
 
     registry1 = ModelProfileRegistry(config_path=config_path)
-    registry1.record_loaded_vram("llama3:8b", 8000.0)
+    registry1.record_loaded_vram(
+        "llama3:8b",
+        8000.0,
+        engine="vllm",
+        observed_gpu_memory_utilization=0.75,
+        tensor_parallel_size=2,
+    )
+    registry1.record_successful_load_util("llama3:8b", 0.72)
     registry1.record_sleeping_vram("llama3:8b", 512.0)
     registry1.record_disk_size("qwen3:8b", 5_000_000_000)
 
@@ -137,6 +173,10 @@ def test_persist_and_reload(tmp_path):
     assert llama is not None
     assert llama.loaded_vram_mb == 8000.0
     assert llama.sleeping_residual_mb == 512.0
+    assert llama.engine == "vllm"
+    assert llama.observed_gpu_memory_utilization == 0.75
+    assert llama.min_gpu_memory_utilization_to_load == 0.72
+    assert llama.tensor_parallel_size == 2
 
     qwen = registry2.get_profile("qwen3:8b")
     assert qwen is not None

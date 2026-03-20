@@ -406,19 +406,22 @@ class LogosNodeDataProvider:
     def get_capacity_info(self) -> OllamaCapacity:
         self.refresh_data()
         runtime_free_mb = None
+        runtime_total_mb = None
         if self._runtime_registry is not None:
             snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
             runtime = (snap or {}).get("runtime") or {}
             devices = runtime.get("devices") or {}
             if isinstance(devices, dict) and bool(devices.get("nvidia_smi_available")):
                 runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
+                runtime_total_mb = int(devices.get("total_memory_mb", 0) or 0)
         with self._lock:
             total_used_bytes = sum(info["size_vram"] for info in self._loaded_models.values())
             used_vram_mb = total_used_bytes // (1024 * 1024)
-            available_vram_mb = runtime_free_mb if runtime_free_mb is not None else max(0, self.total_vram_mb - used_vram_mb)
+            total_vram_mb = runtime_total_mb if runtime_total_mb is not None and runtime_total_mb > 0 else self.total_vram_mb
+            available_vram_mb = runtime_free_mb if runtime_free_mb is not None else max(0, total_vram_mb - used_vram_mb)
             return OllamaCapacity(
                 available_vram_mb=available_vram_mb,
-                total_vram_mb=self.total_vram_mb,
+                total_vram_mb=total_vram_mb,
                 loaded_models=list(self._loaded_models.keys()),
             )
 
@@ -429,7 +432,12 @@ class LogosNodeDataProvider:
     def _build_lane_signal(self, lane: Dict[str, Any]) -> LaneSchedulerSignals:
         """Construct a LaneSchedulerSignals from a raw lane dict in the runtime snapshot."""
         backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+        lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+        vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
         is_vllm = bool(lane.get("vllm"))
+        gpu_cache_usage_percent = backend_metrics.get("gpu_cache_usage_percent")
+        if gpu_cache_usage_percent is None:
+            gpu_cache_usage_percent = backend_metrics.get("gpu_cache_usage_perc")
 
         return LaneSchedulerSignals(
             lane_id=str(lane.get("lane_id", "")),
@@ -443,13 +451,23 @@ class LogosNodeDataProvider:
             if is_vllm
             else float(int(lane.get("active_requests", 0) or 0)),
             gpu_cache_usage_percent=(
-                _lane_metric_float(backend_metrics.get("gpu_cache_usage_perc"))
-                if is_vllm and backend_metrics.get("gpu_cache_usage_perc") is not None
+                _lane_metric_float(gpu_cache_usage_percent)
+                if is_vllm and gpu_cache_usage_percent is not None
                 else None
             ),
             ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
             effective_vram_mb=float(lane.get("effective_vram_mb", 0.0) or 0.0),
             num_parallel=int(lane.get("num_parallel", 0) or 0),
+            gpu_memory_utilization=(
+                _lane_metric_float(vllm_config.get("gpu_memory_utilization"))
+                if is_vllm and vllm_config.get("gpu_memory_utilization") is not None
+                else None
+            ),
+            tensor_parallel_size=(
+                int(vllm_config.get("tensor_parallel_size", 0) or 0)
+                if is_vllm and vllm_config.get("tensor_parallel_size") is not None
+                else None
+            ),
         )
 
     def get_model_scheduler_view(self, model_id: int) -> Optional[ModelSchedulerView]:
@@ -561,6 +579,7 @@ class LogosNodeDataProvider:
 
         runtime = snap.get("runtime") or {}
         raw_profiles = runtime.get("model_profiles") or {}
+        raw_lanes = runtime.get("lanes") or []
         if not isinstance(raw_profiles, dict):
             return {}
 
@@ -573,9 +592,62 @@ class LogosNodeDataProvider:
                 loaded_vram_mb=data.get("loaded_vram_mb"),
                 sleeping_residual_mb=data.get("sleeping_residual_mb"),
                 disk_size_bytes=data.get("disk_size_bytes"),
+                base_residency_mb=data.get("base_residency_mb"),
+                kv_budget_mb=data.get("kv_budget_mb"),
+                engine=data.get("engine"),
+                observed_gpu_memory_utilization=data.get("observed_gpu_memory_utilization"),
+                min_gpu_memory_utilization_to_load=data.get("min_gpu_memory_utilization_to_load"),
+                tensor_parallel_size=data.get("tensor_parallel_size"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
                 last_measured_epoch=float(data.get("last_measured_epoch", 0.0) or 0.0),
             )
+
+        if isinstance(raw_lanes, list):
+            for lane in raw_lanes:
+                if not isinstance(lane, dict):
+                    continue
+                model_name = str(lane.get("model", "")).strip()
+                if not model_name:
+                    continue
+                profile = profiles.get(model_name)
+                if profile is None:
+                    continue
+                lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+                vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
+                if profile.engine is None:
+                    profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
+                if profile.observed_gpu_memory_utilization is None and vllm_config.get("gpu_memory_utilization") is not None:
+                    profile.observed_gpu_memory_utilization = float(vllm_config.get("gpu_memory_utilization"))
+                if profile.tensor_parallel_size is None and vllm_config.get("tensor_parallel_size") is not None:
+                    profile.tensor_parallel_size = int(vllm_config.get("tensor_parallel_size") or 0)
+
+        if self._runtime_registry is not None and hasattr(self._runtime_registry, "peek_recent_samples"):
+            for sample in reversed(self._runtime_registry.peek_recent_samples(self.provider_id)):
+                if not isinstance(sample, dict):
+                    continue
+                runtime_payload = sample.get("runtime_payload")
+                if not isinstance(runtime_payload, dict):
+                    continue
+                lanes = runtime_payload.get("lanes")
+                if not isinstance(lanes, list):
+                    continue
+                for lane in lanes:
+                    if not isinstance(lane, dict):
+                        continue
+                    model_name = str(lane.get("model", "")).strip()
+                    if not model_name:
+                        continue
+                    profile = profiles.get(model_name)
+                    if profile is None:
+                        continue
+                    lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+                    vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
+                    if profile.engine is None:
+                        profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
+                    if profile.observed_gpu_memory_utilization is None and vllm_config.get("gpu_memory_utilization") is not None:
+                        profile.observed_gpu_memory_utilization = float(vllm_config.get("gpu_memory_utilization"))
+                    if profile.tensor_parallel_size is None and vllm_config.get("tensor_parallel_size") is not None:
+                        profile.tensor_parallel_size = int(vllm_config.get("tensor_parallel_size") or 0)
         return profiles
 
     def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:

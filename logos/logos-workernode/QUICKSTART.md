@@ -40,7 +40,7 @@ Important:
 
 ### Model profiles (automatic)
 
-The worker automatically measures each model's VRAM footprint after loading and sleeping, then persists profiles in `config.yml` under a `model_profiles` section. These profiles are sent to Logos on every heartbeat (5s) so the capacity planner can make VRAM-safe decisions. No manual configuration needed — profiles build up over time and survive restarts.
+The worker automatically measures each model's VRAM footprint after loading and sleeping, then persists profiles in `config.yml` under a `model_profiles` section. For vLLM, the profile also carries an estimated base residency and KV-cache budget so Logos can size large and small models differently without manual per-model VRAM input. These profiles are sent to Logos on every heartbeat (5s) so the capacity planner can make VRAM-safe decisions. No manual configuration needed in the common case — profiles build up over time and survive restarts.
 
 ## 3. Start it
 Local dev:

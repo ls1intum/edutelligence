@@ -115,6 +115,7 @@ def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present
                 "runtime": {
                     "devices": {
                         "nvidia_smi_available": True,
+                        "total_memory_mb": 32768,
                         "free_memory_mb": 24576,
                     },
                     "lanes": [],
@@ -135,6 +136,7 @@ def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present
 
     facade.register_model(101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12)
     cap = facade.get_capacity_info(12)
+    assert cap.total_vram_mb == 32768
     assert cap.available_vram_mb == 24576
 
 

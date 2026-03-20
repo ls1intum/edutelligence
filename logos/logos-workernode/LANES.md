@@ -96,9 +96,13 @@ For vLLM lanes, the planner also auto-tunes `gpu_memory_utilization`:
 
 ## Model profiles
 
-The worker automatically measures VRAM footprints:
-- **loaded_vram_mb**: recorded when a lane reaches `loaded` or `running` state
-- **sleeping_residual_mb**: recorded when a lane enters `sleeping` state
+The worker automatically measures memory footprints:
+- **loaded_vram_mb**: observed loaded reservation for the whole lane
+- **sleeping_residual_mb**: observed reservation while the lane is sleeping
+- **base_residency_mb**: estimated floor for weights + runtime overhead
+- **kv_budget_mb**: observed reservation above the base floor, used as the KV/cache budget
+
+For vLLM, Logos does not blindly reuse `loaded_vram_mb` as the next load cost. It uses `base_residency_mb` plus a scaled `kv_budget_mb`, then chooses a lower or higher automatic `gpu_memory_utilization` target based on how large the model is relative to the provider VRAM budget.
 
 Profiles update via exponential moving average (alpha=0.3) and persist in `config.yml` under `model_profiles`. They survive restarts and are sent to Logos every 5s so the capacity planner can validate VRAM budgets before loading or waking lanes.
 
@@ -109,8 +113,11 @@ model_profiles:
     loaded_vram_mb: 2048.5
     sleeping_residual_mb: 256.0
     disk_size_bytes: 1629516544
+    base_residency_mb: 1700.0
     measurement_count: 12
   llama3.1:latest:
     loaded_vram_mb: 4812.3
+    base_residency_mb: 4300.0
+    kv_budget_mb: 512.0
     measurement_count: 3
 ```

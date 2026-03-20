@@ -174,6 +174,7 @@ class LaneManager:
         self._status_revision = 0
         self._status_event = asyncio.Event()
         self._model_profiles = model_profiles
+        self._last_profile_state: dict[str, str] = {}
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [
@@ -779,10 +780,40 @@ class LaneManager:
         vram = float(status.effective_vram_mb or 0.0)
         if vram <= 0:
             return
+        engine = "vllm" if status.vllm else "ollama"
+        observed_gpu_memory_utilization = None
+        tensor_parallel_size = None
+        lane_config = status.lane_config
+        if status.vllm and lane_config is not None and lane_config.vllm_config is not None:
+            observed_gpu_memory_utilization = float(lane_config.vllm_config.gpu_memory_utilization)
+            tensor_parallel_size = int(lane_config.vllm_config.tensor_parallel_size)
+        previous_state = self._last_profile_state.get(status.lane_id)
         if status.runtime_state in ("loaded", "running"):
-            self._model_profiles.record_loaded_vram(model, vram)
+            self._model_profiles.record_loaded_vram(
+                model,
+                vram,
+                engine=engine,
+                observed_gpu_memory_utilization=observed_gpu_memory_utilization,
+                tensor_parallel_size=tensor_parallel_size,
+            )
+            if (
+                status.vllm
+                and observed_gpu_memory_utilization is not None
+                and previous_state not in {"loaded", "running", "sleeping"}
+            ):
+                self._model_profiles.record_successful_load_util(
+                    model,
+                    observed_gpu_memory_utilization,
+                )
         elif status.runtime_state == "sleeping":
-            self._model_profiles.record_sleeping_vram(model, vram)
+            self._model_profiles.record_sleeping_vram(
+                model,
+                vram,
+                engine=engine,
+                observed_gpu_memory_utilization=observed_gpu_memory_utilization,
+                tensor_parallel_size=tensor_parallel_size,
+            )
+        self._last_profile_state[status.lane_id] = status.runtime_state
 
     async def _build_lane_status(
         self,

@@ -7,10 +7,47 @@ to raw dictionaries with better IDE support and type checking.
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 from typing import Any, Dict, Optional, List
 
 # Import queue state from queue subsystem
 from logos.queue.models import QueueStatePerPriority
+
+
+_MODEL_SCALE_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)([bm])")
+
+
+def _estimated_disk_size_bytes_from_model_name(model_name: str) -> int | None:
+    lowered = (model_name or "").lower()
+    match = _MODEL_SCALE_RE.search(lowered)
+    if match is None:
+        return None
+
+    magnitude = float(match.group(1))
+    unit = match.group(2).lower()
+    params = magnitude * (1_000_000_000 if unit == "b" else 1_000_000)
+
+    bytes_per_param = 2.0
+    if any(token in lowered for token in ("q2", "2bit")):
+        bytes_per_param = 0.35
+    elif any(token in lowered for token in ("q3", "3bit")):
+        bytes_per_param = 0.45
+    elif any(token in lowered for token in ("q4", "4bit", "int4", "awq", "gptq")):
+        bytes_per_param = 0.60
+    elif any(token in lowered for token in ("q5", "5bit")):
+        bytes_per_param = 0.70
+    elif any(token in lowered for token in ("q6", "6bit")):
+        bytes_per_param = 0.80
+    elif any(token in lowered for token in ("q8", "8bit", "int8")):
+        bytes_per_param = 1.00
+
+    return int(params * bytes_per_param)
+
+
+def _base_residency_from_bytes(disk_size_bytes: Optional[int]) -> Optional[float]:
+    if disk_size_bytes is None or disk_size_bytes <= 0:
+        return None
+    return (disk_size_bytes / (1024 * 1024)) * 1.1
 
 
 @dataclass
@@ -137,6 +174,8 @@ class LaneSchedulerSignals:
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
     effective_vram_mb: float
     num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
+    gpu_memory_utilization: Optional[float] = None  # vLLM planner target
+    tensor_parallel_size: Optional[int] = None  # vLLM topology hint
 
     def to_dict(self) -> dict:
         return {
@@ -152,6 +191,8 @@ class LaneSchedulerSignals:
             'ttft_p95_seconds': self.ttft_p95_seconds,
             'effective_vram_mb': self.effective_vram_mb,
             'num_parallel': self.num_parallel,
+            'gpu_memory_utilization': self.gpu_memory_utilization,
+            'tensor_parallel_size': self.tensor_parallel_size,
         }
 
 
@@ -256,6 +297,12 @@ class ModelProfile:
     loaded_vram_mb: Optional[float] = None
     sleeping_residual_mb: Optional[float] = None
     disk_size_bytes: Optional[int] = None
+    base_residency_mb: Optional[float] = None
+    kv_budget_mb: Optional[float] = None
+    engine: Optional[str] = None
+    observed_gpu_memory_utilization: Optional[float] = None
+    min_gpu_memory_utilization_to_load: Optional[float] = None
+    tensor_parallel_size: Optional[int] = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
 
@@ -263,9 +310,18 @@ class ModelProfile:
         """Best estimate: measured > disk heuristic > conservative fallback."""
         if self.loaded_vram_mb is not None:
             return self.loaded_vram_mb
-        if self.disk_size_bytes is not None and self.disk_size_bytes > 0:
-            return (self.disk_size_bytes / (1024 * 1024)) * 1.1
+        base = self.estimate_base_residency_mb()
+        if base is not None:
+            return base
         return 4096.0  # conservative fallback
+
+    def estimate_base_residency_mb(self) -> Optional[float]:
+        if self.base_residency_mb is not None:
+            return self.base_residency_mb
+        disk_size_bytes = self.disk_size_bytes
+        if (disk_size_bytes is None or disk_size_bytes <= 0) and self.model_name:
+            disk_size_bytes = _estimated_disk_size_bytes_from_model_name(self.model_name)
+        return _base_residency_from_bytes(disk_size_bytes)
 
     def to_dict(self) -> dict:
         return {
@@ -273,6 +329,12 @@ class ModelProfile:
             'loaded_vram_mb': self.loaded_vram_mb,
             'sleeping_residual_mb': self.sleeping_residual_mb,
             'disk_size_bytes': self.disk_size_bytes,
+            'base_residency_mb': self.base_residency_mb,
+            'kv_budget_mb': self.kv_budget_mb,
+            'engine': self.engine,
+            'observed_gpu_memory_utilization': self.observed_gpu_memory_utilization,
+            'min_gpu_memory_utilization_to_load': self.min_gpu_memory_utilization_to_load,
+            'tensor_parallel_size': self.tensor_parallel_size,
             'measurement_count': self.measurement_count,
             'last_measured_epoch': self.last_measured_epoch,
         }

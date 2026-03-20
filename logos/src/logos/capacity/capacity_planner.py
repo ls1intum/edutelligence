@@ -52,6 +52,7 @@ class CapacityPlanner:
     GPU_CACHE_HIGH = 85.0
     GPU_CACHE_LOW = 40.0
     GPU_UTIL_CHANGE_THRESHOLD = 0.05
+    DEFAULT_VLLM_LOAD_GPU_UTIL = 0.65
 
     # VRAM safety margin
     VRAM_SAFETY_MARGIN = 1.1  # 10% margin
@@ -127,6 +128,59 @@ class CapacityPlanner:
                     "Failed to execute capacity action: %s on lane %s",
                     action.action, action.lane_id,
                 )
+
+    async def prepare_lane_for_request(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float = 60.0,
+    ) -> dict[str, Any] | None:
+        """Prepare an existing lane for request-time execution.
+
+        This path is synchronous to the request. It can wake a sleeping lane and
+        reclaim memory from idle competing lanes before the request is sent.
+        It intentionally does not invent brand-new lane configs for models that
+        currently have no lane.
+        """
+        target = self._pick_request_target_lane(provider_id, model_name)
+        if target is None:
+            return None
+
+        profile = self._safe_get_profiles(provider_id).get(model_name)
+        if target.runtime_state in {"sleeping", "cold"}:
+            ok = await self._ensure_request_capacity(
+                provider_id=provider_id,
+                target=target,
+                profile=profile,
+                timeout_seconds=timeout_seconds,
+            )
+            if not ok:
+                return None
+
+        if target.runtime_state == "sleeping":
+            woke = await self._execute_action_with_confirmation(
+                CapacityPlanAction(
+                    action="wake",
+                    provider_id=provider_id,
+                    lane_id=target.lane_id,
+                    model_name=model_name,
+                    reason="Request-time wake for selected sleeping lane",
+                ),
+                timeout_seconds=min(timeout_seconds, 45.0),
+            )
+            if not woke:
+                return None
+
+        try:
+            return await self._registry.select_lane_for_model(provider_id, model_name)
+        except Exception:
+            logger.debug(
+                "Failed to re-select prepared lane for provider=%s model=%s",
+                provider_id,
+                model_name,
+                exc_info=True,
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Idle tracking
@@ -224,6 +278,14 @@ class CapacityPlanner:
         """Compute wake/load actions based on demand patterns."""
         actions = []
         ranked = self._demand.get_ranked_models()
+        try:
+            profiles = self._facade.get_model_profiles(provider_id)
+        except Exception:
+            profiles = {}
+        try:
+            capacity = self._facade.get_capacity_info(provider_id)
+        except Exception:
+            capacity = None
 
         # Build index of current lanes by model
         lanes_by_model: dict[str, List[LaneSchedulerSignals]] = {}
@@ -252,15 +314,200 @@ class CapacityPlanner:
 
             # Load a new lane if demand is high and no lane exists
             if score >= self.DEMAND_LOAD_THRESHOLD and not model_lanes:
+                lane_id = self._planner_lane_id(model_name)
+                profile = profiles.get(model_name)
                 actions.append(CapacityPlanAction(
                     action="load",
                     provider_id=provider_id,
-                    lane_id=f"demand-{model_name}",
+                    lane_id=lane_id,
                     model_name=model_name,
+                    params=self._build_load_params(model_name, lane_id, profile, capacity),
                     reason=f"Demand score={score:.2f} >= {self.DEMAND_LOAD_THRESHOLD}, preemptive load",
                 ))
 
         return actions
+
+    def _safe_get_profiles(self, provider_id: int) -> dict[str, ModelProfile]:
+        try:
+            return self._facade.get_model_profiles(provider_id)
+        except Exception:
+            return {}
+
+    def _safe_get_capacity(self, provider_id: int):
+        try:
+            return self._facade.get_capacity_info(provider_id)
+        except Exception:
+            return None
+
+    def _safe_get_lanes(self, provider_id: int) -> list[LaneSchedulerSignals]:
+        try:
+            return self._facade.get_all_provider_lane_signals(provider_id)
+        except Exception:
+            return []
+
+    def _pick_request_target_lane(
+        self,
+        provider_id: int,
+        model_name: str,
+    ) -> Optional[LaneSchedulerSignals]:
+        lanes = [
+            lane
+            for lane in self._safe_get_lanes(provider_id)
+            if lane.model_name == model_name and lane.runtime_state not in {"stopped", "error"}
+        ]
+        if not lanes:
+            return None
+
+        state_rank = {
+            "running": 0,
+            "loaded": 1,
+            "sleeping": 2,
+            "cold": 3,
+            "starting": 4,
+        }
+        lanes.sort(
+            key=lambda lane: (
+                state_rank.get(lane.runtime_state, 99),
+                lane.queue_waiting,
+                lane.requests_running,
+                lane.active_requests,
+                lane.ttft_p95_seconds,
+                -float(lane.effective_vram_mb or 0.0),
+                lane.lane_id,
+            )
+        )
+        return lanes[0]
+
+    async def _ensure_request_capacity(
+        self,
+        *,
+        provider_id: int,
+        target: LaneSchedulerSignals,
+        profile: Optional[ModelProfile],
+        timeout_seconds: float,
+    ) -> bool:
+        capacity = self._safe_get_capacity(provider_id)
+        if capacity is None:
+            return False
+
+        target_action = CapacityPlanAction(
+            action="wake" if target.runtime_state == "sleeping" else "load",
+            provider_id=provider_id,
+            lane_id=target.lane_id,
+            model_name=target.model_name,
+            params=self._build_load_params(target.model_name, target.lane_id, profile, capacity),
+            reason="Request-time lane preparation",
+        )
+
+        while True:
+            capacity = self._safe_get_capacity(provider_id)
+            if capacity is None:
+                return False
+
+            needed = self._estimate_action_vram(target_action, profile, capacity) * self.VRAM_SAFETY_MARGIN
+            available = float(capacity.available_vram_mb)
+            if available >= needed:
+                return True
+
+            reclaim = self._next_request_reclaim_action(
+                provider_id=provider_id,
+                target=target,
+                lanes=self._safe_get_lanes(provider_id),
+                profiles=self._safe_get_profiles(provider_id),
+            )
+            if reclaim is None:
+                logger.info(
+                    "No idle reclaim action available for provider=%s model=%s (need=%.0fMB available=%.0fMB)",
+                    provider_id,
+                    target.model_name,
+                    needed,
+                    available,
+                )
+                return False
+
+            ok = await self._execute_action_with_confirmation(
+                reclaim,
+                timeout_seconds=min(timeout_seconds, 45.0),
+            )
+            if not ok:
+                return False
+
+    def _next_request_reclaim_action(
+        self,
+        *,
+        provider_id: int,
+        target: LaneSchedulerSignals,
+        lanes: list[LaneSchedulerSignals],
+        profiles: dict[str, ModelProfile],
+    ) -> Optional[CapacityPlanAction]:
+        sleep_candidates: list[tuple[float, CapacityPlanAction]] = []
+        stop_candidates: list[tuple[float, CapacityPlanAction]] = []
+
+        for lane in lanes:
+            if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
+                continue
+            if lane.active_requests > 0 or lane.queue_waiting > 0:
+                continue
+            if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+
+            profile = profiles.get(lane.model_name)
+            current_vram = float(lane.effective_vram_mb or 0.0)
+            if current_vram <= 0 and profile is not None:
+                current_vram = float(profile.estimate_vram_mb())
+            residual_vram = float(profile.sleeping_residual_mb or 0.0) if profile is not None else 0.0
+
+            if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
+                freed = max(current_vram - residual_vram, 0.0)
+                if freed > 0:
+                    sleep_candidates.append(
+                        (
+                            freed,
+                            CapacityPlanAction(
+                                action="sleep_l1",
+                                provider_id=provider_id,
+                                lane_id=lane.lane_id,
+                                model_name=lane.model_name,
+                                reason=f"Request-time reclaim for {target.model_name}",
+                            ),
+                        )
+                    )
+                if current_vram > 0:
+                    stop_candidates.append(
+                        (
+                            current_vram,
+                            CapacityPlanAction(
+                                action="stop",
+                                provider_id=provider_id,
+                                lane_id=lane.lane_id,
+                                model_name=lane.model_name,
+                                reason=f"Request-time reclaim for {target.model_name}",
+                            ),
+                        )
+                    )
+                continue
+
+            if current_vram > 0:
+                stop_candidates.append(
+                    (
+                        current_vram,
+                        CapacityPlanAction(
+                            action="stop",
+                            provider_id=provider_id,
+                            lane_id=lane.lane_id,
+                            model_name=lane.model_name,
+                            reason=f"Request-time reclaim for {target.model_name}",
+                        ),
+                    )
+                )
+
+        if sleep_candidates:
+            sleep_candidates.sort(key=lambda item: item[0], reverse=True)
+            return sleep_candidates[0][1]
+        if stop_candidates:
+            stop_candidates.sort(key=lambda item: item[0], reverse=True)
+            return stop_candidates[0][1]
+        return None
 
     # ------------------------------------------------------------------
     # GPU utilization tuning (vLLM only)
@@ -281,22 +528,28 @@ class CapacityPlanner:
                 continue
 
             cache_pct = lane.gpu_cache_usage_percent
+            current_util = lane.gpu_memory_utilization or self.DEFAULT_VLLM_LOAD_GPU_UTIL
 
             if cache_pct > self.GPU_CACHE_HIGH:
-                # Increase GPU utilization
-                # Note: actual current gpu_memory_utilization would come from lane config
-                # but we use the step-based approach here
+                target_util = min(self.GPU_UTIL_MAX, current_util + self.GPU_UTIL_STEP)
+                if abs(target_util - current_util) < self.GPU_UTIL_CHANGE_THRESHOLD:
+                    continue
                 actions.append(CapacityPlanAction(
                     action="reconfigure_gpu_util",
                     provider_id=provider_id,
                     lane_id=lane.lane_id,
                     model_name=lane.model_name,
                     params={
-                        "direction": "increase",
-                        "step": self.GPU_UTIL_STEP,
-                        "max": self.GPU_UTIL_MAX,
+                        "updates": {
+                            "vllm_config": {
+                                "gpu_memory_utilization": round(target_util, 3),
+                            }
+                        }
                     },
-                    reason=f"GPU cache pressure high ({cache_pct:.1f}% > {self.GPU_CACHE_HIGH}%)",
+                    reason=(
+                        f"GPU cache pressure high ({cache_pct:.1f}% > {self.GPU_CACHE_HIGH}%), "
+                        f"increasing gpu_memory_utilization to {target_util:.2f}"
+                    ),
                 ))
             elif cache_pct < self.GPU_CACHE_LOW:
                 # Decrease GPU utilization (only if other models need VRAM)
@@ -306,18 +559,25 @@ class CapacityPlanner:
                     if model_name != lane.model_name
                 )
                 if other_demand:
+                    target_util = max(self.GPU_UTIL_MIN, current_util - self.GPU_UTIL_STEP)
+                    if abs(target_util - current_util) < self.GPU_UTIL_CHANGE_THRESHOLD:
+                        continue
                     actions.append(CapacityPlanAction(
                         action="reconfigure_gpu_util",
                         provider_id=provider_id,
                         lane_id=lane.lane_id,
                         model_name=lane.model_name,
                         params={
-                            "direction": "decrease",
-                            "step": self.GPU_UTIL_STEP,
-                            "min": self.GPU_UTIL_MIN,
+                            "updates": {
+                                "vllm_config": {
+                                    "gpu_memory_utilization": round(target_util, 3),
+                                }
+                            }
                         },
-                        reason=f"GPU cache low ({cache_pct:.1f}% < {self.GPU_CACHE_LOW}%), "
-                               f"other models need VRAM",
+                        reason=(
+                            f"GPU cache low ({cache_pct:.1f}% < {self.GPU_CACHE_LOW}%), "
+                            f"other models need VRAM, lowering gpu_memory_utilization to {target_util:.2f}"
+                        ),
                     ))
 
         return actions
@@ -363,7 +623,7 @@ class CapacityPlanner:
                 profiles = {}
 
             profile = profiles.get(action.model_name)
-            estimated_vram = self._estimate_action_vram(action, profile)
+            estimated_vram = self._estimate_action_vram(action, profile, capacity)
 
             if available < estimated_vram * self.VRAM_SAFETY_MARGIN:
                 logger.warning(
@@ -379,10 +639,101 @@ class CapacityPlanner:
 
         return validated
 
+    def _planner_lane_id(self, model_name: str) -> str:
+        sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
+        return f"planner-{sanitized}"
+
+    def _build_load_params(
+        self,
+        model_name: str,
+        lane_id: str,
+        profile: Optional[ModelProfile],
+        capacity=None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "lane_id": lane_id,
+            "model": model_name,
+        }
+        if profile is None or profile.engine != "vllm":
+            return params
+        params["vllm"] = True
+        params["vllm_config"] = {
+            "gpu_memory_utilization": self._recommended_vllm_gpu_util(profile, capacity),
+            "tensor_parallel_size": max(1, int(profile.tensor_parallel_size or 1)),
+        }
+        return params
+
+    def _recommended_vllm_gpu_util(self, profile: Optional[ModelProfile], capacity=None) -> float:
+        total_vram_mb = float(getattr(capacity, "total_vram_mb", 0) or 0)
+        base_residency_mb = profile.estimate_base_residency_mb() if profile is not None else None
+        if base_residency_mb is None or total_vram_mb <= 0:
+            target = self.DEFAULT_VLLM_LOAD_GPU_UTIL
+            return self._apply_vllm_load_floor(profile, target)
+
+        fraction = base_residency_mb / total_vram_mb
+        if fraction >= 0.60:
+            target = 0.50
+        elif fraction >= 0.45:
+            target = 0.55
+        elif fraction >= 0.30:
+            target = 0.65
+        elif fraction >= 0.15:
+            target = 0.75
+        else:
+            target = 0.80
+        target = max(self.GPU_UTIL_MIN, min(self.GPU_UTIL_MAX, target))
+        return self._apply_vllm_load_floor(profile, target)
+
+    def _apply_vllm_load_floor(self, profile: Optional[ModelProfile], target: float) -> float:
+        if profile is None:
+            return target
+        floor = profile.min_gpu_memory_utilization_to_load
+        if floor is None:
+            return target
+        return max(target, max(self.GPU_UTIL_MIN, min(self.GPU_UTIL_MAX, float(floor))))
+
+    def _estimate_vllm_target_utilization(
+        self,
+        action: CapacityPlanAction,
+        profile: Optional[ModelProfile],
+    ) -> float:
+        params = action.params or {}
+        vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
+        target = vllm_config.get("gpu_memory_utilization")
+        if target is None and action.action == "wake":
+            target = profile.observed_gpu_memory_utilization if profile is not None else None
+        if target is None:
+            target = self._recommended_vllm_gpu_util(profile, None)
+        return max(self.GPU_UTIL_MIN, min(self.GPU_UTIL_MAX, float(target)))
+
     def _estimate_action_vram(
-        self, action: CapacityPlanAction, profile: Optional[ModelProfile]
+        self,
+        action: CapacityPlanAction,
+        profile: Optional[ModelProfile],
+        capacity,
     ) -> float:
         """Estimate VRAM cost of an action."""
+        if (
+            profile is not None
+            and profile.engine == "vllm"
+            and int(getattr(capacity, "total_vram_mb", 0) or 0) > 0
+        ):
+            target_util = self._estimate_vllm_target_utilization(action, profile)
+            base_residency = float(profile.estimate_base_residency_mb() or 0.0)
+            observed_reservation = float(profile.loaded_vram_mb or 0.0)
+            observed_util = float(profile.observed_gpu_memory_utilization or 0.0)
+            if observed_reservation > 0 and observed_util > 0:
+                observed_kv_budget = float(profile.kv_budget_mb or max(observed_reservation - base_residency, 0.0))
+                loaded_vram = base_residency + (observed_kv_budget * (target_util / observed_util))
+            else:
+                loaded_vram = max(base_residency, float(capacity.total_vram_mb) * target_util)
+            sleeping_residual = float(profile.sleeping_residual_mb or 0.0)
+            if action.action == "wake":
+                return max(0.0, loaded_vram - sleeping_residual)
+            if action.action == "load":
+                return loaded_vram
+            return 0.0
+
         if profile is not None:
             loaded_vram = profile.estimate_vram_mb()
             sleeping_residual = profile.sleeping_residual_mb or 0.0

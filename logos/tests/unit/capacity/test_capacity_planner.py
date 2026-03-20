@@ -19,6 +19,8 @@ def _make_signal(
     active_requests=0,
     queue_waiting=0.0,
     gpu_cache_usage_percent=None,
+    gpu_memory_utilization=None,
+    effective_vram_mb=8000.0,
 ):
     return LaneSchedulerSignals(
         lane_id=lane_id,
@@ -31,8 +33,9 @@ def _make_signal(
         requests_running=float(active_requests),
         gpu_cache_usage_percent=gpu_cache_usage_percent,
         ttft_p95_seconds=0.1,
-        effective_vram_mb=8000.0,
+        effective_vram_mb=effective_vram_mb,
         num_parallel=4,
+        gpu_memory_utilization=gpu_memory_utilization,
     )
 
 
@@ -68,6 +71,14 @@ class MockRegistry:
 
     def peek_runtime_snapshot(self, provider_id):
         return self._snapshot
+
+    async def select_lane_for_model(self, provider_id, model_name):  # noqa: ARG002
+        runtime = ((self._snapshot or {}).get("runtime") or {})
+        lanes = runtime.get("lanes") or []
+        for lane in lanes:
+            if lane.get("model") == model_name and lane.get("runtime_state") in {"loaded", "running", "cold", "starting"}:
+                return lane
+        return None
 
 
 def _make_planner(facade=None, registry=None, demand=None, cycle_seconds=30.0):
@@ -202,25 +213,30 @@ def test_demand_below_threshold_no_action():
 
 def test_gpu_util_increase_on_high_cache():
     """Cache > 85% → increase gpu_memory_utilization."""
-    lane = _make_signal(is_vllm=True, gpu_cache_usage_percent=90.0)
+    lane = _make_signal(is_vllm=True, gpu_cache_usage_percent=90.0, gpu_memory_utilization=0.70)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
     actions = planner._compute_gpu_util_actions(10, [lane])
     assert len(actions) == 1
     assert actions[0].action == "reconfigure_gpu_util"
-    assert actions[0].params["direction"] == "increase"
+    assert actions[0].params["updates"]["vllm_config"]["gpu_memory_utilization"] == 0.75
 
 
 def test_gpu_util_decrease_on_low_cache_with_demand():
     """Cache < 40% and other models have demand → decrease."""
-    lane = _make_signal(model_name="model-a", is_vllm=True, gpu_cache_usage_percent=30.0)
+    lane = _make_signal(
+        model_name="model-a",
+        is_vllm=True,
+        gpu_cache_usage_percent=30.0,
+        gpu_memory_utilization=0.70,
+    )
     demand = DemandTracker()
     demand.record_request("model-b")  # Other model has demand
 
     planner = _make_planner(facade=MockFacade(lanes=[lane]), demand=demand)
     actions = planner._compute_gpu_util_actions(10, [lane])
     assert len(actions) == 1
-    assert actions[0].params["direction"] == "decrease"
+    assert actions[0].params["updates"]["vllm_config"]["gpu_memory_utilization"] == 0.65
 
 
 def test_gpu_util_no_decrease_without_competing_demand():
@@ -315,6 +331,238 @@ def test_vram_wake_costs_net_increase():
     # Net cost = 8000 - 3500 = 4500, with margin = 4500 * 1.1 = 4950, available = 5000 → accepted
     wake_actions = [a for a in validated if a.action == "wake"]
     assert len(wake_actions) == 1
+
+
+def test_vllm_vram_budget_scales_observed_reservation_to_planner_target():
+    """vLLM load cost should scale from observed reservation to Logos' target gpu util."""
+    from logos.sdi.models import CapacityPlanAction
+
+    facade = MockFacade(
+        capacity=OllamaCapacity(available_vram_mb=29000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                loaded_vram_mb=30508.0,
+                base_residency_mb=15000.0,
+                kv_budget_mb=15508.0,
+                engine="vllm",
+                observed_gpu_memory_utilization=0.90,
+                tensor_parallel_size=2,
+            ),
+        },
+    )
+    planner = _make_planner(facade=facade)
+
+    actions = [
+        CapacityPlanAction(
+            action="load",
+            provider_id=10,
+            lane_id="planner-qwen",
+            model_name="qwen-coder",
+            params={
+                    "vllm": True,
+                    "vllm_config": {
+                        "gpu_memory_utilization": 0.65,
+                        "tensor_parallel_size": 2,
+                    },
+                },
+                reason="test",
+            ),
+    ]
+    estimated = planner._estimate_action_vram(actions[0], facade.get_model_profiles(10)["qwen-coder"], facade.get_capacity_info(10))
+    assert estimated < 30508.0
+    assert estimated > 20000.0
+    validated = planner._validate_vram_budget(actions)
+    load_actions = [a for a in validated if a.action == "load"]
+    assert len(load_actions) == 1
+
+
+def test_vllm_load_params_are_built_from_profile():
+    """Planner load action should carry lane_id and vLLM params when the model profile says vLLM."""
+    demand = DemandTracker()
+    for _ in range(3):
+        demand.record_request("qwen-coder")
+
+    facade = MockFacade(
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                engine="vllm",
+                base_residency_mb=15000.0,
+                tensor_parallel_size=2,
+            ),
+        },
+        capacity=OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[]),
+    )
+    planner = _make_planner(facade=facade, demand=demand)
+
+    actions = planner._compute_demand_actions(10, [])
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.action == "load"
+    assert action.params["lane_id"] == action.lane_id
+    assert action.params["vllm"] is True
+    assert action.params["vllm_config"]["gpu_memory_utilization"] == 0.55
+    assert action.params["vllm_config"]["tensor_parallel_size"] == 2
+
+
+def test_vllm_small_model_gets_higher_auto_gpu_util():
+    planner = _make_planner()
+    profile = ModelProfile(
+        model_name="tiny-1b",
+        engine="vllm",
+        base_residency_mb=4000.0,
+        tensor_parallel_size=1,
+    )
+    capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
+    assert planner._recommended_vllm_gpu_util(profile, capacity) == 0.8
+
+
+def test_vllm_load_floor_clamps_auto_target():
+    planner = _make_planner()
+    profile = ModelProfile(
+        model_name="qwen-coder",
+        engine="vllm",
+        base_residency_mb=4000.0,
+        min_gpu_memory_utilization_to_load=0.82,
+        tensor_parallel_size=1,
+    )
+    capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
+    assert planner._recommended_vllm_gpu_util(profile, capacity) == 0.82
+
+
+@pytest.mark.asyncio
+async def test_prepare_lane_for_request_wakes_sleeping_lane():
+    lane = _make_signal(
+        lane_id="lane-sleep",
+        model_name="qwen-coder",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+    )
+    facade = MockFacade(
+        lanes=[lane],
+        capacity=OllamaCapacity(available_vram_mb=24000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                loaded_vram_mb=12000.0,
+                sleeping_residual_mb=2000.0,
+                base_residency_mb=7000.0,
+                kv_budget_mb=5000.0,
+                engine="vllm",
+                observed_gpu_memory_utilization=0.8,
+            ),
+        },
+    )
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [
+                {
+                    "lane_id": "lane-sleep",
+                    "model": "qwen-coder",
+                    "runtime_state": "sleeping",
+                    "sleep_state": "sleeping",
+                }
+            ]
+        }
+    }
+    planner = _make_planner(facade=facade, registry=registry)
+
+    async def _fake_execute(action, timeout_seconds=60.0):  # noqa: ARG001
+        assert action.action == "wake"
+        registry._snapshot["runtime"]["lanes"][0]["runtime_state"] = "loaded"
+        registry._snapshot["runtime"]["lanes"][0]["sleep_state"] = "awake"
+        return True
+
+    planner._execute_action_with_confirmation = _fake_execute
+    selected = await planner.prepare_lane_for_request(10, "qwen-coder")
+    assert selected is not None
+    assert selected["lane_id"] == "lane-sleep"
+    assert selected["runtime_state"] == "loaded"
+
+
+@pytest.mark.asyncio
+async def test_prepare_lane_for_request_reclaims_idle_competitor_first():
+    target = _make_signal(
+        lane_id="lane-target",
+        model_name="qwen-coder",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        effective_vram_mb=2000.0,
+    )
+    victim = _make_signal(
+        lane_id="lane-victim",
+        model_name="llama",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        effective_vram_mb=12000.0,
+    )
+    facade = MockFacade(
+        lanes=[target, victim],
+        capacity=OllamaCapacity(available_vram_mb=5000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                loaded_vram_mb=12000.0,
+                sleeping_residual_mb=2000.0,
+                base_residency_mb=7000.0,
+                kv_budget_mb=5000.0,
+                engine="vllm",
+                observed_gpu_memory_utilization=0.8,
+            ),
+            "llama": ModelProfile(
+                model_name="llama",
+                loaded_vram_mb=12000.0,
+                sleeping_residual_mb=1000.0,
+                base_residency_mb=7000.0,
+                kv_budget_mb=5000.0,
+                engine="vllm",
+                observed_gpu_memory_utilization=0.8,
+            ),
+        },
+    )
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [
+                {"lane_id": "lane-target", "model": "qwen-coder", "runtime_state": "sleeping", "sleep_state": "sleeping"},
+                {"lane_id": "lane-victim", "model": "llama", "runtime_state": "loaded", "sleep_state": "awake"},
+            ]
+        }
+    }
+    planner = _make_planner(facade=facade, registry=registry)
+    actions = []
+
+    async def _fake_execute(action, timeout_seconds=60.0):  # noqa: ARG001
+        actions.append(action.action)
+        if action.action == "sleep_l1":
+            facade._lanes[1] = _make_signal(
+                lane_id="lane-victim",
+                model_name="llama",
+                runtime_state="sleeping",
+                sleep_state="sleeping",
+                is_vllm=True,
+                effective_vram_mb=1000.0,
+            )
+            facade._capacity = OllamaCapacity(available_vram_mb=16000, total_vram_mb=32768, loaded_models=[])
+            registry._snapshot["runtime"]["lanes"][1]["runtime_state"] = "sleeping"
+            registry._snapshot["runtime"]["lanes"][1]["sleep_state"] = "sleeping"
+            return True
+        if action.action == "wake":
+            registry._snapshot["runtime"]["lanes"][0]["runtime_state"] = "loaded"
+            registry._snapshot["runtime"]["lanes"][0]["sleep_state"] = "awake"
+            return True
+        return True
+
+    planner._execute_action_with_confirmation = _fake_execute
+    selected = await planner.prepare_lane_for_request(10, "qwen-coder")
+    assert selected is not None
+    assert selected["lane_id"] == "lane-target"
+    assert actions == ["sleep_l1", "wake"]
 
 
 def test_vram_no_profile_uses_fallback():

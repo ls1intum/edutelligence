@@ -1117,6 +1117,11 @@ async def start_pipeline():
         demand_tracker=_demand_tracker,
         enabled=planner_enabled,
     )
+    _context_resolver = ContextResolver(
+        logosnode_registry=_logosnode_registry,
+        lane_preparer=_capacity_planner,
+    )
+    _pipeline._context_resolver = _context_resolver
     await _capacity_planner.start()
 
     logger.info(

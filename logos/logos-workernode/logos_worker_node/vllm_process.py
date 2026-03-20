@@ -275,23 +275,24 @@ class VllmProcessHandle:
                 if " " not in line:
                     continue
                 name, value_raw = line.split(" ", 1)
+                metric_name = name.split("{", 1)[0]
                 try:
                     value = float(value_raw.strip())
                 except ValueError:
                     continue
-                if name.endswith("num_requests_waiting"):
+                if metric_name.endswith("num_requests_waiting"):
                     metrics["queue_waiting"] = value
-                elif name.endswith("num_requests_running"):
+                elif metric_name.endswith("num_requests_running"):
                     metrics["requests_running"] = value
-                elif name.endswith("gpu_cache_usage_perc"):
+                elif metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent"):
                     metrics["gpu_cache_usage_percent"] = value * 100.0
-                elif name.endswith("prefix_cache_hit_rate"):
+                elif metric_name.endswith("prefix_cache_hit_rate"):
                     metrics["prefix_cache_hit_rate"] = value
-                elif name.endswith("prompt_tokens_total"):
+                elif metric_name.endswith("prompt_tokens_total"):
                     metrics["prompt_tokens_total"] = value
-                elif name.endswith("generation_tokens_total"):
+                elif metric_name.endswith("generation_tokens_total"):
                     metrics["generation_tokens_total"] = value
-                elif "time_to_first_token_seconds_bucket" in name:
+                elif "time_to_first_token_seconds_bucket" in metric_name:
                     bucket = "unknown"
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]

@@ -166,3 +166,37 @@ async def test_is_sleeping_parses_boolean_payload() -> None:
     handle._http = DummyClient()  # type: ignore[assignment]
 
     assert await handle.is_sleeping() is True
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_parses_labeled_prometheus_lines() -> None:
+    class DummyResponse:
+        status_code = 200
+        text = """
+# HELP ignored ignored
+vllm:num_requests_waiting{model_name=\"Qwen\"} 3
+vllm:num_requests_running{model_name=\"Qwen\"} 5
+vllm:gpu_cache_usage_perc{model_name=\"Qwen\"} 0.82
+vllm:prefix_cache_hit_rate{model_name=\"Qwen\"} 0.35
+vllm:prompt_tokens_total{model_name=\"Qwen\"} 2048
+vllm:generation_tokens_total{model_name=\"Qwen\"} 4096
+vllm:time_to_first_token_seconds_bucket{model_name=\"Qwen\",le=\"0.1\"} 8
+vllm:time_to_first_token_seconds_bucket{model_name=\"Qwen\",le=\"+Inf\"} 10
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["queue_waiting"] == 3.0
+    assert metrics["requests_running"] == 5.0
+    assert metrics["gpu_cache_usage_percent"] == 82.0
+    assert metrics["prefix_cache_hit_rate"] == 0.35
+    assert metrics["prompt_tokens_total"] == 2048.0
+    assert metrics["generation_tokens_total"] == 4096.0
+    assert metrics["ttft_histogram"]["0.1"] == 8.0
+    assert metrics["ttft_histogram"]["+Inf"] == 10.0
