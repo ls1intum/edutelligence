@@ -82,6 +82,7 @@ const config: Config = {
   themeConfig: {
     image: "img/iris/iris-logo-big-right.png",
     colorMode: {
+      defaultMode: "light",
       respectPrefersColorScheme: true,
     },
     navbar: {
