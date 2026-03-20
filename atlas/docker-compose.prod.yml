@@ -72,7 +72,7 @@ services:
       # IP Whitelist middleware (only applied if ALLOWED_IPS is set)
       - "traefik.http.middlewares.atlasml-ipwhitelist.ipallowlist.sourcerange=${ALLOWED_IPS:-0.0.0.0/0}"
       # Apply middlewares (IP whitelist only used if explicitly enabled)
-      - "traefik.http.routers.atlasml-secure.middlewares=default-headers${ALLOWED_IPS:+,atlasml-ipwhitelist}"
+      - "traefik.http.routers.atlasml-secure.middlewares=default-headers@file${ALLOWED_IPS:+,atlasml-ipwhitelist}"
       - "traefik.http.routers.atlasml-secure.service=atlasml"
       - "traefik.http.services.atlasml.loadbalancer.server.port=8000"
     deploy:
