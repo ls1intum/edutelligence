@@ -1,0 +1,62 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  --ifm-color-primary: #3e8acc;
+  --ifm-color-primary-dark: #2d7abf;
+  --ifm-color-primary-darker: #2a73b4;
+  --ifm-color-primary-darkest: #235f94;
+  --ifm-color-primary-light: #559bd4;
+  --ifm-color-primary-lighter: #62a2d7;
+  --ifm-color-primary-lightest: #84b7e1;
+
+  --ifm-background-color: #ffffff;
+  --ifm-background-surface-color: #f8f9fa;
+  --ifm-font-color-base: #212529;
+
+  --iris-border-color: #dee2e6;
+  --iris-tertiary-bg: #e9ecef;
+  --iris-accent-bg: #dee2e6;
+  --iris-label-color: #6c757d;
+  --iris-success: #28a745;
+  --iris-radius: 8px;
+  --iris-radius-pill: 999px;
+
+  --ifm-font-family-base: "DM Sans", system-ui, -apple-system, sans-serif;
+  --ifm-font-family-monospace:
+    "JetBrains Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --ifm-heading-font-weight: 600;
+  --ifm-font-weight-bold: 700;
+
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(62, 138, 204, 0.1);
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #5a9fd6;
+  --ifm-color-primary-dark: #4290cf;
+  --ifm-color-primary-darker: #3889cb;
+  --ifm-color-primary-darkest: #2b74b2;
+  --ifm-color-primary-light: #72aedd;
+  --ifm-color-primary-lighter: #7cb5e0;
+  --ifm-color-primary-lightest: #a0cbe9;
+
+  --ifm-background-color: #181a18;
+  --ifm-background-surface-color: #1f2320;
+  --ifm-font-color-base: #f8f9fa;
+
+  --iris-border-color: #3a3a3a;
+  --iris-tertiary-bg: #262a27;
+  --iris-accent-bg: #2d312e;
+  --iris-label-color: #888888;
+  --iris-success: #00bc8c;
+
+  --docusaurus-highlighted-code-line-bg: rgba(90, 159, 214, 0.15);
+}
+
+body {
+  font-family: var(--ifm-font-family-base);
+}
+
+code {
+  font-family: var(--ifm-font-family-monospace);
+}
