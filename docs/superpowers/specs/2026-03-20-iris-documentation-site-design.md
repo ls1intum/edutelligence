@@ -294,7 +294,7 @@ searchContextByPaths: [
 - Content: Pipeline base class, PIPELINE_ID, ROLES, VARIANT_DEFS, DEPENDENCIES. How to create a new pipeline. Agent execution flow diagram.
 
 **Variant System**
-- Source: AbstractVariant, concrete variants, COURSE_CHAT_PIPELINE_REFACTORING.md
+- Source: Variant class (`iris/domain/variant/variant.py`), pipeline class attrs (VARIANT_DEFS), COURSE_CHAT_PIPELINE_REFACTORING.md (verify still relevant)
 - Content: How variants work, model selection, cloud vs. local models, defining new variants
 
 **Tools**
@@ -374,6 +374,8 @@ searchContextByPaths: [
 ---
 
 ## 7. Directory Structure
+
+All paths relative to the edutelligence monorepo root (`ls1intum/edutelligence`).
 
 ```
 iris/docs/
