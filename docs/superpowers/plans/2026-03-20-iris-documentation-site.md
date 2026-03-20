@@ -35,9 +35,17 @@ iris/docs/
 │   │   ├── index.tsx             # Landing page (hero, trust bar, features, comparison, research, quotes, quickstart, FAQ)
 │   │   └── index.module.css      # Landing page styles (CSS Modules)
 │   └── components/
-│       └── HomepageFeatures/
-│           ├── index.tsx          # Reusable feature cards, stats row, audience cards
-│           └── styles.module.css  # Component styles
+│       └── home/                 # Section-oriented landing page components
+│           ├── HeroSection.tsx
+│           ├── TrustBar.tsx
+│           ├── FeatureCards.tsx
+│           ├── ComparisonSection.tsx
+│           ├── ResearchHighlights.tsx
+│           ├── StudentQuotes.tsx
+│           ├── AudienceCards.tsx
+│           ├── FaqSection.tsx
+│           ├── EcosystemFooter.tsx
+│           └── styles.module.css
 ├── docs/
 │   ├── overview/                 # 4 pages
 │   ├── student/                  # 9 pages
@@ -86,7 +94,7 @@ iris/docs/
   "dependencies": {
     "@docusaurus/core": "3.9.2",
     "@docusaurus/preset-classic": "3.9.2",
-    "@easyops-cn/docusaurus-search-local": "^0.46.3",
+    "@easyops-cn/docusaurus-search-local": "^0.52.1",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^2.0.0",
     "prism-react-renderer": "^2.3.0",
@@ -125,21 +133,30 @@ const config: Config = {
   i18n: { defaultLocale: 'en', locales: ['en'] },
   presets: [['classic', {
     docs: { sidebarPath: './sidebars.ts', editUrl: 'https://github.com/ls1intum/edutelligence/tree/main/iris/docs/' },
+    blog: false,
     theme: { customCss: './src/css/custom.css' },
   }]],
-  themes: [['@easyops-cn/docusaurus-search-local', {
-    hashed: true,
-    searchContextByPaths: [
-      { label: { en: 'Overview' }, path: 'docs/overview' },
-      { label: { en: 'Student Guide' }, path: 'docs/student' },
-      { label: { en: 'Instructor Guide' }, path: 'docs/instructor' },
-      { label: { en: 'Developer Guide' }, path: 'docs/developer' },
-      { label: { en: 'Admin Guide' }, path: 'docs/admin' },
-      { label: { en: 'Research' }, path: 'docs/research' },
-    ],
-    searchResultLimits: 10,
-    searchResultContextMaxLength: 60,
-  }]],
+  plugins: [
+    ['@easyops-cn/docusaurus-search-local', {
+      hashed: true,
+      language: ['en'],
+      docsRouteBasePath: ['docs'],
+      docsDir: ['docs/overview', 'docs/student', 'docs/instructor', 'docs/developer', 'docs/admin', 'docs/research'],
+      indexBlog: false,
+      searchContextByPaths: [
+        { label: { en: 'Overview' }, path: 'docs/overview' },
+        { label: { en: 'Student Guide' }, path: 'docs/student' },
+        { label: { en: 'Instructor Guide' }, path: 'docs/instructor' },
+        { label: { en: 'Developer Guide' }, path: 'docs/developer' },
+        { label: { en: 'Admin Guide' }, path: 'docs/admin' },
+        { label: { en: 'Research' }, path: 'docs/research' },
+      ],
+      hideSearchBarWithNoSearchContext: true,
+      useAllContextsWithNoSearchContext: false,
+      highlightSearchTermsOnTargetPage: true,
+      searchResultContextMaxLength: 60,
+    }],
+  ],
   themeConfig: {
     image: 'img/iris/iris-logo-big-right.png',
     navbar: {
@@ -152,6 +169,7 @@ const config: Config = {
         { type: 'docSidebar', sidebarId: 'developerSidebar', position: 'left', label: 'Developer Guide' },
         { type: 'docSidebar', sidebarId: 'adminSidebar', position: 'left', label: 'Admin Guide' },
         { type: 'docSidebar', sidebarId: 'researchSidebar', position: 'left', label: 'Research' },
+        { type: 'search', position: 'right' },
         { href: 'https://github.com/ls1intum/edutelligence', label: 'GitHub', position: 'right' },
       ],
     },
@@ -264,13 +282,15 @@ Reference values:
 - Light border: `#dee2e6`, dark border: `#3a3a3a`
 - See spec Section 3 for full color table
 
-- [ ] **Step 6: Run npm install and verify build**
+- [ ] **Step 6: Copy logo assets into the docs static directory**
 
 ```bash
-cd iris/docs && npm install && npm run build
+mkdir -p iris/docs/static/img/iris
+cp iris/docs/../../../docs/static/img/iris/*.png iris/docs/static/img/iris/ 2>/dev/null || \
+cp ~/projects/artemis/src/main/resources/public/images/iris/*.png iris/docs/static/img/iris/
 ```
 
-Expected: Build succeeds (will fail until we add doc content files — that's expected at this stage).
+Verify all 3 PNGs exist: `iris-logo-small.png`, `iris-logo-big-right.png`, `iris-logo-big-left.png`.
 
 - [ ] **Step 7: Create placeholder docs for every sidebar entry**
 
@@ -287,13 +307,13 @@ Content coming in subsequent tasks.
 
 This ensures the build succeeds and all sidebar links resolve.
 
-- [ ] **Step 8: Verify build succeeds with all stubs**
+- [ ] **Step 8: Run npm install and verify build succeeds**
 
 ```bash
-cd iris/docs && npm run build
+cd iris/docs && npm install && npm run build
 ```
 
-Expected: Clean build with no broken links.
+Expected: Clean build with no broken links. This is the first build gate — it should pass now that stubs and assets are in place.
 
 - [ ] **Step 9: Commit**
 
@@ -313,20 +333,33 @@ Iris theme colors, search plugin, and stub pages for all 42 doc entries."
 **Files:**
 - Create: `iris/docs/src/pages/index.tsx`
 - Create: `iris/docs/src/pages/index.module.css`
-- Create: `iris/docs/src/components/HomepageFeatures/index.tsx`
-- Create: `iris/docs/src/components/HomepageFeatures/styles.module.css`
+- Create: `iris/docs/src/components/home/HeroSection.tsx`
+- Create: `iris/docs/src/components/home/TrustBar.tsx`
+- Create: `iris/docs/src/components/home/FeatureCards.tsx`
+- Create: `iris/docs/src/components/home/ComparisonSection.tsx`
+- Create: `iris/docs/src/components/home/ResearchHighlights.tsx`
+- Create: `iris/docs/src/components/home/StudentQuotes.tsx`
+- Create: `iris/docs/src/components/home/AudienceCards.tsx`
+- Create: `iris/docs/src/components/home/FaqSection.tsx`
+- Create: `iris/docs/src/components/home/EcosystemFooter.tsx`
+- Create: `iris/docs/src/components/home/styles.module.css`
 
 **Reference:** Spec Section 4 (all 10 subsections). Athena's landing page for structural reference (`athena/docs/src/pages/index.tsx`). Use Direction B layout with Direction A copy.
 
-- [ ] **Step 1: Create HomepageFeatures component**
+- [ ] **Step 1: Create section-oriented landing page components**
 
-Reusable components for the landing page:
-- `FeatureCard` — icon, title, description (used in Section 4.3)
-- `StatItem` — number + label (used in Section 4.5)
-- `AudienceCard` — icon, title, description, link (used in Section 4.8)
-- `FaqItem` — collapsible question/answer (used in Section 4.9)
+One component per landing page section under `src/components/home/`:
+- `HeroSection` — mascot, headline, subtitle, CTAs
+- `TrustBar` — 4 horizontal trust items
+- `FeatureCards` — 3 feature cards (Calibrated Scaffolding, Context-Aware, RAG-Grounded)
+- `ComparisonSection` — side-by-side generic chatbot vs Iris
+- `ResearchHighlights` — stats row from RCT
+- `StudentQuotes` — quotes from Koli Calling study
+- `AudienceCards` — 4 quickstart cards linking to guides
+- `FaqSection` — 5 expandable FAQ items
+- `EcosystemFooter` — EduTelligence service overview
 
-Style with CSS Modules. Follow the Iris color system from custom.css variables.
+Shared styles in `styles.module.css`. Follow the Iris color system from custom.css variables.
 
 - [ ] **Step 2: Create landing page (index.tsx)**
 
@@ -337,7 +370,7 @@ Implement all 10 sections from spec Section 4 in order:
 4. How Iris is Different (side-by-side comparison: generic chatbot vs Iris)
 5. Research highlights (stats row: 275 students, +0.55 Cohen's d, −0.81 frustration, 3 papers)
 6. Student quotes (from Koli Calling qualitative study)
-7. Screencast placeholder (`[VIDEO PLACEHOLDER]`)
+7. Screencast placeholder (video embed area with guidance text)
 8. Audience quickstart (4 cards: Student, Instructor, Developer, Admin)
 9. FAQ (5 expandable items from spec)
 10. EduTelligence ecosystem footer
@@ -403,7 +436,7 @@ Content structure:
 - Key capabilities (calibrated scaffolding, context-awareness, RAG grounding — non-technical language)
 - What makes Iris different from ChatGPT (brief, factual — from C&E:AI findings)
 - Who uses Iris (students, instructors, admins, researchers)
-- `[IMAGE PLACEHOLDER: Iris chat window in Artemis showing a conversation]`
+- `:::info Screenshot Needed — About Iris modal in Artemis showing features and expectations :::`
 
 - [ ] **Step 2: Write "Architecture"**
 
@@ -411,8 +444,8 @@ Content structure:
 - High-level overview (Artemis sends request → Iris pipeline processes → LLM generates → status callback returns)
 - Pipeline system overview (what pipelines are, how they work at a conceptual level)
 - Agent execution flow (tools, RAG, response generation)
-- `[IMAGE PLACEHOLDER: Architecture diagram — Artemis → Iris → LLM with tool calls and RAG]`
-- `[IMAGE PLACEHOLDER: Pipeline execution flow diagram]`
+- `:::info Screenshot Needed — Architecture diagram — Artemis → Iris → LLM with tool calls and RAG :::`
+- `:::info Screenshot Needed — Pipeline execution flow diagram :::`
 
 Keep it conceptual — developer-level details go in the Developer Guide.
 
@@ -460,17 +493,17 @@ git commit -m "Iris: Add Overview documentation (What is Iris, Architecture, Eco
 - [ ] **Step 1: Write "Getting Started"**
 
 Pull from Artemis student docs: AI experience selection (Cloud, On-premise, No AI), where to find Iris in Artemis.
-- `[IMAGE PLACEHOLDER: AI experience selection screen]`
+- `:::info Screenshot Needed — AI experience selection screen :::`
 
 - [ ] **Step 2: Write "Course Chat"**
 
 How Course Chat works: asking about lectures, concepts, course content. How Iris retrieves from slides and transcriptions. Citations.
-- `[IMAGE PLACEHOLDER: Course chat conversation with citation]`
+- `:::info Screenshot Needed — Course chat conversation with citation :::`
 
 - [ ] **Step 3: Write "Exercise Chat"**
 
 Programming exercise support: automatic context reading (code, build logs, test results), calibrated hints.
-- `[IMAGE PLACEHOLDER: Exercise chat showing context-aware response]`
+- `:::info Screenshot Needed — Exercise chat showing context-aware response :::`
 
 - [ ] **Step 4: Write "Text Exercise Chat"**
 
@@ -479,6 +512,7 @@ Text exercise support: how Iris helps with essay/text-based exercises, scaffolde
 - [ ] **Step 5: Write "Lecture Chat"**
 
 Lecture-specific questions: how Iris retrieves from specific lecture slides and transcripts.
+- `:::info Screenshot Needed — Lecture chat with transcript-based retrieval :::`
 
 - [ ] **Step 6: Write "How Iris Helps You Learn"**
 
@@ -537,7 +571,7 @@ text/lecture chat, scaffolding system, memory, privacy, and usage tips."
 - [ ] **Step 1: Write "Enabling Iris"**
 
 Course-level settings: how to enable/disable Iris, IrisCourseSettings.
-- `[IMAGE PLACEHOLDER: Iris course settings panel in Artemis]`
+- `:::info Screenshot Needed — Iris course settings panel in Artemis :::`
 
 - [ ] **Step 2: Write "Custom Instructions"**
 
@@ -554,7 +588,7 @@ Per-course rate limiting: configuration, default values, why rate limits exist.
 - [ ] **Step 5: Write "Lecture Ingestion"**
 
 Sending lecture slides and transcriptions to Iris: bulk ingestion, individual unit ingestion.
-- `[IMAGE PLACEHOLDER: Lecture management page with Iris ingestion buttons]`
+- `:::info Screenshot Needed — Lecture management page with Iris ingestion buttons :::`
 
 - [ ] **Step 6: Write "FAQ Ingestion"**
 
@@ -563,7 +597,7 @@ Ingesting course FAQs into Iris's knowledge base.
 - [ ] **Step 7: Write "Tutor Suggestions"**
 
 AI-powered suggestions for tutors in discussion threads. Direct Iris conversations from threads.
-- `[IMAGE PLACEHOLDER: Tutor suggestion in a discussion thread]`
+- `:::info Screenshot Needed — Tutor suggestion in a discussion thread :::`
 
 - [ ] **Step 8: Write "Pedagogical Approach"**
 
@@ -764,7 +798,7 @@ and citation guidance."
 Mirror `athena_docs-build.yml` structure:
 - `workflow_call` trigger
 - Detect changes in `iris/docs/**`
-- Node.js 20 setup
+- Node.js 24 setup (matching Athena's workflow)
 - `npm ci` and `npm run build` in `iris/docs/`
 - Cache `iris/docs/build`
 - Upload artifact `iris-docs` with 1-day retention
