@@ -3,11 +3,18 @@
 import logging
 import threading
 import time
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 
-from .models import ModelStatus, OllamaCapacity, RequestMetrics
+from .models import (
+    ModelStatus,
+    OllamaCapacity,
+    RequestMetrics,
+    LaneSchedulerSignals,
+    ModelSchedulerView,
+    ModelProfile,
+)
 from .providers.logosnode_provider import LogosNodeDataProvider
 
 logger = logging.getLogger(__name__)
@@ -62,6 +69,74 @@ class LogosNodeSchedulingDataFacade:
             self._model_to_provider[model_id] = current
             logger.info("Registered model %s as '%s' with logosnode provider '%s'", model_id, model_name, provider_name)
 
+    def replace_registrations(self, registrations: list[dict]) -> None:
+        with self._lock:
+            desired_by_provider: Dict[int, Dict[str, object]] = {}
+            for registration in registrations:
+                provider_id = int(registration["provider_id"])
+                entry = desired_by_provider.setdefault(
+                    provider_id,
+                    {
+                        "provider_name": registration["provider_name"],
+                        "base_url": registration.get("logosnode_admin_url"),
+                        "total_vram_mb": int(registration.get("total_vram_mb") or 0),
+                        "models": {},
+                    },
+                )
+                entry["provider_name"] = registration["provider_name"]
+                entry["base_url"] = registration.get("logosnode_admin_url")
+                entry["total_vram_mb"] = int(registration.get("total_vram_mb") or 0)
+                entry["models"][int(registration["model_id"])] = registration["model_name"]
+
+            stale_provider_ids = set(self._providers) - set(desired_by_provider)
+            for provider_id in stale_provider_ids:
+                self._providers.pop(provider_id, None)
+
+            self._model_to_provider = {}
+            for provider_id, entry in desired_by_provider.items():
+                provider = self._providers.get(provider_id)
+                if provider is None:
+                    provider = LogosNodeDataProvider(
+                        name=str(entry["provider_name"]),
+                        base_url=entry.get("base_url"),
+                        total_vram_mb=int(entry.get("total_vram_mb") or 0),
+                        queue_manager=self.queue_manager,
+                        provider_id=provider_id,
+                        db_manager=self._db,
+                        runtime_registry=self._runtime_registry,
+                    )
+                    self._providers[provider_id] = provider
+                else:
+                    provider.update_registration(
+                        name=str(entry["provider_name"]),
+                        base_url=entry.get("base_url"),
+                        total_vram_mb=int(entry.get("total_vram_mb") or 0),
+                    )
+
+                model_map = {
+                    int(model_id): model_name
+                    for model_id, model_name in dict(entry["models"]).items()
+                }
+                provider.set_registered_models(model_map)
+                for model_id in model_map:
+                    current = self._model_to_provider.get(model_id, set())
+                    current.add(provider_id)
+                    self._model_to_provider[model_id] = current
+
+            valid_pairs = {
+                (model_id, provider_id)
+                for model_id, provider_ids in self._model_to_provider.items()
+                for provider_id in provider_ids
+            }
+            self._request_tracking = {
+                request_id: data
+                for request_id, data in self._request_tracking.items()
+                if (
+                    data.get("model_id"),
+                    data.get("provider_id"),
+                ) in valid_pairs
+            }
+
     def get_model_status(self, model_id: int, provider_id: Optional[int] = None) -> ModelStatus:
         provider = self._get_provider_for_model(model_id, provider_id)
         return provider.get_model_status(model_id)
@@ -71,6 +146,32 @@ class LogosNodeSchedulingDataFacade:
             raise KeyError(f"Provider '{provider_id}' not found")
         return self._providers[int(provider_id)].get_capacity_info()
 
+    # ------------------------------------------------------------------
+    # Scheduler-view and lane-signal facade methods (Phase 1.3)
+    # ------------------------------------------------------------------
+
+    def get_model_scheduler_view(self, model_id: int, provider_id: int) -> Optional[ModelSchedulerView]:
+        """Build aggregated scheduler view for one model on a specific provider."""
+        provider = self._get_provider_for_model(model_id, provider_id)
+        return provider.get_model_scheduler_view(model_id)
+
+    def get_all_provider_lane_signals(self, provider_id: int) -> list[LaneSchedulerSignals]:
+        """Return lane signals for every lane on a provider. Used by capacity planner."""
+        if int(provider_id) not in self._providers:
+            raise KeyError(f"Provider '{provider_id}' not found")
+        return self._providers[int(provider_id)].get_all_lane_signals()
+
+    def get_model_profiles(self, provider_id: int) -> Dict[str, ModelProfile]:
+        """Read model profiles from a provider's runtime snapshot."""
+        if int(provider_id) not in self._providers:
+            raise KeyError(f"Provider '{provider_id}' not found")
+        return self._providers[int(provider_id)].get_model_profiles()
+
+    def provider_ids(self) -> list[int]:
+        """Return list of registered provider IDs (for planner iteration)."""
+        with self._lock:
+            return list(self._providers.keys())
+
     def debug_state(self) -> Dict[str, Dict]:
         with self._lock:
             providers: Dict[str, Dict] = {}
@@ -78,6 +179,7 @@ class LogosNodeSchedulingDataFacade:
                 providers[str(provider_id)] = {
                     "name": provider.name,
                     "base_url": provider.base_url,
+                    "runtime": provider.get_runtime_debug_state(),
                     "models": provider.get_debug_state(),
                 }
             now = time.time()

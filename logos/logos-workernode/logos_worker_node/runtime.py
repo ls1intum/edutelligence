@@ -123,6 +123,11 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         free_memory_mb=float(devices.free_memory_mb or 0.0),
     )
 
+    # Include model profiles if available
+    model_profiles = None
+    if hasattr(app.state, "model_profiles") and app.state.model_profiles is not None:
+        model_profiles = app.state.model_profiles.get_all_profiles()
+
     return WorkerRuntimeStatus(
         worker_name=cfg.worker.name,
         worker_id=bridge.worker_id,
@@ -132,4 +137,5 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         devices=devices,
         capacity=capacity,
         lanes=lanes,
+        model_profiles=model_profiles if model_profiles else None,
     )

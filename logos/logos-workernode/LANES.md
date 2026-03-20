@@ -77,3 +77,40 @@ curl -X POST http://localhost:8444/admin/lanes/qwen3-8b-v1/sleep \
   -H 'Content-Type: application/json' \
   -d '{"level":1,"mode":"wait"}'
 ```
+
+### Automatic sleep/wake (Capacity Planner)
+
+When `LOGOS_CAPACITY_PLANNER_ENABLED=true` (default) on the Logos server, sleep and wake are managed automatically:
+
+| Idle duration | Action | Scope |
+|--------------|--------|-------|
+| 60s | Sleep level 1 | vLLM lanes with sleep mode enabled |
+| 5min | Sleep level 2 | vLLM lanes already at level 1 |
+| 15min | Stop | Any lane (Ollama or vLLM) |
+
+Lanes are woken automatically when demand is detected (exponential-decay demand score >= 1.0). New lanes can also be loaded preemptively when demand score >= 2.0, subject to VRAM budget validation.
+
+For vLLM lanes, the planner also auto-tunes `gpu_memory_utilization`:
+- Increases by 0.05 when KV cache usage > 85%
+- Decreases by 0.05 when KV cache usage < 40% and another model needs VRAM
+
+## Model profiles
+
+The worker automatically measures VRAM footprints:
+- **loaded_vram_mb**: recorded when a lane reaches `loaded` or `running` state
+- **sleeping_residual_mb**: recorded when a lane enters `sleeping` state
+
+Profiles update via exponential moving average (alpha=0.3) and persist in `config.yml` under `model_profiles`. They survive restarts and are sent to Logos every 5s so the capacity planner can validate VRAM budgets before loading or waking lanes.
+
+Example persisted profiles (added automatically to config.yml):
+```yaml
+model_profiles:
+  gemma2:2b:
+    loaded_vram_mb: 2048.5
+    sleeping_residual_mb: 256.0
+    disk_size_bytes: 1629516544
+    measurement_count: 12
+  llama3.1:latest:
+    loaded_vram_mb: 4812.3
+    measurement_count: 3
+```

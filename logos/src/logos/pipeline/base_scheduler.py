@@ -242,6 +242,9 @@ class BaseScheduler(SchedulerInterface):
             except Exception:
                 logger.debug("Failed to update Azure rate limits for model %s", model_id, exc_info=False)
 
+    def update_model_registry(self, model_registry: Dict[tuple[int, int], str]) -> None:
+        self._model_registry = dict(model_registry or {})
+
 # TODO: fix that
     # def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
     #     """

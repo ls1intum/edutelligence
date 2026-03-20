@@ -11,10 +11,11 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from logos_worker_node.config import load_config
+from logos_worker_node.config import load_config, get_config_path
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.logos_bridge import LogosBridgeClient
+from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.runtime import SERVICE_VERSION
 
 logging.basicConfig(
@@ -36,11 +37,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
+    model_profiles = ModelProfileRegistry(config_path=get_config_path())
+
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
         lane_port_start=cfg.worker.lane_port_start,
         lane_port_end=cfg.worker.lane_port_end,
         nvidia_smi_available=lambda: gpu_collector.available,
+        model_profiles=model_profiles,
     )
 
     if cfg.lanes:
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.config = cfg
     app.state.gpu_collector = gpu_collector
     app.state.lane_manager = lane_manager
+    app.state.model_profiles = model_profiles
     logos_bridge = LogosBridgeClient(app, cfg.logos)
     app.state.logos_bridge = logos_bridge
     await logos_bridge.start()

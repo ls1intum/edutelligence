@@ -1360,6 +1360,8 @@ class DBManager:
         total_memory_bytes: Optional[int] = None,
         free_memory_bytes: Optional[int] = None,
         snapshot_source: Optional[str] = None,
+        runtime_payload: Optional[Dict[str, Any]] = None,
+        scheduler_signals: Optional[Dict[str, Any]] = None,
         poll_success: bool = True,
         error_message: Optional[str] = None
     ) -> int:
@@ -1388,6 +1390,8 @@ class DBManager:
                 free_memory_bytes,
                 loaded_models,
                 snapshot_source,
+                runtime_payload,
+                scheduler_signals,
                 poll_success,
                 error_message
             ) VALUES (
@@ -1399,6 +1403,8 @@ class DBManager:
                 :free_memory_bytes,
                 :loaded_models,
                 :snapshot_source,
+                :runtime_payload,
+                :scheduler_signals,
                 :poll_success,
                 :error_message
             )
@@ -1414,6 +1420,8 @@ class DBManager:
             "free_memory_bytes": int(free_memory_bytes) if free_memory_bytes is not None else None,
             "loaded_models": json.dumps(loaded_models),
             "snapshot_source": snapshot_source or "unknown",
+            "runtime_payload": json.dumps(runtime_payload or {}),
+            "scheduler_signals": json.dumps(scheduler_signals or {}),
             "poll_success": poll_success,
             "error_message": error_message
         }).fetchone()
@@ -1470,6 +1478,7 @@ class DBManager:
                 s.free_memory_bytes,
                 s.total_models_loaded,
                 s.loaded_models,
+                s.scheduler_signals,
                 p.total_vram_mb,
                 MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
             FROM ollama_provider_snapshots s
@@ -1498,6 +1507,7 @@ class DBManager:
                 free_memory_bytes,
                 models_loaded,
                 loaded_models,
+                scheduler_signals,
                 total_vram_mb,
                 capacity_bytes,
             ) in rows:
@@ -1511,6 +1521,11 @@ class DBManager:
                 )
                 if pid not in providers_data:
                     providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+                parsed_scheduler_signals = (
+                    json.loads(scheduler_signals)
+                    if isinstance(scheduler_signals, str)
+                    else scheduler_signals
+                )
                 providers_data[pid]["data"].append({
                     "snapshot_id": int(snapshot_id or 0),
                     "timestamp": ts.isoformat() if ts else None,
@@ -1521,6 +1536,7 @@ class DBManager:
                     "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
                     "models_loaded": models_loaded,
                     "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
+                    "scheduler_signals": parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {},
                 })
 
             providers_list = [
@@ -1589,6 +1605,7 @@ class DBManager:
                     s.free_memory_bytes,
                     s.total_models_loaded,
                     s.loaded_models,
+                    s.scheduler_signals,
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
@@ -1612,6 +1629,7 @@ class DBManager:
                     s.free_memory_bytes,
                     s.total_models_loaded,
                     s.loaded_models,
+                    s.scheduler_signals,
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
                 FROM ollama_provider_snapshots s
@@ -1645,6 +1663,7 @@ class DBManager:
                 free_memory_bytes,
                 models_loaded,
                 loaded_models,
+                scheduler_signals,
                 total_vram_mb,
                 capacity_bytes,
             ) in rows:
@@ -1663,6 +1682,11 @@ class DBManager:
 
                 if pid not in providers_data:
                     providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+                parsed_scheduler_signals = (
+                    json.loads(scheduler_signals)
+                    if isinstance(scheduler_signals, str)
+                    else scheduler_signals
+                )
 
                 providers_data[pid]["data"].append({
                     "snapshot_id": snapshot_id_int,
@@ -1674,6 +1698,7 @@ class DBManager:
                     "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
                     "models_loaded": models_loaded,
                     "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
+                    "scheduler_signals": parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {},
                 })
 
             providers_list = [

@@ -220,3 +220,129 @@ def test_logosnode_runtime_vllm_lane_uses_lane_config_capacity_hint(monkeypatch)
     assert status.vram_mb == 12288
     assert debug_state[202]["max_capacity"] == 6
     assert debug_state[202]["capacity_source"] == "runtime"
+
+
+def test_logosnode_provider_config_parallel_capacity_overrides_runtime_hint(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
+            return {
+                "runtime": {
+                    "lanes": [
+                        {
+                            "lane_id": "lane-1",
+                            "model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+                            "runtime_state": "loaded",
+                            "vllm": True,
+                            "num_parallel": 0,
+                            "lane_config": {"num_parallel": 1},
+                        }
+                    ]
+                }
+            }
+
+    queue_mgr = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_mgr, runtime_registry=_FakeRegistry())
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {"parallel_capacity": 16},
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: {"models": []},
+    )
+
+    facade.register_model(303, "logosnode", "http://fake", "Qwen/Qwen2.5-Coder-7B-Instruct", 65536, provider_id=13)
+    provider = facade._providers[13]
+
+    debug_state = provider.get_debug_state()
+    assert debug_state[303]["max_capacity"] == 16
+    assert debug_state[303]["capacity_source"] == "config"
+
+
+def test_logosnode_debug_state_includes_recent_scheduler_signals(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
+            return {
+                "last_heartbeat": "2026-03-17T10:00:10Z",
+                "capabilities_models": ["Qwen/Qwen2.5-Coder-7B-Instruct"],
+                "runtime": {
+                    "lanes": [
+                        {
+                            "lane_id": "lane-1",
+                            "model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+                            "runtime_state": "running",
+                            "vllm": True,
+                            "num_parallel": 0,
+                            "lane_config": {"num_parallel": 8},
+                        }
+                    ]
+                },
+            }
+
+        @staticmethod
+        def peek_recent_samples(provider_id: int, *, after_snapshot_id: int = 0):  # noqa: ARG004
+            return [
+                {
+                    "snapshot_id": 1,
+                    "timestamp": "2026-03-17T10:00:00Z",
+                    "scheduler_signals": {
+                        "provider": {"active_requests": 2},
+                        "models": {
+                            "Qwen/Qwen2.5-Coder-7B-Instruct": {
+                                "active_requests": 2,
+                                "queue_waiting_current": 3,
+                                "requests_running_current": 2,
+                                "prompt_tokens_total": 1200,
+                                "generation_tokens_total": 2400,
+                                "ttft_p95_seconds": 0.8,
+                            }
+                        },
+                    },
+                },
+                {
+                    "snapshot_id": 2,
+                    "timestamp": "2026-03-17T10:00:10Z",
+                    "scheduler_signals": {
+                        "provider": {"active_requests": 1},
+                        "models": {
+                            "Qwen/Qwen2.5-Coder-7B-Instruct": {
+                                "active_requests": 1,
+                                "queue_waiting_current": 1,
+                                "requests_running_current": 1,
+                                "prompt_tokens_total": 1800,
+                                "generation_tokens_total": 3600,
+                                "ttft_p95_seconds": 0.4,
+                            }
+                        },
+                    },
+                },
+            ]
+
+    queue_mgr = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_mgr, runtime_registry=_FakeRegistry())
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {},
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: {"models": []},
+    )
+
+    facade.register_model(404, "logosnode", "http://fake", "Qwen/Qwen2.5-Coder-7B-Instruct", 65536, provider_id=13)
+    debug_state = facade.debug_state()
+
+    provider_debug = debug_state["providers"]["13"]
+    model_debug = provider_debug["models"][404]
+
+    assert provider_debug["runtime"]["recent_sample_count"] == 2
+    assert provider_debug["runtime"]["provider_signals"]["active_requests"] == 1
+    assert model_debug["scheduler_signals"]["sample_count"] == 2
+    assert model_debug["scheduler_signals"]["queue_waiting_peak"] == 3.0
+    assert model_debug["scheduler_signals"]["requests_running_peak"] == 2.0
+    assert model_debug["scheduler_signals"]["prompt_tokens_per_second"] == 60.0
+    assert model_debug["scheduler_signals"]["generation_tokens_per_second"] == 120.0

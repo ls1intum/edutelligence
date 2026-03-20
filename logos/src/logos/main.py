@@ -31,14 +31,19 @@ from logos.responses import (
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
 from logos.pipeline.fcfs_scheduler import FcfScheduler
+from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
+from logos.capacity.demand_tracker import DemandTracker
+from logos.capacity.capacity_planner import CapacityPlanner
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.logosnode_registry import (
     LogosNodeCommandError,
     LogosNodeOfflineError,
+    LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
 )
 from scripts import setup_proxy
@@ -49,6 +54,8 @@ logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _logosnode_registry = LogosNodeRuntimeRegistry()
+_demand_tracker: Optional[DemandTracker] = None
+_capacity_planner: Optional[CapacityPlanner] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -162,6 +169,284 @@ def _runtime_modes_for_lanes(lanes: list[dict[str, Any]]) -> list[str]:
     return sorted(modes)
 
 
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_histogram_buckets(target: dict[str, float], source: Any) -> None:
+    if not isinstance(source, dict):
+        return
+    for raw_bucket, raw_value in source.items():
+        bucket = str(raw_bucket).strip()
+        if not bucket:
+            continue
+        count = _safe_float(raw_value)
+        if count is None or count < 0:
+            continue
+        target[bucket] = target.get(bucket, 0.0) + count
+
+
+def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optional[float]:
+    if not isinstance(histogram, dict) or not histogram:
+        return None
+
+    buckets: list[tuple[float, float]] = []
+    for raw_bucket, raw_count in histogram.items():
+        count = _safe_float(raw_count)
+        if count is None or count < 0:
+            continue
+        bucket_label = str(raw_bucket).strip()
+        if not bucket_label:
+            continue
+        if bucket_label == "+Inf":
+            upper_bound = float("inf")
+        else:
+            upper_bound = _safe_float(bucket_label)
+            if upper_bound is None:
+                continue
+        buckets.append((upper_bound, count))
+
+    if not buckets:
+        return None
+
+    buckets.sort(key=lambda item: item[0])
+    total_count = max(count for _upper, count in buckets)
+    if total_count <= 0:
+        return None
+
+    target = total_count * max(0.0, min(1.0, quantile))
+    previous_upper = 0.0
+    previous_count = 0.0
+
+    for upper_bound, cumulative_count in buckets:
+        if cumulative_count < target:
+            previous_upper = 0.0 if upper_bound == float("inf") else upper_bound
+            previous_count = cumulative_count
+            continue
+
+        if upper_bound == float("inf"):
+            return previous_upper if previous_upper > 0 else None
+
+        bucket_count = cumulative_count - previous_count
+        if bucket_count <= 0:
+            return upper_bound
+
+        bucket_width = upper_bound - previous_upper
+        if bucket_width <= 0:
+            return upper_bound
+
+        fraction = (target - previous_count) / bucket_count
+        return previous_upper + (fraction * bucket_width)
+
+    last_upper = buckets[-1][0]
+    if last_upper == float("inf"):
+        return previous_upper if previous_upper > 0 else None
+    return last_upper
+
+
+def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(runtime, dict):
+        return {}
+
+    devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
+    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
+
+    provider_signals: Dict[str, Any] = {
+        "timestamp": runtime.get("timestamp"),
+        "transport_connected": bool(transport.get("connected", True)),
+        "device_mode": devices.get("mode"),
+        "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
+        "device_count": len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0,
+        "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
+        "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
+        "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
+        "lane_count": _safe_int(capacity.get("lane_count")) or len(lanes),
+        "active_requests": _safe_int(capacity.get("active_requests")) or 0,
+        "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
+        "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
+        "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
+        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
+        "runtime_modes": _runtime_modes_for_lanes(lanes),
+    }
+
+    model_signals: dict[str, Dict[str, Any]] = {}
+    lane_signals: dict[str, Dict[str, Any]] = {}
+
+    def _ensure_model_entry(model_name: str) -> Dict[str, Any]:
+        return model_signals.setdefault(
+            model_name,
+            {
+                "lane_count": 0,
+                "vllm_lane_count": 0,
+                "ollama_lane_count": 0,
+                "loaded_lane_count": 0,
+                "running_lane_count": 0,
+                "sleeping_lane_count": 0,
+                "cold_lane_count": 0,
+                "starting_lane_count": 0,
+                "error_lane_count": 0,
+                "active_requests": 0,
+                "effective_vram_mb": 0.0,
+                "reported_vram_mb": 0.0,
+                "pid_vram_mb": 0.0,
+                "device_vram_mb": 0.0,
+                "queue_waiting_current": 0.0,
+                "requests_running_current": 0.0,
+                "prompt_tokens_total": None,
+                "generation_tokens_total": None,
+                "ttft_histogram": {},
+                "ttft_p95_seconds": None,
+                "gpu_cache_usage_percent_avg": None,
+                "gpu_cache_usage_percent_max": None,
+                "prefix_cache_hit_rate_avg": None,
+                "_gpu_cache_usage_percent_sum": 0.0,
+                "_gpu_cache_usage_percent_count": 0,
+                "_prefix_cache_hit_rate_sum": 0.0,
+                "_prefix_cache_hit_rate_count": 0,
+            },
+        )
+
+    for lane in lanes:
+        if not isinstance(lane, dict):
+            continue
+
+        model_name = str(lane.get("model") or "").strip()
+        lane_id = str(lane.get("lane_id") or "").strip()
+        runtime_state = str(lane.get("runtime_state") or "").strip()
+        is_vllm = bool(lane.get("vllm"))
+        active_requests = _safe_int(lane.get("active_requests")) or 0
+        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+        ttft_histogram = (
+            backend_metrics.get("ttft_histogram")
+            if isinstance(backend_metrics.get("ttft_histogram"), dict)
+            else {}
+        )
+        lane_ttft_p95 = _histogram_quantile_seconds(ttft_histogram)
+
+        lane_signal = {
+            "model": model_name,
+            "vllm": is_vllm,
+            "runtime_state": runtime_state,
+            "sleep_state": lane.get("sleep_state"),
+            "active_requests": active_requests,
+            "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,
+            "reported_vram_mb": _safe_float(lane.get("reported_vram_mb")) or 0.0,
+            "pid_vram_mb": _safe_float(lane.get("pid_vram_mb")) or 0.0,
+            "device_vram_mb": _safe_float(lane.get("device_vram_mb")) or 0.0,
+            "vram_source": lane.get("vram_source"),
+            "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
+            "requests_running": _safe_float(backend_metrics.get("requests_running")),
+            "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
+            "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
+            "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
+            "ttft_histogram": ttft_histogram,
+            "ttft_p95_seconds": lane_ttft_p95,
+        }
+        if lane_id:
+            lane_signals[lane_id] = lane_signal
+
+        if not model_name:
+            continue
+
+        entry = _ensure_model_entry(model_name)
+        entry["lane_count"] += 1
+        if is_vllm:
+            entry["vllm_lane_count"] += 1
+        else:
+            entry["ollama_lane_count"] += 1
+
+        if runtime_state == "loaded":
+            entry["loaded_lane_count"] += 1
+        elif runtime_state == "running":
+            entry["running_lane_count"] += 1
+        elif runtime_state == "sleeping":
+            entry["sleeping_lane_count"] += 1
+        elif runtime_state == "cold":
+            entry["cold_lane_count"] += 1
+        elif runtime_state == "starting":
+            entry["starting_lane_count"] += 1
+        elif runtime_state == "error":
+            entry["error_lane_count"] += 1
+
+        entry["active_requests"] += active_requests
+        entry["effective_vram_mb"] += _safe_float(lane.get("effective_vram_mb")) or 0.0
+        entry["reported_vram_mb"] += _safe_float(lane.get("reported_vram_mb")) or 0.0
+        entry["pid_vram_mb"] += _safe_float(lane.get("pid_vram_mb")) or 0.0
+        entry["device_vram_mb"] += _safe_float(lane.get("device_vram_mb")) or 0.0
+
+        queue_waiting = _safe_float(backend_metrics.get("queue_waiting"))
+        if queue_waiting is not None:
+            entry["queue_waiting_current"] += queue_waiting
+
+        requests_running = _safe_float(backend_metrics.get("requests_running"))
+        if requests_running is not None:
+            entry["requests_running_current"] += requests_running
+
+        prompt_tokens_total = _safe_float(backend_metrics.get("prompt_tokens_total"))
+        if prompt_tokens_total is not None:
+            current_prompt = _safe_float(entry.get("prompt_tokens_total")) or 0.0
+            entry["prompt_tokens_total"] = current_prompt + prompt_tokens_total
+
+        generation_tokens_total = _safe_float(backend_metrics.get("generation_tokens_total"))
+        if generation_tokens_total is not None:
+            current_generation = _safe_float(entry.get("generation_tokens_total")) or 0.0
+            entry["generation_tokens_total"] = current_generation + generation_tokens_total
+
+        gpu_cache_usage_percent = _safe_float(backend_metrics.get("gpu_cache_usage_percent"))
+        if gpu_cache_usage_percent is not None:
+            entry["_gpu_cache_usage_percent_sum"] += gpu_cache_usage_percent
+            entry["_gpu_cache_usage_percent_count"] += 1
+            current_max = _safe_float(entry.get("gpu_cache_usage_percent_max"))
+            entry["gpu_cache_usage_percent_max"] = (
+                gpu_cache_usage_percent
+                if current_max is None
+                else max(current_max, gpu_cache_usage_percent)
+            )
+
+        prefix_cache_hit_rate = _safe_float(backend_metrics.get("prefix_cache_hit_rate"))
+        if prefix_cache_hit_rate is not None:
+            entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
+            entry["_prefix_cache_hit_rate_count"] += 1
+
+        _merge_histogram_buckets(entry["ttft_histogram"], ttft_histogram)
+
+    for entry in model_signals.values():
+        gpu_count = int(entry.pop("_gpu_cache_usage_percent_count", 0) or 0)
+        gpu_sum = float(entry.pop("_gpu_cache_usage_percent_sum", 0.0) or 0.0)
+        if gpu_count > 0:
+            entry["gpu_cache_usage_percent_avg"] = gpu_sum / gpu_count
+
+        prefix_count = int(entry.pop("_prefix_cache_hit_rate_count", 0) or 0)
+        prefix_sum = float(entry.pop("_prefix_cache_hit_rate_sum", 0.0) or 0.0)
+        if prefix_count > 0:
+            entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
+
+        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
+
+    return {
+        "provider": provider_signals,
+        "models": model_signals,
+        "lanes": lane_signals,
+    }
+
+
 def _build_live_local_provider_sample(
     provider: Optional[Dict[str, Any]],
     snapshot: Optional[Dict[str, Any]],
@@ -194,6 +479,7 @@ def _build_live_local_provider_sample(
 
     loaded_models = _normalize_loaded_models(lanes)
     runtime_modes = _runtime_modes_for_lanes(lanes)
+    scheduler_signals = _build_logosnode_scheduler_signals(runtime)
 
     if remaining_vram_mb is None and not loaded_models and used_vram_mb <= 0:
         return None
@@ -216,6 +502,8 @@ def _build_live_local_provider_sample(
         "total_vram_mb": total_vram_mb if total_vram_mb > 0 else None,
         "models_loaded": len(loaded_models),
         "loaded_models": loaded_models,
+        "runtime_payload": runtime,
+        "scheduler_signals": scheduler_signals,
     }
 
 
@@ -304,6 +592,8 @@ def _capture_logosnode_provider_snapshot(
             free_memory_bytes=free_bytes,
             loaded_models=list(sample.get("loaded_models") or []),
             snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
+            runtime_payload=sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {},
+            scheduler_signals=sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {},
             poll_success=True,
         )
 
@@ -603,6 +893,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    if _capacity_planner:
+        await _capacity_planner.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -772,6 +1064,7 @@ async def _filter_logosnode_deployments(deployments: list[Deployment]) -> list[D
 async def start_pipeline():
     """Initialize the new request pipeline components."""
     global _pipeline, _queue_mgr, _logosnode_facade, _azure_facade, _context_resolver
+    global _demand_tracker, _capacity_planner
 
     logger.info("Initializing Request Pipeline...")
 
@@ -783,12 +1076,17 @@ async def start_pipeline():
     await _register_models_with_facades(_logosnode_facade, _azure_facade)
 
     model_registry = _build_model_registry()
-    scheduler = FcfScheduler(
+
+    # Scheduler: use ETTFT-correcting scheduler (ablatable via env var)
+    ettft_enabled = os.getenv("LOGOS_SCHEDULER_ETTFT_ENABLED", "true").lower() == "true"
+    scheduler = ClassificationCorrectingScheduler(
         queue_manager=_queue_mgr,
         logosnode_facade=_logosnode_facade,
         azure_facade=_azure_facade,
-        model_registry=model_registry
+        model_registry=model_registry,
+        ettft_enabled=ettft_enabled,
     )
+    logger.info("Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled)
 
     # 5. Executor
     executor = Executor()
@@ -799,23 +1097,45 @@ async def start_pipeline():
     # 7. Classifier
     clf = classifier()
 
-    # 8. Pipeline
+    # 8. Demand Tracker (for capacity planner)
+    _demand_tracker = DemandTracker()
+
+    # 9. Pipeline
     _pipeline = RequestPipeline(
         classifier=clf,
         scheduler=scheduler,
         executor=executor,
-        context_resolver=_context_resolver
+        context_resolver=_context_resolver,
+        demand_tracker=_demand_tracker,
     )
 
-    logger.info("Request Pipeline Initialized. with SDI-aware scheduling")
+    # 10. Capacity Planner (ablatable via env var)
+    planner_enabled = os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
+    _capacity_planner = CapacityPlanner(
+        logosnode_facade=_logosnode_facade,
+        logosnode_registry=_logosnode_registry,
+        demand_tracker=_demand_tracker,
+        enabled=planner_enabled,
+    )
+    await _capacity_planner.start()
+
+    logger.info(
+        "Request Pipeline Initialized with ETTFT-correcting scheduler "
+        "(ettft=%s, planner=%s)", ettft_enabled, planner_enabled,
+    )
 
 
 async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDataFacade, azure_facade: AzureSchedulingDataFacade):
     """Register all models with their respective SDI facades."""
+    logosnode_registrations: list[dict[str, Any]] = []
+    azure_registrations: list[dict[str, Any]] = []
+
     with DBManager() as db:
         deployments = db.get_all_deployments()
         if not deployments:
             logger.warning("No deployments found to register with SDI facades")
+            logosnode_facade.replace_registrations([])
+            azure_facade.replace_registrations([])
             return
 
         model_cache: Dict[int, Dict[str, Any]] = {}
@@ -853,22 +1173,27 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                 continue
 
             if provider_type == "logosnode":
-                logosnode_facade.register_model(
-                    model_id=model_id,
-                    provider_name=provider_name,
-                    logosnode_admin_url=(provider_config.get("ollama_admin_url") or provider_info.get("base_url")),
-                    model_name=model_name,
-                    total_vram_mb=provider_config.get("total_vram_mb", 65536),
-                    provider_id=provider_id,
+                logosnode_registrations.append(
+                    {
+                        "model_id": model_id,
+                        "provider_name": provider_name,
+                        "logosnode_admin_url": (provider_config.get("ollama_admin_url") or provider_info.get("base_url")),
+                        "model_name": model_name,
+                        "total_vram_mb": provider_config.get("total_vram_mb", 65536),
+                        "provider_id": provider_id,
+                    }
                 )
             elif provider_type == "azure":
                 endpoint = db.get_endpoint_for_deployment(model_id, provider_id)
-                _azure_facade.register_model(
-                    model_id=model_id,
-                    provider_name=provider_name,
-                    model_name=model_name,
-                    model_endpoint=endpoint or "",
-                    provider_id=provider_id,
+                deployment_name = endpoint or ""
+                azure_registrations.append(
+                    {
+                        "model_id": model_id,
+                        "provider_name": provider_name,
+                        "model_name": model_name,
+                        "deployment_name": extract_azure_deployment_name(deployment_name),
+                        "provider_id": provider_id,
+                    }
                 )
             else:
                 logger.debug(
@@ -878,6 +1203,10 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                     model_id,
                     provider_type,
                 )
+
+    azure_registrations = [item for item in azure_registrations if item.get("deployment_name")]
+    logosnode_facade.replace_registrations(logosnode_registrations)
+    azure_facade.replace_registrations(azure_registrations)
 
 
 def _build_model_registry() -> Dict[tuple[int, int], str]:
@@ -914,7 +1243,9 @@ def classifier() -> ClassificationManager:
                     "classification_weight": Balancer(),
                 })
 
-    return ClassificationManager(mdls)
+    manager = ClassificationManager(mdls)
+    manager.update_manager(mdls)
+    return manager
 
 
 def rebuild_classifier():
@@ -928,6 +1259,29 @@ def rebuild_classifier():
         new_classifier = classifier()
         _pipeline.update_classifier(new_classifier)
         logger.info("Classifier rebuilt with updated models")
+
+
+async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False) -> None:
+    """
+    Refresh in-memory DB-derived runtime state without rebuilding the whole pipeline.
+
+    This keeps queue state and active request tracking intact while making newly
+    added providers/deployments/models available immediately.
+    """
+    global _pipeline, _logosnode_facade, _azure_facade
+    if not _pipeline or not _logosnode_facade or not _azure_facade:
+        return
+
+    await _register_models_with_facades(_logosnode_facade, _azure_facade)
+    _pipeline.scheduler.update_model_registry(_build_model_registry())
+
+    if rebuild_model_classifier:
+        rebuild_classifier()
+
+    logger.info(
+        "Refreshed in-memory pipeline state%s",
+        " with classifier rebuild" if rebuild_model_classifier else "",
+    )
 
 
 def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None):
@@ -1865,6 +2219,20 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         raise HTTPException(status_code=403, detail="Invalid provider shared key")
 
     worker_id = data.worker_id.strip() if data.worker_id else f"worker-{data.provider_id}"
+    conflicting_session = await _logosnode_registry.get_conflicting_session(
+        data.provider_id,
+        worker_id,
+        stale_after_seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS,
+    )
+    if conflicting_session is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Provider {data.provider_id} is already connected as worker "
+                f"'{conflicting_session.worker_id}'. Register a separate logosnode "
+                f"provider for '{worker_id}' or stop the existing worker first."
+            ),
+        )
     token = await _logosnode_registry.issue_ticket(
         provider_id=data.provider_id,
         worker_id=worker_id,
@@ -1890,7 +2258,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
         return
 
     await websocket.accept()
-    await _logosnode_registry.attach_session(ticket, websocket)
+    try:
+        await _logosnode_registry.attach_session(ticket, websocket)
+    except LogosNodeSessionConflictError as exc:
+        await websocket.close(code=1008, reason=str(exc))
+        return
 
     try:
         while True:
@@ -2074,7 +2446,17 @@ async def set_log(data: SetLogRequest):
 @app.post("/logosdb/add_provider")
 async def add_provider(data: AddProviderRequest):
     with DBManager() as db:
-        return db.add_provider(**data.dict())
+        result = db.add_provider(**data.dict())
+    await refresh_pipeline_runtime_state()
+    return result
+
+
+@app.post("/logosdb/update_provider_sdi_config")
+async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
+    with DBManager() as db:
+        result = db.update_provider_sdi_config(**data.dict())
+    await refresh_pipeline_runtime_state()
+    return result
 
 
 @app.post("/logosdb/add_profile")
@@ -2086,19 +2468,25 @@ async def add_profile(data: AddProfileRequest):
 @app.post("/logosdb/connect_process_provider")
 async def connect_process_provider(data: ConnectProcessProviderRequest):
     with DBManager() as db:
-        return db.connect_process_provider(**data.dict())
+        result = db.connect_process_provider(**data.dict())
+    await refresh_pipeline_runtime_state()
+    return result
 
 
 @app.post("/logosdb/connect_process_model")
 async def connect_process_model(data: ConnectProcessModelRequest):
     with DBManager() as db:
-        return db.connect_process_model(**data.dict())
+        result = db.connect_process_model(**data.dict())
+    await refresh_pipeline_runtime_state()
+    return result
 
 
 @app.post("/logosdb/connect_profile_model")
 async def connect_profile_model(data: ConnectProcessModelRequest):
     with DBManager() as db:
-        return db.connect_profile_model(**data.dict())
+        result = db.connect_profile_model(**data.dict())
+    await refresh_pipeline_runtime_state()
+    return result
 
 
 @app.post("/logosdb/connect_service_process")
@@ -2110,20 +2498,24 @@ async def connect_service_process(data: ConnectServiceProcessRequest):
 @app.post("/logosdb/connect_model_provider")
 async def connect_model_provider(data: ConnectModelProviderRequest):
     with DBManager() as db:
-        return db.connect_model_provider(**data.dict())
+        result = db.connect_model_provider(**data.dict())
+    await refresh_pipeline_runtime_state()
+    return result
 
 
 @app.post("/logosdb/connect_model_api")
 async def connect_model_api(data: ConnectModelApiRequest):
     with DBManager() as db:
-        return db.connect_model_api(**data.dict())
+        result = db.connect_model_api(**data.dict())
+    await refresh_pipeline_runtime_state()
+    return result
 
 
 @app.post("/logosdb/add_model")
 async def add_model(data: AddModelRequest):
     with DBManager() as db:
         back = db.add_model(**data.dict())
-    rebuild_classifier()
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
 
 
@@ -2131,7 +2523,7 @@ async def add_model(data: AddModelRequest):
 async def add_full_model(data: AddFullModelRequest):
     with DBManager() as db:
         back = db.add_full_model(**data.dict())
-    rebuild_classifier()
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
 
 
@@ -2139,7 +2531,7 @@ async def add_full_model(data: AddFullModelRequest):
 async def update_model(data: GiveFeedbackRequest):
     with DBManager() as db:
         back = db.update_model_weights(**data.dict())
-    rebuild_classifier()
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
 
 
@@ -2147,7 +2539,7 @@ async def update_model(data: GiveFeedbackRequest):
 async def delete_model(data: DeleteModelRequest):
     with DBManager() as db:
         back = db.delete_model(**data.dict())
-    rebuild_classifier()
+    await refresh_pipeline_runtime_state(rebuild_model_classifier=True)
     return back
 
 

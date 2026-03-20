@@ -110,8 +110,22 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
                         },
                         "lanes": [
                             {
+                                "lane_id": "qwen-a",
                                 "model": "Qwen/Qwen3-8B",
                                 "vllm": True,
+                                "runtime_state": "running",
+                                "active_requests": 2,
+                                "effective_vram_mb": 6144,
+                                "backend_metrics": {
+                                    "engine": "vllm",
+                                    "queue_waiting": 3,
+                                    "requests_running": 2,
+                                    "gpu_cache_usage_percent": 66.0,
+                                    "prefix_cache_hit_rate": 0.42,
+                                    "prompt_tokens_total": 1200,
+                                    "generation_tokens_total": 3400,
+                                    "ttft_histogram": {"0.5": 8, "1.0": 10},
+                                },
                                 "loaded_models": [
                                     {
                                         "name": "Qwen/Qwen3-8B",
@@ -157,6 +171,12 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
     assert len(local_provider["data"]) == 1
     assert local_provider["data"][0]["remaining_vram_mb"] == 10240
     assert local_provider["data"][0]["models_loaded"] == 1
+    scheduler_signals = local_provider["data"][0]["scheduler_signals"]
+    assert scheduler_signals["provider"]["nvidia_smi_available"] is True
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["queue_waiting_current"] == 3.0
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["requests_running_current"] == 2.0
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["ttft_p95_seconds"] == pytest.approx(0.875)
+    assert scheduler_signals["lanes"]["qwen-a"]["gpu_cache_usage_percent"] == 66.0
 
     offline_provider = payload["providers"][1]
     assert offline_provider["connected"] is False

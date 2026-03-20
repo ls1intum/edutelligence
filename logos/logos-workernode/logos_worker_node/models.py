@@ -270,6 +270,7 @@ class WorkerRuntimeStatus(BaseModel):
     devices: DeviceSummary
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
+    model_profiles: dict[str, dict[str, Any]] | None = None
 
 
 class LaneSetRequest(BaseModel):

@@ -22,6 +22,75 @@ class LogosNodeCommandError(RuntimeError):
     """Raised when a worker command RPC returns an error."""
 
 
+class LogosNodeSessionConflictError(RuntimeError):
+    """Raised when a different worker tries to claim an active provider session."""
+
+
+def _lane_metric_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _lane_ttft_p95_seconds(metrics: dict[str, Any]) -> float:
+    histogram = metrics.get("ttft_histogram")
+    if not isinstance(histogram, dict) or not histogram:
+        return 0.0
+
+    buckets: list[tuple[float, float]] = []
+    for raw_bucket, raw_count in histogram.items():
+        count = _lane_metric_float(raw_count)
+        if count < 0:
+            continue
+        bucket_label = str(raw_bucket).strip()
+        if not bucket_label:
+            continue
+        if bucket_label == "+Inf":
+            upper = float("inf")
+        else:
+            try:
+                upper = float(bucket_label)
+            except ValueError:
+                continue
+        buckets.append((upper, count))
+
+    if not buckets:
+        return 0.0
+
+    buckets.sort(key=lambda item: item[0])
+    total = max(count for _bucket, count in buckets)
+    if total <= 0:
+        return 0.0
+
+    target = total * 0.95
+    for upper, count in buckets:
+        if count >= target:
+            return 0.0 if upper == float("inf") else upper
+    last_upper = buckets[-1][0]
+    return 0.0 if last_upper == float("inf") else last_upper
+
+
+def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
+    backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+    queue_waiting = _lane_metric_float(backend_metrics.get("queue_waiting"))
+    requests_running = _lane_metric_float(backend_metrics.get("requests_running"))
+    if requests_running <= 0:
+        requests_running = _lane_metric_float(lane.get("active_requests"))
+    ttft_p95_seconds = _lane_ttft_p95_seconds(backend_metrics)
+
+    return (
+        lane.get("runtime_state") == "cold",
+        lane.get("runtime_state") == "starting",
+        queue_waiting,
+        requests_running,
+        int(lane.get("active_requests", 0) or 0),
+        ttft_p95_seconds,
+        -float(lane.get("effective_vram_mb", 0.0) or 0.0),
+        str(lane.get("lane_id", "")),
+    )
+
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -98,9 +167,33 @@ class LogosNodeRuntimeRegistry:
         )
         async with self._lock:
             old = self._sessions.get(ticket.provider_id)
+            if (
+                old is not None
+                and old.worker_id != ticket.worker_id
+                and not old.is_stale(30)
+            ):
+                raise LogosNodeSessionConflictError(
+                    f"provider {ticket.provider_id} is already connected as worker '{old.worker_id}'"
+                )
             self._sessions[ticket.provider_id] = session
         if old is not None:
             await self._close_session(old)
+        return session
+
+    async def get_conflicting_session(
+        self,
+        provider_id: int,
+        worker_id: str,
+        *,
+        stale_after_seconds: int = 30,
+    ) -> ProviderSession | None:
+        session = await self._get_session(provider_id)
+        if session is None:
+            return None
+        if session.worker_id == worker_id:
+            return None
+        if session.is_stale(stale_after_seconds):
+            return None
         return session
 
     async def detach_session(self, provider_id: int, websocket: WebSocket | None = None) -> None:
@@ -396,15 +489,7 @@ class LogosNodeRuntimeRegistry:
             candidates.append(lane)
         if not candidates:
             return None
-        candidates.sort(
-            key=lambda item: (
-                item.get("runtime_state") == "cold",
-                item.get("runtime_state") == "starting",
-                int(item.get("active_requests", 0) or 0),
-                -float(item.get("effective_vram_mb", 0.0) or 0.0),
-                str(item.get("lane_id", "")),
-            )
-        )
+        candidates.sort(key=_lane_sort_key)
         return candidates[0]
 
     async def _get_session(self, provider_id: int) -> ProviderSession | None:

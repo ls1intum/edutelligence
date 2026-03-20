@@ -38,6 +38,15 @@ class AddProfileRequest(LogosKeyModel):
     process_id: int
 
 
+class UpdateProviderSdiConfigRequest(LogosKeyModel):
+    provider_id: int
+    ollama_admin_url: str | None = None
+    total_vram_mb: int | None = None
+    parallel_capacity: int | None = None
+    keep_alive_seconds: int | None = None
+    max_loaded_models: int | None = None
+
+
 class GetRole(LogosKeyModel):
     pass
 

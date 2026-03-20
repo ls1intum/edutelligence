@@ -23,6 +23,11 @@ def get_config() -> AppConfig:
     return _config
 
 
+def get_config_path() -> Path | None:
+    """Return the resolved path of the loaded config file, or None."""
+    return _config_path
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     global _config, _config_path
 

@@ -18,6 +18,7 @@ from logos_worker_node.models import (
     OllamaConfig,
     ProcessState,
 )
+from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.ollama_process import OllamaProcessHandle
 from logos_worker_node.vllm_process import VllmProcessHandle
 
@@ -155,6 +156,7 @@ class LaneManager:
         lane_port_end: int = _DEFAULT_PORT_END,
         reserved_ports: Iterable[int] | None = None,
         nvidia_smi_available: Callable[[], bool] | None = None,
+        model_profiles: ModelProfileRegistry | None = None,
     ) -> None:
         self._global_config = global_config
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
@@ -171,6 +173,7 @@ class LaneManager:
         self._starting_deadlines: dict[str, float] = {}
         self._status_revision = 0
         self._status_event = asyncio.Event()
+        self._model_profiles = model_profiles
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [
@@ -761,8 +764,25 @@ class LaneManager:
 
         statuses = []
         for handle in handles:
-            statuses.append(await self._build_lane_status(handle, pid_vram_map))
+            status = await self._build_lane_status(handle, pid_vram_map)
+            statuses.append(status)
+            self._record_profile_from_status(status)
         return statuses
+
+    def _record_profile_from_status(self, status: LaneStatus) -> None:
+        """Update model profile with VRAM measurements from lane status."""
+        if self._model_profiles is None:
+            return
+        model = status.model
+        if not model:
+            return
+        vram = float(status.effective_vram_mb or 0.0)
+        if vram <= 0:
+            return
+        if status.runtime_state in ("loaded", "running"):
+            self._model_profiles.record_loaded_vram(model, vram)
+        elif status.runtime_state == "sleeping":
+            self._model_profiles.record_sleeping_vram(model, vram)
 
     async def _build_lane_status(
         self,

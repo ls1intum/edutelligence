@@ -245,13 +245,15 @@ def extract_token_usage(usage: dict) -> dict:
         usage_tokens[name] = usage[name]
 
     # Extract prompt token details
-    if "prompt_tokens_details" in usage:
-        for name in usage["prompt_tokens_details"]:
-            usage_tokens["prompt_" + name] = usage["prompt_tokens_details"][name]
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        for name in prompt_details:
+            usage_tokens["prompt_" + name] = prompt_details[name]
 
     # Extract completion token details
-    if "completion_tokens_details" in usage:
-        for name in usage["completion_tokens_details"]:
-            usage_tokens["completion_" + name] = usage["completion_tokens_details"][name]
+    completion_details = usage.get("completion_tokens_details")
+    if isinstance(completion_details, dict):
+        for name in completion_details:
+            usage_tokens["completion_" + name] = completion_details[name]
 
     return usage_tokens

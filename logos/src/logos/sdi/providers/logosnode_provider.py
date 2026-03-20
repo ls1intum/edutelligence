@@ -7,13 +7,20 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
-from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_metric_float
 
-from ..models import ModelStatus, OllamaCapacity, QueueStatePerPriority
+from ..models import (
+    ModelStatus,
+    OllamaCapacity,
+    QueueStatePerPriority,
+    LaneSchedulerSignals,
+    ModelSchedulerView,
+    ModelProfile,
+)
 
 try:
     from logos.queue import PriorityQueueManager
@@ -79,6 +86,30 @@ class LogosNodeDataProvider:
             self._model_id_to_name[model_id] = model_name
             self._model_active.setdefault(model_id, 0)
 
+    def update_registration(self, *, name: str, base_url: Optional[str], total_vram_mb: int) -> None:
+        with self._lock:
+            self.name = name
+            self.base_url = base_url.rstrip("/") if base_url else None
+            self.total_vram_mb = int(total_vram_mb)
+            self._provider_config = self._load_provider_config()
+
+    def set_registered_models(self, models: Dict[int, str]) -> None:
+        with self._lock:
+            desired = {int(model_id): model_name for model_id, model_name in models.items()}
+            removed_ids = set(self._model_id_to_name) - set(desired)
+            self._model_id_to_name = desired
+            for model_id in removed_ids:
+                self._model_active.pop(model_id, None)
+            for model_id in desired:
+                self._model_active.setdefault(model_id, 0)
+            stale_request_ids = [
+                request_id
+                for request_id, model_id in self._active_request_ids.items()
+                if model_id not in desired
+            ]
+            for request_id in stale_request_ids:
+                self._active_request_ids.pop(request_id, None)
+
     def refresh_data(self) -> None:
         now = time.time()
         with self._lock:
@@ -132,6 +163,128 @@ class LogosNodeDataProvider:
                     "expires_at": expires_at,
                 }
         return loaded_models
+
+    @staticmethod
+    def _sample_epoch(timestamp: Any) -> float | None:
+        if not isinstance(timestamp, str) or not timestamp.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+
+    @staticmethod
+    def _counter_rate(points: list[tuple[float, dict[str, Any]]], key: str) -> float | None:
+        if len(points) < 2:
+            return None
+
+        start_value: float | None = None
+        start_ts: float | None = None
+        end_value: float | None = None
+        end_ts: float | None = None
+
+        for ts, signal in points:
+            raw = signal.get(key)
+            if raw is None:
+                continue
+            try:
+                numeric = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if start_value is None:
+                start_value = numeric
+                start_ts = ts
+            end_value = numeric
+            end_ts = ts
+
+        if start_value is None or end_value is None or start_ts is None or end_ts is None:
+            return None
+        elapsed = end_ts - start_ts
+        if elapsed <= 0 or end_value < start_value:
+            return None
+        return (end_value - start_value) / elapsed
+
+    def _get_recent_model_scheduler_signals(self, model_id: int) -> Dict[str, Any] | None:
+        if self._runtime_registry is None or not hasattr(self._runtime_registry, "peek_recent_samples"):
+            return None
+
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return None
+
+        points: list[tuple[float, dict[str, Any]]] = []
+        for sample in self._runtime_registry.peek_recent_samples(self.provider_id):
+            if not isinstance(sample, dict):
+                continue
+            scheduler_signals = sample.get("scheduler_signals")
+            if not isinstance(scheduler_signals, dict):
+                continue
+            models = scheduler_signals.get("models")
+            if not isinstance(models, dict):
+                continue
+            signal = models.get(model_name)
+            if not isinstance(signal, dict):
+                continue
+            sample_ts = self._sample_epoch(sample.get("timestamp"))
+            if sample_ts is None:
+                continue
+            points.append((sample_ts, signal))
+
+        if not points:
+            return None
+
+        latest_ts, latest_signal = points[-1]
+        first_ts = points[0][0]
+        recent_window_seconds = max(0.0, latest_ts - first_ts)
+
+        result = dict(latest_signal)
+        result["sample_count"] = len(points)
+        result["recent_window_seconds"] = recent_window_seconds
+        result["queue_waiting_peak"] = max(float(signal.get("queue_waiting_current") or 0.0) for _, signal in points)
+        result["requests_running_peak"] = max(float(signal.get("requests_running_current") or 0.0) for _, signal in points)
+        result["active_requests_peak"] = max(int(signal.get("active_requests") or 0) for _, signal in points)
+
+        prompt_rate = self._counter_rate(points, "prompt_tokens_total")
+        if prompt_rate is not None:
+            result["prompt_tokens_per_second"] = prompt_rate
+
+        generation_rate = self._counter_rate(points, "generation_tokens_total")
+        if generation_rate is not None:
+            result["generation_tokens_per_second"] = generation_rate
+
+        return result
+
+    def get_runtime_debug_state(self) -> Dict[str, Any]:
+        if self._runtime_registry is None:
+            return {}
+
+        snapshot = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snapshot:
+            return {}
+
+        provider_signals: Dict[str, Any] = {}
+        sample_count = 0
+        samples = (
+            self._runtime_registry.peek_recent_samples(self.provider_id)
+            if hasattr(self._runtime_registry, "peek_recent_samples")
+            else []
+        )
+        if samples:
+            sample_count = len(samples)
+            latest = samples[-1]
+            scheduler_signals = latest.get("scheduler_signals")
+            if isinstance(scheduler_signals, dict):
+                provider_signals = scheduler_signals.get("provider") or {}
+
+        return {
+            "last_heartbeat": snapshot.get("last_heartbeat"),
+            "capabilities_models": snapshot.get("capabilities_models") or [],
+            "recent_sample_count": sample_count,
+            "provider_signals": provider_signals,
+        }
 
     def _fetch_ps_data(self) -> Optional[Dict[str, Any]]:
         if not self.base_url:
@@ -214,11 +367,17 @@ class LogosNodeDataProvider:
         return max(1, total_capacity), "runtime"
 
     def get_parallel_capacity(self, model_id: int) -> tuple[int, str]:
+        configured = self.get_config_value(model_id, "parallel_capacity", None)
+        if configured is not None and int(configured) != self.DEFAULT_PARALLEL_CAPACITY:
+            return int(configured), "config"
+
         runtime_capacity, source = self._get_runtime_parallel_capacity(model_id)
         if runtime_capacity is not None:
             return runtime_capacity, source
-        configured = self.get_config_value(model_id, "parallel_capacity", self.DEFAULT_PARALLEL_CAPACITY)
-        return int(configured), "config"
+
+        if configured is not None:
+            return int(configured), "config"
+        return self.DEFAULT_PARALLEL_CAPACITY, "default"
 
     def get_model_status(self, model_id: int) -> ModelStatus:
         self.refresh_data()
@@ -262,6 +421,162 @@ class LogosNodeDataProvider:
                 total_vram_mb=self.total_vram_mb,
                 loaded_models=list(self._loaded_models.keys()),
             )
+
+    # ------------------------------------------------------------------
+    # Scheduler-view and lane-signal methods (Phase 1.2)
+    # ------------------------------------------------------------------
+
+    def _build_lane_signal(self, lane: Dict[str, Any]) -> LaneSchedulerSignals:
+        """Construct a LaneSchedulerSignals from a raw lane dict in the runtime snapshot."""
+        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+        is_vllm = bool(lane.get("vllm"))
+
+        return LaneSchedulerSignals(
+            lane_id=str(lane.get("lane_id", "")),
+            model_name=str(lane.get("model", "")),
+            runtime_state=str(lane.get("runtime_state", "error")),
+            sleep_state=str(lane.get("sleep_state", "unsupported")),
+            is_vllm=is_vllm,
+            active_requests=int(lane.get("active_requests", 0) or 0),
+            queue_waiting=_lane_metric_float(backend_metrics.get("queue_waiting")),
+            requests_running=_lane_metric_float(backend_metrics.get("requests_running"))
+            if is_vllm
+            else float(int(lane.get("active_requests", 0) or 0)),
+            gpu_cache_usage_percent=(
+                _lane_metric_float(backend_metrics.get("gpu_cache_usage_perc"))
+                if is_vllm and backend_metrics.get("gpu_cache_usage_perc") is not None
+                else None
+            ),
+            ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
+            effective_vram_mb=float(lane.get("effective_vram_mb", 0.0) or 0.0),
+            num_parallel=int(lane.get("num_parallel", 0) or 0),
+        )
+
+    def get_model_scheduler_view(self, model_id: int) -> Optional[ModelSchedulerView]:
+        """Build aggregated scheduler view for one model from runtime snapshot.
+
+        Reads lanes from latest_runtime, filters by model name matching model_id,
+        constructs LaneSchedulerSignals per lane, aggregates into ModelSchedulerView.
+        Returns None if the model is not registered or no runtime data available.
+        """
+        self.refresh_data()
+
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return None
+
+        if self._runtime_registry is None:
+            return None
+
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return None
+
+        runtime = snap.get("runtime") or {}
+        lanes = runtime.get("lanes") or []
+        if not isinstance(lanes, list):
+            return None
+
+        matching_signals: List[LaneSchedulerSignals] = []
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if lane.get("model") != model_name:
+                continue
+            if lane.get("runtime_state") in {"stopped", "error"}:
+                # Include stopped/error lanes in signals but they'll rank lowest
+                # in warmth ordering — allows planner to see them
+                pass
+            matching_signals.append(self._build_lane_signal(lane))
+
+        if not matching_signals:
+            return None
+
+        runtime_states = [s.runtime_state for s in matching_signals]
+        sleep_states = [s.sleep_state for s in matching_signals]
+        best_lane_state = ModelSchedulerView.warmest_state(runtime_states)
+        best_sleep_state = ModelSchedulerView.warmest_sleep(sleep_states)
+
+        is_loaded = best_lane_state in ("loaded", "running")
+
+        aggregate_active = sum(s.active_requests for s in matching_signals)
+        aggregate_queue = sum(s.queue_waiting for s in matching_signals)
+
+        # Best-case TTFT: minimum ttft_p95 among loaded/running lanes (non-zero)
+        loaded_ttfts = [
+            s.ttft_p95_seconds
+            for s in matching_signals
+            if s.runtime_state in ("loaded", "running") and s.ttft_p95_seconds > 0
+        ]
+        warmest_ttft = min(loaded_ttfts) if loaded_ttfts else 0.0
+
+        # Max GPU cache pressure across lanes (vLLM only)
+        cache_values = [
+            s.gpu_cache_usage_percent
+            for s in matching_signals
+            if s.gpu_cache_usage_percent is not None
+        ]
+        gpu_cache_max = max(cache_values) if cache_values else None
+
+        return ModelSchedulerView(
+            model_id=model_id,
+            model_name=model_name,
+            provider_id=self.provider_id,
+            is_loaded=is_loaded,
+            best_lane_state=best_lane_state,
+            best_sleep_state=best_sleep_state,
+            aggregate_active_requests=aggregate_active,
+            aggregate_queue_waiting=aggregate_queue,
+            warmest_ttft_p95_seconds=warmest_ttft,
+            gpu_cache_pressure_max=gpu_cache_max,
+            lanes=matching_signals,
+        )
+
+    def get_all_lane_signals(self) -> List[LaneSchedulerSignals]:
+        """Return signals for every lane regardless of model. Used by capacity planner."""
+        self.refresh_data()
+
+        if self._runtime_registry is None:
+            return []
+
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return []
+
+        runtime = snap.get("runtime") or {}
+        lanes = runtime.get("lanes") or []
+        if not isinstance(lanes, list):
+            return []
+
+        return [self._build_lane_signal(lane) for lane in lanes if isinstance(lane, dict)]
+
+    def get_model_profiles(self) -> Dict[str, ModelProfile]:
+        """Read model profiles from runtime snapshot's model_profiles section."""
+        if self._runtime_registry is None:
+            return {}
+
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return {}
+
+        runtime = snap.get("runtime") or {}
+        raw_profiles = runtime.get("model_profiles") or {}
+        if not isinstance(raw_profiles, dict):
+            return {}
+
+        profiles: Dict[str, ModelProfile] = {}
+        for model_name, data in raw_profiles.items():
+            if not isinstance(data, dict):
+                continue
+            profiles[str(model_name)] = ModelProfile(
+                model_name=str(model_name),
+                loaded_vram_mb=data.get("loaded_vram_mb"),
+                sleeping_residual_mb=data.get("sleeping_residual_mb"),
+                disk_size_bytes=data.get("disk_size_bytes"),
+                measurement_count=int(data.get("measurement_count", 0) or 0),
+                last_measured_epoch=float(data.get("last_measured_epoch", 0.0) or 0.0),
+            )
+        return profiles
 
     def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
         with self._lock:
@@ -313,6 +628,7 @@ class LogosNodeDataProvider:
             for model_id, model_name in self._model_id_to_name.items():
                 max_capacity, capacity_source = self.get_parallel_capacity(model_id)
                 queue_state = self.queue_manager.get_state(model_id, self.provider_id)
+                recent_signals = self._get_recent_model_scheduler_signals(model_id)
                 models[model_id] = {
                     "model_name": model_name,
                     "active": self._model_active.get(model_id, 0),
@@ -320,6 +636,7 @@ class LogosNodeDataProvider:
                     "capacity_source": capacity_source,
                     "queue_depth": queue_state.total,
                     "loaded": model_name in self._loaded_models,
+                    "scheduler_signals": recent_signals,
                 }
             return models
 

@@ -71,12 +71,14 @@ class RequestPipeline:
         executor: Executor,
         context_resolver: Optional[ContextResolver] = None,
         monitoring: Optional[MonitoringRecorder] = None,
+        demand_tracker=None,
     ):
         self._classifier = classifier
         self._scheduler = scheduler
         self._executor = executor
         self._context_resolver = context_resolver or ContextResolver()
         self._monitoring = monitoring or MonitoringRecorder()
+        self._demand_tracker = demand_tracker
 
     @property
     def classifier(self) -> ClassificationManager:
@@ -211,7 +213,13 @@ class RequestPipeline:
             queue_depth_at_schedule=scheduling_result.queue_depth_at_schedule,
             provider_metrics=scheduling_result.provider_metrics
         )
-        
+
+        # Record demand for capacity planner
+        if self._demand_tracker:
+            model_name = self._resolve_model_name(scheduling_result.model_id)
+            if model_name:
+                self._demand_tracker.record_request(model_name)
+
         # 3. Resolve execution context (with authorization check)
         try:
             exec_context = await self._context_resolver.resolve_context(
@@ -399,6 +407,14 @@ class RequestPipeline:
     def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:
         """Record provider metrics (e.g. Azure rate limits) for a request."""
         self._monitoring.record_provider_metrics(request_id, provider_metrics)
+
+    def _resolve_model_name(self, model_id: int) -> Optional[str]:
+        """Look up model name from scheduler's model registry."""
+        if hasattr(self._scheduler, '_model_registry') and self._scheduler._model_registry:
+            for (mid, pid), name in self._scheduler._model_registry.items():
+                if mid == model_id:
+                    return name
+        return None
 
 
 @dataclass

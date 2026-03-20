@@ -6,8 +6,17 @@
 3. Save `provider_id` and `shared_key`.
 4. Connect at least one Logos model to that provider.
 
+### Scheduling configuration (optional)
+
+Logos uses ETTFT-aware scheduling and a background capacity planner by default. Both are on with zero configuration. To disable either subsystem, set env vars on the Logos server:
+
+| Variable | Default | Effect when `false` |
+|----------|---------|-------------------|
+| `LOGOS_SCHEDULER_ETTFT_ENABLED` | `true` | Scheduler uses raw classification weights (no latency penalties) |
+| `LOGOS_CAPACITY_PLANNER_ENABLED` | `true` | Background planner does not start (no automatic sleep/wake/stop) |
+
 ## 2. Configure the worker
-Edit [config.yml](/Users/kubaj/edutelligence/logos/logos-workernode/config.yml).
+Edit [config.yml](config.yml).
 
 Required fields:
 - `worker.api_key`: local admin token
@@ -28,6 +37,10 @@ For vLLM lanes:
 Important:
 - `nvidia-smi` is mandatory for vLLM mode.
 - If any configured lane uses `vllm: true` and `nvidia-smi` is unavailable, LogosWorkerNode now fails startup with a clear error instead of running with optimistic VRAM accounting.
+
+### Model profiles (automatic)
+
+The worker automatically measures each model's VRAM footprint after loading and sleeping, then persists profiles in `config.yml` under a `model_profiles` section. These profiles are sent to Logos on every heartbeat (5s) so the capacity planner can make VRAM-safe decisions. No manual configuration needed — profiles build up over time and survive restarts.
 
 ## 3. Start it
 Local dev:
@@ -61,3 +74,4 @@ A healthy response contains:
 - `runtime.devices`
 - `runtime.capacity`
 - `runtime.lanes`
+- `model_profiles` (populated after first lane load)

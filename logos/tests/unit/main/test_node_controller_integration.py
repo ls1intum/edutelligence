@@ -7,9 +7,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Request
 import pytest
 
-from logos.dbutils.dbrequest import LogosNodeAuthRequest, LogosNodeRegisterRequest
+from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
 from logos.logosnode_registry import (
     LogosNodeOfflineError,
+    LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
 )
 from logos.pipeline.context_resolver import ContextResolver, ExecutionContext
@@ -50,6 +51,51 @@ async def test_registry_selects_least_active_lane():
     selected = await registry.select_lane_for_model(11, "model-a")
     assert selected is not None
     assert selected["lane_id"] == "lane-1"
+
+
+@pytest.mark.asyncio
+async def test_registry_prefers_lane_with_lower_vllm_queue_pressure():
+    registry = LogosNodeRuntimeRegistry()
+    ticket = await registry.consume_ticket(await registry.issue_ticket(16, "worker-qwen", ["model-a"]))
+    assert ticket is not None
+
+    ws = _FakeWebSocket()
+    await registry.attach_session(ticket, ws)
+    await registry.update_runtime(
+        provider_id=16,
+        runtime={
+            "lanes": [
+                {
+                    "lane_id": "lane-busy",
+                    "model": "model-a",
+                    "runtime_state": "running",
+                    "active_requests": 1,
+                    "effective_vram_mb": 16000,
+                    "backend_metrics": {
+                        "queue_waiting": 5,
+                        "requests_running": 2,
+                        "ttft_histogram": {"0.5": 2, "1.0": 6},
+                    },
+                },
+                {
+                    "lane_id": "lane-cool",
+                    "model": "model-a",
+                    "runtime_state": "running",
+                    "active_requests": 1,
+                    "effective_vram_mb": 12000,
+                    "backend_metrics": {
+                        "queue_waiting": 0,
+                        "requests_running": 1,
+                        "ttft_histogram": {"0.5": 4, "1.0": 4},
+                    },
+                },
+            ]
+        },
+    )
+
+    selected = await registry.select_lane_for_model(16, "model-a")
+    assert selected is not None
+    assert selected["lane_id"] == "lane-cool"
 
 
 @pytest.mark.asyncio
@@ -229,6 +275,20 @@ async def test_registry_stale_session_raises():
 
 
 @pytest.mark.asyncio
+async def test_registry_rejects_different_worker_for_active_provider():
+    registry = LogosNodeRuntimeRegistry()
+    ticket_a = await registry.consume_ticket(await registry.issue_ticket(15, "worker-a", []))
+    ticket_b = await registry.consume_ticket(await registry.issue_ticket(15, "worker-b", []))
+    assert ticket_a is not None
+    assert ticket_b is not None
+
+    await registry.attach_session(ticket_a, _FakeWebSocket())
+
+    with pytest.raises(LogosNodeSessionConflictError):
+        await registry.attach_session(ticket_b, _FakeWebSocket())
+
+
+@pytest.mark.asyncio
 async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
     monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
 
@@ -266,6 +326,48 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
     bad_req = LogosNodeAuthRequest(provider_id=3, shared_key="wrong", worker_id="worker-3")
     with pytest.raises(HTTPException):
         await main_mod.logosnode_auth(bad_req, request)
+
+
+@pytest.mark.asyncio
+async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
+    registry = LogosNodeRuntimeRegistry()
+    ticket = await registry.consume_ticket(await registry.issue_ticket(3, "worker-a", []))
+    assert ticket is not None
+    await registry.attach_session(ticket, _FakeWebSocket())
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_provider(provider_id: int):
+            return {
+                "id": provider_id,
+                "provider_type": "logosnode",
+                "api_key": "shared-secret",
+            }
+
+    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+
+    req = LogosNodeAuthRequest(provider_id=3, shared_key="shared-secret", worker_id="worker-b")
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "method": "POST",
+            "path": "/logosdb/providers/logosnode/auth",
+            "headers": [(b"host", b"logos.local:8080")],
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await main_mod.logosnode_auth(req, request)
+    assert exc.value.status_code == 409
+    assert "worker-a" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -352,6 +454,175 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
     assert response["provider_id"] == 41
     assert response["provider_type"] == "logosnode"
     assert response["shared_key"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch):
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_all_deployments():
+            return [
+                {"model_id": 30, "provider_id": 13, "type": "logosnode"},
+                {"model_id": 10, "provider_id": 1, "type": "azure"},
+            ]
+
+        @staticmethod
+        def get_model(model_id: int):
+            return {
+                30: {"id": 30, "name": "Qwen/Qwen2.5-Coder-7B-Instruct"},
+                10: {"id": 10, "name": "azure-gpt-4-omni"},
+            }[model_id]
+
+        @staticmethod
+        def get_provider(provider_id: int):
+            return {
+                13: {"id": 13, "name": "hochbruegge-node", "base_url": ""},
+                1: {"id": 1, "name": "azure", "base_url": "https://azure.example"},
+            }[provider_id]
+
+        @staticmethod
+        def get_provider_config(provider_id: int):
+            if provider_id == 13:
+                return {"total_vram_mb": 32768}
+            return {}
+
+        @staticmethod
+        def get_endpoint_for_deployment(model_id: int, provider_id: int):  # noqa: ARG002
+            return "https://azure.example/openai/deployments/gpt-4o/chat/completions"
+
+    class _FakeLogosNodeFacade:
+        def __init__(self):
+            self.registrations = None
+
+        def replace_registrations(self, registrations):
+            self.registrations = registrations
+
+    class _FakeAzureFacade:
+        def __init__(self):
+            self.registrations = None
+
+        def replace_registrations(self, registrations):
+            self.registrations = registrations
+
+    class _FakeScheduler:
+        def __init__(self):
+            self.model_registry = None
+
+        def update_model_registry(self, registry):
+            self.model_registry = registry
+
+    class _FakePipeline:
+        def __init__(self):
+            self.scheduler = _FakeScheduler()
+
+    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(main_mod, "_logosnode_facade", _FakeLogosNodeFacade(), raising=False)
+    monkeypatch.setattr(main_mod, "_azure_facade", _FakeAzureFacade(), raising=False)
+    monkeypatch.setattr(main_mod, "_pipeline", _FakePipeline(), raising=False)
+
+    rebuilt = []
+
+    def _fake_rebuild_classifier():
+        rebuilt.append(True)
+
+    monkeypatch.setattr(main_mod, "rebuild_classifier", _fake_rebuild_classifier)
+
+    await main_mod.refresh_pipeline_runtime_state(rebuild_model_classifier=True)
+
+    assert main_mod._logosnode_facade.registrations == [
+        {
+            "model_id": 30,
+            "provider_name": "hochbruegge-node",
+            "logosnode_admin_url": "",
+            "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
+            "total_vram_mb": 32768,
+            "provider_id": 13,
+        }
+    ]
+    assert main_mod._azure_facade.registrations == [
+        {
+            "model_id": 10,
+            "provider_name": "azure",
+            "model_name": "azure-gpt-4-omni",
+            "deployment_name": "gpt-4o",
+            "provider_id": 1,
+        }
+    ]
+    assert main_mod._pipeline.scheduler.model_registry == {
+        (30, 13): "logosnode",
+        (10, 1): "azure",
+    }
+    assert rebuilt == [True]
+
+
+@pytest.mark.asyncio
+async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypatch):
+    refresh_calls = []
+
+    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
+        refresh_calls.append(rebuild_model_classifier)
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def connect_model_provider(**kwargs):
+            assert kwargs["provider_id"] == 13
+            assert kwargs["model_id"] == 30
+            return {"result": "ok"}, 200
+
+    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
+
+    req = ConnectModelProviderRequest(logos_key="root-key", model_id=30, provider_id=13)
+    response = await main_mod.connect_model_provider(req)
+
+    assert response == ({"result": "ok"}, 200)
+    assert refresh_calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monkeypatch):
+    refresh_calls = []
+
+    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
+        refresh_calls.append(rebuild_model_classifier)
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def update_provider_sdi_config(**kwargs):
+            assert kwargs["provider_id"] == 13
+            assert kwargs["parallel_capacity"] == 16
+            return {"result": "ok"}, 200
+
+    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
+
+    req = main_mod.UpdateProviderSdiConfigRequest(
+        logos_key="root-key",
+        provider_id=13,
+        parallel_capacity=16,
+    )
+    response = await main_mod.update_provider_sdi_config(req)
+
+    assert response == ({"result": "ok"}, 200)
+    assert refresh_calls == [False]
 
 
 @pytest.mark.asyncio

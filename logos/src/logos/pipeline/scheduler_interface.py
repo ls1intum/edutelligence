@@ -51,6 +51,8 @@ class SchedulingResult:
     provider_metrics: Dict[str, Any] = None
     priority_when_scheduled: Optional[str] = None
     is_cold_start: Optional[bool] = None
+    ettft_estimate_ms: Optional[float] = None
+    ettft_tier: Optional[str] = None
 
     def __post_init__(self):
         if self.provider_metrics is None:

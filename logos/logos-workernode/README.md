@@ -2,15 +2,17 @@
 
 LogosWorkerNode is the outbound worker for local inference in Logos.
 
-It does three things:
+It does four things:
 - starts one lane process per configured model,
 - keeps a websocket session open to Logos,
-- reports runtime/device/lane status so Logos can schedule against warm/cold capacity.
+- reports runtime/device/lane status so Logos can schedule against warm/cold capacity,
+- auto-calibrates model VRAM profiles (loaded vs sleeping memory footprints) and persists them across restarts.
 
 ## What changed
 - Provider type is `logosnode`.
 - The worker is lane-only. There is no singleton Ollama runtime API anymore.
 - Local admin HTTP is private/operator-facing only.
+- **Model profiles**: the worker automatically measures effective VRAM after each lane load/sleep and reports calibrated profiles to Logos via the existing websocket heartbeat. Profiles persist in `config.yml` under `model_profiles`. No manual configuration needed.
 - Benchmarks and research material live under `tools/` and `research/`.
 
 ## Local dev
