@@ -68,12 +68,11 @@ services:
       - "traefik.http.routers.atlasml-secure.entrypoints=https"
       - "traefik.http.routers.atlasml-secure.rule=PathPrefix(`/`)"
       - "traefik.http.routers.atlasml-secure.tls=true"
-      - "traefik.http.routers.atlasml-secure.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.atlasml-secure.tls.options=default@file"
+      - "traefik.http.routers.atlasml-secure.tls.certresolver=harica"
       # IP Whitelist middleware (only applied if ALLOWED_IPS is set)
       - "traefik.http.middlewares.atlasml-ipwhitelist.ipallowlist.sourcerange=${ALLOWED_IPS:-0.0.0.0/0}"
       # Apply middlewares (IP whitelist only used if explicitly enabled)
-      - "traefik.http.routers.atlasml-secure.middlewares=default-headers,rate-limit${ALLOWED_IPS:+,atlasml-ipwhitelist}"
+      - "traefik.http.routers.atlasml-secure.middlewares=default-headers${ALLOWED_IPS:+,atlasml-ipwhitelist}"
       - "traefik.http.routers.atlasml-secure.service=atlasml"
       - "traefik.http.services.atlasml.loadbalancer.server.port=8000"
     deploy:
