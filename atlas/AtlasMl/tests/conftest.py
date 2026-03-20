@@ -145,7 +145,7 @@ class MockWeaviateQuery:
                     vector=[0.1, 0.2, 0.3],
                 )
             ]
-        elif self.collection_name == "SEMANTIC_CLUSTER":
+        elif self.collection_name == "SemanticCluster":
             objects = [
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
@@ -293,7 +293,7 @@ class MockWeaviateCollection:
                     vector=[0.4, 0.5, 0.6],
                 ),
             ]
-        elif self.name == "SEMANTIC_CLUSTER":
+        elif self.name == "SemanticCluster":
             static_objects = [
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
@@ -331,7 +331,7 @@ class MockWeaviateCollections:
     """Mock Weaviate collections manager."""
 
     def __init__(self):
-        self._existing_collections = {"Exercise", "Competency", "SEMANTIC_CLUSTER"}
+        self._existing_collections = {"Exercise", "Competency", "SemanticCluster"}
         self._collection_instances = {}
 
     def get(self, name: str):

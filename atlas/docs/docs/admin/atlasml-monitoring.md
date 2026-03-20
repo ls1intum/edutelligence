@@ -41,22 +41,21 @@ AtlasML provides a health check endpoint:
 # Check health
 curl http://localhost/api/v1/health
 
-# Expected response
-[]
-
 # HTTP 200 = healthy
-# Non-200 = unhealthy
+# HTTP 503 = unhealthy
 ```
 
 **What it checks**:
 - Application is running
 - Can respond to requests
-- Basic connectivity
+- Weaviate is reachable
+- Required Weaviate collections exist
+- A lightweight read against the competency collection succeeds
 
 **Does NOT check**:
-- Weaviate connectivity
 - OpenAI API availability
-- Database integrity
+- End-to-end write operations
+- Semantic correctness of stored vectors
 
 ---
 
@@ -111,7 +110,7 @@ docker inspect atlasml | jq '.[0].State.Health'
       "Start": "2025-01-15T10:00:00Z",
       "End": "2025-01-15T10:00:01Z",
       "ExitCode": 0,
-      "Output": "[]"
+      "Output": "{\"status\":\"ok\",\"components\":{\"api\":{\"status\":\"ok\"},\"weaviate\":{\"status\":\"ok\",\"collections\":{\"Exercise\":{\"status\":\"ok\"},\"Competency\":{\"status\":\"ok\"},\"SemanticCluster\":{\"status\":\"ok\"}}}}}"
     }
   ]
 }
@@ -119,23 +118,12 @@ docker inspect atlasml | jq '.[0].State.Health'
 
 ---
 
-### Custom Health Checks
+### Failure Interpretation
 
-For more comprehensive checks, add custom endpoints:
+- `200 OK`: AtlasML is ready to serve traffic.
+- `503 Service Unavailable`: AtlasML is running, but Weaviate is unreachable or not usable for core AtlasML operations.
 
-**Check Weaviate connectivity**:
-```bash
-curl http://localhost/api/v1/health/weaviate
-```
-
-**Check OpenAI API**:
-```bash
-curl http://localhost/api/v1/health/openai
-```
-
-:::note
-These endpoints don't exist by default. See Developer Guide to implement.
-:::
+Because the single health endpoint is dependency-aware, failed probes should be interpreted as service unavailability rather than merely process death.
 
 ---
 
