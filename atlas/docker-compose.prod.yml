@@ -62,11 +62,11 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.atlasml.entrypoints=http"
-      - "traefik.http.routers.atlasml.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.atlasml.rule=Host(`${APP_HOSTNAME}`) && PathPrefix(`/`)"
       - "traefik.http.middlewares.atlasml-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.routers.atlasml.middlewares=atlasml-https-redirect"
       - "traefik.http.routers.atlasml-secure.entrypoints=https"
-      - "traefik.http.routers.atlasml-secure.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.atlasml-secure.rule=Host(`${APP_HOSTNAME}`) && PathPrefix(`/`)"
       - "traefik.http.routers.atlasml-secure.tls=true"
       - "traefik.http.routers.atlasml-secure.tls.certresolver=harica"
       # IP Whitelist middleware (only applied if ALLOWED_IPS is set)
