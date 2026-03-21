@@ -2171,7 +2171,7 @@
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  padding: 2.5rem 1.5rem 1.75rem;
+  padding: 2.75rem 1.5rem 1.75rem;
   text-align: center;
   transition:
     transform 0.2s,
@@ -2195,16 +2195,16 @@
 
 .howItWorksNumber {
   position: absolute;
-  top: -22px;
+  top: -28px;
   left: 50%;
   transform: translateX(-50%);
-  width: 44px;
-  height: 44px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #1a6fb5, #00b4a0);
+  background: linear-gradient(135deg, #1a5a96, #0d7d6e);
   color: #fff;
   font-family: "DM Serif Display", serif;
-  font-size: 1.25rem;
+  font-size: 1.5rem;
   font-weight: 400;
   display: flex;
   align-items: center;
