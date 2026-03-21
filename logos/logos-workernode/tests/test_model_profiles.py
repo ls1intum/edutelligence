@@ -418,6 +418,63 @@ def test_kv_per_token_in_to_dict():
     assert d["max_context_length"] == 32768
 
 
+def test_seed_capabilities_creates_profiles():
+    """seed_capabilities pre-creates profiles with engine and HF metadata."""
+    registry = ModelProfileRegistry()
+    kv_params = {"num_layers": 28, "num_kv_heads": 4, "head_dim": 128, "max_context": 32768}
+
+    with patch("logos_worker_node.model_profiles._fetch_hf_model_size_bytes") as mock_size, \
+         patch("logos_worker_node.model_profiles._fetch_hf_kv_params") as mock_kv:
+        mock_size.return_value = 15231233024
+        mock_kv.return_value = kv_params
+        registry.seed_capabilities(["Qwen/Qwen2.5-Coder-7B-Instruct"])
+
+    profile = registry.get_profile("Qwen/Qwen2.5-Coder-7B-Instruct")
+    assert profile is not None
+    assert profile.engine == "vllm"
+    assert profile.kv_per_token_bytes == 57344
+    assert profile.max_context_length == 32768
+    assert profile.disk_size_bytes == 15231233024
+    assert profile.base_residency_mb is not None
+    assert profile.base_residency_mb > 0
+    # No loaded_vram_mb yet — model hasn't been loaded
+    assert profile.loaded_vram_mb is None
+    assert profile.measurement_count == 0
+
+
+def test_seed_capabilities_skips_existing_profile():
+    """seed_capabilities does not overwrite existing profiles."""
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("model/a", 5000.0, engine="ollama")
+
+    with patch("logos_worker_node.model_profiles._fetch_hf_model_size_bytes") as mock_size, \
+         patch("logos_worker_node.model_profiles._fetch_hf_kv_params") as mock_kv:
+        mock_size.return_value = None
+        mock_kv.return_value = None
+        registry.seed_capabilities(["model/a"], engine="vllm")
+
+    profile = registry.get_profile("model/a")
+    assert profile.engine == "ollama"  # not overwritten
+    assert profile.loaded_vram_mb == 5000.0
+
+
+def test_seed_capabilities_sets_engine_if_missing():
+    """seed_capabilities sets engine on existing profile if it was None."""
+    registry = ModelProfileRegistry()
+    # Manually insert a profile with no engine
+    registry._profiles["model/b"] = ModelProfileRecord(loaded_vram_mb=3000.0)
+
+    with patch("logos_worker_node.model_profiles._fetch_hf_model_size_bytes") as mock_size, \
+         patch("logos_worker_node.model_profiles._fetch_hf_kv_params") as mock_kv:
+        mock_size.return_value = None
+        mock_kv.return_value = None
+        registry.seed_capabilities(["model/b"], engine="vllm")
+
+    profile = registry.get_profile("model/b")
+    assert profile.engine == "vllm"
+    assert profile.loaded_vram_mb == 3000.0  # preserved
+
+
 def test_ensure_disk_size_fetches_kv_params():
     """_ensure_disk_size also fetches KV params from config.json."""
     registry = ModelProfileRegistry()

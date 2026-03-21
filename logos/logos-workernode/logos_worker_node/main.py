@@ -64,6 +64,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "No lanes configured — waiting for server commands. Capabilities: %s",
             caps or "(none)",
         )
+        if caps:
+            model_profiles.seed_capabilities(caps, engine="vllm")
 
     app.state.config = cfg
     app.state.gpu_collector = gpu_collector

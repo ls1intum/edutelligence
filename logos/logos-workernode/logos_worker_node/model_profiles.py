@@ -268,6 +268,33 @@ class ModelProfileRegistry:
         if tensor_parallel_size is not None and tensor_parallel_size > 0:
             profile.tensor_parallel_size = tensor_parallel_size
 
+    def seed_capabilities(self, model_names: list[str], engine: str = "vllm") -> None:
+        """Pre-create profiles for capabilities models before any lane is loaded.
+
+        Fetches HF metadata (disk size, KV params) so the server-side planner
+        knows the engine type and can compute VRAM estimates for cold loads.
+        """
+        for model_name in model_names:
+            with self._lock:
+                if model_name in self._profiles:
+                    profile = self._profiles[model_name]
+                    if profile.engine is None:
+                        profile.engine = engine
+                    continue
+                profile = ModelProfileRecord(engine=engine)
+                self._profiles[model_name] = profile
+            self._ensure_disk_size(model_name, profile)
+            logger.info(
+                "Seeded capability profile: %s engine=%s disk_size=%s "
+                "base_residency=%.0fMB kv_per_token=%s max_ctx=%s",
+                model_name, engine,
+                profile.disk_size_bytes,
+                profile.base_residency_mb or 0,
+                profile.kv_per_token_bytes,
+                profile.max_context_length,
+            )
+        self._persist()
+
     def _ensure_disk_size(self, model_name: str, profile: ModelProfileRecord) -> None:
         """Fetch model metadata from HF API if not already known. Called outside lock."""
         if model_name in self._hf_fetch_attempted:
