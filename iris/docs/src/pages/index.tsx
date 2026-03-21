@@ -5,13 +5,14 @@ import TrustBar from "../components/home/TrustBar";
 import FeatureCards from "../components/home/FeatureCards";
 import CourseMaterialsSection from "../components/home/CourseMaterialsSection";
 import HowItWorksSection from "../components/home/HowItWorksSection";
-import ComparisonSection from "../components/home/ComparisonSection";
 import ShowcaseSection from "../components/home/ShowcaseSection";
+import ComparisonSection from "../components/home/ComparisonSection";
 import WhyNotChatGPTSection from "../components/home/WhyNotChatGPTSection";
 import ResearchHighlights from "../components/home/ResearchHighlights";
 import DisciplinesSection from "../components/home/DisciplinesSection";
 import ComfortTrapSection from "../components/home/ComfortTrapSection";
 import StudentQuotes from "../components/home/StudentQuotes";
+import ScaleSection from "../components/home/ScaleSection";
 import PrivacySection from "../components/home/PrivacySection";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
@@ -37,37 +38,40 @@ export default function Home(): React.JSX.Element {
       {/* 5. How It Works */}
       <HowItWorksSection />
 
-      {/* 6. See Iris in Action (multi-turn showcase) */}
+      {/* 6. See Iris in Action */}
       <ShowcaseSection />
 
       {/* 7. How Iris Is Different (chat comparison) */}
       <ComparisonSection />
 
-      {/* 7. Why Not Just Use a Generic AI Chatbot? (table) */}
+      {/* 8. Why Not Just Use a Generic AI Chatbot? */}
       <WhyNotChatGPTSection />
 
-      {/* 8. Research Highlights */}
+      {/* 9. Research Highlights */}
       <ResearchHighlights />
 
-      {/* 9. Works for Every Course */}
+      {/* 10. Works for Every Course */}
       <DisciplinesSection />
 
-      {/* 10. The Comfort Trap — research insight */}
+      {/* 11. The Comfort Trap */}
       <ComfortTrapSection />
 
-      {/* 10. Trusted by Educators */}
+      {/* 12. Trusted by Educators */}
       <StudentQuotes />
 
-      {/* 11. Your Data, Your Control */}
+      {/* 13. Built for Scale */}
+      <ScaleSection />
+
+      {/* 14. Your Data, Your Control */}
       <PrivacySection />
 
-      {/* 12. Audience Quickstart Cards */}
+      {/* 15. Audience Quickstart Cards */}
       <AudienceCards />
 
-      {/* 13. FAQ */}
+      {/* 16. FAQ */}
       <FaqSection />
 
-      {/* 14. Closing CTA */}
+      {/* 17. Closing CTA */}
       <ClosingCta />
     </Layout>
   );

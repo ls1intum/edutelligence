@@ -1995,6 +1995,73 @@
   margin: 0;
 }
 
+/* ─── Built for Scale Section ─── */
+
+.scaleGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.scaleCard {
+  text-align: center;
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  padding: 2.5rem 1.5rem;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+[data-theme="dark"] .scaleCard {
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .scaleCard:hover {
+    transform: translateY(-4px);
+  }
+}
+
+.scaleNumber {
+  font-family: "DM Serif Display", serif;
+  font-size: 3rem;
+  font-weight: 400;
+  background: linear-gradient(135deg, var(--ifm-color-primary), #00b4a0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.1;
+  margin-bottom: 0.5rem;
+}
+
+.scaleLabel {
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ifm-font-color-base);
+  margin-bottom: 0.5rem;
+}
+
+.scaleDetail {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--iris-label-color);
+}
+
 /* ─── Privacy Section ─── */
 
 .privacyGrid {
@@ -2107,6 +2174,10 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .scaleGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .heroHeadline {
     font-size: 2.25rem;
   }
@@ -2150,6 +2221,10 @@
   }
 
   .disciplineGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .scaleGrid {
     grid-template-columns: 1fr;
   }
 
