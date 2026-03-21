@@ -13,7 +13,7 @@ function BotAvatar({ className }: { className?: string }) {
     <div
       className={`${styles.chatUIAvatar} ${styles.chatUIAvatarBot} ${className || ""}`}
     >
-      🤖
+      <span aria-hidden="true">🤖</span>
     </div>
   );
 }
@@ -78,7 +78,8 @@ export default function ComparisonSection(): React.JSX.Element {
               </div>
             </div>
             <p className={styles.comparisonOutcome}>
-              ❌ Student skims the answer. Forgets it tomorrow.
+              <span aria-hidden="true">❌</span> Student skims the answer.
+              Forgets it tomorrow.
             </p>
           </div>
 
@@ -123,7 +124,8 @@ export default function ComparisonSection(): React.JSX.Element {
             <p
               className={`${styles.comparisonOutcomeGood} ${styles.irisBubble} ${styles.irisBubbleDelay3} ${visible ? styles.irisBubbleVisible : ""}`}
             >
-              ✅ Student works through the problem. Genuine understanding.
+              <span aria-hidden="true">✅</span> Student works through the
+              problem. Genuine understanding.
             </p>
           </div>
         </div>
