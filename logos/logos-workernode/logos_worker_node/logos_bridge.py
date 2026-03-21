@@ -27,6 +27,15 @@ from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
 
+# ANSI color codes for structured log output
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_RED = "\033[31m"
+_CYAN = "\033[36m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_RESET = "\033[0m"
+
 
 class LogosBridgeClient:
     """Maintains the outbound control/data session to Logos."""
@@ -104,6 +113,14 @@ class LogosBridgeClient:
                     self._last_event_seq = 0
                     self._last_runtime_signature = None
                     self._last_runtime_payload = {}
+                    caps = list(self._cfg.capabilities_models) if self._cfg.capabilities_models else []
+                    logger.info(
+                        "%s══ BRIDGE CONNECTED ══%s provider_id=%s worker_id=%s "
+                        "capabilities=%s url=%s",
+                        _GREEN + _BOLD, _RESET,
+                        self._cfg.provider_id, self.worker_id,
+                        caps or "(none)", ws_url.split("?")[0],
+                    )
                     await self._send_hello(ws)
                     await self._send_runtime_status(ws, force=True)
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws), name="logos-bridge-heartbeat")
@@ -127,11 +144,20 @@ class LogosBridgeClient:
             except asyncio.CancelledError:
                 raise
             except ConnectionClosed as exc:
-                logger.warning("Logos websocket closed (%s)", exc)
                 self._consecutive_failures += 1
+                logger.warning(
+                    "%s══ BRIDGE DISCONNECTED ══%s websocket closed: %s "
+                    "(consecutive_failures=%d)",
+                    _RED + _BOLD, _RESET, exc, self._consecutive_failures,
+                )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Logos bridge cycle failed: %s", exc)
                 self._consecutive_failures += 1
+                logger.warning(
+                    "%s══ BRIDGE ERROR ══%s %s (consecutive_failures=%d, "
+                    "retrying in %ds)",
+                    _RED + _BOLD, _RESET, exc, self._consecutive_failures,
+                    max(1, self._cfg.reconnect_backoff_seconds),
+                )
             finally:
                 self._connected = False
 
@@ -290,10 +316,27 @@ class LogosBridgeClient:
             await self._execute_stream_command(ws, cmd_id, params)
             return
 
+        # Log non-infer commands prominently
+        if action != "infer":
+            param_summary = ", ".join(f"{k}={v}" for k, v in params.items() if k != "messages")
+            logger.info(
+                "%s>> CMD %s%s cmd_id=%s %s",
+                _CYAN + _BOLD, action, _RESET, cmd_id[:8], param_summary,
+            )
+
         try:
             result = await self._execute_command(action, params)
+            if action != "infer":
+                logger.info(
+                    "%s<< CMD %s OK%s cmd_id=%s",
+                    _GREEN, action, _RESET, cmd_id[:8],
+                )
             response = {"type": "command_result", "cmd_id": cmd_id, "success": True, "result": result}
         except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "%s<< CMD %s FAILED%s cmd_id=%s error=%s",
+                _RED, action, _RESET, cmd_id[:8], exc,
+            )
             response = {"type": "command_result", "cmd_id": cmd_id, "success": False, "error": str(exc)}
         await self._send_json(ws, response)
 

@@ -61,11 +61,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         caps = cfg.logos.capabilities_models if cfg.logos else []
         logger.info(
-            "No lanes configured — waiting for server commands. Capabilities: %s",
+            "\033[1m\033[36m══ ZERO-LANE MODE ══\033[0m "
+            "Waiting for server commands. Capabilities: %s",
             caps or "(none)",
         )
         if caps:
             model_profiles.seed_capabilities(caps, engine="vllm")
+            for cap_model in caps:
+                p = model_profiles.get_profile(cap_model)
+                if p:
+                    logger.info(
+                        "  \033[32m✓\033[0m %s: engine=%s base_residency=%.0fMB "
+                        "kv_per_token=%s max_ctx=%s disk=%.1fGB",
+                        cap_model, p.engine,
+                        p.base_residency_mb or 0,
+                        p.kv_per_token_bytes,
+                        p.max_context_length,
+                        (p.disk_size_bytes or 0) / (1024**3),
+                    )
 
     app.state.config = cfg
     app.state.gpu_collector = gpu_collector

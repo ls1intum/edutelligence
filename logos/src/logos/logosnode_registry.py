@@ -7,11 +7,23 @@ import base64
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import logging
 import secrets
 from typing import Any, AsyncIterator
 import uuid
 
 from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
+
+# ANSI color codes
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_RED = "\033[31m"
+_CYAN = "\033[36m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_RESET = "\033[0m"
 
 
 class LogosNodeOfflineError(RuntimeError):
@@ -177,7 +189,24 @@ class LogosNodeRuntimeRegistry:
                 )
             self._sessions[ticket.provider_id] = session
         if old is not None:
+            logger.info(
+                "%s●● WORKER RECONNECTED%s provider=%s worker=%s capabilities=%s "
+                "(replaced old session)",
+                _YELLOW + _BOLD, _RESET, ticket.provider_id,
+                ticket.worker_id, sorted(ticket.capabilities_models),
+            )
             await self._close_session(old)
+        else:
+            logger.info(
+                "%s●● WORKER CONNECTED%s provider=%s worker=%s capabilities=%s",
+                _GREEN + _BOLD, _RESET, ticket.provider_id,
+                ticket.worker_id, sorted(ticket.capabilities_models),
+            )
+        total = len(self._sessions)
+        logger.info(
+            "%sActive worker sessions: %d%s",
+            _DIM, total, _RESET,
+        )
         return session
 
     async def get_conflicting_session(
@@ -204,6 +233,14 @@ class LogosNodeRuntimeRegistry:
             if websocket is not None and session.websocket is not websocket:
                 return
             self._sessions.pop(provider_id, None)
+        pending_cmds = len(session.pending_commands)
+        pending_streams = len(session.pending_streams)
+        logger.warning(
+            "%s●● WORKER DISCONNECTED%s provider=%s worker=%s "
+            "(pending_commands=%d, pending_streams=%d, remaining_sessions=%d)",
+            _RED + _BOLD, _RESET, provider_id, session.worker_id,
+            pending_cmds, pending_streams, len(self._sessions),
+        )
         for fut in list(session.pending_commands.values()):
             if not fut.done():
                 fut.set_exception(LogosNodeOfflineError("Worker disconnected"))
@@ -244,10 +281,42 @@ class LogosNodeRuntimeRegistry:
         session = await self._get_session(provider_id)
         if session is None:
             return
+        old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
         session.last_heartbeat = _utc_now()
         if capabilities_models is not None:
             session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+
+        # Detect lane state changes and log them
+        old_lanes = {
+            l.get("lane_id"): l.get("runtime_state")
+            for l in (old_runtime.get("lanes") or [])
+            if isinstance(l, dict)
+        }
+        new_lanes = {
+            l.get("lane_id"): l.get("runtime_state")
+            for l in (runtime.get("lanes") or []) if isinstance(runtime, dict)
+            if isinstance(l, dict)
+        }
+        if old_lanes != new_lanes:
+            added = set(new_lanes) - set(old_lanes)
+            removed = set(old_lanes) - set(new_lanes)
+            changed = {
+                lid for lid in set(old_lanes) & set(new_lanes)
+                if old_lanes[lid] != new_lanes[lid]
+            }
+            parts = []
+            for lid in added:
+                parts.append(f"{_GREEN}+{lid}({new_lanes[lid]}){_RESET}")
+            for lid in removed:
+                parts.append(f"{_RED}-{lid}{_RESET}")
+            for lid in changed:
+                parts.append(f"{_YELLOW}{lid}: {old_lanes[lid]}→{new_lanes[lid]}{_RESET}")
+            if parts:
+                logger.info(
+                    "%s⚡ LANE CHANGE%s provider=%s: %s",
+                    _CYAN + _BOLD, _RESET, provider_id, " ".join(parts),
+                )
 
     async def record_runtime_sample(self, provider_id: int, sample: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)

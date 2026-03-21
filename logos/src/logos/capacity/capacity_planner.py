@@ -20,6 +20,18 @@ from .demand_tracker import DemandTracker
 
 logger = logging.getLogger(__name__)
 
+# ANSI color codes for structured log output
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_RED = "\033[31m"
+_CYAN = "\033[36m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_RESET = "\033[0m"
+
+# How often to print a full cluster summary (every N cycles)
+_SUMMARY_EVERY_N_CYCLES = 5
+
 
 class CapacityPlanner:
     """
@@ -109,12 +121,20 @@ class CapacityPlanner:
         all_actions: List[CapacityPlanAction] = []
 
         provider_ids = self._facade.provider_ids()
+        is_summary_cycle = (self._cycle_count % _SUMMARY_EVERY_N_CYCLES == 0)
+
+        # Periodic cluster summary
+        if is_summary_cycle:
+            self._log_cluster_summary(provider_ids)
 
         for provider_id in provider_ids:
             try:
                 lanes = self._facade.get_all_provider_lane_signals(provider_id)
             except Exception:
-                logger.debug("Provider %s offline, skipping", provider_id)
+                if is_summary_cycle:
+                    logger.info(
+                        "  %s⊘ provider=%s OFFLINE%s", _RED, provider_id, _RESET,
+                    )
                 continue
 
             if lanes:
@@ -135,9 +155,15 @@ class CapacityPlanner:
 
         if all_actions:
             logger.info(
-                "Planner cycle %d: %d actions proposed",
-                self._cycle_count, len(all_actions),
+                "%s═══ Planner cycle %d: %d actions ═══%s",
+                _CYAN + _BOLD, self._cycle_count, len(all_actions), _RESET,
             )
+            for a in all_actions:
+                logger.info(
+                    "  %s→ %s%s %s on provider=%s lane=%s — %s",
+                    _YELLOW, a.action, _RESET, a.model_name,
+                    a.provider_id, a.lane_id, a.reason,
+                )
 
         validated = self._validate_vram_budget(all_actions)
 
@@ -150,11 +176,82 @@ class CapacityPlanner:
                     action.action, action.lane_id,
                 )
 
+    def _log_cluster_summary(self, provider_ids: List[int]) -> None:
+        """Print a periodic colored cluster overview."""
+        lines = [
+            f"{_BOLD}{_CYAN}══════ CLUSTER STATUS (cycle {self._cycle_count}) ══════{_RESET}",
+        ]
+
+        # Connected workers
+        connected = 0
+        for pid in provider_ids:
+            snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
+            if snap is None:
+                lines.append(f"  {_RED}⊘{_RESET} provider={pid} {_DIM}(no session){_RESET}")
+                continue
+            connected += 1
+            rt = snap.get("runtime") or {}
+            worker_id = snap.get("worker_id", "?")
+            caps = snap.get("capabilities_models") or []
+            cap = rt.get("capacity") or {}
+            lanes_list = rt.get("lanes") or []
+            profiles = rt.get("model_profiles") or {}
+            total_vram = (rt.get("devices") or {}).get("total_memory_mb", 0)
+            free_vram = cap.get("free_memory_mb", 0)
+            used_pct = ((total_vram - free_vram) / total_vram * 100) if total_vram > 0 else 0
+
+            lines.append(
+                f"  {_GREEN}●{_RESET} provider={pid} worker={_BOLD}{worker_id}{_RESET} "
+                f"lanes={cap.get('lane_count', 0)} "
+                f"({cap.get('loaded_lane_count', 0)} loaded, "
+                f"{cap.get('sleeping_lane_count', 0)} sleeping) "
+                f"VRAM={_BOLD}{total_vram - free_vram:.0f}{_RESET}/{total_vram:.0f}MB "
+                f"({used_pct:.0f}%) capabilities={caps}"
+            )
+            for lane in lanes_list:
+                if not isinstance(lane, dict):
+                    continue
+                state = lane.get("runtime_state", "?")
+                sleep = lane.get("sleep_state", "none")
+                color = _GREEN if state in ("loaded", "running") else (_YELLOW if sleep == "sleeping" else _DIM)
+                lines.append(
+                    f"    {color}▸{_RESET} {lane.get('lane_id', '?')}: "
+                    f"model={lane.get('model', '?')} state={color}{state}/{sleep}{_RESET} "
+                    f"active={lane.get('active_requests', 0)} "
+                    f"vram={lane.get('effective_vram_mb', 0):.0f}MB"
+                )
+            if profiles:
+                for model_name, pdata in profiles.items():
+                    if not isinstance(pdata, dict):
+                        continue
+                    lines.append(
+                        f"    {_DIM}📋 {model_name}: engine={pdata.get('engine', '?')} "
+                        f"base={pdata.get('base_residency_mb', 0) or 0:.0f}MB "
+                        f"kv_per_tok={pdata.get('kv_per_token_bytes', '?')} "
+                        f"measured={pdata.get('measurement_count', 0)}x{_RESET}"
+                    )
+
+        # Demand scores
+        demand_stats = self._demand.get_stats()
+        active_demand = {k: v for k, v in demand_stats.get("scores", {}).items() if v > 0.1}
+        if active_demand:
+            lines.append(f"  {_YELLOW}Demand:{_RESET} " + ", ".join(
+                f"{m}={s:.2f}" for m, s in sorted(active_demand.items(), key=lambda x: -x[1])
+            ))
+
+        lines.append(
+            f"  {_DIM}Workers: {connected}/{len(provider_ids)} connected{_RESET}"
+        )
+        lines.append(f"{_BOLD}{_CYAN}═══════════════════════════════════════{_RESET}")
+
+        for line in lines:
+            logger.info(line)
+
     async def prepare_lane_for_request(
         self,
         provider_id: int,
         model_name: str,
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 120.0,
     ) -> dict[str, Any] | None:
         """Prepare a lane for request-time execution.
 
@@ -1220,12 +1317,15 @@ class CapacityPlanner:
 
         command_action, command_params = command_entry
 
+        # Load actions need longer command timeout since the worker blocks
+        # until apply_lanes completes (vLLM cold start can take 60-120s).
+        cmd_timeout = int(timeout_seconds) if action.action == "load" else int(min(timeout_seconds, 30))
         try:
             await self._registry.send_command(
                 action.provider_id,
                 command_action,
                 command_params,
-                timeout_seconds=int(min(timeout_seconds, 30)),
+                timeout_seconds=cmd_timeout,
             )
         except Exception:
             logger.exception(
