@@ -47,7 +47,7 @@ export default function ResearchHighlights(): React.JSX.Element {
 
   return (
     <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>Research-Backed</h2>
+      <h2 className={styles.sectionHeadingAccent}>Research-Backed</h2>
       <p className={styles.sectionSubtitle}>
         Results from a randomized controlled trial with 275 students at TU
         Munich.

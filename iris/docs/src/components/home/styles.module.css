@@ -83,6 +83,26 @@
   color: var(--ifm-font-color-base);
 }
 
+.sectionHeadingAccent {
+  font-size: 2.125rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 1.25rem;
+  color: var(--ifm-font-color-base);
+  position: relative;
+  padding-bottom: 0.75rem;
+}
+
+.sectionHeadingAccent::after {
+  content: "";
+  display: block;
+  width: 60px;
+  height: 3px;
+  background: var(--ifm-color-primary);
+  border-radius: 2px;
+  margin: 0.5rem auto 0;
+}
+
 .sectionSubtitle {
   text-align: center;
   color: var(--iris-label-color);
@@ -91,6 +111,251 @@
   margin-left: auto;
   margin-right: auto;
   line-height: 1.6;
+}
+
+/* ─── Section Backgrounds: Editorial Academic ─── */
+
+/* 1. CourseMaterials — Deep navy/indigo */
+.sectionNavy {
+  padding: 4rem 1.5rem;
+  background: linear-gradient(165deg, #0f1e3d 0%, #1a2d52 60%, #162847 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.sectionNavy::before {
+  content: "";
+  position: absolute;
+  top: -40%;
+  right: -20%;
+  width: 600px;
+  height: 600px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(42, 115, 180, 0.15) 0%,
+    transparent 70%
+  );
+  filter: blur(80px);
+  pointer-events: none;
+}
+
+.sectionNavy .sectionHeading,
+.sectionNavy .courseMaterialTitle {
+  color: #ffffff;
+}
+
+.sectionNavy .sectionSubtitle,
+.sectionNavy .courseMaterialDesc {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.sectionNavy .courseMaterialIcon {
+  color: #5aadde;
+}
+
+.sectionNavy .courseMaterialCard {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .sectionNavy {
+  background: linear-gradient(165deg, #080e1a 0%, #0d1829 60%, #0b1422 100%);
+}
+
+[data-theme="dark"] .sectionNavy .courseMaterialCard {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.sectionNavyInner {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* 2. WhyNotChatGPT — Warm parchment */
+.sectionParchment {
+  padding: 4rem 1.5rem;
+  background: linear-gradient(180deg, #faf6f0 0%, #f5ede0 100%);
+  position: relative;
+}
+
+.sectionParchment::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 39px,
+    rgba(180, 160, 130, 0.06) 39px,
+    rgba(180, 160, 130, 0.06) 40px
+  );
+  pointer-events: none;
+}
+
+[data-theme="dark"] .sectionParchment {
+  background: linear-gradient(180deg, #1e1b16 0%, #1a1710 100%);
+}
+
+[data-theme="dark"] .sectionParchment::before {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 39px,
+    rgba(180, 160, 130, 0.04) 39px,
+    rgba(180, 160, 130, 0.04) 40px
+  );
+}
+
+.sectionParchmentInner {
+  position: relative;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* 3. ComfortTrap — Amber accent tint */
+.sectionAmber {
+  padding: 5.5rem 1.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+  border-left: 4px solid #d4a843;
+  background: linear-gradient(90deg, #fef9f0 0%, #ffffff 8%);
+  position: relative;
+}
+
+[data-theme="dark"] .sectionAmber {
+  border-left-color: #b8922f;
+  background: linear-gradient(
+    90deg,
+    #1e1a10 0%,
+    var(--ifm-background-color) 8%
+  );
+}
+
+/* 4. Scale — Diagonal primary gradient with clip-path */
+.sectionScaleBg {
+  position: relative;
+  padding: 5rem 1.5rem 6rem;
+  background: linear-gradient(135deg, #1a3a5c 0%, #2a73b4 45%, #1e8a7a 100%);
+  clip-path: polygon(0 4vw, 100% 0, 100% calc(100% - 4vw), 0 100%);
+  margin-top: -2vw;
+  margin-bottom: -2vw;
+}
+
+.sectionScaleBg .sectionHeading {
+  color: #ffffff;
+}
+
+.sectionScaleBg .sectionHeadingAccent {
+  color: #ffffff;
+}
+
+.sectionScaleBg .sectionHeadingAccent::after {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.sectionScaleBg .sectionSubtitle {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.sectionScaleBg .scaleCard {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.sectionScaleBg .scaleNumber {
+  background: linear-gradient(135deg, #ffffff, #a0d8ef);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.sectionScaleBg .scaleLabel {
+  color: #ffffff;
+}
+
+.sectionScaleBg .scaleDetail {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+[data-theme="dark"] .sectionScaleBg {
+  background: linear-gradient(135deg, #0d1f30 0%, #163a5c 45%, #0f4a42 100%);
+}
+
+[data-theme="dark"] .sectionScaleBg .scaleCard {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.sectionScaleInner {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* 5. ClosingCta — Rich navy bookend */
+.closingCtaWrapperNavy {
+  background: linear-gradient(180deg, #0f1e3d 0%, #162847 50%, #1a2d52 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.closingCtaWrapperNavy::before {
+  content: "";
+  position: absolute;
+  bottom: -30%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 700px;
+  height: 700px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(42, 115, 180, 0.18) 0%,
+    transparent 70%
+  );
+  filter: blur(80px);
+  pointer-events: none;
+}
+
+.closingCtaWrapperNavy .closingCtaHeadline {
+  color: #ffffff;
+}
+
+.closingCtaWrapperNavy .closingCtaSubtitle {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+[data-theme="dark"] .closingCtaWrapperNavy {
+  background: linear-gradient(180deg, #080e1a 0%, #0d1829 50%, #0b1422 100%);
+}
+
+/* Button overrides for navy/dark background sections */
+.closingCtaWrapperNavy .btnGhost,
+.sectionNavy .btnGhost {
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.closingCtaWrapperNavy .btnGhost:hover,
+.sectionNavy .btnGhost:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* Scale section heading accent override */
+.sectionScaleBg .sectionHeadingAccent {
+  color: #ffffff;
+}
+
+.sectionScaleBg .sectionHeadingAccent::after {
+  background: rgba(255, 255, 255, 0.4);
 }
 
 /* ─── Hero ─── */
@@ -269,16 +534,26 @@
 
 .heroHeadline {
   font-family: "DM Serif Display", serif;
-  font-size: 2.75rem;
+  font-size: 3.25rem;
   font-weight: 400;
-  line-height: 1.2;
+  line-height: 1.15;
   margin-bottom: 1.25rem;
   color: var(--ifm-font-color-base);
 }
 
 .heroHeadline em {
   font-style: italic;
-  color: var(--ifm-color-primary);
+  background: linear-gradient(135deg, #1a6fb5 0%, #2a73b4 50%, #00b4a0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+[data-theme="dark"] .heroHeadline em {
+  background: linear-gradient(135deg, #5a9fd6 0%, #6cb4e8 50%, #00d4c0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .heroSubtitle {
@@ -1107,18 +1382,23 @@
 
 .statNumber {
   font-family: "DM Serif Display", serif;
-  font-size: 3rem;
+  font-size: 4.5rem;
   font-weight: 400;
-  color: var(--ifm-color-primary);
-  line-height: 1.1;
+  background: linear-gradient(135deg, #1a6fb5 0%, #2a73b4 40%, #00b4a0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.05;
   margin-bottom: 0.5rem;
   display: inline-block;
-  border-bottom: 4px solid rgba(42, 115, 180, 0.25);
-  padding-bottom: 4px;
+  letter-spacing: -0.02em;
 }
 
 [data-theme="dark"] .statNumber {
-  border-bottom-color: rgba(90, 159, 214, 0.3);
+  background: linear-gradient(135deg, #5a9fd6 0%, #6cb4e8 40%, #00d4c0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .statLabel {
@@ -1210,13 +1490,29 @@
 }
 
 .testimonialQuote {
-  font-size: 0.95rem;
+  font-family: "DM Serif Display", serif;
+  font-size: 1.1rem;
   font-style: italic;
-  line-height: 1.7;
+  line-height: 1.65;
   color: var(--ifm-font-color-base);
   margin: 0;
   padding: 0;
   border: none;
+  position: relative;
+  padding-left: 1.5rem;
+}
+
+.testimonialQuote::before {
+  content: "\201C";
+  font-family: "DM Serif Display", serif;
+  font-size: 3.5rem;
+  font-style: normal;
+  color: var(--ifm-color-primary);
+  opacity: 0.2;
+  position: absolute;
+  top: -0.75rem;
+  left: -0.25rem;
+  line-height: 1;
 }
 
 .testimonialAuthor {
@@ -2054,14 +2350,22 @@
 
 .scaleNumber {
   font-family: "DM Serif Display", serif;
-  font-size: 3rem;
+  font-size: 4.5rem;
   font-weight: 400;
-  background: linear-gradient(135deg, var(--ifm-color-primary), #00b4a0);
+  background: linear-gradient(135deg, #1a6fb5 0%, #2a73b4 40%, #00b4a0 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  line-height: 1.1;
+  line-height: 1.05;
   margin-bottom: 0.5rem;
+  letter-spacing: -0.02em;
+}
+
+[data-theme="dark"] .scaleNumber {
+  background: linear-gradient(135deg, #5a9fd6 0%, #6cb4e8 40%, #00d4c0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .scaleLabel {

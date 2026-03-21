@@ -88,8 +88,8 @@ export default function CourseMaterialsSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionAlt}>
-      <div className={styles.sectionAltInner}>
+    <section className={styles.sectionNavy}>
+      <div className={styles.sectionNavyInner}>
         <h2 className={styles.sectionHeading}>
           Powered by Your Course Materials
         </h2>

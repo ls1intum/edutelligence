@@ -8,7 +8,7 @@ export default function ClosingCta(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.closingCtaWrapper}>
+    <section className={styles.closingCtaWrapperNavy}>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={`${styles.closingCta} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""}`}

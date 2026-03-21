@@ -54,7 +54,7 @@ export default function StudentQuotes(): React.JSX.Element {
   return (
     <section className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>Trusted by Educators</h2>
+        <h2 className={styles.sectionHeadingAccent}>Trusted by Educators</h2>
         <p className={styles.sectionSubtitle}>
           Iris supports over 2,000 students across multiple disciplines at the
           Technical University of Munich.

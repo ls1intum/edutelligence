@@ -26,27 +26,29 @@ export default function ScaleSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>Built for Scale</h2>
-      <p className={styles.sectionSubtitle}>
-        Iris isn&apos;t a prototype. It&apos;s a production system supporting
-        thousands of students across one of Europe&apos;s largest technical
-        universities.
-      </p>
-      <div
-        ref={ref as React.RefObject<HTMLDivElement>}
-        className={styles.scaleGrid}
-      >
-        {stats.map((stat, i) => (
-          <div
-            key={stat.label}
-            className={`${styles.scaleCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
-          >
-            <div className={styles.scaleNumber}>{stat.number}</div>
-            <div className={styles.scaleLabel}>{stat.label}</div>
-            <div className={styles.scaleDetail}>{stat.detail}</div>
-          </div>
-        ))}
+    <section className={styles.sectionScaleBg}>
+      <div className={styles.sectionScaleInner}>
+        <h2 className={styles.sectionHeadingAccent}>Built for Scale</h2>
+        <p className={styles.sectionSubtitle}>
+          Iris isn&apos;t a prototype. It&apos;s a production system supporting
+          thousands of students across one of Europe&apos;s largest technical
+          universities.
+        </p>
+        <div
+          ref={ref as React.RefObject<HTMLDivElement>}
+          className={styles.scaleGrid}
+        >
+          {stats.map((stat, i) => (
+            <div
+              key={stat.label}
+              className={`${styles.scaleCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+            >
+              <div className={styles.scaleNumber}>{stat.number}</div>
+              <div className={styles.scaleLabel}>{stat.label}</div>
+              <div className={styles.scaleDetail}>{stat.detail}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

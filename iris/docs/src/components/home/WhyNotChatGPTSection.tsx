@@ -47,8 +47,8 @@ export default function WhyNotChatGPTSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionAlt}>
-      <div className={styles.sectionAltInner}>
+    <section className={styles.sectionParchment}>
+      <div className={styles.sectionParchmentInner}>
         <h2 className={styles.sectionHeading}>
           Why Not Just Use a Generic AI Chatbot?
         </h2>

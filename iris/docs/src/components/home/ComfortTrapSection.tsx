@@ -6,7 +6,7 @@ export default function ComfortTrapSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionSpacious}>
+    <section className={styles.sectionAmber}>
       <h2 className={styles.sectionHeading}>
         The Comfort Trap: Why &ldquo;Easier&rdquo; Isn&apos;t Always Better
       </h2>
