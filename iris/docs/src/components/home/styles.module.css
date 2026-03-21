@@ -349,22 +349,22 @@
   max-width: 440px;
   margin: 0 auto;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.35);
   box-shadow:
-    0 20px 60px rgba(42, 115, 180, 0.15),
-    0 4px 16px rgba(0, 0, 0, 0.06);
+    0 8px 32px rgba(42, 115, 180, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
   overflow: hidden;
 }
 
 [data-theme="dark"] .chatMockup {
-  background: rgba(31, 31, 31, 0.75);
-  border-color: rgba(90, 159, 214, 0.15);
+  background: rgba(30, 30, 30, 0.55);
+  border-color: rgba(255, 255, 255, 0.1);
   box-shadow:
-    0 20px 60px rgba(42, 115, 180, 0.2),
-    0 4px 16px rgba(0, 0, 0, 0.3);
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -666,24 +666,28 @@
 }
 
 .featureCard {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-top: 3px solid var(--ifm-color-primary);
   border-radius: 16px;
   padding: 1.5rem 1.25rem;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
   transition:
     transform 0.2s,
     box-shadow 0.2s;
 }
 
 [data-theme="dark"] .featureCard {
-  background: rgba(31, 31, 31, 0.7);
-  border-color: rgba(90, 159, 214, 0.15);
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
   border-top-color: var(--ifm-color-primary);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 @media (hover: hover) {
@@ -1028,18 +1032,22 @@
 .statCard {
   text-align: center;
   padding: 2rem 1.5rem;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 [data-theme="dark"] .statCard {
-  background: rgba(31, 31, 31, 0.7);
-  border-color: rgba(90, 159, 214, 0.15);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .statNumber {
@@ -1079,100 +1087,100 @@
   font-size: 0.9rem;
 }
 
-/* ─── Student Quotes ─── */
+/* ─── Trusted by Educators (Testimonials) ─── */
 
-.quoteBlock {
-  max-width: 740px;
+.testimonialGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+  max-width: 900px;
   margin: 0 auto;
-  text-align: center;
-  padding: 2rem 0;
 }
 
-.quoteText {
-  font-family: "DM Serif Display", serif;
-  font-size: 1.2rem;
-  font-weight: 400;
+.testimonialCard {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-left: 4px solid var(--ifm-color-primary);
+  border-radius: 16px;
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+[data-theme="dark"] .testimonialCard {
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  border-left-color: var(--ifm-color-primary);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .testimonialCard:hover {
+    transform: translateY(-3px);
+    box-shadow:
+      0 8px 32px rgba(42, 115, 180, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+}
+
+.testimonialHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.testimonialAvatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--ifm-color-primary), #00b4a0);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.testimonialQuote {
+  font-size: 0.95rem;
+  font-style: italic;
   line-height: 1.7;
   color: var(--ifm-font-color-base);
-  font-style: italic;
-  position: relative;
-  padding: 0 1rem;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .quoteText {
-    animation: quoteFadeIn 0.4s ease-out;
-  }
-
-  @keyframes quoteFadeIn {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
-}
-
-.quoteText::before {
-  content: "\201C";
-  font-family: "DM Serif Display", serif;
-  font-size: 4rem;
-  font-weight: 400;
-  color: var(--ifm-color-primary);
-  opacity: 0.25;
-  position: absolute;
-  top: -1.5rem;
-  left: -0.5rem;
-  line-height: 1;
-}
-
-.quoteAttribution {
-  margin-top: 1rem;
-  font-size: 0.9rem;
-  color: var(--iris-label-color);
-  font-style: normal;
-}
-
-.quoteDots {
-  display: flex;
-  justify-content: center;
-  gap: 0.5rem;
-  margin-top: 1.5rem;
-}
-
-.quoteDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  margin: 0;
+  padding: 0;
   border: none;
-  background: var(--iris-border-color);
-  cursor: pointer;
-  padding: 8px;
-  background-clip: content-box;
-  transition:
-    background 0.2s,
-    width 0.2s,
-    height 0.2s;
 }
 
-.quoteDot:hover {
-  background: var(--ifm-color-primary-light);
-  background-clip: content-box;
+.testimonialAuthor {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ifm-font-color-base);
 }
 
-.quoteDot:focus-visible {
-  outline: 2px solid var(--ifm-color-primary);
-  outline-offset: 2px;
-  border-radius: 50%;
+.testimonialOrg {
+  font-size: 0.8rem;
+  color: var(--iris-label-color);
 }
 
-.quoteDotActive {
-  composes: quoteDot;
-  width: 10px;
-  height: 10px;
-  background: var(--ifm-color-primary);
-  background-clip: content-box;
+.testimonialNote {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--iris-label-color);
+  margin-top: 2rem;
+  font-style: italic;
 }
 
 /* ─── Audience Cards ─── */
@@ -1184,12 +1192,14 @@
 }
 
 .audienceCard {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
   padding: 1.75rem 1.5rem;
   text-decoration: none;
   color: inherit;
@@ -1202,9 +1212,11 @@
 }
 
 [data-theme="dark"] .audienceCard {
-  background: rgba(31, 31, 31, 0.7);
-  border-color: rgba(90, 159, 214, 0.15);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 @media (hover: hover) {
@@ -1408,18 +1420,22 @@
 /* ─── Glassmorphism mixin (shared card style) ─── */
 
 .glassCard {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 [data-theme="dark"] .glassCard {
-  background: rgba(31, 31, 31, 0.7);
-  border-color: rgba(90, 159, 214, 0.15);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 /* ─── Course Materials Section ─── */
@@ -1434,12 +1450,14 @@
 
 .courseMaterialCard {
   position: relative;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
   padding: 2rem 1.5rem 1.75rem;
   text-align: center;
   transition:
@@ -1448,9 +1466,11 @@
 }
 
 [data-theme="dark"] .courseMaterialCard {
-  background: rgba(31, 31, 31, 0.7);
-  border-color: rgba(90, 159, 214, 0.15);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
@@ -1458,24 +1478,6 @@
     transform: translateY(-4px);
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
   }
-}
-
-.courseMaterialNumber {
-  position: absolute;
-  top: -14px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--ifm-color-primary);
-  color: #fff;
-  font-size: 0.85rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 8px rgba(42, 115, 180, 0.3);
 }
 
 .courseMaterialIcon {
@@ -1511,12 +1513,14 @@
 
 .howItWorksCard {
   position: relative;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
   padding: 2.25rem 1.5rem 1.75rem;
   text-align: center;
   transition:
@@ -1525,9 +1529,11 @@
 }
 
 [data-theme="dark"] .howItWorksCard {
-  background: rgba(31, 31, 31, 0.7);
-  border-color: rgba(90, 159, 214, 0.15);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
@@ -1578,19 +1584,23 @@
 .comparisonTableWrapper {
   max-width: 740px;
   margin: 0 auto;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
   overflow: hidden;
 }
 
 [data-theme="dark"] .comparisonTableWrapper {
-  background: rgba(31, 31, 31, 0.7);
-  border-color: rgba(90, 159, 214, 0.15);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .comparisonTable {
@@ -1723,6 +1733,10 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .testimonialGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .heroHeadline {
     font-size: 2.25rem;
   }
@@ -1754,6 +1768,10 @@
   }
 
   .howItWorksGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .testimonialGrid {
     grid-template-columns: 1fr;
   }
 

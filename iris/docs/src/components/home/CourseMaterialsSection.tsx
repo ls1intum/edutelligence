@@ -2,11 +2,11 @@ import React from "react";
 import styles from "./styles.module.css";
 import { useFadeIn } from "./useFadeIn";
 
-function UploadIcon() {
+function SlidesIcon() {
   return (
     <svg
-      width="36"
-      height="36"
+      width="32"
+      height="32"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -14,18 +14,18 @@ function UploadIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="17 8 12 3 7 8" />
-      <line x1="12" y1="3" x2="12" y2="15" />
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
     </svg>
   );
 }
 
-function BrainIcon() {
+function FaqIcon() {
   return (
     <svg
-      width="36"
-      height="36"
+      width="32"
+      height="32"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -33,19 +33,18 @@ function BrainIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z" />
-      <path d="M9 18h6" />
-      <path d="M10 22h4" />
-      <circle cx="12" cy="9" r="1" fill="currentColor" />
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
     </svg>
   );
 }
 
-function ChatBubbleIcon() {
+function CitationIcon() {
   return (
     <svg
-      width="36"
-      height="36"
+      width="32"
+      height="32"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -53,34 +52,33 @@ function ChatBubbleIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      <path d="M8 9h8" />
-      <path d="M8 13h5" />
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
     </svg>
   );
 }
 
-const steps = [
+const cards = [
   {
-    icon: <UploadIcon />,
-    number: "1",
-    title: "Instructors share course materials",
+    icon: <SlidesIcon />,
+    title: "Lecture Slides & Transcripts",
     description:
-      "Lecture slides, transcriptions, exercises, and FAQs are automatically available to Iris through Artemis.",
+      "Upload your slide decks and video transcripts. Iris indexes the content so it can reference specific slides when students ask questions \u2014 whether that\u2019s a history timeline, a biology diagram, or a legal case study.",
   },
   {
-    icon: <BrainIcon />,
-    number: "2",
-    title: "Iris learns your course content",
+    icon: <FaqIcon />,
+    title: "Course FAQs",
     description:
-      "Iris reads and understands your materials so every answer is grounded in what was actually taught.",
+      "Add frequently asked questions to your course. Iris draws on these instructor-curated answers first, ensuring students get your preferred explanations \u2014 not something the AI invented.",
   },
   {
-    icon: <ChatBubbleIcon />,
-    number: "3",
-    title: "Students get accurate, sourced answers",
+    icon: <CitationIcon />,
+    title: "Transparent Citations",
     description:
-      "When students ask a question, Iris responds with hints that reference specific slides and lectures.",
+      "Every answer includes numbered citation markers. Students can see exactly which slide, transcript, or FAQ the information came from. No black boxes, no mystery answers.",
   },
 ];
 
@@ -90,32 +88,29 @@ export default function CourseMaterialsSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionAlt}>
-      <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>
-          Powered by Your Course Materials
-        </h2>
-        <p className={styles.sectionSubtitle}>
-          Iris doesn&apos;t make things up. It answers based on your actual
-          lectures, slides, and exercises &mdash; so students always get
-          accurate, course-specific guidance.
-        </p>
-        <div
-          ref={ref as React.RefObject<HTMLDivElement>}
-          className={styles.courseMaterialsGrid}
-        >
-          {steps.map((step, i) => (
-            <div
-              key={step.title}
-              className={`${styles.courseMaterialCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
-            >
-              <div className={styles.courseMaterialNumber}>{step.number}</div>
-              <div className={styles.courseMaterialIcon}>{step.icon}</div>
-              <h3 className={styles.courseMaterialTitle}>{step.title}</h3>
-              <p className={styles.courseMaterialDesc}>{step.description}</p>
-            </div>
-          ))}
-        </div>
+    <section className={styles.section}>
+      <h2 className={styles.sectionHeading}>
+        Powered by Your Course Materials
+      </h2>
+      <p className={styles.sectionSubtitle}>
+        Iris doesn&apos;t make things up. It answers based on your actual
+        lecture slides, video transcripts, and course FAQs &mdash; complete with
+        citations so students can trace every answer back to the exact source.
+      </p>
+      <div
+        ref={ref as React.RefObject<HTMLDivElement>}
+        className={styles.courseMaterialsGrid}
+      >
+        {cards.map((card, i) => (
+          <div
+            key={card.title}
+            className={`${styles.courseMaterialCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+          >
+            <div className={styles.courseMaterialIcon}>{card.icon}</div>
+            <h3 className={styles.courseMaterialTitle}>{card.title}</h3>
+            <p className={styles.courseMaterialDesc}>{card.description}</p>
+          </div>
+        ))}
       </div>
     </section>
   );

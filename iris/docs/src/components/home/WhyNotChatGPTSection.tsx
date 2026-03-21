@@ -9,21 +9,33 @@ interface ComparisonRow {
 }
 
 const rows: ComparisonRow[] = [
-  { feature: "Knows your specific course content", chatgpt: false, iris: true },
-  { feature: "Cites lecture slides and materials", chatgpt: false, iris: true },
   {
-    feature: "Gives calibrated hints, not full answers",
+    feature: "Knows your specific course content",
     chatgpt: false,
     iris: true,
   },
   {
-    feature: "Integrated into your learning platform",
+    feature: "Guides with hints instead of giving full answers",
     chatgpt: false,
     iris: true,
   },
-  { feature: "Backed by peer-reviewed research", chatgpt: false, iris: true },
   {
-    feature: "Adapts to the exercise you\u2019re working on",
+    feature: "Cites lecture slides and course materials",
+    chatgpt: false,
+    iris: true,
+  },
+  {
+    feature: "Integrated into your learning platform (LMS)",
+    chatgpt: false,
+    iris: true,
+  },
+  {
+    feature: "GDPR compliant & university-hosted",
+    chatgpt: false,
+    iris: true,
+  },
+  {
+    feature: "Free for students",
     chatgpt: false,
     iris: true,
   },
@@ -37,10 +49,14 @@ export default function WhyNotChatGPTSection(): React.JSX.Element {
   return (
     <section className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>Why Not Just Use ChatGPT?</h2>
+        <h2 className={styles.sectionHeading}>
+          Why Not Just Use a Generic AI Chatbot?
+        </h2>
         <p className={styles.sectionSubtitle}>
-          General-purpose AI chatbots are powerful &mdash; but they weren&apos;t
-          designed for education. Here&apos;s what makes Iris different.
+          Your students are already using ChatGPT. But generic AI chatbots give
+          direct answers that feel helpful &mdash; while skipping the thinking
+          that actually builds understanding. Here&apos;s what Iris does
+          differently.
         </p>
         <div
           ref={ref as React.RefObject<HTMLDivElement>}
@@ -50,7 +66,9 @@ export default function WhyNotChatGPTSection(): React.JSX.Element {
             <thead>
               <tr>
                 <th className={styles.comparisonTableFeatureHeader}>Feature</th>
-                <th className={styles.comparisonTableHeader}>ChatGPT</th>
+                <th className={styles.comparisonTableHeader}>
+                  Generic AI Chatbot
+                </th>
                 <th
                   className={`${styles.comparisonTableHeader} ${styles.comparisonTableHeaderIris}`}
                 >
@@ -66,22 +84,38 @@ export default function WhyNotChatGPTSection(): React.JSX.Element {
                   </td>
                   <td className={styles.comparisonTableCell}>
                     {row.chatgpt ? (
-                      <span className={styles.checkMark} aria-label="Yes">
+                      <span
+                        className={styles.checkMark}
+                        role="img"
+                        aria-label="Yes"
+                      >
                         &#10003;
                       </span>
                     ) : (
-                      <span className={styles.crossMark} aria-label="No">
+                      <span
+                        className={styles.crossMark}
+                        role="img"
+                        aria-label="No"
+                      >
                         &#10007;
                       </span>
                     )}
                   </td>
                   <td className={styles.comparisonTableCellIris}>
                     {row.iris ? (
-                      <span className={styles.checkMark} aria-label="Yes">
+                      <span
+                        className={styles.checkMark}
+                        role="img"
+                        aria-label="Yes"
+                      >
                         &#10003;
                       </span>
                     ) : (
-                      <span className={styles.crossMark} aria-label="No">
+                      <span
+                        className={styles.crossMark}
+                        role="img"
+                        aria-label="No"
+                      >
                         &#10007;
                       </span>
                     )}
