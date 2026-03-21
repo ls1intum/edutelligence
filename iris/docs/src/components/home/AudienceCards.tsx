@@ -51,7 +51,9 @@ export default function AudienceCards(): React.JSX.Element {
           >
             <div className={styles.audienceCardTitle}>{a.title}</div>
             <div className={styles.audienceCardDesc}>{a.description}</div>
-            <div className={styles.audienceCardArrow}>&rarr;</div>
+            <div className={styles.audienceCardArrow} aria-hidden="true">
+              &rarr;
+            </div>
           </Link>
         ))}
       </div>
