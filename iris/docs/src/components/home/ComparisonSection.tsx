@@ -34,8 +34,8 @@ export default function ComparisonSection(): React.JSX.Element {
     <section id="comparison" className={styles.section}>
       <h2 className={styles.sectionHeading}>How Iris Is Different</h2>
       <p className={styles.sectionSubtitle}>
-        A student is stuck on the Burrows&ndash;Wheeler Transform rotation step.
-        Here&rsquo;s what happens next.
+        A student is preparing for their biology exam and asks about
+        photosynthesis. Here&rsquo;s what happens next.
       </p>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
@@ -58,7 +58,7 @@ export default function ComparisonSection(): React.JSX.Element {
                     <span className={styles.chatUIMessageTime}>14:32</span>
                   </div>
                   <div className={styles.chatUIBubbleLeft}>
-                    How do I do the BWT rotation step?
+                    Can you explain how photosynthesis works?
                   </div>
                 </div>
               </div>
@@ -70,18 +70,15 @@ export default function ComparisonSection(): React.JSX.Element {
                     <span className={styles.chatUIMessageTime}>14:32</span>
                   </div>
                   <div className={styles.chatUIBubbleLeft}>
-                    Sure! Here&rsquo;s the full implementation:{" "}
-                    <code>
-                      rotations = [s[i:] + s[:i] for i in range(len(s))]
-                    </code>
-                    <br />
-                    <code>table = sorted(rotations); ...</code>
+                    Photosynthesis is the process by which plants convert light
+                    energy into chemical energy. It occurs in two stages: the
+                    light-dependent reactions and the Calvin cycle&hellip;
                   </div>
                 </div>
               </div>
             </div>
             <p className={styles.comparisonOutcome}>
-              ❌ Student copies the answer. Learns nothing.
+              ❌ Student skims the answer. Forgets it tomorrow.
             </p>
           </div>
 
@@ -101,7 +98,7 @@ export default function ComparisonSection(): React.JSX.Element {
                     <span className={styles.chatUIMessageTime}>14:32</span>
                   </div>
                   <div className={styles.chatUIBubbleLeft}>
-                    How do I do the BWT rotation step?
+                    Can you explain how photosynthesis works?
                   </div>
                 </div>
               </div>
@@ -115,10 +112,10 @@ export default function ComparisonSection(): React.JSX.Element {
                     <span className={styles.chatUIMessageTime}>14:33</span>
                   </div>
                   <div className={styles.chatUIBubbleIris}>
-                    I see you&rsquo;re working on the BWT rotation step. Think
-                    about what happens when you rotate a string by moving the
-                    first character to the end. Can you see how to generate all
-                    rotations from there?
+                    Great question! Your instructor covered this on{" "}
+                    <strong>slide 7</strong>. Before I explain, what do you
+                    already know about how plants capture light energy? Think
+                    about what role chlorophyll plays.
                   </div>
                 </div>
               </div>
