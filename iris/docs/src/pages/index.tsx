@@ -18,6 +18,7 @@ import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
 import QuizSection from "../components/home/QuizSection";
 import IdeSection from "../components/home/IdeSection";
+import MemorySection from "../components/home/MemorySection";
 import ClosingCta from "../components/home/ClosingCta";
 export default function Home(): React.JSX.Element {
   return (
@@ -33,6 +34,9 @@ export default function Home(): React.JSX.Element {
 
       {/* 3. Feature Cards — Why Iris? */}
       <FeatureCards />
+
+      {/* 3.5. Gets Smarter the More You Use It */}
+      <MemorySection />
 
       {/* 4. Powered by Your Course Materials */}
       <CourseMaterialsSection />
