@@ -557,6 +557,22 @@
   box-shadow: 0 2px 8px rgba(62, 138, 204, 0.25);
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .btnPrimary {
+    animation: ctaPulse 3s ease-in-out 2s 3;
+  }
+
+  @keyframes ctaPulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(42, 115, 180, 0.4);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(42, 115, 180, 0);
+    }
+  }
+}
+
 .btnGhost {
   display: inline-flex;
   align-items: center;
@@ -972,6 +988,25 @@
 [data-theme="dark"] .chatUIBubbleIris {
   background: rgba(90, 159, 214, 0.08);
   border-color: rgba(90, 159, 214, 0.22);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chatUIBubbleIris::after {
+    content: "\258E";
+    color: var(--ifm-color-primary);
+    animation: cursorBlink 1s step-end infinite;
+    margin-left: 2px;
+  }
+
+  @keyframes cursorBlink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
 }
 
 .comparisonOutcome {
