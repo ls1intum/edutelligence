@@ -19,7 +19,9 @@ export default function HeroSection(): React.JSX.Element {
           An AI tutor built into Artemis, grounded in course materials, and
           backed by peer-reviewed research at TU Munich.
         </p>
-        <p className={styles.heroProof}>Used by 1,600+ students at TU Munich</p>
+        <p className={styles.heroProof}>
+          Used by 1,600+ students at TU Munich in Winter 2025/26
+        </p>
         <div className={styles.heroCtas}>
           <a className={styles.btnPrimary} href="#comparison">
             See How It Works
