@@ -504,6 +504,7 @@
 .quoteText {
   font-family: "DM Serif Display", serif;
   font-size: 1.2rem;
+  font-weight: 400;
   line-height: 1.7;
   color: var(--ifm-font-color-base);
   font-style: italic;
@@ -530,6 +531,7 @@
   content: "\201C";
   font-family: "DM Serif Display", serif;
   font-size: 4rem;
+  font-weight: 400;
   color: var(--ifm-color-primary);
   opacity: 0.25;
   position: absolute;
