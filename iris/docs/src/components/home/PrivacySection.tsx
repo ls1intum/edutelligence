@@ -85,26 +85,28 @@ export default function PrivacySection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>Your Data, Your Control</h2>
-      <p className={styles.sectionSubtitle}>
-        Privacy isn&apos;t an afterthought. Iris is designed from the ground up
-        to keep student data safe and give instructors full control.
-      </p>
-      <div
-        ref={ref as React.RefObject<HTMLDivElement>}
-        className={styles.privacyGrid}
-      >
-        {cards.map((card, i) => (
-          <div
-            key={card.title}
-            className={`${styles.privacyCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
-          >
-            <div className={styles.privacyIcon}>{card.icon}</div>
-            <h3 className={styles.privacyTitle}>{card.title}</h3>
-            <p className={styles.privacyDesc}>{card.description}</p>
-          </div>
-        ))}
+    <section className={styles.sectionAlt}>
+      <div className={styles.sectionAltInner}>
+        <h2 className={styles.sectionHeading}>Your Data, Your Control</h2>
+        <p className={styles.sectionSubtitle}>
+          Privacy isn&apos;t an afterthought. Iris is designed from the ground
+          up to keep student data safe and give instructors full control.
+        </p>
+        <div
+          ref={ref as React.RefObject<HTMLDivElement>}
+          className={styles.privacyGrid}
+        >
+          {cards.map((card, i) => (
+            <div
+              key={card.title}
+              className={`${styles.privacyCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+            >
+              <div className={styles.privacyIcon}>{card.icon}</div>
+              <h3 className={styles.privacyTitle}>{card.title}</h3>
+              <p className={styles.privacyDesc}>{card.description}</p>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

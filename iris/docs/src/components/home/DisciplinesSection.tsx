@@ -52,30 +52,33 @@ export default function DisciplinesSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>
-        Works for Every Course, Every Discipline
-      </h2>
-      <p className={styles.sectionSubtitle}>
-        Iris isn&apos;t just for computer science. Any course that uses Artemis
-        can benefit from AI-guided learning &mdash; from biology to law.
-      </p>
-      <div
-        ref={ref as React.RefObject<HTMLDivElement>}
-        className={styles.disciplineGrid}
-      >
-        {disciplines.map((d, i) => (
-          <div
-            key={d.title}
-            className={`${styles.disciplineCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i % staggerClasses.length] || ""}`}
-          >
-            <div className={styles.disciplineEmoji} aria-hidden="true">
-              {d.emoji}
+    <section className={styles.sectionAlt}>
+      <div className={styles.sectionAltInner}>
+        <h2 className={styles.sectionHeading}>
+          Works for Every Course, Every Discipline
+        </h2>
+        <p className={styles.sectionSubtitle}>
+          Iris isn&apos;t just for computer science. Any course that uses
+          Artemis can benefit from AI-guided learning &mdash; from biology to
+          law.
+        </p>
+        <div
+          ref={ref as React.RefObject<HTMLDivElement>}
+          className={styles.disciplineGrid}
+        >
+          {disciplines.map((d, i) => (
+            <div
+              key={d.title}
+              className={`${styles.disciplineCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i % staggerClasses.length] || ""}`}
+            >
+              <div className={styles.disciplineEmoji} aria-hidden="true">
+                {d.emoji}
+              </div>
+              <h3 className={styles.disciplineTitle}>{d.title}</h3>
+              <p className={styles.disciplineDesc}>{d.description}</p>
             </div>
-            <h3 className={styles.disciplineTitle}>{d.title}</h3>
-            <p className={styles.disciplineDesc}>{d.description}</p>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </section>
   );

@@ -88,29 +88,32 @@ export default function CourseMaterialsSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>
-        Powered by Your Course Materials
-      </h2>
-      <p className={styles.sectionSubtitle}>
-        Iris doesn&apos;t make things up. It answers based on your actual
-        lecture slides, video transcripts, and course FAQs &mdash; complete with
-        citations so students can trace every answer back to the exact source.
-      </p>
-      <div
-        ref={ref as React.RefObject<HTMLDivElement>}
-        className={styles.courseMaterialsGrid}
-      >
-        {cards.map((card, i) => (
-          <div
-            key={card.title}
-            className={`${styles.courseMaterialCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
-          >
-            <div className={styles.courseMaterialIcon}>{card.icon}</div>
-            <h3 className={styles.courseMaterialTitle}>{card.title}</h3>
-            <p className={styles.courseMaterialDesc}>{card.description}</p>
-          </div>
-        ))}
+    <section className={styles.sectionAlt}>
+      <div className={styles.sectionAltInner}>
+        <h2 className={styles.sectionHeading}>
+          Powered by Your Course Materials
+        </h2>
+        <p className={styles.sectionSubtitle}>
+          Iris doesn&apos;t make things up. It answers based on your actual
+          lecture slides, video transcripts, and course FAQs &mdash; complete
+          with citations so students can trace every answer back to the exact
+          source.
+        </p>
+        <div
+          ref={ref as React.RefObject<HTMLDivElement>}
+          className={styles.courseMaterialsGrid}
+        >
+          {cards.map((card, i) => (
+            <div
+              key={card.title}
+              className={`${styles.courseMaterialCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+            >
+              <div className={styles.courseMaterialIcon}>{card.icon}</div>
+              <h3 className={styles.courseMaterialTitle}>{card.title}</h3>
+              <p className={styles.courseMaterialDesc}>{card.description}</p>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

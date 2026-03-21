@@ -32,30 +32,28 @@ export default function HowItWorksSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionAlt}>
-      <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>How It Works</h2>
-        <p className={styles.sectionSubtitle}>
-          Three steps. Five minutes of setup. Unlimited student support.
-        </p>
-        <div
-          ref={ref as React.RefObject<HTMLDivElement>}
-          className={styles.howItWorksGrid}
-        >
-          {steps.map((step, i) => (
-            <div
-              key={step.title}
-              className={`${styles.howItWorksCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
-            >
-              <div className={styles.howItWorksNumber}>{step.number}</div>
-              <div className={styles.howItWorksEmoji} aria-hidden="true">
-                {step.emoji}
-              </div>
-              <h3 className={styles.howItWorksTitle}>{step.title}</h3>
-              <p className={styles.howItWorksDesc}>{step.description}</p>
+    <section className={styles.section}>
+      <h2 className={styles.sectionHeading}>How It Works</h2>
+      <p className={styles.sectionSubtitle}>
+        Three steps. Five minutes of setup. Unlimited student support.
+      </p>
+      <div
+        ref={ref as React.RefObject<HTMLDivElement>}
+        className={styles.howItWorksGrid}
+      >
+        {steps.map((step, i) => (
+          <div
+            key={step.title}
+            className={`${styles.howItWorksCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+          >
+            <div className={styles.howItWorksNumber}>{step.number}</div>
+            <div className={styles.howItWorksEmoji} aria-hidden="true">
+              {step.emoji}
             </div>
-          ))}
-        </div>
+            <h3 className={styles.howItWorksTitle}>{step.title}</h3>
+            <p className={styles.howItWorksDesc}>{step.description}</p>
+          </div>
+        ))}
       </div>
     </section>
   );
