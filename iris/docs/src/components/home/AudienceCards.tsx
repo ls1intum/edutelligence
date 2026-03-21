@@ -39,9 +39,6 @@ export default function AudienceCards(): React.JSX.Element {
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeading}>Who Is Iris For?</h2>
-      <p className={styles.sectionSubtitle}>
-        Pick the guide that matches your role.
-      </p>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={styles.audienceGrid}
