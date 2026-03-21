@@ -16,8 +16,8 @@ export default function HeroSection(): React.JSX.Element {
           The AI tutor that teaches, not just <em>answers</em>
         </h1>
         <p className={styles.heroSubtitle}>
-          An AI tutor built into Artemis that helps students learn by guiding
-          them to the answer &mdash; not giving it away.
+          An AI tutor built into Artemis, grounded in course materials, and
+          backed by peer-reviewed research at TU Munich.
         </p>
         <p className={styles.heroProof}>Used by 1,600+ students at TU Munich</p>
         <div className={styles.heroCtas}>
