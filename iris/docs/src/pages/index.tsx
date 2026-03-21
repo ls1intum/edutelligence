@@ -13,7 +13,7 @@ export default function Home(): React.JSX.Element {
   return (
     <Layout
       title="Iris — The AI Tutor That Teaches"
-      description="Iris is a context-aware virtual tutor integrated into Artemis. Scaffolded hints, guided learning, and grounded responses — backed by peer-reviewed research."
+      description="An AI tutor that teaches, not just answers. Built into Artemis, backed by peer-reviewed research at TU Munich."
     >
       {/* 1. Hero */}
       <HeroSection />
