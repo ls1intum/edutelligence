@@ -8,7 +8,9 @@ import HowItWorksSection from "../components/home/HowItWorksSection";
 import ComparisonSection from "../components/home/ComparisonSection";
 import WhyNotChatGPTSection from "../components/home/WhyNotChatGPTSection";
 import ResearchHighlights from "../components/home/ResearchHighlights";
+import ComfortTrapSection from "../components/home/ComfortTrapSection";
 import StudentQuotes from "../components/home/StudentQuotes";
+import PrivacySection from "../components/home/PrivacySection";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
 import ClosingCta from "../components/home/ClosingCta";
@@ -24,7 +26,7 @@ export default function Home(): React.JSX.Element {
       {/* 2. Trust Bar */}
       <TrustBar />
 
-      {/* 3. Feature Cards */}
+      {/* 3. Feature Cards — Why Iris? */}
       <FeatureCards />
 
       {/* 4. Powered by Your Course Materials */}
@@ -36,22 +38,28 @@ export default function Home(): React.JSX.Element {
       {/* 6. How Iris Is Different (chat comparison) */}
       <ComparisonSection />
 
-      {/* 7. Why Not Just Use ChatGPT? (table comparison) */}
+      {/* 7. Why Not Just Use a Generic AI Chatbot? (table) */}
       <WhyNotChatGPTSection />
 
       {/* 8. Research Highlights */}
       <ResearchHighlights />
 
-      {/* 9. Testimonials */}
+      {/* 9. The Comfort Trap — research insight */}
+      <ComfortTrapSection />
+
+      {/* 10. Trusted by Educators */}
       <StudentQuotes />
 
-      {/* 10. Audience Quickstart Cards */}
+      {/* 11. Your Data, Your Control */}
+      <PrivacySection />
+
+      {/* 12. Audience Quickstart Cards */}
       <AudienceCards />
 
-      {/* 11. FAQ */}
+      {/* 13. FAQ */}
       <FaqSection />
 
-      {/* 12. Closing CTA */}
+      {/* 14. Closing CTA */}
       <ClosingCta />
     </Layout>
   );
