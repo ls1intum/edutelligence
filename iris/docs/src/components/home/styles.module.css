@@ -1637,6 +1637,8 @@
   margin-bottom: 0.5rem;
   display: inline-block;
   letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
 }
 
 [data-theme="dark"] .statNumber {
@@ -2832,6 +2834,8 @@
   line-height: 1.05;
   margin-bottom: 0.5rem;
   letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
 }
 
 [data-theme="dark"] .scaleNumber {
