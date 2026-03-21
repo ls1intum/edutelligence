@@ -221,6 +221,33 @@
   margin: 0 auto;
 }
 
+.sectionParchment .comparisonTableWrapper {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(180, 160, 130, 0.2);
+  box-shadow:
+    0 4px 24px rgba(140, 120, 80, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.sectionParchment .comparisonTableFeatureHeader,
+.sectionParchment .comparisonTableHeader {
+  background: rgba(180, 160, 130, 0.08);
+}
+
+.sectionParchment .comparisonTableRow:hover {
+  background: rgba(180, 160, 130, 0.06);
+}
+
+[data-theme="dark"] .sectionParchment .comparisonTableWrapper {
+  background: rgba(30, 28, 22, 0.6);
+  border-color: rgba(180, 160, 130, 0.1);
+}
+
+[data-theme="dark"] .sectionParchment .comparisonTableFeatureHeader,
+[data-theme="dark"] .sectionParchment .comparisonTableHeader {
+  background: rgba(180, 160, 130, 0.06);
+}
+
 /* 3. ComfortTrap — Amber accent tint */
 .sectionAmber {
   padding: 5.5rem 1.5rem;
