@@ -27,9 +27,9 @@ export default function ClosingCta(): React.JSX.Element {
           integration, and your first course &mdash; no commitment required.
         </p>
         <div className={styles.heroCtas}>
-          <Link className={styles.btnPrimary} to="mailto:krusche@tum.de">
+          <a className={styles.btnPrimary} href="mailto:krusche@tum.de">
             Request a Demo
-          </Link>
+          </a>
           <Link className={styles.btnGhost} to="/docs/overview/what-is-iris">
             Explore the Docs
           </Link>

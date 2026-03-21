@@ -20,6 +20,8 @@ import QuizSection from "../components/home/QuizSection";
 import IdeSection from "../components/home/IdeSection";
 import MemorySection from "../components/home/MemorySection";
 import ClosingCta from "../components/home/ClosingCta";
+import styles from "../components/home/styles.module.css";
+
 export default function Home(): React.JSX.Element {
   return (
     <Layout
@@ -41,50 +43,80 @@ export default function Home(): React.JSX.Element {
       {/* 4. Powered by Your Course Materials */}
       <CourseMaterialsSection />
 
-      {/* 5. How It Works */}
-      <HowItWorksSection />
+      {/* 5. How It Works — below the fold, lazy-rendered */}
+      <div className={styles.sectionLazy}>
+        <HowItWorksSection />
+      </div>
 
       {/* 6. See Iris in Action */}
-      <ShowcaseSection />
+      <div className={styles.sectionLazy}>
+        <ShowcaseSection />
+      </div>
 
       {/* 6.5. Turn Any Lecture into a Quiz */}
-      <QuizSection />
+      <div className={styles.sectionLazy}>
+        <QuizSection />
+      </div>
 
       {/* 7. How Iris Is Different (chat comparison) */}
-      <ComparisonSection />
+      <div className={styles.sectionLazy}>
+        <ComparisonSection />
+      </div>
 
       {/* 8. Why Not Just Use a Generic AI Chatbot? */}
-      <WhyNotChatGPTSection />
+      <div className={styles.sectionLazy}>
+        <WhyNotChatGPTSection />
+      </div>
 
       {/* 9. Research Highlights */}
-      <ResearchHighlights />
+      <div className={styles.sectionLazy}>
+        <ResearchHighlights />
+      </div>
 
       {/* 10. Works for Every Course */}
-      <DisciplinesSection />
+      <div className={styles.sectionLazy}>
+        <DisciplinesSection />
+      </div>
 
       {/* 10.5. Iris in Your IDE */}
-      <IdeSection />
+      <div className={styles.sectionLazy}>
+        <IdeSection />
+      </div>
 
       {/* 11. The Comfort Trap */}
-      <ComfortTrapSection />
+      <div className={styles.sectionLazy}>
+        <ComfortTrapSection />
+      </div>
 
       {/* 12. Trusted by Educators */}
-      <StudentQuotes />
+      <div className={styles.sectionLazy}>
+        <StudentQuotes />
+      </div>
 
       {/* 13. Built for Scale */}
-      <ScaleSection />
+      <div className={styles.sectionLazy}>
+        <ScaleSection />
+      </div>
 
       {/* 14. Your Data, Your Control */}
-      <PrivacySection />
+      <div className={styles.sectionLazy}>
+        <PrivacySection />
+      </div>
 
       {/* 15. Audience Quickstart Cards */}
-      <AudienceCards />
+      <div className={styles.sectionLazy}>
+        <AudienceCards />
+      </div>
 
       {/* 16. FAQ */}
-      <FaqSection />
+      <div className={styles.sectionLazy}>
+        <FaqSection />
+      </div>
 
       {/* 17. Closing CTA */}
-      <ClosingCta />
+      <div className={styles.sectionLazy}>
+        <ClosingCta />
+      </div>
     </Layout>
   );
 }
