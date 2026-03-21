@@ -903,4 +903,8 @@
   .comparisonCol {
     padding: 1.5rem 1.25rem;
   }
+
+  .faqQuestion {
+    padding: 1.35rem 0;
+  }
 }
