@@ -12,7 +12,7 @@ import ClosingCta from "../components/home/ClosingCta";
 export default function Home(): React.JSX.Element {
   return (
     <Layout
-      title="Iris — The AI Tutor That Teaches"
+      title="Iris — The AI Tutor that Teaches"
       description="An AI tutor that teaches, not just answers. Built into Artemis, backed by peer-reviewed research at TU Munich."
     >
       {/* 1. Hero */}
