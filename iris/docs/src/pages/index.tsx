@@ -8,6 +8,7 @@ import ResearchHighlights from "../components/home/ResearchHighlights";
 import StudentQuotes from "../components/home/StudentQuotes";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
+import ClosingCta from "../components/home/ClosingCta";
 import EcosystemFooter from "../components/home/EcosystemFooter";
 export default function Home(): React.JSX.Element {
   return (
@@ -39,7 +40,10 @@ export default function Home(): React.JSX.Element {
       {/* 8. FAQ */}
       <FaqSection />
 
-      {/* 9. EduTelligence Ecosystem */}
+      {/* 9. Closing CTA */}
+      <ClosingCta />
+
+      {/* 10. EduTelligence Ecosystem */}
       <EcosystemFooter />
     </Layout>
   );
