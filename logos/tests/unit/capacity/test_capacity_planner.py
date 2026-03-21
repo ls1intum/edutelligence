@@ -718,3 +718,215 @@ async def test_stop_confirmation_lane_gone():
 
     result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
     assert result is True
+
+
+# ---------------------------------------------------------------------------
+# Active-request guards on idle actions
+# ---------------------------------------------------------------------------
+
+
+def test_idle_sleep_skips_active_requests():
+    """Lane with active_requests > 0 should NOT be slept even if idle timer expired."""
+    lane = _make_signal(is_vllm=True, runtime_state="loaded", sleep_state="awake", active_requests=2)
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+
+    # Idle timer says 61s, but lane has active requests
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 61
+
+    actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
+
+
+def test_idle_stop_skips_active_requests():
+    """Lane with active_requests > 0 should NOT be stopped even if idle timer expired."""
+    lane = _make_signal(is_vllm=True, runtime_state="loaded", sleep_state="awake", active_requests=1)
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
+
+    actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
+
+
+def test_idle_sleep_l2_skips_active_requests():
+    """Sleeping lane with active_requests > 0 should NOT be deepened to L2."""
+    lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=1)
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 301
+
+    actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
+
+
+# ---------------------------------------------------------------------------
+# Request-time cold load
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prepare_lane_cold_load():
+    """When no lane exists, prepare_lane_for_request cold-loads the model."""
+    facade = MockFacade(
+        lanes=[],  # No lanes at all
+        capacity=OllamaCapacity(available_vram_mb=24000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                loaded_vram_mb=12000.0,
+                base_residency_mb=7000.0,
+                engine="vllm",
+                observed_gpu_memory_utilization=0.8,
+                tensor_parallel_size=1,
+            ),
+        },
+    )
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {"lanes": []}
+    }
+    planner = _make_planner(facade=facade, registry=registry)
+    actions = []
+
+    async def _fake_execute(action, timeout_seconds=60.0):  # noqa: ARG001
+        actions.append(action.action)
+        if action.action == "load":
+            registry._snapshot = {
+                "runtime": {
+                    "lanes": [
+                        {
+                            "lane_id": action.lane_id,
+                            "model": "qwen-coder",
+                            "runtime_state": "loaded",
+                            "sleep_state": "awake",
+                        }
+                    ]
+                }
+            }
+            return True
+        return True
+
+    planner._execute_action_with_confirmation = _fake_execute
+    selected = await planner.prepare_lane_for_request(10, "qwen-coder")
+    assert selected is not None
+    assert selected["model"] == "qwen-coder"
+    assert "load" in actions
+
+
+@pytest.mark.asyncio
+async def test_prepare_lane_cold_load_insufficient_vram():
+    """Cold load is rejected when VRAM budget is insufficient and no reclaimable lanes."""
+    facade = MockFacade(
+        lanes=[],
+        capacity=OllamaCapacity(available_vram_mb=2000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "big-model": ModelProfile(
+                model_name="big-model",
+                loaded_vram_mb=30000.0,
+                base_residency_mb=25000.0,
+            ),
+        },
+    )
+    registry = MockRegistry()
+    registry._snapshot = {"runtime": {"lanes": []}}
+    planner = _make_planner(facade=facade, registry=registry)
+
+    selected = await planner.prepare_lane_for_request(10, "big-model")
+    assert selected is None
+
+
+# ---------------------------------------------------------------------------
+# Preemptive load-then-sleep
+# ---------------------------------------------------------------------------
+
+
+def test_preemptive_sleep_loads_previously_served_model():
+    """Model with known sleeping_residual_mb and no lane → load + sleep_l1 actions."""
+    facade = MockFacade(
+        lanes=[],  # No lanes running
+        capacity=OllamaCapacity(available_vram_mb=24000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                loaded_vram_mb=12000.0,
+                sleeping_residual_mb=2000.0,
+                base_residency_mb=7000.0,
+                engine="vllm",
+                observed_gpu_memory_utilization=0.8,
+                tensor_parallel_size=1,
+            ),
+        },
+    )
+    demand = DemandTracker()
+    demand.record_request("qwen-coder")  # Some demand
+    planner = _make_planner(facade=facade, demand=demand)
+
+    actions = planner._compute_preemptive_sleep_actions(10, [])
+    assert len(actions) == 2
+    assert actions[0].action == "load"
+    assert actions[0].model_name == "qwen-coder"
+    assert actions[1].action == "sleep_l1"
+    assert actions[1].model_name == "qwen-coder"
+
+
+def test_preemptive_sleep_skips_non_vllm():
+    """Ollama models don't support sleep, so they shouldn't be preemptively loaded."""
+    facade = MockFacade(
+        lanes=[],
+        capacity=OllamaCapacity(available_vram_mb=24000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "ollama-model": ModelProfile(
+                model_name="ollama-model",
+                loaded_vram_mb=4000.0,
+                sleeping_residual_mb=500.0,
+                engine="ollama",
+            ),
+        },
+    )
+    demand = DemandTracker()
+    demand.record_request("ollama-model")
+    planner = _make_planner(facade=facade, demand=demand)
+
+    actions = planner._compute_preemptive_sleep_actions(10, [])
+    assert actions == []
+
+
+def test_preemptive_sleep_skips_when_vram_tight():
+    """Don't preemptively load when VRAM headroom is below 20%."""
+    facade = MockFacade(
+        lanes=[],
+        capacity=OllamaCapacity(available_vram_mb=5000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                loaded_vram_mb=12000.0,
+                sleeping_residual_mb=2000.0,
+                base_residency_mb=7000.0,
+                engine="vllm",
+            ),
+        },
+    )
+    planner = _make_planner(facade=facade)
+
+    actions = planner._compute_preemptive_sleep_actions(10, [])
+    assert actions == []
+
+
+def test_preemptive_sleep_skips_model_with_active_lane():
+    """Don't preemptively load a model that already has a lane."""
+    lane = _make_signal(model_name="qwen-coder", runtime_state="sleeping", sleep_state="sleeping")
+    facade = MockFacade(
+        lanes=[lane],
+        capacity=OllamaCapacity(available_vram_mb=24000, total_vram_mb=32768, loaded_models=[]),
+        profiles={
+            "qwen-coder": ModelProfile(
+                model_name="qwen-coder",
+                sleeping_residual_mb=2000.0,
+                engine="vllm",
+            ),
+        },
+    )
+    planner = _make_planner(facade=facade)
+
+    actions = planner._compute_preemptive_sleep_actions(10, [lane])
+    assert actions == []

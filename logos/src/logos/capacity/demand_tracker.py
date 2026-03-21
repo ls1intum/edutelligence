@@ -14,6 +14,7 @@ class DemandTracker:
     """Exponential-decay demand histogram per model name."""
 
     DECAY_FACTOR = 0.95
+    STALE_THRESHOLD_SECONDS = 3600  # Clean up metadata after 1 hour of inactivity
 
     def __init__(self) -> None:
         self._demand: dict[str, float] = {}
@@ -29,7 +30,12 @@ class DemandTracker:
             self._last_request[model_name] = time.time()
 
     def decay_all(self) -> None:
-        """Multiply all scores by DECAY_FACTOR. Called once per planner cycle."""
+        """Multiply all scores by DECAY_FACTOR. Called once per planner cycle.
+
+        Also cleans up stale metadata (raw_count, last_request) for models
+        that have decayed to zero and haven't been requested in over an hour.
+        """
+        now = time.time()
         with self._lock:
             to_remove = []
             for model in self._demand:
@@ -38,6 +44,15 @@ class DemandTracker:
                     to_remove.append(model)
             for model in to_remove:
                 del self._demand[model]
+
+            # Clean up stale metadata for models no longer in demand
+            stale_models = [
+                model for model, last in self._last_request.items()
+                if model not in self._demand and (now - last) > self.STALE_THRESHOLD_SECONDS
+            ]
+            for model in stale_models:
+                self._raw_count.pop(model, None)
+                self._last_request.pop(model, None)
 
     def get_ranked_models(self) -> List[Tuple[str, float]]:
         """Return (model_name, score) sorted by score descending."""

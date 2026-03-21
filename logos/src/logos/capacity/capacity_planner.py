@@ -57,6 +57,10 @@ class CapacityPlanner:
     # VRAM safety margin
     VRAM_SAFETY_MARGIN = 1.1  # 10% margin
 
+    # Preemptive load-then-sleep
+    PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO = 0.20
+    PREEMPTIVE_SLEEP_MAX_MODELS = 3
+
     def __init__(
         self,
         logosnode_facade: LogosNodeSchedulingDataFacade,
@@ -117,6 +121,7 @@ class CapacityPlanner:
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
             all_actions.extend(self._compute_demand_actions(provider_id, lanes))
             all_actions.extend(self._compute_gpu_util_actions(provider_id, lanes))
+            all_actions.extend(self._compute_preemptive_sleep_actions(provider_id, lanes))
 
         validated = self._validate_vram_budget(all_actions)
 
@@ -135,17 +140,32 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float = 60.0,
     ) -> dict[str, Any] | None:
-        """Prepare an existing lane for request-time execution.
+        """Prepare a lane for request-time execution.
 
-        This path is synchronous to the request. It can wake a sleeping lane and
-        reclaim memory from idle competing lanes before the request is sent.
-        It intentionally does not invent brand-new lane configs for models that
-        currently have no lane.
+        This path is synchronous to the request. It can:
+        1. Wake a sleeping lane (reclaiming VRAM from idle competitors if needed)
+        2. Cold-load a model that has no lane at all (with VRAM budget validation)
         """
         target = self._pick_request_target_lane(provider_id, model_name)
-        if target is None:
-            return None
 
+        if target is not None:
+            return await self._prepare_existing_lane(
+                provider_id, model_name, target, timeout_seconds,
+            )
+
+        # No lane exists — attempt request-time cold load
+        return await self._cold_load_for_request(
+            provider_id, model_name, timeout_seconds,
+        )
+
+    async def _prepare_existing_lane(
+        self,
+        provider_id: int,
+        model_name: str,
+        target: LaneSchedulerSignals,
+        timeout_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Wake or prepare an existing lane for a request."""
         profile = self._safe_get_profiles(provider_id).get(model_name)
         if target.runtime_state in {"sleeping", "cold"}:
             ok = await self._ensure_request_capacity(
@@ -179,6 +199,77 @@ class CapacityPlanner:
                 provider_id,
                 model_name,
                 exc_info=True,
+            )
+            return None
+
+    async def _cold_load_for_request(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Load a model that has no lane at all (request-time cold load)."""
+        profile = self._safe_get_profiles(provider_id).get(model_name)
+        capacity = self._safe_get_capacity(provider_id)
+        if capacity is None:
+            logger.debug("No capacity info for provider %s, cannot cold-load %s", provider_id, model_name)
+            return None
+
+        lane_id = self._planner_lane_id(model_name)
+        load_action = CapacityPlanAction(
+            action="load",
+            provider_id=provider_id,
+            lane_id=lane_id,
+            model_name=model_name,
+            params=self._build_load_params(model_name, lane_id, profile, capacity),
+            reason="Request-time cold load",
+        )
+
+        estimated = self._estimate_action_vram(load_action, profile, capacity)
+        available = float(capacity.available_vram_mb)
+
+        if available < estimated * self.VRAM_SAFETY_MARGIN:
+            # Build a synthetic target signal for VRAM reclaim
+            synthetic_target = LaneSchedulerSignals(
+                lane_id=lane_id,
+                model_name=model_name,
+                runtime_state="cold",
+                sleep_state="unsupported",
+                is_vllm=profile.engine == "vllm" if profile else False,
+                active_requests=0,
+                queue_waiting=0.0,
+                requests_running=0.0,
+                gpu_cache_usage_percent=None,
+                ttft_p95_seconds=0.0,
+                effective_vram_mb=0.0,
+                num_parallel=0,
+            )
+            ok = await self._ensure_request_capacity(
+                provider_id=provider_id,
+                target=synthetic_target,
+                profile=profile,
+                timeout_seconds=timeout_seconds,
+            )
+            if not ok:
+                logger.info(
+                    "Cannot reclaim enough VRAM for cold load of %s on provider %s",
+                    model_name, provider_id,
+                )
+                return None
+
+        logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, provider_id, lane_id)
+        loaded = await self._execute_action_with_confirmation(
+            load_action, timeout_seconds=min(timeout_seconds, 90.0),
+        )
+        if not loaded:
+            return None
+
+        try:
+            return await self._registry.select_lane_for_model(provider_id, model_name)
+        except Exception:
+            logger.debug(
+                "Failed to select cold-loaded lane for provider=%s model=%s",
+                provider_id, model_name, exc_info=True,
             )
             return None
 
@@ -221,8 +312,8 @@ class CapacityPlanner:
             if lane.runtime_state in ("stopped", "error", "cold"):
                 continue
 
-            # Stop after 15 minutes idle
-            if idle_seconds >= self.IDLE_STOP:
+            # Stop after 15 minutes idle (guard against TOCTOU race)
+            if idle_seconds >= self.IDLE_STOP and lane.active_requests == 0:
                 actions.append(CapacityPlanAction(
                     action="stop",
                     provider_id=provider_id,
@@ -239,6 +330,7 @@ class CapacityPlanner:
             # Sleep L2 after 5 minutes of L1 sleep
             if (
                 lane.sleep_state == "sleeping"
+                and lane.active_requests == 0
                 and idle_seconds >= self.IDLE_SLEEP_L2
             ):
                 actions.append(CapacityPlanAction(
@@ -251,10 +343,11 @@ class CapacityPlanner:
                 ))
                 continue
 
-            # Sleep L1 after 1 minute idle (only if awake)
+            # Sleep L1 after 1 minute idle (only if awake, no active requests)
             if (
                 lane.sleep_state == "awake"
                 and lane.runtime_state in ("loaded", "running")
+                and lane.active_requests == 0
                 and idle_seconds >= self.IDLE_SLEEP_L1
             ):
                 actions.append(CapacityPlanAction(
@@ -324,6 +417,89 @@ class CapacityPlanner:
                     params=self._build_load_params(model_name, lane_id, profile, capacity),
                     reason=f"Demand score={score:.2f} >= {self.DEMAND_LOAD_THRESHOLD}, preemptive load",
                 ))
+
+        return actions
+
+    def _compute_preemptive_sleep_actions(
+        self, provider_id: int, lanes: List[LaneSchedulerSignals]
+    ) -> List[CapacityPlanAction]:
+        """Proactively load previously-served models into sleeping state.
+
+        When a model was previously loaded and sleeping (sleeping_residual_mb known)
+        but its lane was stopped, loading it back and immediately sleeping it keeps
+        future requests at ~2s wake latency instead of ~45s cold start.
+
+        Only acts when sufficient free VRAM exists (>20% of total after accounting
+        for the sleeping residual cost).
+        """
+        profiles = self._safe_get_profiles(provider_id)
+        capacity = self._safe_get_capacity(provider_id)
+        if not profiles or capacity is None:
+            return []
+
+        total_vram = float(capacity.total_vram_mb)
+        available_vram = float(capacity.available_vram_mb)
+        if total_vram <= 0:
+            return []
+
+        # Only act if sufficient headroom exists
+        if available_vram / total_vram < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
+            return []
+
+        # Models that currently have a lane (any state)
+        active_models = {lane.model_name for lane in lanes}
+
+        # Find models with sleeping profiles but no lane
+        candidates: list[tuple[float, str, ModelProfile]] = []
+        for model_name, profile in profiles.items():
+            if model_name in active_models:
+                continue
+            if profile.sleeping_residual_mb is None or profile.sleeping_residual_mb <= 0:
+                continue
+            if profile.engine != "vllm":
+                continue  # Only vLLM supports sleep mode
+            demand_score = self._demand.get_score(model_name)
+            candidates.append((demand_score, model_name, profile))
+
+        if not candidates:
+            return []
+
+        # Sort by demand score descending, take top N
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        candidates = candidates[:self.PREEMPTIVE_SLEEP_MAX_MODELS]
+
+        actions = []
+        remaining_vram = available_vram
+
+        for _score, model_name, profile in candidates:
+            # The net cost after sleep is just the sleeping residual
+            residual = float(profile.sleeping_residual_mb or 0.0)
+            # But we need enough VRAM to load first (then sleep frees most of it)
+            load_cost = profile.estimate_vram_mb()
+            if remaining_vram < load_cost * self.VRAM_SAFETY_MARGIN:
+                continue
+            # After load + sleep, net VRAM consumed is just the residual
+            if (remaining_vram - residual) / total_vram < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
+                continue
+
+            lane_id = self._planner_lane_id(model_name)
+            actions.append(CapacityPlanAction(
+                action="load",
+                provider_id=provider_id,
+                lane_id=lane_id,
+                model_name=model_name,
+                params=self._build_load_params(model_name, lane_id, profile, capacity),
+                reason=f"Preemptive load-then-sleep (residual={residual:.0f}MB)",
+            ))
+            actions.append(CapacityPlanAction(
+                action="sleep_l1",
+                provider_id=provider_id,
+                lane_id=lane_id,
+                model_name=model_name,
+                params={"level": 1},
+                reason=f"Preemptive sleep after load (residual={residual:.0f}MB)",
+            ))
+            remaining_vram -= residual
 
         return actions
 

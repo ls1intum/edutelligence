@@ -483,3 +483,45 @@ def test_warmest_sleep_ordering():
     assert ModelSchedulerView.warmest_sleep(["unsupported", "sleeping"]) == "sleeping"
     assert ModelSchedulerView.warmest_sleep(["unsupported", "unknown"]) == "unknown"
     assert ModelSchedulerView.warmest_sleep([]) == "unsupported"
+
+
+# ---------------------------------------------------------------------------
+# ModelProfile.estimate_vram_mb — vLLM fix
+# ---------------------------------------------------------------------------
+
+
+def test_vllm_estimate_vram_prefers_base_residency():
+    """For vLLM, estimate_vram_mb should return base_residency, not loaded_vram (GPU reservation)."""
+    profile = ModelProfile(
+        model_name="qwen-coder",
+        loaded_vram_mb=30508.0,  # nvidia-smi reservation (0.9 * 2 * 16GB)
+        base_residency_mb=5500.0,  # actual model weight footprint
+        engine="vllm",
+    )
+    estimate = profile.estimate_vram_mb()
+    assert estimate == 5500.0  # Should prefer base_residency for vLLM
+
+
+def test_ollama_estimate_vram_uses_loaded():
+    """For Ollama (non-vLLM), estimate_vram_mb should return loaded_vram_mb as before."""
+    profile = ModelProfile(
+        model_name="gemma2:2b",
+        loaded_vram_mb=2048.0,
+        base_residency_mb=1700.0,
+        engine=None,  # Ollama
+    )
+    estimate = profile.estimate_vram_mb()
+    assert estimate == 2048.0  # Should use loaded_vram_mb for non-vLLM
+
+
+def test_vllm_estimate_vram_falls_back_to_loaded_when_no_base():
+    """For vLLM without base_residency, fall back to loaded_vram_mb."""
+    profile = ModelProfile(
+        model_name="custom-model",
+        loaded_vram_mb=8000.0,
+        base_residency_mb=None,
+        disk_size_bytes=None,
+        engine="vllm",
+    )
+    estimate = profile.estimate_vram_mb()
+    assert estimate == 8000.0  # Falls back to loaded_vram_mb

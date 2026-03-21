@@ -82,3 +82,29 @@ def test_get_stats():
     assert "scores" in stats
     assert "raw_counts" in stats
     assert stats["raw_counts"]["model-a"] == 1
+
+
+def test_decay_cleans_stale_metadata():
+    """After demand decays to zero and >1h passes, raw_count and last_request are cleaned."""
+    import time
+
+    tracker = DemandTracker()
+    tracker.record_request("old-model")
+
+    # Decay until removed from demand
+    for _ in range(200):
+        tracker.decay_all()
+    assert tracker.get_score("old-model") == 0.0
+
+    # Metadata still exists (last_request is recent)
+    assert tracker.get_raw_count("old-model") == 1
+
+    # Simulate stale timestamp (>1h ago)
+    with tracker._lock:
+        tracker._last_request["old-model"] = time.time() - 3700
+
+    tracker.decay_all()  # Should clean up stale metadata
+
+    assert tracker.get_raw_count("old-model") == 0
+    stats = tracker.get_stats()
+    assert "old-model" not in stats["last_request"]

@@ -82,7 +82,16 @@ class ModelProfileRecord:
     last_measured_epoch: float = 0.0
 
     def estimate_vram_mb(self) -> float:
-        """Best estimate: measured > disk heuristic > conservative fallback."""
+        """Best estimate of model footprint (not GPU reservation).
+
+        For vLLM, loaded_vram_mb is the full GPU reservation (gpu_util × device_vram),
+        which vastly overestimates the actual model size. Prefer base_residency_mb
+        (model weights + runtime overhead) for vLLM engines.
+        """
+        if self.engine == "vllm":
+            base = self.estimate_base_residency_mb()
+            if base is not None:
+                return base
         if self.loaded_vram_mb is not None:
             return self.loaded_vram_mb
         base = self.estimate_base_residency_mb()
