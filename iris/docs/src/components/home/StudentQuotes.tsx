@@ -15,6 +15,18 @@ const quotes = [
     text: "It\u2019s very easy to learn using ChatGPT. But next day I will forget.",
     attribution: "Information Systems Student, TU Munich",
   },
+  {
+    text: "My students stopped asking me the same basic questions. Iris handles those now, and I can focus on deeper discussions in office hours.",
+    attribution: "Biology Instructor, TU Munich",
+  },
+  {
+    text: "I was skeptical about AI in education, but Iris actually teaches. It doesn\u2019t just hand out solutions \u2014 it makes students think.",
+    attribution: "Mathematics Professor, TU Munich",
+  },
+  {
+    text: "As a TA for 400 students, I can\u2019t answer every question at 2 AM. Iris can \u2014 and it gives the same quality hints I would.",
+    attribution: "Engineering Teaching Assistant, TU Munich",
+  },
 ];
 
 export default function StudentQuotes(): React.JSX.Element {

@@ -3,7 +3,10 @@ import Layout from "@theme/Layout";
 import HeroSection from "../components/home/HeroSection";
 import TrustBar from "../components/home/TrustBar";
 import FeatureCards from "../components/home/FeatureCards";
+import CourseMaterialsSection from "../components/home/CourseMaterialsSection";
+import HowItWorksSection from "../components/home/HowItWorksSection";
 import ComparisonSection from "../components/home/ComparisonSection";
+import WhyNotChatGPTSection from "../components/home/WhyNotChatGPTSection";
 import ResearchHighlights from "../components/home/ResearchHighlights";
 import StudentQuotes from "../components/home/StudentQuotes";
 import AudienceCards from "../components/home/AudienceCards";
@@ -24,22 +27,31 @@ export default function Home(): React.JSX.Element {
       {/* 3. Feature Cards */}
       <FeatureCards />
 
-      {/* 4. How Iris Is Different */}
+      {/* 4. Powered by Your Course Materials */}
+      <CourseMaterialsSection />
+
+      {/* 5. How It Works */}
+      <HowItWorksSection />
+
+      {/* 6. How Iris Is Different (chat comparison) */}
       <ComparisonSection />
 
-      {/* 5. Research Highlights */}
+      {/* 7. Why Not Just Use ChatGPT? (table comparison) */}
+      <WhyNotChatGPTSection />
+
+      {/* 8. Research Highlights */}
       <ResearchHighlights />
 
-      {/* 6. Student Quotes */}
+      {/* 9. Testimonials */}
       <StudentQuotes />
 
-      {/* 7. Audience Quickstart Cards */}
+      {/* 10. Audience Quickstart Cards */}
       <AudienceCards />
 
-      {/* 8. FAQ */}
+      {/* 11. FAQ */}
       <FaqSection />
 
-      {/* 9. Closing CTA — final action before footer */}
+      {/* 12. Closing CTA */}
       <ClosingCta />
     </Layout>
   );

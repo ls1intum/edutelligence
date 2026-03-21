@@ -666,32 +666,24 @@
 }
 
 .featureCard {
-  background: var(--ifm-background-surface-color);
-  border: 1px solid var(--iris-border-color);
-  border-top: 3px solid transparent;
-  border-radius: var(--iris-radius);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-top: 3px solid var(--ifm-color-primary);
+  border-radius: 16px;
   padding: 1.5rem 1.25rem;
-  background-image:
-    linear-gradient(
-      var(--ifm-background-surface-color),
-      var(--ifm-background-surface-color)
-    ),
-    linear-gradient(90deg, #2a73b4, #00b4a0);
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
   transition:
     transform 0.2s,
     box-shadow 0.2s;
 }
 
 [data-theme="dark"] .featureCard {
-  background-image:
-    linear-gradient(
-      var(--ifm-background-surface-color),
-      var(--ifm-background-surface-color)
-    ),
-    linear-gradient(90deg, #5a9fd6, #00b4a0);
+  background: rgba(31, 31, 31, 0.7);
+  border-color: rgba(90, 159, 214, 0.15);
+  border-top-color: var(--ifm-color-primary);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
 @media (hover: hover) {
@@ -1036,21 +1028,18 @@
 .statCard {
   text-align: center;
   padding: 2rem 1.5rem;
-  background: linear-gradient(
-    135deg,
-    rgba(42, 115, 180, 0.04),
-    rgba(0, 180, 160, 0.03)
-  );
-  border-radius: var(--iris-radius);
-  border: 1px solid var(--iris-border-color);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="dark"] .statCard {
-  background: linear-gradient(
-    135deg,
-    rgba(42, 115, 180, 0.06),
-    rgba(0, 180, 160, 0.04)
-  );
+  background: rgba(31, 31, 31, 0.7);
+  border-color: rgba(90, 159, 214, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
 .statNumber {
@@ -1195,9 +1184,12 @@
 }
 
 .audienceCard {
-  background: var(--ifm-background-surface-color);
-  border: 1px solid var(--iris-border-color);
-  border-radius: var(--iris-radius);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
   padding: 1.75rem 1.5rem;
   text-decoration: none;
   color: inherit;
@@ -1207,6 +1199,12 @@
     border-color 0.2s;
   display: flex;
   flex-direction: column;
+}
+
+[data-theme="dark"] .audienceCard {
+  background: rgba(31, 31, 31, 0.7);
+  border-color: rgba(90, 159, 214, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
 @media (hover: hover) {
@@ -1407,6 +1405,288 @@
   line-height: 1.5;
 }
 
+/* ─── Glassmorphism mixin (shared card style) ─── */
+
+.glassCard {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] .glassCard {
+  background: rgba(31, 31, 31, 0.7);
+  border-color: rgba(90, 159, 214, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* ─── Course Materials Section ─── */
+
+.courseMaterialsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.courseMaterialCard {
+  position: relative;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  padding: 2rem 1.5rem 1.75rem;
+  text-align: center;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+[data-theme="dark"] .courseMaterialCard {
+  background: rgba(31, 31, 31, 0.7);
+  border-color: rgba(90, 159, 214, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .courseMaterialCard:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.courseMaterialNumber {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--ifm-color-primary);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(42, 115, 180, 0.3);
+}
+
+.courseMaterialIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.5rem auto 1rem;
+  color: var(--ifm-color-primary);
+}
+
+.courseMaterialTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--ifm-font-color-base);
+}
+
+.courseMaterialDesc {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--iris-label-color);
+}
+
+/* ─── How It Works Section ─── */
+
+.howItWorksGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.howItWorksCard {
+  position: relative;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  padding: 2.25rem 1.5rem 1.75rem;
+  text-align: center;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+[data-theme="dark"] .howItWorksCard {
+  background: rgba(31, 31, 31, 0.7);
+  border-color: rgba(90, 159, 214, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .howItWorksCard:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.howItWorksNumber {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--ifm-color-primary);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(42, 115, 180, 0.3);
+}
+
+.howItWorksEmoji {
+  font-size: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.howItWorksTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--ifm-font-color-base);
+}
+
+.howItWorksDesc {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--iris-label-color);
+}
+
+/* ─── Why Not ChatGPT — Comparison Table ─── */
+
+.comparisonTableWrapper {
+  max-width: 740px;
+  margin: 0 auto;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+[data-theme="dark"] .comparisonTableWrapper {
+  background: rgba(31, 31, 31, 0.7);
+  border-color: rgba(90, 159, 214, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.comparisonTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.comparisonTableFeatureHeader {
+  text-align: left;
+  padding: 1rem 1.25rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iris-label-color);
+  background: rgba(42, 115, 180, 0.04);
+  border-bottom: 1px solid var(--iris-border-color);
+}
+
+[data-theme="dark"] .comparisonTableFeatureHeader {
+  background: rgba(90, 159, 214, 0.06);
+}
+
+.comparisonTableHeader {
+  text-align: center;
+  padding: 1rem 1.25rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iris-label-color);
+  background: rgba(42, 115, 180, 0.04);
+  border-bottom: 1px solid var(--iris-border-color);
+  width: 120px;
+}
+
+[data-theme="dark"] .comparisonTableHeader {
+  background: rgba(90, 159, 214, 0.06);
+}
+
+.comparisonTableHeaderIris {
+  color: var(--ifm-color-primary);
+}
+
+.comparisonTableRow {
+  border-bottom: 1px solid var(--iris-border-color);
+  transition: background 0.15s;
+}
+
+.comparisonTableRow:last-child {
+  border-bottom: none;
+}
+
+.comparisonTableRow:hover {
+  background: rgba(42, 115, 180, 0.03);
+}
+
+[data-theme="dark"] .comparisonTableRow:hover {
+  background: rgba(90, 159, 214, 0.05);
+}
+
+.comparisonTableFeature {
+  padding: 0.85rem 1.25rem;
+  color: var(--ifm-font-color-base);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.comparisonTableCell {
+  padding: 0.85rem 1.25rem;
+  text-align: center;
+}
+
+.comparisonTableCellIris {
+  padding: 0.85rem 1.25rem;
+  text-align: center;
+  background: rgba(42, 115, 180, 0.03);
+}
+
+[data-theme="dark"] .comparisonTableCellIris {
+  background: rgba(90, 159, 214, 0.05);
+}
+
+.checkMark {
+  color: #22c55e;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.crossMark {
+  color: #ef4444;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
 /* ─── Responsive ─── */
 
 @media (max-width: 996px) {
@@ -1435,6 +1715,14 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .courseMaterialsGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .howItWorksGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .heroHeadline {
     font-size: 2.25rem;
   }
@@ -1458,6 +1746,14 @@
   }
 
   .ecosystemGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .courseMaterialsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .howItWorksGrid {
     grid-template-columns: 1fr;
   }
 

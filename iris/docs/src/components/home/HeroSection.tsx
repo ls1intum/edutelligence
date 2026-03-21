@@ -18,7 +18,8 @@ function ChatMockup(): React.JSX.Element {
         <div className={styles.chatBubbleUser}>
           <div className={styles.chatAvatar}>S</div>
           <div className={styles.chatBubbleContent}>
-            How do I implement the BWT rotation step?
+            Can you explain the key differences between mitosis and meiosis from
+            today&apos;s lecture?
           </div>
         </div>
         <div className={styles.chatBubbleIris}>
@@ -30,9 +31,11 @@ function ChatMockup(): React.JSX.Element {
             />
           </div>
           <div className={styles.chatBubbleContentIris}>
-            Think about what happens when you take a string like{" "}
-            <code>BANANA$</code> and rotate it one position. What pattern do you
-            see? <span className={styles.chatTypingDots}>...</span>
+            Great question! As Prof. M&uuml;ller covered on{" "}
+            <strong>slide 14</strong>, both involve cell division &mdash; but
+            think about <em>how many daughter cells</em> each produces and
+            whether they&apos;re identical. What do you recall?{" "}
+            <span className={styles.chatTypingDots}>...</span>
           </div>
         </div>
       </div>
