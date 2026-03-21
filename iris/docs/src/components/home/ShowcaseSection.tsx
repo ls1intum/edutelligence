@@ -63,7 +63,7 @@ export default function ShowcaseSection(): React.JSX.Element {
   const irisLogo = useBaseUrl("/img/iris/iris-logo-big-right.png");
 
   return (
-    <section className={styles.sectionAlt}>
+    <section className={styles.sectionAltSpacious}>
       <div className={styles.sectionAltInner}>
         <h2 className={styles.sectionHeading}>See Iris in Action</h2>
         <p className={styles.sectionSubtitle}>
