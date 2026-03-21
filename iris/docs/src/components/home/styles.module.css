@@ -261,7 +261,7 @@
   background: var(--ifm-background-surface-color);
   border: 1px solid var(--iris-border-color);
   border-radius: var(--iris-radius);
-  padding: 2rem 1.5rem;
+  padding: 1.5rem 1.25rem;
   transition:
     transform 0.2s,
     box-shadow 0.2s;
@@ -561,7 +561,10 @@
   cursor: pointer;
   padding: 8px;
   background-clip: content-box;
-  transition: background 0.2s;
+  transition:
+    background 0.2s,
+    width 0.2s,
+    height 0.2s;
 }
 
 .quoteDot:hover {
@@ -577,6 +580,8 @@
 
 .quoteDotActive {
   composes: quoteDot;
+  width: 10px;
+  height: 10px;
   background: var(--ifm-color-primary);
   background-clip: content-box;
 }
