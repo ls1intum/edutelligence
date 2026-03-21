@@ -44,7 +44,7 @@ export default function FaqSection(): React.JSX.Element {
   return (
     <section className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>Frequently Asked Questions</h2>
+        <h2 className={styles.sectionHeading}>Still Have Questions?</h2>
         <div className={styles.faqList}>
           {faqs.map((faq, i) => {
             const panelId = `faq-panel-${i}`;
