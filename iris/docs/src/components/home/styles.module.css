@@ -1,3 +1,41 @@
+/* ─── Scroll-triggered fade-in ─── */
+
+.fadeIn {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 0.5s ease-out,
+    transform 0.5s ease-out;
+}
+
+.fadeInVisible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Stagger delays for card grids (applied per-child) */
+.stagger1 {
+  transition-delay: 0ms;
+}
+.stagger2 {
+  transition-delay: 80ms;
+}
+.stagger3 {
+  transition-delay: 160ms;
+}
+.stagger4 {
+  transition-delay: 240ms;
+}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .fadeIn {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
 /* ─── Shared layout tokens ─── */
 
 .section {

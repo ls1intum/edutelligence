@@ -1,6 +1,7 @@
 import React from "react";
 import Link from "@docusaurus/Link";
 import styles from "./styles.module.css";
+import { useFadeIn } from "./useFadeIn";
 
 const audiences = [
   {
@@ -25,16 +26,32 @@ const audiences = [
   },
 ];
 
+const staggerClasses = [
+  styles.stagger1,
+  styles.stagger2,
+  styles.stagger3,
+  styles.stagger4,
+];
+
 export default function AudienceCards(): React.JSX.Element {
+  const [ref, visible] = useFadeIn();
+
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeading}>Jump In</h2>
       <p className={styles.sectionSubtitle}>
         Pick the guide that matches your role.
       </p>
-      <div className={styles.audienceGrid}>
-        {audiences.map((a) => (
-          <Link key={a.title} className={styles.audienceCard} to={a.to}>
+      <div
+        ref={ref as React.RefObject<HTMLDivElement>}
+        className={styles.audienceGrid}
+      >
+        {audiences.map((a, i) => (
+          <Link
+            key={a.title}
+            className={`${styles.audienceCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+            to={a.to}
+          >
             <div className={styles.audienceCardTitle}>{a.title}</div>
             <div className={styles.audienceCardDesc}>{a.description}</div>
             <div className={styles.audienceCardArrow}>&rarr;</div>

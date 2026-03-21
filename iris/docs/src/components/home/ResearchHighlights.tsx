@@ -1,6 +1,7 @@
 import React from "react";
 import Link from "@docusaurus/Link";
 import styles from "./styles.module.css";
+import { useFadeIn } from "./useFadeIn";
 
 const stats = [
   { number: "275", label: "students in randomized controlled trial" },
@@ -9,7 +10,16 @@ const stats = [
   { number: "3", label: "peer-reviewed publications" },
 ];
 
+const staggerClasses = [
+  styles.stagger1,
+  styles.stagger2,
+  styles.stagger3,
+  styles.stagger4,
+];
+
 export default function ResearchHighlights(): React.JSX.Element {
+  const [ref, visible] = useFadeIn();
+
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeading}>Research-Backed</h2>
@@ -17,9 +27,15 @@ export default function ResearchHighlights(): React.JSX.Element {
         Iris is evaluated through rigorous empirical research, not marketing
         claims.
       </p>
-      <div className={styles.statsRow}>
-        {stats.map((s) => (
-          <div key={s.label} className={styles.statCard}>
+      <div
+        ref={ref as React.RefObject<HTMLDivElement>}
+        className={styles.statsRow}
+      >
+        {stats.map((s, i) => (
+          <div
+            key={s.label}
+            className={`${styles.statCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+          >
             <div className={styles.statNumber}>{s.number}</div>
             <div className={styles.statLabel}>{s.label}</div>
           </div>

@@ -1,7 +1,10 @@
 import React from "react";
 import styles from "./styles.module.css";
+import { useFadeIn } from "./useFadeIn";
 
 export default function ComparisonSection(): React.JSX.Element {
+  const [ref, visible] = useFadeIn();
+
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeading}>How Iris Is Different</h2>
@@ -9,7 +12,10 @@ export default function ComparisonSection(): React.JSX.Element {
         A student is stuck on the Burrows&ndash;Wheeler Transform rotation step.
         Here&rsquo;s what happens next.
       </p>
-      <div className={styles.comparisonWrapper}>
+      <div
+        ref={ref as React.RefObject<HTMLDivElement>}
+        className={`${styles.comparisonWrapper} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""}`}
+      >
         <div className={styles.comparisonGrid}>
           {/* ── Generic Chatbot ── */}
           <div className={styles.comparisonColGeneric}>
