@@ -1,15 +1,15 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root {
-  --ifm-color-primary: #3e8acc;
-  --ifm-color-primary-dark: #2d7abf;
-  --ifm-color-primary-darker: #2a73b4;
-  --ifm-color-primary-darkest: #235f94;
+  --ifm-color-primary: #2a73b4;
+  --ifm-color-primary-dark: #235f94;
+  --ifm-color-primary-darker: #1f6789;
+  --ifm-color-primary-darkest: #1a5670;
+  --ifm-color-primary-light: #3e8acc;
+  --ifm-color-primary-lighter: #559bd4;
+  --ifm-color-primary-lightest: #84b7e1;
   --iris-btn-bg: #2a73b4;
   --iris-btn-bg-hover: #235f94;
-  --ifm-color-primary-light: #559bd4;
-  --ifm-color-primary-lighter: #62a2d7;
-  --ifm-color-primary-lightest: #84b7e1;
 
   --ifm-background-color: #ffffff;
   --ifm-background-surface-color: #f8f9fa;
