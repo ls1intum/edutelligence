@@ -76,7 +76,7 @@ export default function HowItWorksSection(): React.JSX.Element {
 
   return (
     <section className={styles.section}>
-      <h2 className={styles.sectionHeadingAccent}>How It Works</h2>
+      <h2 className={styles.sectionHeading}>How It Works</h2>
       <p className={styles.sectionSubtitle}>
         Three steps. Five minutes of setup. Unlimited student support.
       </p>

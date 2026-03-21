@@ -65,7 +65,7 @@ export default function ShowcaseSection(): React.JSX.Element {
   return (
     <section className={styles.sectionAltSpacious}>
       <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>See Iris in Action</h2>
+        <h2 className={styles.sectionHeadingAccent}>See Iris in Action</h2>
         <p className={styles.sectionSubtitle}>
           Watch how Iris guides a student through a biology concept step by step
           &mdash; no answers given, just the right questions at the right time.
