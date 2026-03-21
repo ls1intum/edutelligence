@@ -6,17 +6,15 @@ const features = [
   {
     title: "Hints, Not Answers",
     description:
-      "Four tiers of support \u2014 from subtle hints to generalized examples \u2014 preserving productive struggle instead of giving away answers.",
+      "Guides students through the problem instead of solving it for them.",
   },
   {
     title: "Context-Aware",
-    description:
-      "Deeply integrated into Artemis. Iris reads your code, build logs, test results, and course materials automatically \u2014 no copy-pasting needed.",
+    description: "Reads your code, tests, and course materials automatically.",
   },
   {
     title: "Always Accurate",
-    description:
-      "Responses grounded in lecture slides, transcripts, and FAQs with transparent citations you can verify.",
+    description: "Grounded in lecture content with citations you can verify.",
   },
 ];
 
