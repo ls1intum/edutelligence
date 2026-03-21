@@ -78,6 +78,22 @@
 
 /* ─── Hero ─── */
 
+.heroWrapper {
+  background: radial-gradient(
+    ellipse 80% 60% at 50% 40%,
+    rgba(62, 138, 204, 0.04) 0%,
+    transparent 70%
+  );
+}
+
+[data-theme="dark"] .heroWrapper {
+  background: radial-gradient(
+    ellipse 80% 60% at 50% 40%,
+    rgba(90, 159, 214, 0.06) 0%,
+    transparent 70%
+  );
+}
+
 .hero {
   display: flex;
   flex-direction: column;
@@ -614,6 +630,13 @@
   margin: 0 auto;
   text-align: center;
   padding: 3rem 1.5rem;
+}
+
+.closingCtaMascot {
+  width: 24px;
+  height: auto;
+  margin-bottom: 1rem;
+  opacity: 0.8;
 }
 
 .closingCtaHeadline {

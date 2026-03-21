@@ -1,5 +1,6 @@
 import React from "react";
 import Link from "@docusaurus/Link";
+import useBaseUrl from "@docusaurus/useBaseUrl";
 import styles from "./styles.module.css";
 import { useFadeIn } from "./useFadeIn";
 
@@ -12,6 +13,12 @@ export default function ClosingCta(): React.JSX.Element {
         ref={ref as React.RefObject<HTMLDivElement>}
         className={`${styles.closingCta} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""}`}
       >
+        <img
+          src={useBaseUrl("/img/iris/iris-logo-big-right.png")}
+          alt=""
+          className={styles.closingCtaMascot}
+          aria-hidden="true"
+        />
         <h2 className={styles.closingCtaHeadline}>
           Ready to bring Iris to your university?
         </h2>
@@ -22,7 +29,7 @@ export default function ClosingCta(): React.JSX.Element {
         </p>
         <div className={styles.heroCtas}>
           <Link className={styles.btnPrimary} to="mailto:krusche@tum.de">
-            Get in Touch
+            Request a Demo
           </Link>
           <Link className={styles.btnGhost} to="/docs/overview/what-is-iris">
             See How It Works
