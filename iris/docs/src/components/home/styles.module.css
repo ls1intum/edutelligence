@@ -745,11 +745,125 @@
   text-decoration: underline;
 }
 
+/* ─── Chat UI for Comparison ─── */
+
+.chatUIThread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.chatUIMessage {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+.chatUIAvatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--iris-accent-bg);
+  color: var(--iris-label-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.chatUIAvatarBot {
+  background: #e8e8e8;
+  font-size: 1rem;
+}
+
+[data-theme="dark"] .chatUIAvatarBot {
+  background: #333;
+}
+
+.chatUIAvatarIris {
+  background: rgba(42, 115, 180, 0.12);
+  overflow: hidden;
+}
+
+[data-theme="dark"] .chatUIAvatarIris {
+  background: rgba(90, 159, 214, 0.15);
+}
+
+.chatUIAvatarImg {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.chatUIMessageContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.chatUIMessageHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.chatUIMessageName {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ifm-font-color-base);
+}
+
+.chatUIMessageNameIris {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ifm-color-primary);
+}
+
+.chatUIMessageTime {
+  font-size: 0.7rem;
+  color: var(--iris-label-color);
+  opacity: 0.7;
+}
+
+.chatUIBubbleLeft {
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--iris-border-color);
+  border-radius: 4px 12px 12px 12px;
+  padding: 0.65rem 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--ifm-font-color-base);
+}
+
+.chatUIBubbleLeft code {
+  background: var(--iris-tertiary-bg);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+
+.chatUIBubbleIris {
+  background: rgba(42, 115, 180, 0.06);
+  border: 1px solid rgba(42, 115, 180, 0.18);
+  border-radius: 4px 12px 12px 12px;
+  padding: 0.65rem 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--ifm-font-color-base);
+}
+
+[data-theme="dark"] .chatUIBubbleIris {
+  background: rgba(90, 159, 214, 0.08);
+  border-color: rgba(90, 159, 214, 0.22);
+}
+
 .comparisonOutcome {
   font-size: 0.85rem;
   color: var(--iris-label-color);
   font-style: italic;
-  margin-top: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 .comparisonOutcomeGood {
