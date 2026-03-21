@@ -135,6 +135,13 @@ export default function HeroSection(): React.JSX.Element {
               </svg>
               94% helpful
             </div>
+            <img
+              src={useBaseUrl("/img/screenshots/iris-chat-response-hd.png")}
+              alt=""
+              className={styles.heroGhostScreenshot}
+              aria-hidden="true"
+              loading="lazy"
+            />
             <ChatMockup />
           </div>
         </div>

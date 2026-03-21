@@ -3459,3 +3459,45 @@
     padding: 0.3rem 0.65rem;
   }
 }
+
+/* ─── Real screenshot styles ─── */
+
+.screenshotImg {
+  max-width: 100%;
+  height: auto;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  display: block;
+  margin: 0 auto;
+}
+
+.screenshotCaption {
+  text-align: center;
+  font-size: 0.85rem;
+  font-style: italic;
+  color: var(--iris-label-color);
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}
+
+.screenshotBlock {
+  margin-top: 2.5rem;
+}
+
+.heroGhostScreenshot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 110%;
+  height: auto;
+  border-radius: 16px;
+  opacity: 0.15;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(1px);
+}
+
+[data-theme="dark"] .screenshotImg {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}

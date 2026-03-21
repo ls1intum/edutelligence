@@ -118,6 +118,17 @@ export default function ShowcaseSection(): React.JSX.Element {
           Same approach, any subject. Iris guides students toward understanding
           through questions grounded in your actual course materials.
         </p>
+        <div className={styles.screenshotBlock}>
+          <img
+            src={useBaseUrl("/img/screenshots/iris-chat-response-hd.png")}
+            alt="Iris chat interface showing a detailed AI response in a real course conversation"
+            className={styles.screenshotImg}
+            loading="lazy"
+          />
+          <p className={styles.screenshotCaption}>
+            Real Iris conversation from a course at TU Munich
+          </p>
+        </div>
         <blockquote className={styles.endorseQuote}>
           <p className={styles.endorseQuoteText}>
             &ldquo;Iris was clearly aware of the context. It pointed me in the

@@ -116,3 +116,4 @@ athena/test-results/
 .coverage
 **/.coverage
 .superpowers/
+.playwright-cli/

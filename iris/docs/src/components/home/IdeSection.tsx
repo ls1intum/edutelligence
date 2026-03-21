@@ -1,4 +1,5 @@
 import React from "react";
+import useBaseUrl from "@docusaurus/useBaseUrl";
 import styles from "./styles.module.css";
 import { useFadeIn } from "./useFadeIn";
 
@@ -191,6 +192,17 @@ export default function IdeSection(): React.JSX.Element {
             <span>Python 3.11</span>
             <span>Artemis Extension v0.4.0</span>
           </div>
+        </div>
+        <div className={styles.screenshotBlock}>
+          <img
+            src={useBaseUrl("/img/screenshots/iris-exercise-chat.png")}
+            alt="Iris exercise chat widget helping a student with the Strategy Pattern exercise in Artemis"
+            className={styles.screenshotImg}
+            loading="lazy"
+          />
+          <p className={styles.screenshotCaption}>
+            Iris helps a student with the Strategy Pattern exercise in Artemis
+          </p>
         </div>
       </div>
     </section>
