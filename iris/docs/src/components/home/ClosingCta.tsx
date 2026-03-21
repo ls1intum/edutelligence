@@ -23,9 +23,8 @@ export default function ClosingCta(): React.JSX.Element {
           Ready to bring Iris to your university?
         </h2>
         <p className={styles.closingCtaSubtitle}>
-          Iris is open source, backed by peer-reviewed research, and already
-          serving 1,600+ students at TU Munich. Let&rsquo;s talk about how it
-          can work for your institution.
+          Deployment takes under an hour. We&rsquo;ll walk you through setup,
+          integration, and your first course &mdash; no commitment required.
         </p>
         <div className={styles.heroCtas}>
           <Link className={styles.btnPrimary} to="mailto:krusche@tum.de">

@@ -10,7 +10,7 @@ const faqs: FaqEntry[] = [
   {
     question: "How is Iris different from ChatGPT?",
     answer:
-      "ChatGPT is a general-purpose chatbot that provides direct answers. Iris is purpose-built for education: it uses calibrated scaffolding to guide students toward understanding rather than handing out solutions. It is deeply integrated into Artemis, so it automatically has context about your code, submissions, and course materials. Its pedagogical approach is backed by peer-reviewed research.",
+      "Iris is embedded in your course context and uses a calibrated hint system instead of direct answers. In a controlled trial with 275 students, that approach led to measurably deeper learning.",
   },
   {
     question: "Is Iris free?",

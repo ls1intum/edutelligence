@@ -31,9 +31,6 @@ export default function FeatureCards(): React.JSX.Element {
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeading}>Why Iris?</h2>
-      <p className={styles.sectionSubtitle}>
-        Purpose-built for education, not adapted from a general-purpose chatbot.
-      </p>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={styles.featureGrid}
