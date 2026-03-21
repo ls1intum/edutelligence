@@ -1110,10 +1110,13 @@ class CapacityPlanner:
         params["vllm"] = True
         vllm_config: Dict[str, Any] = {
             "gpu_memory_utilization": self.GPU_UTIL_MAX,  # 0.95 ceiling
-            "tensor_parallel_size": max(1, int(profile.tensor_parallel_size or 1)),
             "enable_sleep_mode": True,
             "server_dev_mode": True,
         }
+        # Only send TP if the profile has an observed value from a previous load.
+        # Otherwise, let the worker auto-detect based on its GPU count.
+        if profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+            vllm_config["tensor_parallel_size"] = int(profile.tensor_parallel_size)
         kv = self._compute_kv_cache_bytes(profile, capacity)
         if kv:
             vllm_config["kv_cache_memory_bytes"] = kv

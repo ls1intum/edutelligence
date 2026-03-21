@@ -33,6 +33,11 @@ class GpuMetricsCollector:
     def available(self) -> bool:
         return self._available
 
+    @property
+    def device_count(self) -> int:
+        """Number of GPU devices detected (0 if nvidia-smi unavailable)."""
+        return len(self._devices)
+
     async def start(self) -> None:
         if shutil.which("nvidia-smi") is None:
             logger.warning("nvidia-smi not found in PATH — GPU metrics disabled")

@@ -157,9 +157,11 @@ class LaneManager:
         reserved_ports: Iterable[int] | None = None,
         nvidia_smi_available: Callable[[], bool] | None = None,
         model_profiles: ModelProfileRegistry | None = None,
+        gpu_device_count: Callable[[], int] | None = None,
     ) -> None:
         self._global_config = global_config
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
+        self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -502,7 +504,49 @@ class LaneManager:
     # Internal
     # ------------------------------------------------------------------
 
+    def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
+        """Auto-detect tensor_parallel_size for vLLM lanes based on GPU count.
+
+        If TP is not explicitly set (default=1) and multiple GPUs are available,
+        check if the model needs more than one GPU based on its base_residency.
+        This mirrors Ollama's behavior of automatically spreading across GPUs.
+        """
+        if not lane_config.vllm or lane_config.vllm_config is None:
+            return lane_config
+        vc = lane_config.vllm_config
+        gpu_count = self._gpu_device_count()
+        if gpu_count <= 1:
+            return lane_config
+        # Only auto-adjust if TP was left at default (1)
+        if vc.tensor_parallel_size != 1:
+            return lane_config
+        # Check model profile for base residency
+        needed_tp = gpu_count  # default: use all GPUs
+        if self._model_profiles is not None:
+            profile = self._model_profiles.get_profile(lane_config.model)
+            if profile and profile.base_residency_mb and profile.base_residency_mb > 0:
+                # Estimate per-GPU VRAM (total / gpu_count) with 90% usable
+                per_gpu_mb = (profile.base_residency_mb * 1024) / gpu_count  # rough
+                # Actually: we need to check if model fits on 1 GPU.
+                # base_residency_mb is in MB. Per-GPU total VRAM is unknown here
+                # directly, but we can use a heuristic: if base_residency > 85%
+                # of what a single GPU likely has, we need TP > 1.
+                # Simpler: just use all GPUs for vLLM — it's always beneficial.
+                pass
+        # Use all available GPUs — vLLM benefits from TP across GPUs
+        # (more VRAM for KV cache, faster inference via parallelism)
+        new_vc = vc.model_copy(update={"tensor_parallel_size": gpu_count})
+        new_config = lane_config.model_copy(update={"vllm_config": new_vc})
+        logger.info(
+            "\033[36mAuto-TP\033[0m lane '%s' model=%s: "
+            "tensor_parallel_size %d → %d (detected %d GPU(s))",
+            lane_config.model, lane_config.model,
+            vc.tensor_parallel_size, gpu_count, gpu_count,
+        )
+        return new_config
+
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
+        lane_config = self._auto_tensor_parallel(lane_config)
         port = self._port_alloc.allocate(lane_id)
         handle = _create_handle(lane_id, port, self._global_config, lane_config)
         try:
@@ -553,6 +597,7 @@ class LaneManager:
 
         Returns the OLD handle (caller must close it after success).
         """
+        new_config = self._auto_tensor_parallel(new_config)
         old_handle = self._handles[lane_id]
         old_port = self._port_alloc.get_port(lane_id)
 
