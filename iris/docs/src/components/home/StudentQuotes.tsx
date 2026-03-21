@@ -27,7 +27,9 @@ export default function StudentQuotes(): React.JSX.Element {
         ref={ref as React.RefObject<HTMLDivElement>}
         className={`${styles.quoteBlock} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""}`}
       >
-        <p className={styles.quoteText}>{quotes[current].text}</p>
+        <p key={current} className={styles.quoteText}>
+          {quotes[current].text}
+        </p>
         <p className={styles.quoteAttribution}>
           &mdash; {quotes[current].attribution}
         </p>
