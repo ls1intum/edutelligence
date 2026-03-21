@@ -18,8 +18,7 @@ function ChatMockup(): React.JSX.Element {
         <div className={styles.chatBubbleUser}>
           <div className={styles.chatAvatar}>S</div>
           <div className={styles.chatBubbleContent}>
-            Can you explain the key differences between mitosis and meiosis from
-            today&apos;s lecture?
+            Can you explain what photosynthesis does?
           </div>
         </div>
         <div className={styles.chatBubbleIris}>
@@ -31,10 +30,10 @@ function ChatMockup(): React.JSX.Element {
             />
           </div>
           <div className={styles.chatBubbleContentIris}>
-            Great question! As Prof. M&uuml;ller covered on{" "}
-            <strong>slide 14</strong>, both involve cell division &mdash; but
-            think about <em>how many daughter cells</em> each produces and
-            whether they&apos;re identical. What do you recall?{" "}
+            Good question! Before I explain, what do you already know about how
+            plants get their energy? Your instructor covered this on{" "}
+            <strong>slide 7</strong> with a great diagram.{" "}
+            <span className={styles.chatCitation}>[1]</span>{" "}
             <span className={styles.chatTypingDots}>...</span>
           </div>
         </div>

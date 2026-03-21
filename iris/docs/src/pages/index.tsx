@@ -8,6 +8,7 @@ import HowItWorksSection from "../components/home/HowItWorksSection";
 import ComparisonSection from "../components/home/ComparisonSection";
 import WhyNotChatGPTSection from "../components/home/WhyNotChatGPTSection";
 import ResearchHighlights from "../components/home/ResearchHighlights";
+import DisciplinesSection from "../components/home/DisciplinesSection";
 import ComfortTrapSection from "../components/home/ComfortTrapSection";
 import StudentQuotes from "../components/home/StudentQuotes";
 import PrivacySection from "../components/home/PrivacySection";
@@ -44,7 +45,10 @@ export default function Home(): React.JSX.Element {
       {/* 8. Research Highlights */}
       <ResearchHighlights />
 
-      {/* 9. The Comfort Trap — research insight */}
+      {/* 9. Works for Every Course */}
+      <DisciplinesSection />
+
+      {/* 10. The Comfort Trap — research insight */}
       <ComfortTrapSection />
 
       {/* 10. Trusted by Educators */}

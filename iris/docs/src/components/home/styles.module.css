@@ -504,6 +504,22 @@
   font-size: 0.8rem;
 }
 
+.chatCitation {
+  display: inline-block;
+  background: rgba(42, 115, 180, 0.12);
+  color: var(--ifm-color-primary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  vertical-align: super;
+  line-height: 1;
+}
+
+[data-theme="dark"] .chatCitation {
+  background: rgba(90, 159, 214, 0.15);
+}
+
 .chatTypingDots {
   color: var(--ifm-color-primary);
   font-weight: 700;
@@ -1728,6 +1744,67 @@
   font-weight: 700;
 }
 
+/* ─── Disciplines Section ─── */
+
+.disciplineGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.disciplineCard {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  box-shadow:
+    0 4px 24px rgba(42, 115, 180, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  padding: 1.75rem 1.5rem;
+  text-align: center;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+[data-theme="dark"] .disciplineCard {
+  background: rgba(30, 30, 30, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .disciplineCard:hover {
+    transform: translateY(-4px);
+    box-shadow:
+      0 8px 32px rgba(42, 115, 180, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+}
+
+.disciplineEmoji {
+  font-size: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.disciplineTitle {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--ifm-font-color-base);
+}
+
+.disciplineDesc {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--iris-label-color);
+}
+
 /* ─── Comfort Trap Section ─── */
 
 .comfortTrapContent {
@@ -1894,6 +1971,10 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .disciplineGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .heroHeadline {
     font-size: 2.25rem;
   }
@@ -1933,6 +2014,10 @@
   }
 
   .privacyGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .disciplineGrid {
     grid-template-columns: 1fr;
   }
 
