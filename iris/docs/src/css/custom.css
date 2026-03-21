@@ -42,13 +42,13 @@
   --ifm-color-primary-lighter: #7cb5e0;
   --ifm-color-primary-lightest: #a0cbe9;
 
-  --ifm-background-color: #181a18;
-  --ifm-background-surface-color: #1f2320;
+  --ifm-background-color: #181818;
+  --ifm-background-surface-color: #1f1f1f;
   --ifm-font-color-base: #f8f9fa;
 
   --iris-border-color: #3a3a3a;
-  --iris-tertiary-bg: #262a27;
-  --iris-accent-bg: #2d312e;
+  --iris-tertiary-bg: #262626;
+  --iris-accent-bg: #2d2d2d;
   --iris-label-color: #919191;
   --iris-success: #00bc8c;
   --iris-btn-bg: #235f94;
