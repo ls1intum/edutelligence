@@ -21,7 +21,25 @@
   --iris-label-color: #636b72;
   --iris-success: #1e7e34;
   --iris-radius: 8px;
+  --iris-radius-card: 16px;
   --iris-radius-pill: 999px;
+
+  /* Glassmorphism intensity ladder */
+  --iris-glass-blur-light: blur(8px);
+  --iris-glass-blur-standard: blur(16px) saturate(180%);
+  --iris-glass-blur-prominent: blur(20px) saturate(180%);
+  --iris-glass-blur-maximum: blur(24px) saturate(200%);
+
+  /* Shadow depth scale */
+  --iris-shadow-card: 0 4px 24px rgba(42, 115, 180, 0.08);
+  --iris-shadow-card-hover: 0 12px 48px rgba(42, 115, 180, 0.14);
+  --iris-shadow-panel: 0 8px 32px rgba(42, 115, 180, 0.1);
+  --iris-shadow-hero: 0 16px 64px rgba(42, 115, 180, 0.15);
+
+  /* Motion tokens */
+  --iris-motion-entrance: 0.5s ease-out;
+  --iris-motion-hover: 0.25s ease;
+  --iris-motion-stagger: 80ms;
 
   --ifm-font-family-base: "DM Sans", system-ui, -apple-system, sans-serif;
   --ifm-font-family-monospace:
