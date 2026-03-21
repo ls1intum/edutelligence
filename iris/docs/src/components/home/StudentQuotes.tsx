@@ -12,7 +12,7 @@ const quotes = [
     attribution: "Software Engineering Student, TU Munich",
   },
   {
-    text: "It\u2019s easy to learn using ChatGPT. But next day I forget because I just learned it from ChatGPT.",
+    text: "It\u2019s very easy to learn using ChatGPT. But next day I will forget.",
     attribution: "Information Systems Student, TU Munich",
   },
 ];
