@@ -193,17 +193,19 @@ export default function IdeSection(): React.JSX.Element {
             <span>Artemis Extension v0.4.0</span>
           </div>
         </div>
-        <div className={styles.screenshotBlock}>
+        <figure className={styles.screenshotBlock}>
           <img
             src={useBaseUrl("/img/screenshots/iris-exercise-chat.png")}
             alt="Iris exercise chat widget helping a student with the Strategy Pattern exercise in Artemis"
             className={styles.screenshotImg}
+            width={960}
+            height={540}
             loading="lazy"
           />
-          <p className={styles.screenshotCaption}>
+          <figcaption className={styles.screenshotCaption}>
             Iris helps a student with the Strategy Pattern exercise in Artemis
-          </p>
-        </div>
+          </figcaption>
+        </figure>
       </div>
     </section>
   );

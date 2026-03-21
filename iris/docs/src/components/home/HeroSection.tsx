@@ -139,6 +139,8 @@ export default function HeroSection(): React.JSX.Element {
               src={useBaseUrl("/img/screenshots/iris-chat-response-hd.png")}
               alt=""
               className={styles.heroGhostScreenshot}
+              width={960}
+              height={540}
               aria-hidden="true"
               loading="lazy"
             />
