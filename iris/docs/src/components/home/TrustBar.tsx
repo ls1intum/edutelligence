@@ -4,8 +4,8 @@ import styles from "./styles.module.css";
 const items = [
   "Integrated into Artemis at TUM",
   "1,600+ active students",
-  "Open Source",
-  "Peer-Reviewed Research",
+  "MIT Licensed",
+  "3 Published Papers",
 ];
 
 export default function TrustBar(): React.JSX.Element {
