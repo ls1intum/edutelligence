@@ -32,7 +32,7 @@ export default function ClosingCta(): React.JSX.Element {
             Request a Demo
           </Link>
           <Link className={styles.btnGhost} to="/docs/overview/what-is-iris">
-            See How It Works
+            Read the Docs
           </Link>
         </div>
       </div>
