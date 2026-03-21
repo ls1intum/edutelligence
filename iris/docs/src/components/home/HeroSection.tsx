@@ -16,10 +16,8 @@ export default function HeroSection(): React.JSX.Element {
           The AI tutor that teaches, not just <em>answers</em>
         </h1>
         <p className={styles.heroSubtitle}>
-          Iris is a context-aware virtual tutor integrated into Artemis. It
-          provides scaffolded hints, guided learning, and grounded responses
-          &mdash; designed to preserve productive struggle and foster genuine
-          understanding.
+          An AI tutor built into Artemis that helps students learn by guiding
+          them to the answer &mdash; not giving it away.
         </p>
         <p className={styles.heroProof}>Used by 1,600+ students at TU Munich</p>
         <div className={styles.heroCtas}>
