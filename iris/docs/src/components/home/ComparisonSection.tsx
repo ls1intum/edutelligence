@@ -1,4 +1,5 @@
 import React from "react";
+import Link from "@docusaurus/Link";
 import styles from "./styles.module.css";
 import { useFadeIn } from "./useFadeIn";
 
@@ -63,6 +64,13 @@ export default function ComparisonSection(): React.JSX.Element {
             </div>
           </div>
         </div>
+        <p
+          className={`${styles.comparisonTakeaway} ${styles.irisBubble} ${styles.irisBubbleDelay4} ${visible ? styles.irisBubbleVisible : ""}`}
+        >
+          Iris guides students to the answer instead of giving it away
+          &mdash;&nbsp;that&rsquo;s why they learn{" "}
+          <Link to="/docs/research/publications">55% more effectively</Link>.
+        </p>
       </div>
     </section>
   );

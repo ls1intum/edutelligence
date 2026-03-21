@@ -394,10 +394,35 @@
       transform 0.4s ease-out 1s;
   }
 
+  .irisBubbleDelay4 {
+    transition:
+      opacity 0.5s ease-out 1.4s,
+      transform 0.5s ease-out 1.4s;
+  }
+
   .irisBubble.irisBubbleVisible {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+.comparisonTakeaway {
+  text-align: center;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--iris-label-color);
+  margin-top: 1.5rem;
+  font-weight: 500;
+}
+
+.comparisonTakeaway a {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.comparisonTakeaway a:hover {
+  text-decoration: underline;
 }
 
 .comparisonOutcome {
