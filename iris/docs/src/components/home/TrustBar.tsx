@@ -13,7 +13,7 @@ export default function TrustBar(): React.JSX.Element {
     <div className={styles.trustBar}>
       {items.map((text) => (
         <span key={text} className={styles.trustItem}>
-          <span className={styles.trustDot} />
+          <span className={styles.trustDot} aria-hidden="true" />
           {text}
         </span>
       ))}
