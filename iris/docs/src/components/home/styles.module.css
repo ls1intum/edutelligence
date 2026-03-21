@@ -267,13 +267,15 @@
     box-shadow 0.2s;
 }
 
-.featureCard:hover {
-  transform: translateY(-4px) scale(1.02);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-}
+@media (hover: hover) {
+  .featureCard:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  }
 
-[data-theme="dark"] .featureCard:hover {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  [data-theme="dark"] .featureCard:hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
 }
 
 .featureCardTitle {
@@ -594,16 +596,18 @@
   flex-direction: column;
 }
 
-.audienceCard:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-  border-color: var(--ifm-color-primary);
-  text-decoration: none;
-  color: inherit;
-}
+@media (hover: hover) {
+  .audienceCard:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    border-color: var(--ifm-color-primary);
+    text-decoration: none;
+    color: inherit;
+  }
 
-[data-theme="dark"] .audienceCard:hover {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  [data-theme="dark"] .audienceCard:hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
 }
 
 .audienceCardTitle {
@@ -741,11 +745,13 @@
     border-color 0.2s;
 }
 
-.ecosystemCard:hover {
-  transform: translateY(-2px);
-  border-color: var(--ifm-color-primary);
-  text-decoration: none;
-  color: inherit;
+@media (hover: hover) {
+  .ecosystemCard:hover {
+    transform: translateY(-2px);
+    border-color: var(--ifm-color-primary);
+    text-decoration: none;
+    color: inherit;
+  }
 }
 
 .ecosystemCardName {
