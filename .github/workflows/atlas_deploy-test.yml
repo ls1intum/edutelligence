@@ -14,7 +14,6 @@ on:
 jobs:
 
   deploy-atlasml:
-    needs: provision-env
     if: ${{ inputs.deploy-atlasml }}
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
