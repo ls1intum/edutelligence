@@ -6,6 +6,7 @@ import FeatureCards from "../components/home/FeatureCards";
 import CourseMaterialsSection from "../components/home/CourseMaterialsSection";
 import HowItWorksSection from "../components/home/HowItWorksSection";
 import ComparisonSection from "../components/home/ComparisonSection";
+import ShowcaseSection from "../components/home/ShowcaseSection";
 import WhyNotChatGPTSection from "../components/home/WhyNotChatGPTSection";
 import ResearchHighlights from "../components/home/ResearchHighlights";
 import DisciplinesSection from "../components/home/DisciplinesSection";
@@ -36,7 +37,10 @@ export default function Home(): React.JSX.Element {
       {/* 5. How It Works */}
       <HowItWorksSection />
 
-      {/* 6. How Iris Is Different (chat comparison) */}
+      {/* 6. See Iris in Action (multi-turn showcase) */}
+      <ShowcaseSection />
+
+      {/* 7. How Iris Is Different (chat comparison) */}
       <ComparisonSection />
 
       {/* 7. Why Not Just Use a Generic AI Chatbot? (table) */}
