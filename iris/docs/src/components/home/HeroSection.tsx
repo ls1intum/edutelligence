@@ -20,18 +20,16 @@ export default function HeroSection(): React.JSX.Element {
         &mdash; designed to preserve productive struggle and foster genuine
         understanding.
       </p>
+      <p className={styles.heroProof}>
+        Used by 1,600+ students at the Technical University of Munich
+      </p>
       <div className={styles.heroCtas}>
         <Link className={styles.btnPrimary} to="/docs/overview/what-is-iris">
-          Get Started
+          See How It Works
         </Link>
-        <a
-          className={styles.btnGhost}
-          href="https://github.com/ls1intum/edutelligence"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          View on GitHub
-        </a>
+        <Link className={styles.btnGhost} to="/docs/research/publications">
+          Read the Research
+        </Link>
       </div>
     </header>
   );
