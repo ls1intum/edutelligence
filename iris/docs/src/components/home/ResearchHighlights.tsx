@@ -40,8 +40,8 @@ export default function ResearchHighlights(): React.JSX.Element {
     <section className={styles.section}>
       <h2 className={styles.sectionHeading}>Research-Backed</h2>
       <p className={styles.sectionSubtitle}>
-        Iris is evaluated through rigorous empirical research, not marketing
-        claims.
+        Results from a randomized controlled trial with 275 students at TU
+        Munich.
       </p>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
