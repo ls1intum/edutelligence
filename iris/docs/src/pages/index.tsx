@@ -17,6 +17,7 @@ import PrivacySection from "../components/home/PrivacySection";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
 import QuizSection from "../components/home/QuizSection";
+import IdeSection from "../components/home/IdeSection";
 import ClosingCta from "../components/home/ClosingCta";
 export default function Home(): React.JSX.Element {
   return (
@@ -56,6 +57,9 @@ export default function Home(): React.JSX.Element {
 
       {/* 10. Works for Every Course */}
       <DisciplinesSection />
+
+      {/* 10.5. Iris in Your IDE */}
+      <IdeSection />
 
       {/* 11. The Comfort Trap */}
       <ComfortTrapSection />

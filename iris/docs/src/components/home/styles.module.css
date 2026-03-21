@@ -119,8 +119,10 @@
 
 /* 1. CourseMaterials — Deep navy/indigo */
 .sectionNavy {
-  padding: 4rem 1.5rem;
-  background: linear-gradient(165deg, #0f1e3d 0%, #1a2d52 60%, #162847 100%);
+  padding: 5rem 1.5rem 4rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 4%),
+    linear-gradient(165deg, #0f1e3d 0%, #1a2d52 60%, #162847 100%);
   position: relative;
   overflow: hidden;
 }
@@ -182,8 +184,8 @@
 
 /* 2. WhyNotChatGPT — Warm parchment */
 .sectionParchment {
-  padding: 4rem 1.5rem;
-  background: linear-gradient(180deg, #faf6f0 0%, #f5ede0 100%);
+  padding: 5rem 1.5rem 4rem;
+  background: linear-gradient(180deg, #ffffff 0%, #faf6f0 3%, #f5ede0 100%);
   position: relative;
 }
 
@@ -202,7 +204,7 @@
 }
 
 [data-theme="dark"] .sectionParchment {
-  background: linear-gradient(180deg, #1e1b16 0%, #1a1710 100%);
+  background: linear-gradient(180deg, #181818 0%, #1e1b16 3%, #1a1710 100%);
 }
 
 [data-theme="dark"] .sectionParchment::before {
@@ -324,7 +326,13 @@
 
 /* 5. ClosingCta — Rich navy bookend */
 .closingCtaWrapperNavy {
-  background: linear-gradient(180deg, #0f1e3d 0%, #162847 50%, #1a2d52 100%);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    #0f1e3d 3%,
+    #162847 50%,
+    #1a2d52 100%
+  );
   position: relative;
   overflow: hidden;
 }
@@ -352,7 +360,7 @@
 }
 
 .closingCtaWrapperNavy .closingCtaSubtitle {
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(255, 255, 255, 0.82);
 }
 
 [data-theme="dark"] .closingCtaWrapperNavy {
@@ -3283,5 +3291,166 @@
 
   .quizQuestion {
     font-size: 1.05rem;
+  }
+}
+
+/* ─── IDE Section (VS Code Mockup) ─── */
+
+.idePanel {
+  max-width: 820px;
+  margin: 0 auto;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1e1e1e;
+  box-shadow:
+    0 12px 48px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.ideHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 1rem;
+  background: #252526;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+.ideTabs {
+  display: flex;
+  gap: 0;
+  margin-left: 0.5rem;
+}
+
+.ideTab,
+.ideTabActive {
+  padding: 0.3rem 1rem;
+  font-size: 0.78rem;
+  font-family: var(--ifm-font-family-monospace);
+  color: #969696;
+  border-bottom: 2px solid transparent;
+  cursor: default;
+}
+
+.ideTabActive {
+  color: #ffffff;
+  background: #1e1e1e;
+  border-bottom-color: var(--ifm-color-primary);
+}
+
+.ideBody {
+  display: flex;
+  min-height: 280px;
+}
+
+.ideCodePane {
+  flex: 1;
+  overflow-x: auto;
+  padding: 1rem 0;
+}
+
+.ideCode {
+  margin: 0;
+  background: transparent;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
+.ideCodeLine {
+  display: flex;
+  padding: 0 1rem;
+}
+
+.ideCodeLine:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ideLineNumber {
+  width: 2.5rem;
+  text-align: right;
+  padding-right: 1rem;
+  color: #555;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.ideLineContent {
+  white-space: pre;
+}
+
+.ideChatPane {
+  width: 260px;
+  flex-shrink: 0;
+  border-left: 1px solid #3c3c3c;
+  display: flex;
+  flex-direction: column;
+  background: #252526;
+}
+
+.ideChatHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #cccccc;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+.ideChatMessages {
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  flex: 1;
+}
+
+.ideChatBubbleStudent {
+  align-self: flex-end;
+  background: rgba(42, 115, 180, 0.3);
+  color: #d4d4d4;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px 10px 2px 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-width: 92%;
+}
+
+.ideChatBubbleIris {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.07);
+  color: #d4d4d4;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px 10px 10px 2px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-width: 92%;
+}
+
+.ideStatusBar {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 1rem;
+  font-size: 0.7rem;
+  color: #969696;
+  background: #007acc;
+  color: #ffffff;
+}
+
+@media (max-width: 768px) {
+  .ideBody {
+    flex-direction: column;
+  }
+
+  .ideChatPane {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #3c3c3c;
+  }
+
+  .ideCodePane {
+    min-height: 160px;
   }
 }
