@@ -212,8 +212,30 @@
 
 .heroVisual {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
+  perspective: 800px;
+}
+
+.heroVisual .chatMockup {
+  transform: rotateY(-3deg) rotateX(2deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .heroVisual .chatMockup {
+    animation: chatFloat3d 6s ease-in-out infinite;
+  }
+
+  @keyframes chatFloat3d {
+    0%,
+    100% {
+      transform: rotateY(-3deg) rotateX(2deg) translateY(0);
+    }
+    50% {
+      transform: rotateY(-3deg) rotateX(2deg) translateY(-8px);
+    }
+  }
 }
 
 @media (max-width: 996px) {
@@ -327,35 +349,25 @@
   max-width: 440px;
   margin: 0 auto;
   border-radius: 16px;
-  background: var(--ifm-background-surface-color);
-  border: 1px solid var(--iris-border-color);
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
   box-shadow:
-    0 20px 60px rgba(42, 115, 180, 0.12),
+    0 20px 60px rgba(42, 115, 180, 0.15),
     0 4px 16px rgba(0, 0, 0, 0.06);
   overflow: hidden;
 }
 
 [data-theme="dark"] .chatMockup {
+  background: rgba(31, 31, 31, 0.75);
+  border-color: rgba(90, 159, 214, 0.15);
   box-shadow:
-    0 20px 60px rgba(42, 115, 180, 0.15),
+    0 20px 60px rgba(42, 115, 180, 0.2),
     0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .chatMockup {
-    animation: chatFloat 6s ease-in-out infinite;
-  }
-
-  @keyframes chatFloat {
-    0%,
-    100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-8px);
-    }
-  }
-
   .chatBubbleUser {
     opacity: 0;
     transform: translateY(8px);
