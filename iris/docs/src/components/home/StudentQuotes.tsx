@@ -4,15 +4,15 @@ import { useFadeIn } from "./useFadeIn";
 
 const quotes = [
   {
-    text: "Iris was clearly aware of the context. It pointed me in the right direction. When I asked for getting the strings, it said, you can shift the strings like this for this algorithm without me even mentioning the algorithm.",
+    text: "It pointed me in the right direction without me even mentioning the algorithm.",
     attribution: "Computer Science Student, TU Munich",
   },
   {
-    text: "It tried to make me think about it myself more, but my brain is constantly thinking about it. It didn\u2019t want to answer my question \u2014 it wanted me to actually answer it myself.",
+    text: "It didn\u2019t want to answer my question \u2014 it wanted me to actually answer it myself.",
     attribution: "Software Engineering Student, TU Munich",
   },
   {
-    text: "I think it\u2019s very easy to learn using ChatGPT. But next day I will forget because I just learned it from ChatGPT.",
+    text: "It\u2019s easy to learn using ChatGPT. But next day I forget because I just learned it from ChatGPT.",
     attribution: "Information Systems Student, TU Munich",
   },
 ];
