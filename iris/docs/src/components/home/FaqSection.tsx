@@ -20,7 +20,7 @@ const faqs: FaqEntry[] = [
   {
     question: "How does Iris protect student data?",
     answer:
-      "Institutions can choose between cloud deployment (using EU-based data centers) or fully on-premise deployment where no data ever leaves the institution\u2019s infrastructure. Iris processes only the data needed for the current interaction and does not train on student data.",
+      "Deploy on-premise so no data leaves your infrastructure, or use EU-based cloud hosting. Iris never trains on student data.",
   },
   {
     question: "Does Iris give away answers?",
