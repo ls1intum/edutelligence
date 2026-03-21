@@ -110,8 +110,8 @@ export default function IdeSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionAlt}>
-      <div className={styles.sectionAltInner}>
+    <section className={styles.section}>
+      <div>
         <h2 className={styles.sectionHeading}>Iris in Your IDE</h2>
         <p className={styles.sectionSubtitle}>
           For programming courses, Iris works right inside VS Code &mdash;
