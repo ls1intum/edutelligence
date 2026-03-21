@@ -16,6 +16,7 @@ import ScaleSection from "../components/home/ScaleSection";
 import PrivacySection from "../components/home/PrivacySection";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
+import QuizSection from "../components/home/QuizSection";
 import ClosingCta from "../components/home/ClosingCta";
 export default function Home(): React.JSX.Element {
   return (
@@ -40,6 +41,9 @@ export default function Home(): React.JSX.Element {
 
       {/* 6. See Iris in Action */}
       <ShowcaseSection />
+
+      {/* 6.5. Turn Any Lecture into a Quiz */}
+      <QuizSection />
 
       {/* 7. How Iris Is Different (chat comparison) */}
       <ComparisonSection />
