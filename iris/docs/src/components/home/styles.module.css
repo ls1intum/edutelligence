@@ -1561,8 +1561,8 @@
 .statCard {
   text-align: center;
   padding: 2.5rem 1.25rem;
-  background: #ffffff;
-  border: 1px solid #d0d7de;
+  background: var(--ifm-background-color);
+  border: 1px solid var(--iris-border-color);
   border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.1),
@@ -1570,8 +1570,6 @@
 }
 
 [data-theme="dark"] .statCard {
-  background: #1e1e1e;
-  border-color: #3a3a3a;
   box-shadow:
     0 4px 24px rgba(0, 0, 0, 0.4),
     0 1px 4px rgba(0, 0, 0, 0.15);
@@ -3114,8 +3112,8 @@
 .quizPanel {
   max-width: 560px;
   margin: 0 auto;
-  background: #ffffff;
-  border: 1.5px solid #d0d7de;
+  background: var(--ifm-background-color);
+  border: 1.5px solid var(--iris-border-color);
   border-radius: var(--iris-radius-card);
   box-shadow:
     0 12px 48px rgba(42, 115, 180, 0.12),
@@ -3125,8 +3123,6 @@
 }
 
 [data-theme="dark"] .quizPanel {
-  background: #1e1e1e;
-  border-color: #3a3a3a;
   box-shadow:
     0 12px 48px rgba(0, 0, 0, 0.5),
     0 2px 8px rgba(0, 0, 0, 0.2);
@@ -3181,15 +3177,14 @@
   gap: 0.75rem;
   padding: 0.7rem 1rem;
   border-radius: 12px;
-  border: 1.5px solid #d0d7de;
-  background: #f8f9fa;
+  border: 1.5px solid var(--iris-border-color);
+  background: var(--ifm-background-surface-color);
   transition:
     border-color 0.15s,
     background 0.15s;
 }
 
 [data-theme="dark"] .quizOption {
-  border-color: #3a3a3a;
   background: #2a2a2a;
 }
 
