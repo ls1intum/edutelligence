@@ -6,22 +6,22 @@ import { useFadeIn } from "./useFadeIn";
 const audiences = [
   {
     title: "Students",
-    description: "Learn how to get the most out of Iris",
+    description: "Get unstuck on exercises without giving up",
     to: "/docs/student/getting-started",
   },
   {
     title: "Instructors",
-    description: "Configure Iris for your courses",
+    description: "See how students are learning, not just what they submitted",
     to: "/docs/instructor/enabling-iris",
   },
   {
     title: "Developers",
-    description: "Contribute to Iris",
+    description: "Extend Iris with new pipelines and tools",
     to: "/docs/developer/local-setup",
   },
   {
     title: "Administrators",
-    description: "Deploy and operate Iris",
+    description: "Deploy on-premise or cloud in under an hour",
     to: "/docs/admin/deployment",
   },
 ];

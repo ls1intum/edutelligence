@@ -9,11 +9,11 @@ const quotes = [
   },
   {
     text: "It tried to make me think about it myself more, but my brain is constantly thinking about it. It didn\u2019t want to answer my question \u2014 it wanted me to actually answer it myself.",
-    attribution: "Computer Science Student, TU Munich",
+    attribution: "Software Engineering Student, TU Munich",
   },
   {
     text: "I think it\u2019s very easy to learn using ChatGPT. But next day I will forget because I just learned it from ChatGPT.",
-    attribution: "Computer Science Student, TU Munich",
+    attribution: "Information Systems Student, TU Munich",
   },
 ];
 
@@ -26,6 +26,7 @@ export default function StudentQuotes(): React.JSX.Element {
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={`${styles.quoteBlock} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""}`}
+        aria-live="polite"
       >
         <p key={current} className={styles.quoteText}>
           {quotes[current].text}
