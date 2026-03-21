@@ -2171,7 +2171,7 @@
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  padding: 2.25rem 1.5rem 1.75rem;
+  padding: 2.5rem 1.5rem 1.75rem;
   text-align: center;
   transition:
     transform 0.2s,
@@ -2195,20 +2195,21 @@
 
 .howItWorksNumber {
   position: absolute;
-  top: -14px;
+  top: -22px;
   left: 50%;
   transform: translateX(-50%);
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  background: var(--ifm-color-primary);
+  background: linear-gradient(135deg, #1a6fb5, #00b4a0);
   color: #fff;
-  font-size: 0.85rem;
-  font-weight: 700;
+  font-family: "DM Serif Display", serif;
+  font-size: 1.25rem;
+  font-weight: 400;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(42, 115, 180, 0.3);
+  box-shadow: 0 4px 12px rgba(42, 115, 180, 0.25);
 }
 
 .howItWorksEmoji {
