@@ -2,10 +2,17 @@
 
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+from logos_worker_node.model_profiles import (
+    ModelProfileRegistry,
+    ModelProfileRecord,
+    _fetch_hf_model_size_bytes,
+    _fetch_hf_kv_params,
+    _compute_kv_per_token_bytes,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +113,9 @@ def test_estimate_vram_measured():
 
 def test_estimate_vram_disk_heuristic():
     """Falls back to disk_size heuristic when no measurement."""
-    # 4 GB disk = 4096 MB * 1.1 = 4505.6
+    # 4 GB disk = 4096 MB * 1.2 (20% inference overhead)
     p = ModelProfileRecord(disk_size_bytes=4 * 1024 * 1024 * 1024)
-    expected = (4 * 1024 * 1024 * 1024 / (1024 * 1024)) * 1.1
+    expected = (4 * 1024 * 1024 * 1024 / (1024 * 1024)) * 1.2
     assert abs(p.estimate_vram_mb() - expected) < 1.0
 
 
@@ -225,3 +232,206 @@ def test_concurrent_record(tmp_path):
     for name in ["model-0", "model-1", "model-2", "model-3"]:
         assert name in profiles
         assert profiles[name]["measurement_count"] == 50
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace API model size fetching
+# ---------------------------------------------------------------------------
+
+
+def _mock_hf_response(model_name):
+    """Simulate HF API response for safetensors metadata."""
+    import json
+    import io
+
+    responses = {
+        "Qwen/Qwen2.5-Coder-7B-Instruct": {
+            "safetensors": {
+                "parameters": {"BF16": 7615616512},
+                "total": 7615616512,
+            }
+        },
+        "meta-llama/Llama-3.1-70B": {
+            "safetensors": {
+                "parameters": {"BF16": 70553706496},
+                "total": 70553706496,
+            }
+        },
+    }
+    data = responses.get(model_name, {})
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps(data).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    return FakeResponse()
+
+
+def test_fetch_hf_model_size_bytes_qwen():
+    """Fetches real model weight size from HF API mock."""
+    with patch("logos_worker_node.model_profiles.urllib.request.urlopen") as mock_url:
+        mock_url.return_value = _mock_hf_response("Qwen/Qwen2.5-Coder-7B-Instruct")
+        result = _fetch_hf_model_size_bytes("Qwen/Qwen2.5-Coder-7B-Instruct")
+
+    # 7615616512 params × 2 bytes (BF16) = 15231233024 bytes
+    assert result == 7615616512 * 2
+    assert result / (1024 ** 3) == pytest.approx(14.19, abs=0.1)
+
+
+def test_fetch_hf_model_size_bytes_skips_non_hf_names():
+    """Models without / in name are not HF model IDs."""
+    result = _fetch_hf_model_size_bytes("gemma2:2b")
+    assert result is None
+
+
+def test_fetch_hf_model_size_bytes_handles_error():
+    """Network errors return None gracefully."""
+    with patch("logos_worker_node.model_profiles.urllib.request.urlopen") as mock_url:
+        mock_url.side_effect = Exception("Connection refused")
+        result = _fetch_hf_model_size_bytes("Qwen/Qwen2.5-Coder-7B-Instruct")
+    assert result is None
+
+
+def test_ensure_disk_size_populates_base_residency():
+    """record_loaded_vram fetches HF size and computes accurate base_residency."""
+    registry = ModelProfileRegistry()
+
+    with patch("logos_worker_node.model_profiles._fetch_hf_model_size_bytes") as mock_fetch:
+        # 7B BF16 = ~14.2 GB weight bytes
+        mock_fetch.return_value = 7615616512 * 2
+        registry.record_loaded_vram(
+            "Qwen/Qwen2.5-Coder-7B-Instruct",
+            28000.0,  # effective_vram_mb when loaded at 0.90
+            engine="vllm",
+            observed_gpu_memory_utilization=0.90,
+            tensor_parallel_size=2,
+        )
+
+    profile = registry.get_profile("Qwen/Qwen2.5-Coder-7B-Instruct")
+    assert profile is not None
+    assert profile.disk_size_bytes == 7615616512 * 2
+    # base_residency = disk_size / 1024² × 1.2 ≈ 14.2 GB × 1.2 ≈ 17.0 GB
+    expected_base = (7615616512 * 2 / (1024 * 1024)) * 1.2
+    assert abs(profile.base_residency_mb - expected_base) < 10
+    # kv_budget = loaded_vram - base_residency
+    assert profile.kv_budget_mb is not None
+    assert profile.kv_budget_mb > 0
+    assert profile.kv_budget_mb == pytest.approx(28000.0 - profile.base_residency_mb, abs=10)
+
+
+def test_ensure_disk_size_only_fetches_once():
+    """HF API is called at most once per model, even on repeated record calls."""
+    registry = ModelProfileRegistry()
+
+    with patch("logos_worker_node.model_profiles._fetch_hf_model_size_bytes") as mock_fetch, \
+         patch("logos_worker_node.model_profiles._fetch_hf_kv_params") as mock_kv:
+        mock_fetch.return_value = None  # simulate failure
+        mock_kv.return_value = None
+        registry.record_loaded_vram("Qwen/Qwen2.5-Coder-7B-Instruct", 28000.0, engine="vllm")
+        registry.record_loaded_vram("Qwen/Qwen2.5-Coder-7B-Instruct", 28000.0, engine="vllm")
+        registry.record_loaded_vram("Qwen/Qwen2.5-Coder-7B-Instruct", 28000.0, engine="vllm")
+        assert mock_fetch.call_count == 1  # only first attempt
+
+
+# ---------------------------------------------------------------------------
+# HF config.json KV params
+# ---------------------------------------------------------------------------
+
+def test_fetch_hf_kv_params_qwen():
+    """config.json fetch extracts architecture params for KV cache calculation."""
+    # Qwen2.5-7B config.json structure
+    fake_config = {
+        "num_hidden_layers": 28,
+        "num_attention_heads": 28,
+        "num_key_value_heads": 4,
+        "hidden_size": 3584,
+        "max_position_embeddings": 32768,
+    }
+    import json
+    import io
+
+    def mock_urlopen(req, timeout=10):
+        resp = io.BytesIO(json.dumps(fake_config).encode())
+        resp.status = 200
+        return resp
+
+    with patch("logos_worker_node.model_profiles.urllib.request.urlopen", mock_urlopen):
+        result = _fetch_hf_kv_params("Qwen/Qwen2.5-Coder-7B-Instruct")
+
+    assert result is not None
+    assert result["num_layers"] == 28
+    assert result["num_kv_heads"] == 4
+    assert result["head_dim"] == 128  # 3584 // 28
+    assert result["max_context"] == 32768
+
+
+def test_fetch_hf_kv_params_non_gqa():
+    """Models without num_key_value_heads fall back to num_attention_heads."""
+    fake_config = {
+        "num_hidden_layers": 12,
+        "num_attention_heads": 12,
+        "hidden_size": 768,
+        "max_position_embeddings": 2048,
+    }
+    import json
+    import io
+
+    def mock_urlopen(req, timeout=10):
+        return io.BytesIO(json.dumps(fake_config).encode())
+
+    with patch("logos_worker_node.model_profiles.urllib.request.urlopen", mock_urlopen):
+        result = _fetch_hf_kv_params("org/small-model")
+
+    assert result is not None
+    assert result["num_kv_heads"] == 12  # fallback to num_attention_heads
+    assert result["head_dim"] == 64  # 768 // 12
+
+
+def test_fetch_hf_kv_params_skips_non_hf():
+    """Non-HF model names (no /) return None."""
+    assert _fetch_hf_kv_params("gemma2:2b") is None
+
+
+def test_compute_kv_per_token_bytes():
+    """Verify KV per-token formula: 2 × layers × kv_heads × head_dim × 2 (BF16)."""
+    # Qwen2.5-7B: 2 × 28 × 4 × 128 × 2 = 57,344
+    params = {"num_layers": 28, "num_kv_heads": 4, "head_dim": 128, "max_context": 32768}
+    assert _compute_kv_per_token_bytes(params) == 57344
+
+    # Gemma2-2B: 2 × 26 × 4 × 256 × 2 = 106,496
+    params2 = {"num_layers": 26, "num_kv_heads": 4, "head_dim": 256, "max_context": 8192}
+    assert _compute_kv_per_token_bytes(params2) == 106496
+
+
+def test_kv_per_token_in_to_dict():
+    """kv_per_token_bytes and max_context_length are included in serialization."""
+    record = ModelProfileRecord(
+        kv_per_token_bytes=57344,
+        max_context_length=32768,
+    )
+    d = record.to_dict()
+    assert d["kv_per_token_bytes"] == 57344
+    assert d["max_context_length"] == 32768
+
+
+def test_ensure_disk_size_fetches_kv_params():
+    """_ensure_disk_size also fetches KV params from config.json."""
+    registry = ModelProfileRegistry()
+    kv_params = {"num_layers": 28, "num_kv_heads": 4, "head_dim": 128, "max_context": 32768}
+
+    with patch("logos_worker_node.model_profiles._fetch_hf_model_size_bytes") as mock_size, \
+         patch("logos_worker_node.model_profiles._fetch_hf_kv_params") as mock_kv:
+        mock_size.return_value = 15231233024
+        mock_kv.return_value = kv_params
+        registry.record_loaded_vram(
+            "Qwen/Qwen2.5-Coder-7B-Instruct", 28000.0, engine="vllm",
+        )
+
+    profile = registry.get_profile("Qwen/Qwen2.5-Coder-7B-Instruct")
+    assert profile is not None
+    assert profile.kv_per_token_bytes == 57344  # 2 * 28 * 4 * 128 * 2
+    assert profile.max_context_length == 32768

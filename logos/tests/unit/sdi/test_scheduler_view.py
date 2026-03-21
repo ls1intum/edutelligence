@@ -419,9 +419,9 @@ def test_model_profile_estimate_vram_mb():
     p1 = ModelProfile(model_name="m1", loaded_vram_mb=8000.0)
     assert p1.estimate_vram_mb() == 8000.0
 
-    # Only disk size available: disk_bytes / 1MB * 1.1
+    # Only disk size available: disk_bytes / 1MB * 1.2 (20% inference overhead)
     p2 = ModelProfile(model_name="m2", disk_size_bytes=4 * 1024 * 1024 * 1024)
-    expected = (4 * 1024 * 1024 * 1024 / (1024 * 1024)) * 1.1
+    expected = (4 * 1024 * 1024 * 1024 / (1024 * 1024)) * 1.2
     assert abs(p2.estimate_vram_mb() - expected) < 1.0
 
     # Nothing available: fallback 4096

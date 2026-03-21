@@ -598,6 +598,8 @@ class LogosNodeDataProvider:
                 observed_gpu_memory_utilization=data.get("observed_gpu_memory_utilization"),
                 min_gpu_memory_utilization_to_load=data.get("min_gpu_memory_utilization_to_load"),
                 tensor_parallel_size=data.get("tensor_parallel_size"),
+                kv_per_token_bytes=data.get("kv_per_token_bytes"),
+                max_context_length=data.get("max_context_length"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
                 last_measured_epoch=float(data.get("last_measured_epoch", 0.0) or 0.0),
             )
@@ -649,6 +651,16 @@ class LogosNodeDataProvider:
                     if profile.tensor_parallel_size is None and vllm_config.get("tensor_parallel_size") is not None:
                         profile.tensor_parallel_size = int(vllm_config.get("tensor_parallel_size") or 0)
         return profiles
+
+    def get_worker_capabilities(self) -> List[str]:
+        """Return the list of models this worker declares it can serve."""
+        if self._runtime_registry is None:
+            return []
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return []
+        caps = snap.get("capabilities_models")
+        return list(caps) if caps else []
 
     def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
         with self._lock:

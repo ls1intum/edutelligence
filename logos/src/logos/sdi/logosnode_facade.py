@@ -167,6 +167,11 @@ class LogosNodeSchedulingDataFacade:
             raise KeyError(f"Provider '{provider_id}' not found")
         return self._providers[int(provider_id)].get_model_profiles()
 
+    def get_worker_capabilities(self, provider_id: int) -> List[str]:
+        """Return the capability models declared by a worker."""
+        provider = self._providers.get(int(provider_id))
+        return provider.get_worker_capabilities() if provider else []
+
     def provider_ids(self) -> list[int]:
         """Return list of registered provider IDs (for planner iteration)."""
         with self._lock:

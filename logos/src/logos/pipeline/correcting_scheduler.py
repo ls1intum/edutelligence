@@ -18,6 +18,8 @@ from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeo
 from .ettft_estimator import (
     EttftEstimate,
     ReadinessTier,
+    TIER_THRESHOLDS,
+    _DEFAULT_COLD_MS,
     estimate_ettft_local,
     estimate_ettft_azure,
     compute_corrected_score,
@@ -135,11 +137,13 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             except (KeyError, Exception):
                 view = None
             if view is None:
+                # No lanes visible — treat as COLD (capacity planner can cold-load
+                # during context resolution) rather than UNAVAILABLE
                 return EttftEstimate(
-                    ettft_ms=float("inf"),
-                    tier=ReadinessTier.UNAVAILABLE,
-                    penalty=float("inf"),
-                    reasoning=f"No scheduler view for logosnode model {model_id}",
+                    ettft_ms=_DEFAULT_COLD_MS,
+                    tier=ReadinessTier.COLD,
+                    penalty=TIER_THRESHOLDS[ReadinessTier.COLD]["penalty"],
+                    reasoning=f"No lanes for logosnode model {model_id}, cold-load required",
                 )
             return estimate_ettft_local(view)
 

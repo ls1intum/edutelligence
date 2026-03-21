@@ -45,9 +45,14 @@ def _estimated_disk_size_bytes_from_model_name(model_name: str) -> int | None:
 
 
 def _base_residency_from_bytes(disk_size_bytes: Optional[int]) -> Optional[float]:
+    """Convert model weight bytes to estimated GPU residency in MB.
+
+    Adds 20% overhead for CUDA kernels, activation buffers, and runtime
+    (per EleutherAI inference overhead research).
+    """
     if disk_size_bytes is None or disk_size_bytes <= 0:
         return None
-    return (disk_size_bytes / (1024 * 1024)) * 1.1
+    return (disk_size_bytes / (1024 * 1024)) * 1.2
 
 
 @dataclass
@@ -303,6 +308,8 @@ class ModelProfile:
     observed_gpu_memory_utilization: Optional[float] = None
     min_gpu_memory_utilization_to_load: Optional[float] = None
     tensor_parallel_size: Optional[int] = None
+    kv_per_token_bytes: Optional[int] = None
+    max_context_length: Optional[int] = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
 
@@ -344,6 +351,8 @@ class ModelProfile:
             'observed_gpu_memory_utilization': self.observed_gpu_memory_utilization,
             'min_gpu_memory_utilization_to_load': self.min_gpu_memory_utilization_to_load,
             'tensor_parallel_size': self.tensor_parallel_size,
+            'kv_per_token_bytes': self.kv_per_token_bytes,
+            'max_context_length': self.max_context_length,
             'measurement_count': self.measurement_count,
             'last_measured_epoch': self.last_measured_epoch,
         }

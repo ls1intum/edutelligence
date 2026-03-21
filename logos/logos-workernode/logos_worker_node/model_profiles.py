@@ -22,10 +22,25 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
+try:
+    import urllib.request
+    import json as _json
+
+    _HAS_URLLIB = True
+except ImportError:  # pragma: no cover
+    _HAS_URLLIB = False
+
 logger = logging.getLogger(__name__)
 
 _EMA_ALPHA = 0.3  # weight for new measurement vs historical average
 _MODEL_SCALE_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)([bm])")
+
+# Bytes per parameter for common dtypes used in HuggingFace safetensors metadata
+_DTYPE_BYTES: dict[str, float] = {
+    "F64": 8.0, "F32": 4.0, "F16": 2.0, "BF16": 2.0,
+    "I64": 8.0, "I32": 4.0, "I16": 2.0, "I8": 1.0, "U8": 1.0,
+    "F8_E5M2": 1.0, "F8_E4M3": 1.0,
+}
 
 
 def _ema(previous: float | None, current: float) -> float:
@@ -61,10 +76,111 @@ def _estimated_disk_size_bytes_from_model_name(model_name: str) -> int | None:
     return int(params * bytes_per_param)
 
 
+def _fetch_hf_model_size_bytes(model_name: str) -> int | None:
+    """Query HuggingFace API for the real model weight size in bytes.
+
+    Uses the safetensors metadata from the HF model API which gives
+    exact parameter counts per dtype. Returns total weight bytes or None.
+    """
+    if not _HAS_URLLIB:
+        return None
+    # Only query for names that look like HF model IDs (org/model)
+    if "/" not in model_name:
+        return None
+    url = f"https://huggingface.co/api/models/{model_name}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "logos-worker/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+    except Exception:
+        logger.debug("HF API query failed for %s", model_name, exc_info=True)
+        return None
+
+    safetensors = data.get("safetensors")
+    if not isinstance(safetensors, dict):
+        return None
+    params_by_dtype = safetensors.get("parameters")
+    if not isinstance(params_by_dtype, dict):
+        return None
+
+    total_bytes = 0
+    for dtype_name, param_count in params_by_dtype.items():
+        bpp = _DTYPE_BYTES.get(dtype_name.upper(), 2.0)
+        total_bytes += int(param_count) * bpp
+
+    if total_bytes > 0:
+        logger.info(
+            "HF API: %s weight size = %.0f MB (%s)",
+            model_name, total_bytes / (1024 * 1024),
+            ", ".join(f"{k}={v}" for k, v in params_by_dtype.items()),
+        )
+        return int(total_bytes)
+    return None
+
+
+def _fetch_hf_kv_params(model_name: str) -> dict[str, int] | None:
+    """Fetch model architecture params from HuggingFace config.json for KV cache calculation.
+
+    Returns {"num_layers", "num_kv_heads", "head_dim", "max_context"} or None.
+    """
+    if not _HAS_URLLIB:
+        return None
+    if "/" not in model_name:
+        return None
+    url = f"https://huggingface.co/{model_name}/resolve/main/config.json"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "logos-worker/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            cfg = _json.loads(resp.read())
+    except Exception:
+        logger.debug("HF config.json fetch failed for %s", model_name, exc_info=True)
+        return None
+
+    num_layers = cfg.get("num_hidden_layers")
+    num_heads = cfg.get("num_attention_heads")
+    hidden_size = cfg.get("hidden_size")
+    if num_layers is None or num_heads is None or hidden_size is None:
+        return None
+
+    num_kv_heads = cfg.get("num_key_value_heads", num_heads)
+    head_dim = cfg.get("head_dim") or (hidden_size // num_heads)
+    max_context = cfg.get("max_position_embeddings") or 8192
+
+    logger.info(
+        "HF config.json: %s — layers=%d, kv_heads=%d, head_dim=%d, max_ctx=%d",
+        model_name, num_layers, num_kv_heads, head_dim, max_context,
+    )
+    return {
+        "num_layers": int(num_layers),
+        "num_kv_heads": int(num_kv_heads),
+        "head_dim": int(head_dim),
+        "max_context": int(max_context),
+    }
+
+
+def _compute_kv_per_token_bytes(kv_params: dict[str, int]) -> int:
+    """Compute KV cache bytes per token from architecture params.
+
+    Formula: 2 (key+value) × num_layers × num_kv_heads × head_dim × 2 (BF16 bytes)
+    """
+    return (
+        2
+        * kv_params["num_layers"]
+        * kv_params["num_kv_heads"]
+        * kv_params["head_dim"]
+        * 2  # BF16
+    )
+
+
 def _base_residency_from_bytes(disk_size_bytes: int | None) -> float | None:
+    """Convert model weight bytes to estimated GPU residency in MB.
+
+    Adds 20% overhead for CUDA kernels, activation buffers, and runtime
+    (per EleutherAI inference overhead research).
+    """
     if disk_size_bytes is None or disk_size_bytes <= 0:
         return None
-    return (disk_size_bytes / (1024 * 1024)) * 1.1
+    return (disk_size_bytes / (1024 * 1024)) * 1.2
 
 
 @dataclass
@@ -78,6 +194,8 @@ class ModelProfileRecord:
     observed_gpu_memory_utilization: float | None = None
     min_gpu_memory_utilization_to_load: float | None = None
     tensor_parallel_size: int | None = None
+    kv_per_token_bytes: int | None = None
+    max_context_length: int | None = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
 
@@ -118,6 +236,8 @@ class ModelProfileRecord:
             "observed_gpu_memory_utilization": self.observed_gpu_memory_utilization,
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
             "tensor_parallel_size": self.tensor_parallel_size,
+            "kv_per_token_bytes": self.kv_per_token_bytes,
+            "max_context_length": self.max_context_length,
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
         }
@@ -130,6 +250,7 @@ class ModelProfileRegistry:
         self._profiles: dict[str, ModelProfileRecord] = {}
         self._config_path = config_path
         self._lock = threading.Lock()
+        self._hf_fetch_attempted: set[str] = set()  # models we already tried HF API for
         self._load_persisted()
 
     def _update_metadata(
@@ -147,6 +268,26 @@ class ModelProfileRegistry:
         if tensor_parallel_size is not None and tensor_parallel_size > 0:
             profile.tensor_parallel_size = tensor_parallel_size
 
+    def _ensure_disk_size(self, model_name: str, profile: ModelProfileRecord) -> None:
+        """Fetch model metadata from HF API if not already known. Called outside lock."""
+        if model_name in self._hf_fetch_attempted:
+            return
+        needs_size = profile.disk_size_bytes is None or profile.disk_size_bytes <= 0
+        needs_kv = profile.kv_per_token_bytes is None
+        if not needs_size and not needs_kv:
+            return
+        self._hf_fetch_attempted.add(model_name)
+        if needs_size:
+            hf_bytes = _fetch_hf_model_size_bytes(model_name)
+            if hf_bytes is not None and hf_bytes > 0:
+                profile.disk_size_bytes = hf_bytes
+                profile.base_residency_mb = _base_residency_from_bytes(hf_bytes)
+        if needs_kv:
+            kv_params = _fetch_hf_kv_params(model_name)
+            if kv_params is not None:
+                profile.kv_per_token_bytes = _compute_kv_per_token_bytes(kv_params)
+                profile.max_context_length = kv_params["max_context"]
+
     def record_loaded_vram(
         self,
         model_name: str,
@@ -163,8 +304,12 @@ class ModelProfileRegistry:
         if effective_vram_mb <= 0:
             return
 
+        # Fetch HF model size outside the lock (network I/O)
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+        self._ensure_disk_size(model_name, profile)
+
+        with self._lock:
             self._update_metadata(
                 profile,
                 engine=engine,
@@ -185,9 +330,15 @@ class ModelProfileRegistry:
                 profile.loaded_vram_mb = _ema(profile.loaded_vram_mb, effective_vram_mb)
             profile.measurement_count += 1
             profile.last_measured_epoch = time.time()
-            logger.debug(
-                "Model profile updated: %s loaded_vram_mb=%.1f (count=%d)",
-                model_name, profile.loaded_vram_mb, profile.measurement_count,
+            logger.info(
+                "Model profile updated: %s base_residency=%.0fMB kv_budget=%.0fMB "
+                "loaded_vram=%.0fMB disk_size=%s (count=%d)",
+                model_name,
+                profile.base_residency_mb or 0,
+                profile.kv_budget_mb or 0,
+                profile.loaded_vram_mb or 0,
+                profile.disk_size_bytes,
+                profile.measurement_count,
             )
         self._persist()
 
@@ -222,6 +373,9 @@ class ModelProfileRegistry:
 
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+        self._ensure_disk_size(model_name, profile)
+
+        with self._lock:
             self._update_metadata(
                 profile,
                 engine=engine,

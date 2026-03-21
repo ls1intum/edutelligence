@@ -48,11 +48,8 @@ class CapacityPlanner:
     # GPU utilization tuning
     GPU_UTIL_MIN = 0.50
     GPU_UTIL_MAX = 0.95
-    GPU_UTIL_STEP = 0.05
     GPU_CACHE_HIGH = 85.0
     GPU_CACHE_LOW = 40.0
-    GPU_UTIL_CHANGE_THRESHOLD = 0.05
-    DEFAULT_VLLM_LOAD_GPU_UTIL = 0.65
 
     # VRAM safety margin
     VRAM_SAFETY_MARGIN = 1.1  # 10% margin
@@ -95,6 +92,7 @@ class CapacityPlanner:
             logger.info("Capacity planner stopped")
 
     async def _run_loop(self) -> None:
+        await asyncio.sleep(self._cycle_seconds)  # Initial delay to let system settle
         while True:
             try:
                 await self._run_cycle()
@@ -110,18 +108,36 @@ class CapacityPlanner:
         self._demand.decay_all()
         all_actions: List[CapacityPlanAction] = []
 
-        for provider_id in self._facade.provider_ids():
+        provider_ids = self._facade.provider_ids()
+
+        for provider_id in provider_ids:
             try:
                 lanes = self._facade.get_all_provider_lane_signals(provider_id)
             except Exception:
                 logger.debug("Provider %s offline, skipping", provider_id)
                 continue
 
+            if lanes:
+                logger.info(
+                    "Planner cycle %d: provider=%s lane_count=%d [%s]",
+                    self._cycle_count, provider_id, len(lanes),
+                    ", ".join(
+                        f"{l.lane_id}({l.runtime_state}/{l.sleep_state} active={l.active_requests})"
+                        for l in lanes
+                    ),
+                )
+
             self._update_idle_tracking(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
             all_actions.extend(self._compute_demand_actions(provider_id, lanes))
-            all_actions.extend(self._compute_gpu_util_actions(provider_id, lanes))
+            all_actions.extend(self._compute_kv_cache_tuning_actions(provider_id, lanes))
             all_actions.extend(self._compute_preemptive_sleep_actions(provider_id, lanes))
+
+        if all_actions:
+            logger.info(
+                "Planner cycle %d: %d actions proposed",
+                self._cycle_count, len(all_actions),
+            )
 
         validated = self._validate_vram_budget(all_actions)
 
@@ -215,6 +231,9 @@ class CapacityPlanner:
             logger.debug("No capacity info for provider %s, cannot cold-load %s", provider_id, model_name)
             return None
 
+        if not self._passes_minimum_load_feasibility(model_name, profile, capacity):
+            return None
+
         lane_id = self._planner_lane_id(model_name)
         load_action = CapacityPlanAction(
             action="load",
@@ -227,6 +246,17 @@ class CapacityPlanner:
 
         estimated = self._estimate_action_vram(load_action, profile, capacity)
         available = float(capacity.available_vram_mb)
+
+        logger.info(
+            "Cold-load VRAM check for %s on provider %s: estimated=%.0fMB, available=%.0fMB, "
+            "profile=%s, engine=%s, total_vram=%s, base_residency=%s, loaded_vram=%s",
+            model_name, provider_id, estimated, available,
+            profile is not None,
+            getattr(profile, "engine", None),
+            getattr(capacity, "total_vram_mb", None),
+            getattr(profile, "base_residency_mb", None) if profile else None,
+            getattr(profile, "loaded_vram_mb", None) if profile else None,
+        )
 
         if available < estimated * self.VRAM_SAFETY_MARGIN:
             # Build a synthetic target signal for VRAM reclaim
@@ -312,16 +342,18 @@ class CapacityPlanner:
             if lane.runtime_state in ("stopped", "error", "cold"):
                 continue
 
-            # Stop after 15 minutes idle (guard against TOCTOU race)
+            # Stop after 15 minutes idle — but ONLY if other models need the VRAM.
+            # Keeping idle lanes sleeping is cheap and avoids costly cold starts.
             if idle_seconds >= self.IDLE_STOP and lane.active_requests == 0:
-                actions.append(CapacityPlanAction(
-                    action="stop",
-                    provider_id=provider_id,
-                    lane_id=lane.lane_id,
-                    model_name=lane.model_name,
-                    reason=f"Idle for {idle_seconds:.0f}s (threshold {self.IDLE_STOP}s)",
-                ))
-                continue
+                if self._has_vram_pressure(provider_id, lane.model_name):
+                    actions.append(CapacityPlanAction(
+                        action="stop",
+                        provider_id=provider_id,
+                        lane_id=lane.lane_id,
+                        model_name=lane.model_name,
+                        reason=f"Idle for {idle_seconds:.0f}s with VRAM pressure from other models",
+                    ))
+                    continue
 
             # Only vLLM lanes support sleep
             if not lane.is_vllm:
@@ -343,9 +375,9 @@ class CapacityPlanner:
                 ))
                 continue
 
-            # Sleep L1 after 1 minute idle (only if awake, no active requests)
+            # Sleep L1 after 1 minute idle (awake or unknown state, no active requests)
             if (
-                lane.sleep_state == "awake"
+                lane.sleep_state in ("awake", "unknown")
                 and lane.runtime_state in ("loaded", "running")
                 and lane.active_requests == 0
                 and idle_seconds >= self.IDLE_SLEEP_L1
@@ -360,6 +392,41 @@ class CapacityPlanner:
                 ))
 
         return actions
+
+    def _has_vram_pressure(self, provider_id: int, exclude_model: str) -> bool:
+        """Check if other models need VRAM on this provider.
+
+        Returns True when:
+        - Another model has demand but no lane (needs load), OR
+        - Available VRAM is below 20% and there's any other model demand
+        """
+        ranked = self._demand.get_ranked_models()
+        other_demand = [
+            (name, score) for name, score in ranked
+            if name != exclude_model and score > 0
+        ]
+        if not other_demand:
+            return False
+
+        # Check if any demanded model has no lane (would need a cold load)
+        try:
+            lanes = self._facade.get_all_provider_lane_signals(provider_id)
+        except Exception:
+            return False
+        active_models = {lane.model_name for lane in lanes}
+        for name, score in other_demand:
+            if name not in active_models and score >= self.DEMAND_LOAD_THRESHOLD:
+                return True
+
+        # Check if VRAM is tight
+        capacity = self._safe_get_capacity(provider_id)
+        if capacity is not None:
+            total = float(capacity.total_vram_mb)
+            available = float(capacity.available_vram_mb)
+            if total > 0 and available / total < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
+                return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Demand-based actions
@@ -385,6 +452,8 @@ class CapacityPlanner:
         for lane in lanes:
             lanes_by_model.setdefault(lane.model_name, []).append(lane)
 
+        planned_models: set[str] = set()
+
         for model_name, score in ranked:
             model_lanes = lanes_by_model.get(model_name, [])
 
@@ -403,12 +472,15 @@ class CapacityPlanner:
                         model_name=model_name,
                         reason=f"Demand score={score:.2f} >= {self.DEMAND_WAKE_THRESHOLD}, waking sleeping lane",
                     ))
+                    planned_models.add(model_name)
                     continue
 
             # Load a new lane if demand is high and no lane exists
             if score >= self.DEMAND_LOAD_THRESHOLD and not model_lanes:
-                lane_id = self._planner_lane_id(model_name)
                 profile = profiles.get(model_name)
+                if not self._passes_minimum_load_feasibility(model_name, profile, capacity):
+                    continue
+                lane_id = self._planner_lane_id(model_name)
                 actions.append(CapacityPlanAction(
                     action="load",
                     provider_id=provider_id,
@@ -416,6 +488,30 @@ class CapacityPlanner:
                     model_name=model_name,
                     params=self._build_load_params(model_name, lane_id, profile, capacity),
                     reason=f"Demand score={score:.2f} >= {self.DEMAND_LOAD_THRESHOLD}, preemptive load",
+                ))
+                planned_models.add(model_name)
+
+        # Capability seeding: if worker has zero lanes but declared capabilities,
+        # seed load actions for in-demand models it can serve.
+        if not lanes:
+            capabilities = self._facade.get_worker_capabilities(provider_id)
+            for model_name in capabilities:
+                if model_name in planned_models:
+                    continue
+                score = self._demand.get_score(model_name)
+                if score <= 0:
+                    continue
+                profile = profiles.get(model_name)
+                if not self._passes_minimum_load_feasibility(model_name, profile, capacity):
+                    continue
+                lane_id = self._planner_lane_id(model_name)
+                actions.append(CapacityPlanAction(
+                    action="load",
+                    provider_id=provider_id,
+                    lane_id=lane_id,
+                    model_name=model_name,
+                    params=self._build_load_params(model_name, lane_id, profile, capacity),
+                    reason=f"Capability seeding: worker declares {model_name}, demand={score:.2f}",
                 ))
 
         return actions
@@ -689,11 +785,24 @@ class CapacityPlanner:
     # GPU utilization tuning (vLLM only)
     # ------------------------------------------------------------------
 
-    def _compute_gpu_util_actions(
+    # KV cache tuning step: 20% of current KV budget
+    KV_CACHE_TUNE_STEP = 0.20
+    # Minimum KV cache: 512 MB (below this, model can barely serve requests)
+    KV_CACHE_MIN_MB = 512.0
+
+    def _compute_kv_cache_tuning_actions(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
     ) -> List[CapacityPlanAction]:
-        """Tune gpu_memory_utilization based on KV cache pressure."""
+        """Tune kv_cache_memory_bytes based on KV cache pressure.
+
+        gpu_memory_utilization stays at 0.95 (ceiling). Only KV cache size
+        is adjusted up/down based on observed cache usage percentage.
+        """
         actions = []
+        try:
+            profiles = self._facade.get_model_profiles(provider_id)
+        except Exception:
+            profiles = {}
 
         for lane in lanes:
             if not lane.is_vllm:
@@ -704,55 +813,70 @@ class CapacityPlanner:
                 continue
 
             cache_pct = lane.gpu_cache_usage_percent
-            current_util = lane.gpu_memory_utilization or self.DEFAULT_VLLM_LOAD_GPU_UTIL
+            profile = profiles.get(lane.model_name)
+            if profile is None:
+                continue
+
+            # Determine current KV budget
+            current_kv_mb = float(profile.kv_budget_mb or 0.0)
+            if current_kv_mb <= 0 and profile.kv_per_token_bytes and profile.kv_per_token_bytes > 0:
+                ctx = min(profile.max_context_length or self.DEFAULT_CONTEXT_CAP, self.DEFAULT_CONTEXT_CAP)
+                current_kv_mb = (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+            if current_kv_mb <= 0:
+                base = profile.estimate_base_residency_mb()
+                if base and base > 0:
+                    current_kv_mb = base * self.KV_CACHE_HEADROOM_RATIO
+                else:
+                    continue  # can't tune without knowing current KV size
+
+            step_mb = current_kv_mb * self.KV_CACHE_TUNE_STEP
 
             if cache_pct > self.GPU_CACHE_HIGH:
-                target_util = min(self.GPU_UTIL_MAX, current_util + self.GPU_UTIL_STEP)
-                if abs(target_util - current_util) < self.GPU_UTIL_CHANGE_THRESHOLD:
-                    continue
+                new_kv_mb = current_kv_mb + step_mb
+                new_kv_str = self._format_bytes_human(int(new_kv_mb * 1024 * 1024))
                 actions.append(CapacityPlanAction(
-                    action="reconfigure_gpu_util",
+                    action="reconfigure_kv_cache",
                     provider_id=provider_id,
                     lane_id=lane.lane_id,
                     model_name=lane.model_name,
                     params={
                         "updates": {
                             "vllm_config": {
-                                "gpu_memory_utilization": round(target_util, 3),
+                                "kv_cache_memory_bytes": new_kv_str,
                             }
                         }
                     },
                     reason=(
-                        f"GPU cache pressure high ({cache_pct:.1f}% > {self.GPU_CACHE_HIGH}%), "
-                        f"increasing gpu_memory_utilization to {target_util:.2f}"
+                        f"KV cache pressure high ({cache_pct:.1f}% > {self.GPU_CACHE_HIGH}%), "
+                        f"increasing kv_cache from {current_kv_mb:.0f}MB to {new_kv_mb:.0f}MB"
                     ),
                 ))
             elif cache_pct < self.GPU_CACHE_LOW:
-                # Decrease GPU utilization (only if other models need VRAM)
                 other_demand = any(
                     score > 0
                     for model_name, score in self._demand.get_ranked_models()
                     if model_name != lane.model_name
                 )
                 if other_demand:
-                    target_util = max(self.GPU_UTIL_MIN, current_util - self.GPU_UTIL_STEP)
-                    if abs(target_util - current_util) < self.GPU_UTIL_CHANGE_THRESHOLD:
+                    new_kv_mb = max(self.KV_CACHE_MIN_MB, current_kv_mb - step_mb)
+                    if abs(new_kv_mb - current_kv_mb) < 64:  # <64MB change not worth it
                         continue
+                    new_kv_str = self._format_bytes_human(int(new_kv_mb * 1024 * 1024))
                     actions.append(CapacityPlanAction(
-                        action="reconfigure_gpu_util",
+                        action="reconfigure_kv_cache",
                         provider_id=provider_id,
                         lane_id=lane.lane_id,
                         model_name=lane.model_name,
                         params={
                             "updates": {
                                 "vllm_config": {
-                                    "gpu_memory_utilization": round(target_util, 3),
+                                    "kv_cache_memory_bytes": new_kv_str,
                                 }
                             }
                         },
                         reason=(
-                            f"GPU cache low ({cache_pct:.1f}% < {self.GPU_CACHE_LOW}%), "
-                            f"other models need VRAM, lowering gpu_memory_utilization to {target_util:.2f}"
+                            f"KV cache low ({cache_pct:.1f}% < {self.GPU_CACHE_LOW}%), "
+                            f"other models need VRAM, reducing kv_cache from {current_kv_mb:.0f}MB to {new_kv_mb:.0f}MB"
                         ),
                     ))
 
@@ -761,6 +885,60 @@ class CapacityPlanner:
     # ------------------------------------------------------------------
     # VRAM budget validation
     # ------------------------------------------------------------------
+
+    def _passes_minimum_load_feasibility(
+        self,
+        model_name: str,
+        profile: Optional[ModelProfile],
+        capacity,
+        kv_cache_bytes_str: Optional[str] = None,
+    ) -> bool:
+        """Quick feasibility check: base_model_size + kv_cache <= available_vram.
+
+        Uses HF API data from profile (fetched by worker), or name heuristic.
+        Returns True if load seems feasible, False if it would definitely OOM.
+        Returns True (allow) when we cannot estimate — don't block unknowns.
+        """
+        if capacity is None:
+            return False
+        available_mb = float(getattr(capacity, "available_vram_mb", 0) or 0)
+        if available_mb <= 0:
+            return False
+
+        base_mb: Optional[float] = None
+        if profile is not None:
+            base_mb = profile.estimate_base_residency_mb()
+        if base_mb is None:
+            from logos.sdi.models import (
+                _base_residency_from_bytes,
+                _estimated_disk_size_bytes_from_model_name,
+            )
+            disk = _estimated_disk_size_bytes_from_model_name(model_name)
+            base_mb = _base_residency_from_bytes(disk)
+        if base_mb is None:
+            return True  # can't estimate, allow
+
+        kv_mb = 0.0
+        if kv_cache_bytes_str:
+            kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
+        elif profile is not None and profile.kv_budget_mb and profile.kv_budget_mb > 0:
+            kv_mb = float(profile.kv_budget_mb)
+        elif profile is not None and profile.kv_per_token_bytes and profile.kv_per_token_bytes > 0:
+            ctx = min(profile.max_context_length or self.DEFAULT_CONTEXT_CAP, self.DEFAULT_CONTEXT_CAP)
+            kv_mb = (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+        else:
+            kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
+
+        minimum_needed = base_mb + kv_mb
+        feasible = available_mb >= minimum_needed * self.VRAM_SAFETY_MARGIN
+        if not feasible:
+            logger.info(
+                "Feasibility FAILED for %s: need %.0fMB (base=%.0fMB + kv=%.0fMB) "
+                "× %.1f margin, have %.0fMB",
+                model_name, minimum_needed, base_mb, kv_mb,
+                self.VRAM_SAFETY_MARGIN, available_mb,
+            )
+        return feasible
 
     def _validate_vram_budget(
         self, actions: List[CapacityPlanAction]
@@ -833,54 +1011,89 @@ class CapacityPlanner:
         if profile is None or profile.engine != "vllm":
             return params
         params["vllm"] = True
-        params["vllm_config"] = {
-            "gpu_memory_utilization": self._recommended_vllm_gpu_util(profile, capacity),
+        vllm_config: Dict[str, Any] = {
+            "gpu_memory_utilization": self.GPU_UTIL_MAX,  # 0.95 ceiling
             "tensor_parallel_size": max(1, int(profile.tensor_parallel_size or 1)),
+            "enable_sleep_mode": True,
+            "server_dev_mode": True,
         }
+        kv = self._compute_kv_cache_bytes(profile, capacity)
+        if kv:
+            vllm_config["kv_cache_memory_bytes"] = kv
+        params["vllm_config"] = vllm_config
         return params
 
-    def _recommended_vllm_gpu_util(self, profile: Optional[ModelProfile], capacity=None) -> float:
-        total_vram_mb = float(getattr(capacity, "total_vram_mb", 0) or 0)
-        base_residency_mb = profile.estimate_base_residency_mb() if profile is not None else None
-        if base_residency_mb is None or total_vram_mb <= 0:
-            target = self.DEFAULT_VLLM_LOAD_GPU_UTIL
-            return self._apply_vllm_load_floor(profile, target)
+    # KV cache estimation
+    KV_CACHE_HEADROOM_RATIO = 0.35  # last-resort fallback for models without HF config
+    DEFAULT_CONTEXT_CAP = 8192      # conservative initial context window
+    DEFAULT_CONCURRENCY = 4         # target concurrent sequences
 
-        fraction = base_residency_mb / total_vram_mb
-        if fraction >= 0.60:
-            target = 0.50
-        elif fraction >= 0.45:
-            target = 0.55
-        elif fraction >= 0.30:
-            target = 0.65
-        elif fraction >= 0.15:
-            target = 0.75
-        else:
-            target = 0.80
-        target = max(self.GPU_UTIL_MIN, min(self.GPU_UTIL_MAX, target))
-        return self._apply_vllm_load_floor(profile, target)
+    def _compute_kv_cache_bytes(
+        self, profile: Optional[ModelProfile], capacity=None
+    ) -> Optional[str]:
+        """Compute kv_cache_memory_bytes string for vLLM.
 
-    def _apply_vllm_load_floor(self, profile: Optional[ModelProfile], target: float) -> float:
+        Priority:
+        1. Observed kv_budget_mb from previous load (most accurate)
+        2. Exact calculation from model architecture (kv_per_token_bytes × context × concurrency)
+        3. Last resort: base_residency × headroom ratio
+
+        Returns human-readable string like '1792M' or None if we can't estimate.
+        """
         if profile is None:
-            return target
-        floor = profile.min_gpu_memory_utilization_to_load
-        if floor is None:
-            return target
-        return max(target, max(self.GPU_UTIL_MIN, min(self.GPU_UTIL_MAX, float(floor))))
+            return None
 
-    def _estimate_vllm_target_utilization(
-        self,
-        action: CapacityPlanAction,
-        profile: Optional[ModelProfile],
-    ) -> float:
-        params = action.params or {}
-        vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
-        target = vllm_config.get("gpu_memory_utilization")
-        if target is None and action.action == "wake":
-            target = profile.observed_gpu_memory_utilization if profile is not None else None
-        if target is None:
-            target = self._recommended_vllm_gpu_util(profile, None)
-        return max(self.GPU_UTIL_MIN, min(self.GPU_UTIL_MAX, float(target)))
+        # 1. Observed KV budget from previous load
+        if profile.kv_budget_mb and profile.kv_budget_mb > 0:
+            kv_bytes = int(float(profile.kv_budget_mb) * 1024 * 1024)
+            if kv_bytes > 0:
+                return self._format_bytes_human(kv_bytes)
+
+        # 2. Exact calculation from model architecture
+        if profile.kv_per_token_bytes and profile.kv_per_token_bytes > 0:
+            context = min(
+                profile.max_context_length or self.DEFAULT_CONTEXT_CAP,
+                self.DEFAULT_CONTEXT_CAP,
+            )
+            kv_bytes = profile.kv_per_token_bytes * context * self.DEFAULT_CONCURRENCY
+            if kv_bytes > 0:
+                return self._format_bytes_human(kv_bytes)
+
+        # 3. Fallback: headroom ratio (only for models without HF config)
+        base = profile.estimate_base_residency_mb()
+        if base is not None and base > 0:
+            kv_bytes = int(base * self.KV_CACHE_HEADROOM_RATIO * 1024 * 1024)
+            if kv_bytes > 0:
+                return self._format_bytes_human(kv_bytes)
+
+        return None
+
+    @staticmethod
+    def _format_bytes_human(n: int) -> str:
+        """Format byte count as human-readable string for vLLM CLI."""
+        if n >= 1024 * 1024 * 1024 and n % (1024 * 1024 * 1024) == 0:
+            return f"{n // (1024 * 1024 * 1024)}G"
+        if n >= 1024 * 1024 and n % (1024 * 1024) == 0:
+            return f"{n // (1024 * 1024)}M"
+        return str(n)
+
+    @staticmethod
+    def _parse_kv_cache_to_mb(value: str) -> float:
+        """Parse kv_cache_memory_bytes string to MB. E.g. '4G' → 4096.0."""
+        if not value:
+            return 0.0
+        v = value.strip().upper()
+        if v.endswith("G"):
+            return float(v[:-1]) * 1024
+        if v.endswith("M"):
+            return float(v[:-1])
+        if v.endswith("K"):
+            return float(v[:-1]) / 1024
+        return float(v) / (1024 * 1024)
+
+    def _recommended_vllm_gpu_util(self, profile: Optional[ModelProfile], capacity=None) -> float:
+        """Return GPU utilization ceiling. KV cache is now controlled directly."""
+        return self.GPU_UTIL_MAX
 
     def _estimate_action_vram(
         self,
@@ -888,22 +1101,34 @@ class CapacityPlanner:
         profile: Optional[ModelProfile],
         capacity,
     ) -> float:
-        """Estimate VRAM cost of an action."""
-        if (
-            profile is not None
-            and profile.engine == "vllm"
-            and int(getattr(capacity, "total_vram_mb", 0) or 0) > 0
-        ):
-            target_util = self._estimate_vllm_target_utilization(action, profile)
+        """Estimate VRAM cost of an action.
+
+        For vLLM: base_residency + kv_cache_mb (parsed from action params).
+        KV cache is now controlled directly via --kv-cache-memory-bytes,
+        so we no longer derive cost from total_vram × gpu_memory_utilization.
+        """
+        if profile is not None and profile.engine == "vllm":
             base_residency = float(profile.estimate_base_residency_mb() or 0.0)
-            observed_reservation = float(profile.loaded_vram_mb or 0.0)
-            observed_util = float(profile.observed_gpu_memory_utilization or 0.0)
-            if observed_reservation > 0 and observed_util > 0:
-                observed_kv_budget = float(profile.kv_budget_mb or max(observed_reservation - base_residency, 0.0))
-                loaded_vram = base_residency + (observed_kv_budget * (target_util / observed_util))
-            else:
-                loaded_vram = max(base_residency, float(capacity.total_vram_mb) * target_util)
+
+            # Extract kv_cache_memory_bytes from the action's vllm_config params
+            params = action.params or {}
+            vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
+            kv_str = vllm_config.get("kv_cache_memory_bytes", "")
+            kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
+
+            # Fallback chain: observed budget → exact per-token → headroom ratio
+            if kv_mb <= 0:
+                if profile.kv_budget_mb and profile.kv_budget_mb > 0:
+                    kv_mb = float(profile.kv_budget_mb)
+                elif profile.kv_per_token_bytes and profile.kv_per_token_bytes > 0:
+                    ctx = min(profile.max_context_length or self.DEFAULT_CONTEXT_CAP, self.DEFAULT_CONTEXT_CAP)
+                    kv_mb = (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+                elif base_residency > 0:
+                    kv_mb = base_residency * self.KV_CACHE_HEADROOM_RATIO
+
+            loaded_vram = base_residency + kv_mb
             sleeping_residual = float(profile.sleeping_residual_mb or 0.0)
+
             if action.action == "wake":
                 return max(0.0, loaded_vram - sleeping_residual)
             if action.action == "load":
@@ -941,16 +1166,51 @@ class CapacityPlanner:
             action.provider_id, action.reason,
         )
 
+        # KV cache reconfiguration: sleep first for warm restart, then reconfigure
+        if action.action == "reconfigure_kv_cache":
+            try:
+                logger.info(
+                    "Sleeping lane %s before KV cache reconfigure (warm restart)",
+                    action.lane_id,
+                )
+                await self._registry.send_command(
+                    action.provider_id,
+                    "sleep_lane",
+                    {"lane_id": action.lane_id, "level": 1, "mode": "wait"},
+                    timeout_seconds=15,
+                )
+            except Exception:
+                logger.warning(
+                    "Sleep before reconfigure failed for lane %s, proceeding with cold restart",
+                    action.lane_id, exc_info=True,
+                )
+            try:
+                await self._registry.send_command(
+                    action.provider_id,
+                    "reconfigure_lane",
+                    {"lane_id": action.lane_id, **action.params},
+                    timeout_seconds=int(min(timeout_seconds, 30)),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send reconfigure_lane for lane %s", action.lane_id,
+                )
+                return False
+
+            confirmed = await self._poll_confirmation(action, timeout_seconds)
+            if not confirmed:
+                logger.warning(
+                    "Confirmation timeout for reconfigure_kv_cache on lane %s after %.0fs",
+                    action.lane_id, timeout_seconds,
+                )
+            return confirmed
+
         command_map = {
             "sleep_l1": ("sleep_lane", {"lane_id": action.lane_id, "level": 1}),
             "sleep_l2": ("sleep_lane", {"lane_id": action.lane_id, "level": 2}),
             "wake": ("wake_lane", {"lane_id": action.lane_id}),
             "stop": ("delete_lane", {"lane_id": action.lane_id}),
             "load": ("apply_lanes", {"lanes": [{"model": action.model_name, **action.params}]}),
-            "reconfigure_gpu_util": (
-                "reconfigure_lane",
-                {"lane_id": action.lane_id, **action.params},
-            ),
         }
 
         command_entry = command_map.get(action.action)
@@ -1029,7 +1289,7 @@ class CapacityPlanner:
         if action.action == "load":
             # Look for any lane with the model name in loaded/running state
             return lane is not None and lane.get("runtime_state") in ("loaded", "running")
-        if action.action == "reconfigure_gpu_util":
+        if action.action == "reconfigure_kv_cache":
             return True  # Reconfiguration confirmed by command success
         return False
 

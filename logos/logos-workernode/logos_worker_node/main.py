@@ -58,6 +58,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await lane_manager.close()
             await gpu_collector.stop()
             raise
+    else:
+        caps = cfg.logos.capabilities_models if cfg.logos else []
+        logger.info(
+            "No lanes configured — waiting for server commands. Capabilities: %s",
+            caps or "(none)",
+        )
 
     app.state.config = cfg
     app.state.gpu_collector = gpu_collector

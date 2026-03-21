@@ -69,6 +69,50 @@ def test_build_cmd_includes_stability_and_sleep_flags(monkeypatch) -> None:
     assert "--enable-sleep-mode" in cmd
 
 
+def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(kv_cache_memory_bytes="4G"),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--kv-cache-memory-bytes")
+    assert cmd[idx + 1] == "4G"
+
+
+def test_build_cmd_omits_kv_cache_when_empty(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),  # kv_cache_memory_bytes defaults to ""
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--kv-cache-memory-bytes" not in cmd
+
+
+def test_vllm_config_kv_cache_validation() -> None:
+    import pytest
+
+    # Valid values
+    VllmConfig(kv_cache_memory_bytes="4G")
+    VllmConfig(kv_cache_memory_bytes="2048M")
+    VllmConfig(kv_cache_memory_bytes="512000000")
+    VllmConfig(kv_cache_memory_bytes="2.5G")
+    VllmConfig(kv_cache_memory_bytes="")
+
+    # Invalid values
+    with pytest.raises(Exception):
+        VllmConfig(kv_cache_memory_bytes="abc")
+    with pytest.raises(Exception):
+        VllmConfig(kv_cache_memory_bytes="-1G")
+
+
 def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) -> None:
     models_path = tmp_path / "models"
     models_path.mkdir(parents=True, exist_ok=True)

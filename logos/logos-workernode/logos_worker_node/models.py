@@ -65,6 +65,11 @@ class VllmConfig(BaseModel):
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
     gpu_memory_utilization: float = Field(default=0.90, ge=0.1, le=1.0)
+    kv_cache_memory_bytes: str = Field(
+        default="",
+        description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
+        "Empty = let vLLM decide from gpu_memory_utilization.",
+    )
     enforce_eager: bool = False
     enable_prefix_caching: bool = True
     disable_custom_all_reduce: bool = False
@@ -72,6 +77,19 @@ class VllmConfig(BaseModel):
     enable_sleep_mode: bool = False
     server_dev_mode: bool = False
     extra_args: list[str] = Field(default_factory=list)
+
+    @field_validator("kv_cache_memory_bytes")
+    @classmethod
+    def _validate_kv_cache(cls, value: str) -> str:
+        if not value or not value.strip():
+            return ""
+        v = value.strip().upper()
+        if re.fullmatch(r"\d+(\.\d+)?[GMK]?", v):
+            return v
+        raise ValueError(
+            f"Invalid kv_cache_memory_bytes: {value!r}. "
+            "Use e.g. '4G', '2048M', or raw byte count."
+        )
 
 
 class VllmEngineConfig(BaseModel):

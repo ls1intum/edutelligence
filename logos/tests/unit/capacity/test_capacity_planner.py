@@ -40,12 +40,13 @@ def _make_signal(
 
 
 class MockFacade:
-    def __init__(self, lanes=None, capacity=None, profiles=None):
+    def __init__(self, lanes=None, capacity=None, profiles=None, capabilities=None):
         self._lanes = lanes or []
         self._capacity = capacity or OllamaCapacity(
             available_vram_mb=32000, total_vram_mb=48000, loaded_models=[],
         )
         self._profiles = profiles or {}
+        self._capabilities = capabilities or []
 
     def provider_ids(self):
         return [10]
@@ -58,6 +59,9 @@ class MockFacade:
 
     def get_model_profiles(self, provider_id):
         return self._profiles
+
+    def get_worker_capabilities(self, provider_id):
+        return self._capabilities
 
 
 class MockRegistry:
@@ -122,10 +126,47 @@ def test_idle_sleep_l2_after_threshold():
     assert actions[0].action == "sleep_l2"
 
 
-def test_idle_stop_after_threshold():
-    """Lane idle for > IDLE_STOP → stop action."""
+def test_idle_stop_requires_vram_pressure():
+    """Lane idle for > IDLE_STOP without VRAM pressure → no stop, stays sleeping."""
     lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
+
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
+
+    actions = planner._compute_idle_actions(10, [lane])
+    # No stop action — only sleep_l2 deepening (which is fine, lane stays alive)
+    assert all(a.action != "stop" for a in actions)
+    # The sleeping lane gets deepened to L2 since 901 > IDLE_SLEEP_L2 (300)
+    assert len(actions) == 1
+    assert actions[0].action == "sleep_l2"
+
+
+def test_idle_stop_with_vram_pressure():
+    """Lane idle for > IDLE_STOP WITH VRAM pressure from another model → stop action."""
+    lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
+    demand = DemandTracker()
+    # Another model has high demand but no lane → needs VRAM
+    for _ in range(3):
+        demand.record_request("other-model")
+    planner = _make_planner(facade=MockFacade(lanes=[lane]), demand=demand)
+
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
+
+    actions = planner._compute_idle_actions(10, [lane])
+    assert len(actions) == 1
+    assert actions[0].action == "stop"
+
+
+def test_idle_stop_with_low_vram():
+    """Lane idle for > IDLE_STOP with low available VRAM and any other demand → stop."""
+    lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
+    demand = DemandTracker()
+    demand.record_request("other-model")  # Any demand (score=1, below DEMAND_LOAD_THRESHOLD)
+    facade = MockFacade(
+        lanes=[lane],
+        capacity=OllamaCapacity(available_vram_mb=3000, total_vram_mb=32768, loaded_models=[]),
+    )
+    planner = _make_planner(facade=facade, demand=demand)
 
     planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
 
@@ -145,7 +186,7 @@ def test_no_idle_action_when_active():
 
 
 def test_no_sleep_for_ollama_lanes():
-    """Ollama lanes don't support sleep, only stop after IDLE_STOP."""
+    """Ollama lanes don't support sleep. Stop only happens with VRAM pressure."""
     lane = _make_signal(is_vllm=False, runtime_state="loaded", sleep_state="unsupported")
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
@@ -154,9 +195,18 @@ def test_no_sleep_for_ollama_lanes():
     actions = planner._compute_idle_actions(10, [lane])
     assert actions == []
 
-    # Idle for 901s — stop threshold → action
+    # Idle for 901s — stop threshold, but no VRAM pressure → no action
     planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
     actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
+
+    # Idle for 901s WITH VRAM pressure → stop action
+    demand = DemandTracker()
+    for _ in range(3):
+        demand.record_request("other-model")
+    planner_with_demand = _make_planner(facade=MockFacade(lanes=[lane]), demand=demand)
+    planner_with_demand._lane_idle_since[(10, "lane-1")] = time.time() - 901
+    actions = planner_with_demand._compute_idle_actions(10, [lane])
     assert len(actions) == 1
     assert actions[0].action == "stop"
 
@@ -211,49 +261,63 @@ def test_demand_below_threshold_no_action():
 # ---------------------------------------------------------------------------
 
 
-def test_gpu_util_increase_on_high_cache():
-    """Cache > 85% → increase gpu_memory_utilization."""
-    lane = _make_signal(is_vllm=True, gpu_cache_usage_percent=90.0, gpu_memory_utilization=0.70)
-    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+def test_kv_cache_increase_on_high_cache():
+    """Cache > 85% → increase kv_cache_memory_bytes."""
+    lane = _make_signal(is_vllm=True, gpu_cache_usage_percent=90.0, model_name="model-a")
+    profile = ModelProfile(
+        model_name="model-a", engine="vllm", kv_budget_mb=4096.0,
+        base_residency_mb=14000.0,
+    )
+    planner = _make_planner(facade=MockFacade(lanes=[lane], profiles={"model-a": profile}))
 
-    actions = planner._compute_gpu_util_actions(10, [lane])
+    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
     assert len(actions) == 1
-    assert actions[0].action == "reconfigure_gpu_util"
-    assert actions[0].params["updates"]["vllm_config"]["gpu_memory_utilization"] == 0.75
+    assert actions[0].action == "reconfigure_kv_cache"
+    assert "kv_cache_memory_bytes" in actions[0].params["updates"]["vllm_config"]
 
 
-def test_gpu_util_decrease_on_low_cache_with_demand():
-    """Cache < 40% and other models have demand → decrease."""
+def test_kv_cache_decrease_on_low_cache_with_demand():
+    """Cache < 40% and other models have demand → decrease KV cache."""
     lane = _make_signal(
         model_name="model-a",
         is_vllm=True,
         gpu_cache_usage_percent=30.0,
-        gpu_memory_utilization=0.70,
+    )
+    profile = ModelProfile(
+        model_name="model-a", engine="vllm", kv_budget_mb=4096.0,
+        base_residency_mb=14000.0,
     )
     demand = DemandTracker()
     demand.record_request("model-b")  # Other model has demand
 
-    planner = _make_planner(facade=MockFacade(lanes=[lane]), demand=demand)
-    actions = planner._compute_gpu_util_actions(10, [lane])
+    planner = _make_planner(
+        facade=MockFacade(lanes=[lane], profiles={"model-a": profile}),
+        demand=demand,
+    )
+    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
     assert len(actions) == 1
-    assert actions[0].params["updates"]["vllm_config"]["gpu_memory_utilization"] == 0.65
+    assert actions[0].action == "reconfigure_kv_cache"
 
 
-def test_gpu_util_no_decrease_without_competing_demand():
+def test_kv_cache_no_decrease_without_competing_demand():
     """Cache low but no other demand → no action."""
     lane = _make_signal(model_name="model-a", is_vllm=True, gpu_cache_usage_percent=30.0)
-    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+    profile = ModelProfile(
+        model_name="model-a", engine="vllm", kv_budget_mb=4096.0,
+        base_residency_mb=14000.0,
+    )
+    planner = _make_planner(facade=MockFacade(lanes=[lane], profiles={"model-a": profile}))
 
-    actions = planner._compute_gpu_util_actions(10, [lane])
+    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
     assert actions == []
 
 
-def test_gpu_util_not_for_ollama():
-    """Ollama lanes → no GPU util tuning."""
+def test_kv_cache_tuning_not_for_ollama():
+    """Ollama lanes → no KV cache tuning."""
     lane = _make_signal(is_vllm=False, gpu_cache_usage_percent=95.0)
     planner = _make_planner()
 
-    actions = planner._compute_gpu_util_actions(10, [lane])
+    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
     assert actions == []
 
 
@@ -333,48 +397,59 @@ def test_vram_wake_costs_net_increase():
     assert len(wake_actions) == 1
 
 
-def test_vllm_vram_budget_scales_observed_reservation_to_planner_target():
-    """vLLM load cost should scale from observed reservation to Logos' target gpu util."""
+def test_vllm_vram_estimate_uses_base_plus_kv():
+    """vLLM load cost = base_residency + kv_cache (from action params or profile)."""
     from logos.sdi.models import CapacityPlanAction
 
     facade = MockFacade(
-        capacity=OllamaCapacity(available_vram_mb=29000, total_vram_mb=32768, loaded_models=[]),
+        capacity=OllamaCapacity(available_vram_mb=35000, total_vram_mb=48000, loaded_models=[]),
         profiles={
             "qwen-coder": ModelProfile(
                 model_name="qwen-coder",
                 loaded_vram_mb=30508.0,
                 base_residency_mb=15000.0,
-                kv_budget_mb=15508.0,
+                kv_budget_mb=5000.0,
                 engine="vllm",
-                observed_gpu_memory_utilization=0.90,
                 tensor_parallel_size=2,
             ),
         },
     )
     planner = _make_planner(facade=facade)
 
-    actions = [
-        CapacityPlanAction(
-            action="load",
-            provider_id=10,
-            lane_id="planner-qwen",
-            model_name="qwen-coder",
-            params={
-                    "vllm": True,
-                    "vllm_config": {
-                        "gpu_memory_utilization": 0.65,
-                        "tensor_parallel_size": 2,
-                    },
-                },
-                reason="test",
-            ),
-    ]
-    estimated = planner._estimate_action_vram(actions[0], facade.get_model_profiles(10)["qwen-coder"], facade.get_capacity_info(10))
-    assert estimated < 30508.0
-    assert estimated > 20000.0
-    validated = planner._validate_vram_budget(actions)
-    load_actions = [a for a in validated if a.action == "load"]
-    assert len(load_actions) == 1
+    # Action with explicit kv_cache_memory_bytes in vllm_config
+    action_with_kv = CapacityPlanAction(
+        action="load",
+        provider_id=10,
+        lane_id="planner-qwen",
+        model_name="qwen-coder",
+        params={
+            "vllm": True,
+            "vllm_config": {
+                "gpu_memory_utilization": 0.95,
+                "kv_cache_memory_bytes": "4G",
+                "tensor_parallel_size": 2,
+            },
+        },
+        reason="test",
+    )
+    profile = facade.get_model_profiles(10)["qwen-coder"]
+    cap = facade.get_capacity_info(10)
+    estimated = planner._estimate_action_vram(action_with_kv, profile, cap)
+    # base=15000 + kv=4096MB (4G) = 19096
+    assert abs(estimated - 19096.0) < 1.0
+
+    # Action without kv_cache_memory_bytes → falls back to profile's kv_budget_mb
+    action_no_kv = CapacityPlanAction(
+        action="load",
+        provider_id=10,
+        lane_id="planner-qwen",
+        model_name="qwen-coder",
+        params={"vllm": True, "vllm_config": {"gpu_memory_utilization": 0.95}},
+        reason="test",
+    )
+    estimated2 = planner._estimate_action_vram(action_no_kv, profile, cap)
+    # base=15000 + kv_budget=5000 = 20000
+    assert abs(estimated2 - 20000.0) < 1.0
 
 
 def test_vllm_load_params_are_built_from_profile():
@@ -402,11 +477,35 @@ def test_vllm_load_params_are_built_from_profile():
     assert action.action == "load"
     assert action.params["lane_id"] == action.lane_id
     assert action.params["vllm"] is True
-    assert action.params["vllm_config"]["gpu_memory_utilization"] == 0.55
+    # gpu_memory_utilization is now always 0.95 (ceiling)
+    assert action.params["vllm_config"]["gpu_memory_utilization"] == 0.95
     assert action.params["vllm_config"]["tensor_parallel_size"] == 2
+    # kv_cache_memory_bytes = base_residency * 0.35 = 15000 * 0.35 = 5250 MB
+    kv_str = action.params["vllm_config"]["kv_cache_memory_bytes"]
+    assert kv_str  # should be set
+    kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv_str)
+    assert abs(kv_mb - 5250.0) < 10
 
 
-def test_vllm_small_model_gets_higher_auto_gpu_util():
+def test_kv_cache_bytes_from_observed_budget():
+    """When profile has observed kv_budget_mb, use it directly."""
+    planner = _make_planner()
+    profile = ModelProfile(
+        model_name="qwen-7b",
+        engine="vllm",
+        base_residency_mb=15000.0,
+        kv_budget_mb=8000.0,
+        tensor_parallel_size=1,
+    )
+    capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
+    kv = planner._compute_kv_cache_bytes(profile, capacity)
+    assert kv is not None
+    kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv)
+    assert abs(kv_mb - 8000.0) < 10
+
+
+def test_kv_cache_bytes_from_headroom_ratio():
+    """When no observed kv_budget, estimate from base_residency * 0.35."""
     planner = _make_planner()
     profile = ModelProfile(
         model_name="tiny-1b",
@@ -415,20 +514,29 @@ def test_vllm_small_model_gets_higher_auto_gpu_util():
         tensor_parallel_size=1,
     )
     capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
-    assert planner._recommended_vllm_gpu_util(profile, capacity) == 0.8
+    kv = planner._compute_kv_cache_bytes(profile, capacity)
+    assert kv is not None
+    kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv)
+    assert abs(kv_mb - 1400.0) < 10  # 4000 * 0.35 = 1400
 
 
-def test_vllm_load_floor_clamps_auto_target():
+def test_kv_cache_bytes_none_when_no_profile():
+    """No profile → return None, let vLLM decide."""
+    planner = _make_planner()
+    assert planner._compute_kv_cache_bytes(None, None) is None
+
+
+def test_gpu_util_always_ceiling():
+    """_recommended_vllm_gpu_util always returns GPU_UTIL_MAX (0.95)."""
     planner = _make_planner()
     profile = ModelProfile(
         model_name="qwen-coder",
         engine="vllm",
         base_residency_mb=4000.0,
-        min_gpu_memory_utilization_to_load=0.82,
         tensor_parallel_size=1,
     )
     capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
-    assert planner._recommended_vllm_gpu_util(profile, capacity) == 0.82
+    assert planner._recommended_vllm_gpu_util(profile, capacity) == 0.95
 
 
 @pytest.mark.asyncio
@@ -930,3 +1038,207 @@ def test_preemptive_sleep_skips_model_with_active_lane():
 
     actions = planner._compute_preemptive_sleep_actions(10, [lane])
     assert actions == []
+
+
+# ---------------------------------------------------------------------------
+# Capability seeding
+# ---------------------------------------------------------------------------
+
+def test_capability_seeding_zero_lane_worker():
+    """Worker with zero lanes but capabilities should get load actions for in-demand models."""
+    demand = DemandTracker()
+    demand.record_request("qwen-coder")
+
+    facade = MockFacade(
+        lanes=[],
+        capacity=OllamaCapacity(available_vram_mb=32000, total_vram_mb=48000, loaded_models=[]),
+        profiles={},
+        capabilities=["qwen-coder", "llama-8b"],
+    )
+    planner = _make_planner(facade=facade, demand=demand)
+
+    actions = planner._compute_demand_actions(10, [])
+    # qwen-coder has demand, llama-8b doesn't
+    load_actions = [a for a in actions if a.action == "load"]
+    assert len(load_actions) == 1
+    assert load_actions[0].model_name == "qwen-coder"
+    assert "Capability seeding" in load_actions[0].reason
+
+
+def test_capability_seeding_skips_when_lanes_exist():
+    """Worker with existing lanes should not trigger capability seeding."""
+    demand = DemandTracker()
+    demand.record_request("qwen-coder")
+
+    lane = _make_signal(model_name="other-model", runtime_state="loaded")
+    facade = MockFacade(
+        lanes=[lane],
+        capacity=OllamaCapacity(available_vram_mb=32000, total_vram_mb=48000, loaded_models=[]),
+        profiles={},
+        capabilities=["qwen-coder"],
+    )
+    planner = _make_planner(facade=facade, demand=demand)
+
+    actions = planner._compute_demand_actions(10, [lane])
+    # Normal demand load might fire (score >= 2.0), but capability seeding should not
+    cap_actions = [a for a in actions if "Capability seeding" in (a.reason or "")]
+    assert cap_actions == []
+
+
+def test_capability_seeding_no_demand():
+    """Capabilities with no demand should not trigger load."""
+    facade = MockFacade(
+        lanes=[],
+        capabilities=["qwen-coder"],
+    )
+    planner = _make_planner(facade=facade)
+
+    actions = planner._compute_demand_actions(10, [])
+    assert actions == []
+
+
+# ---------------------------------------------------------------------------
+# Feasibility check
+# ---------------------------------------------------------------------------
+
+def test_feasibility_rejects_oom():
+    """Model too large for available VRAM → feasibility fails."""
+    planner = _make_planner()
+    profile = ModelProfile(
+        model_name="huge-model",
+        engine="vllm",
+        base_residency_mb=40000.0,
+    )
+    capacity = OllamaCapacity(available_vram_mb=20000, total_vram_mb=24000, loaded_models=[])
+    assert not planner._passes_minimum_load_feasibility("huge-model", profile, capacity)
+
+
+def test_feasibility_passes():
+    """Model fits in available VRAM → feasibility passes."""
+    planner = _make_planner()
+    profile = ModelProfile(
+        model_name="small-model",
+        engine="vllm",
+        base_residency_mb=5000.0,
+        kv_budget_mb=2000.0,
+    )
+    capacity = OllamaCapacity(available_vram_mb=20000, total_vram_mb=24000, loaded_models=[])
+    assert planner._passes_minimum_load_feasibility("small-model", profile, capacity)
+
+
+def test_feasibility_no_profile_allows():
+    """No profile → can't estimate, allow the load."""
+    planner = _make_planner()
+    capacity = OllamaCapacity(available_vram_mb=20000, total_vram_mb=24000, loaded_models=[])
+    assert planner._passes_minimum_load_feasibility("unknown-model", None, capacity)
+
+
+# ---------------------------------------------------------------------------
+# Exact KV cache from kv_per_token_bytes
+# ---------------------------------------------------------------------------
+
+def test_kv_cache_from_per_token_calculation():
+    """KV cache computed from kv_per_token_bytes × context × concurrency."""
+    planner = _make_planner()
+    # Qwen2.5-7B: 57344 bytes/token × 8192 ctx × 4 seq = 1,879,048,192 bytes ≈ 1792M
+    profile = ModelProfile(
+        model_name="qwen-7b",
+        engine="vllm",
+        kv_per_token_bytes=57344,
+        max_context_length=32768,
+        base_residency_mb=15000.0,
+    )
+    kv = planner._compute_kv_cache_bytes(profile)
+    assert kv is not None
+    kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv)
+    # 57344 * 8192 * 4 / 1024² = 1792 MB (context capped at DEFAULT_CONTEXT_CAP=8192)
+    assert abs(kv_mb - 1792.0) < 10
+
+
+def test_kv_cache_observed_budget_takes_priority():
+    """Observed kv_budget_mb takes priority over per-token calculation."""
+    planner = _make_planner()
+    profile = ModelProfile(
+        model_name="qwen-7b",
+        engine="vllm",
+        kv_budget_mb=5000.0,
+        kv_per_token_bytes=57344,
+        max_context_length=32768,
+        base_residency_mb=15000.0,
+    )
+    kv = planner._compute_kv_cache_bytes(profile)
+    assert kv is not None
+    kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv)
+    assert abs(kv_mb - 5000.0) < 10  # uses observed, not calculated
+
+
+def test_kv_cache_falls_back_to_headroom_ratio():
+    """Without kv_per_token or observed budget, falls back to headroom ratio."""
+    planner = _make_planner()
+    profile = ModelProfile(
+        model_name="unknown-model",
+        engine="vllm",
+        base_residency_mb=10000.0,
+    )
+    kv = planner._compute_kv_cache_bytes(profile)
+    assert kv is not None
+    kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv)
+    assert abs(kv_mb - 3500.0) < 10  # 10000 * 0.35
+
+
+def test_feasibility_uses_per_token_kv():
+    """Feasibility check uses kv_per_token_bytes when available."""
+    planner = _make_planner()
+    # Gemma2-2B: 106496 bytes/token × 8192 × 4 = ~3.2 GB KV
+    profile = ModelProfile(
+        model_name="gemma2-2b",
+        engine="vllm",
+        base_residency_mb=5000.0,
+        kv_per_token_bytes=106496,
+        max_context_length=8192,
+    )
+    # Need: 5000 + 3328 ≈ 8328 MB × 1.1 margin ≈ 9161 MB
+    capacity_ok = OllamaCapacity(available_vram_mb=10000, total_vram_mb=24000, loaded_models=[])
+    assert planner._passes_minimum_load_feasibility("gemma2-2b", profile, capacity_ok)
+
+    capacity_tight = OllamaCapacity(available_vram_mb=8000, total_vram_mb=24000, loaded_models=[])
+    assert not planner._passes_minimum_load_feasibility("gemma2-2b", profile, capacity_tight)
+
+
+# ---------------------------------------------------------------------------
+# Sleep-before-reconfigure
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reconfigure_kv_cache_sleeps_before_restart():
+    """reconfigure_kv_cache should sleep the lane before sending reconfigure_lane."""
+    from logos.sdi.models import CapacityPlanAction
+
+    registry = MockRegistry()
+    # Set up snapshot so confirmation polling sees loaded state
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [{"lane_id": "lane-1", "runtime_state": "loaded", "model": "model-a"}]
+        }
+    }
+    planner = _make_planner(registry=registry)
+
+    action = CapacityPlanAction(
+        action="reconfigure_kv_cache",
+        provider_id=10,
+        lane_id="lane-1",
+        model_name="model-a",
+        params={"updates": {"vllm_config": {"kv_cache_memory_bytes": "2048M"}}},
+        reason="test",
+    )
+
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
+    assert result is True
+
+    # Verify: first command is sleep_lane, second is reconfigure_lane
+    assert len(registry.commands_sent) == 2
+    assert registry.commands_sent[0]["action"] == "sleep_lane"
+    assert registry.commands_sent[0]["params"]["lane_id"] == "lane-1"
+    assert registry.commands_sent[0]["params"]["mode"] == "wait"
+    assert registry.commands_sent[1]["action"] == "reconfigure_lane"
+    assert registry.commands_sent[1]["params"]["lane_id"] == "lane-1"

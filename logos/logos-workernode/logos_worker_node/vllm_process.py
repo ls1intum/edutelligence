@@ -405,6 +405,8 @@ class VllmProcessHandle:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
         elif lane_config.context_length > 0:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
+        if vc.kv_cache_memory_bytes:
+            cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
         # ``--enforce-eager`` is both an explicit option and our fallback when

@@ -243,10 +243,10 @@ async def test_ettft_disabled_uses_raw_weights():
 
 
 @pytest.mark.asyncio
-async def test_all_unavailable_returns_none():
-    """All candidates unavailable → None (no queueing possible)."""
+async def test_no_view_treated_as_cold():
+    """No scheduler view → COLD (not UNAVAILABLE), model is still schedulable for cold-load."""
     logosnode = MockLogosNodeFacade()
-    # No views set → get_model_scheduler_view returns None → UNAVAILABLE
+    # No views set → get_model_scheduler_view returns None → COLD (was UNAVAILABLE)
 
     scheduler = _make_scheduler(logosnode=logosnode, ettft_enabled=True)
 
@@ -255,7 +255,10 @@ async def test_all_unavailable_returns_none():
     request = _make_request(candidates, deployments)
 
     result = await scheduler.schedule(request)
-    assert result is None
+    # Model is now COLD (penalty=20), not UNAVAILABLE — it can be scheduled
+    assert result is not None
+    assert result.ettft_tier == "cold"
+    assert result.ettft_estimate_ms == 45000.0
 
 
 # ---------------------------------------------------------------------------
