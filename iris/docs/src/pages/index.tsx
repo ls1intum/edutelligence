@@ -9,8 +9,6 @@ import StudentQuotes from "../components/home/StudentQuotes";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
 import EcosystemFooter from "../components/home/EcosystemFooter";
-import pageStyles from "./index.module.css";
-
 export default function Home(): React.JSX.Element {
   return (
     <Layout
@@ -35,21 +33,13 @@ export default function Home(): React.JSX.Element {
       {/* 6. Student Quotes */}
       <StudentQuotes />
 
-      {/* 7. Screencast Placeholder */}
-      {/* TODO: Replace with Course Chat demo, then programming exercise screencast */}
-      <section className={pageStyles.screencastSection}>
-        <div className={pageStyles.screencastPlaceholder}>
-          Feature screencast coming soon
-        </div>
-      </section>
-
-      {/* 8. Audience Quickstart Cards */}
+      {/* 7. Audience Quickstart Cards */}
       <AudienceCards />
 
-      {/* 9. FAQ */}
+      {/* 8. FAQ */}
       <FaqSection />
 
-      {/* 10. EduTelligence Ecosystem */}
+      {/* 9. EduTelligence Ecosystem */}
       <EcosystemFooter />
     </Layout>
   );

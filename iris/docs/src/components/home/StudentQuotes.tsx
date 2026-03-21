@@ -22,7 +22,7 @@ export default function StudentQuotes(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.section}>
+    <section className={styles.sectionAlt}>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={`${styles.quoteBlock} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""}`}
