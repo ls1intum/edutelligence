@@ -76,7 +76,7 @@ export default function StudentQuotes(): React.JSX.Element {
                 </div>
               </div>
               <blockquote className={styles.testimonialQuote}>
-                &ldquo;{t.text}&rdquo;
+                {t.text}
               </blockquote>
             </div>
           ))}

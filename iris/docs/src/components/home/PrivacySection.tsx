@@ -81,12 +81,82 @@ const cards = [
 
 const staggerClasses = [styles.stagger1, styles.stagger2, styles.stagger3];
 
+function ShieldWatermark(): React.JSX.Element {
+  return (
+    <svg
+      className={styles.privacyWatermark}
+      width="240"
+      height="280"
+      viewBox="0 0 240 280"
+      fill="none"
+      aria-hidden="true"
+    >
+      {/* Large shield outline */}
+      <path
+        d="M120 16L30 56V136C30 200 120 260 120 260C120 260 210 200 210 136V56L120 16Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        opacity="0.08"
+      />
+      {/* Inner shield */}
+      <path
+        d="M120 44L52 74V130C52 180 120 228 120 228C120 228 188 180 188 130V74L120 44Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        opacity="0.05"
+      />
+      {/* Lock body */}
+      <rect
+        x="92"
+        y="120"
+        width="56"
+        height="44"
+        rx="6"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        opacity="0.1"
+      />
+      {/* Lock shackle */}
+      <path
+        d="M102 120V106C102 96 110 88 120 88C130 88 138 96 138 106V120"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        opacity="0.1"
+      />
+      {/* Keyhole */}
+      <circle
+        cx="120"
+        cy="140"
+        r="5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        opacity="0.08"
+      />
+      <line
+        x1="120"
+        y1="145"
+        x2="120"
+        y2="153"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        opacity="0.08"
+      />
+    </svg>
+  );
+}
+
 export default function PrivacySection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
     <section className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
+        <ShieldWatermark />
         <h2 className={styles.sectionHeadingAccent}>Your Data, Your Control</h2>
         <p className={styles.sectionSubtitle}>
           Privacy isn&apos;t an afterthought. Iris is designed from the ground

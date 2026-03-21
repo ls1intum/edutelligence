@@ -84,12 +84,156 @@ const cards = [
 
 const staggerClasses = [styles.stagger1, styles.stagger2, styles.stagger3];
 
+function DocumentStackWatermark(): React.JSX.Element {
+  return (
+    <svg
+      className={styles.courseMaterialWatermark}
+      width="280"
+      height="320"
+      viewBox="0 0 280 320"
+      fill="none"
+      aria-hidden="true"
+    >
+      {/* Back document — most rotated */}
+      <rect
+        x="60"
+        y="20"
+        width="180"
+        height="240"
+        rx="8"
+        transform="rotate(-6 60 20)"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        opacity="0.15"
+      />
+      <line
+        x1="90"
+        y1="70"
+        x2="210"
+        y2="62"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.1"
+      />
+      <line
+        x1="90"
+        y1="90"
+        x2="190"
+        y2="83"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.1"
+      />
+
+      {/* Middle document */}
+      <rect
+        x="50"
+        y="30"
+        width="180"
+        height="240"
+        rx="8"
+        transform="rotate(-3 50 30)"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        opacity="0.2"
+      />
+      <line
+        x1="80"
+        y1="80"
+        x2="200"
+        y2="76"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.12"
+      />
+      <line
+        x1="80"
+        y1="100"
+        x2="180"
+        y2="97"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.12"
+      />
+      <line
+        x1="80"
+        y1="120"
+        x2="195"
+        y2="117"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.12"
+      />
+
+      {/* Front document */}
+      <rect
+        x="40"
+        y="40"
+        width="180"
+        height="240"
+        rx="8"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+        opacity="0.25"
+      />
+      <line
+        x1="70"
+        y1="90"
+        x2="190"
+        y2="90"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.15"
+      />
+      <line
+        x1="70"
+        y1="110"
+        x2="170"
+        y2="110"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.15"
+      />
+      <line
+        x1="70"
+        y1="130"
+        x2="185"
+        y2="130"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.15"
+      />
+      <line
+        x1="70"
+        y1="150"
+        x2="160"
+        y2="150"
+        stroke="currentColor"
+        strokeWidth="1"
+        opacity="0.15"
+      />
+      {/* Corner fold */}
+      <path
+        d="M190 40 L220 40 L220 70 Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        opacity="0.15"
+      />
+    </svg>
+  );
+}
+
 export default function CourseMaterialsSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
     <section className={styles.sectionNavy}>
       <div className={styles.sectionNavyInner}>
+        <DocumentStackWatermark />
         <h2 className={styles.sectionHeading}>
           Powered by Your Course Materials
         </h2>

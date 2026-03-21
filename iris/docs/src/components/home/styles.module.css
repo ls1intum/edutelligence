@@ -2941,4 +2941,24 @@
   .faqQuestion {
     padding: 1.35rem 0;
   }
+
+  /* Reduce clip-path angle on mobile */
+  .sectionScaleBg {
+    clip-path: polygon(0 2vw, 100% 0, 100% calc(100% - 2vw), 0 100%);
+    margin-top: -1vw;
+    margin-bottom: -1vw;
+    padding: 3.5rem 1rem 4rem;
+  }
+
+  .sectionNavy {
+    padding: 3rem 1rem;
+  }
+
+  .sectionParchment {
+    padding: 3rem 1rem;
+  }
+
+  .sectionAmber {
+    padding: 3.5rem 1rem;
+  }
 }

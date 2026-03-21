@@ -28,6 +28,49 @@ const steps = [
 
 const staggerClasses = [styles.stagger1, styles.stagger2, styles.stagger3];
 
+function FlowConnector(): React.JSX.Element {
+  return (
+    <svg
+      className={styles.howItWorksConnector}
+      viewBox="0 0 800 24"
+      fill="none"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <line
+        x1="130"
+        y1="12"
+        x2="370"
+        y2="12"
+        stroke="var(--ifm-color-primary)"
+        strokeWidth="2"
+        strokeDasharray="6 4"
+        strokeOpacity="0.3"
+      />
+      <polygon
+        points="370,7 380,12 370,17"
+        fill="var(--ifm-color-primary)"
+        fillOpacity="0.3"
+      />
+      <line
+        x1="430"
+        y1="12"
+        x2="670"
+        y2="12"
+        stroke="var(--ifm-color-primary)"
+        strokeWidth="2"
+        strokeDasharray="6 4"
+        strokeOpacity="0.3"
+      />
+      <polygon
+        points="670,7 680,12 670,17"
+        fill="var(--ifm-color-primary)"
+        fillOpacity="0.3"
+      />
+    </svg>
+  );
+}
+
 export default function HowItWorksSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
@@ -39,21 +82,24 @@ export default function HowItWorksSection(): React.JSX.Element {
       </p>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
-        className={styles.howItWorksGrid}
+        className={styles.howItWorksGridWrapper}
       >
-        {steps.map((step, i) => (
-          <div
-            key={step.title}
-            className={`${styles.howItWorksCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
-          >
-            <div className={styles.howItWorksNumber}>{step.number}</div>
-            <div className={styles.howItWorksEmoji} aria-hidden="true">
-              {step.emoji}
+        <FlowConnector />
+        <div className={styles.howItWorksGrid}>
+          {steps.map((step, i) => (
+            <div
+              key={step.title}
+              className={`${styles.howItWorksCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
+            >
+              <div className={styles.howItWorksNumber}>{step.number}</div>
+              <div className={styles.howItWorksEmoji} aria-hidden="true">
+                {step.emoji}
+              </div>
+              <h3 className={styles.howItWorksTitle}>{step.title}</h3>
+              <p className={styles.howItWorksDesc}>{step.description}</p>
             </div>
-            <h3 className={styles.howItWorksTitle}>{step.title}</h3>
-            <p className={styles.howItWorksDesc}>{step.description}</p>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </section>
   );
