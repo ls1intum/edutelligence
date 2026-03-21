@@ -7,7 +7,7 @@ export default function ComparisonSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionAlt}>
+    <section id="comparison" className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
         <h2 className={styles.sectionHeading}>How Iris Is Different</h2>
         <p className={styles.sectionSubtitle}>

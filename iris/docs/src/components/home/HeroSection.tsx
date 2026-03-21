@@ -21,9 +21,9 @@ export default function HeroSection(): React.JSX.Element {
         </p>
         <p className={styles.heroProof}>Used by 1,600+ students at TU Munich</p>
         <div className={styles.heroCtas}>
-          <Link className={styles.btnPrimary} to="/docs/overview/what-is-iris">
+          <a className={styles.btnPrimary} href="#comparison">
             See How It Works
-          </Link>
+          </a>
           <Link className={styles.btnGhost} to="/docs/research/publications">
             Read the Research
           </Link>
