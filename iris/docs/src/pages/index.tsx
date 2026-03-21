@@ -9,7 +9,6 @@ import StudentQuotes from "../components/home/StudentQuotes";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
 import ClosingCta from "../components/home/ClosingCta";
-import EcosystemFooter from "../components/home/EcosystemFooter";
 export default function Home(): React.JSX.Element {
   return (
     <Layout
@@ -40,10 +39,7 @@ export default function Home(): React.JSX.Element {
       {/* 8. FAQ */}
       <FaqSection />
 
-      {/* 9. EduTelligence Ecosystem */}
-      <EcosystemFooter />
-
-      {/* 10. Closing CTA — final action before footer */}
+      {/* 9. Closing CTA — final action before footer */}
       <ClosingCta />
     </Layout>
   );
