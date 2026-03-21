@@ -4,10 +4,26 @@ import styles from "./styles.module.css";
 import { useFadeIn } from "./useFadeIn";
 
 const stats = [
-  { number: "275", label: "students in randomized controlled trial" },
-  { number: "+0.55", label: "Cohen\u2019s d increase in intrinsic motivation" },
-  { number: "\u22120.81", label: "Cohen\u2019s d reduction in frustration" },
-  { number: "3", label: "peer-reviewed publications" },
+  {
+    number: "275",
+    label: "students",
+    subtitle: "in a randomized controlled trial",
+  },
+  {
+    number: "+0.55",
+    label: "effect size",
+    subtitle: "significantly more motivated",
+  },
+  {
+    number: "\u22120.81",
+    label: "effect size",
+    subtitle: "dramatically less frustrated",
+  },
+  {
+    number: "3",
+    label: "papers",
+    subtitle: "peer-reviewed and published",
+  },
 ];
 
 const staggerClasses = [
@@ -38,6 +54,7 @@ export default function ResearchHighlights(): React.JSX.Element {
           >
             <div className={styles.statNumber}>{s.number}</div>
             <div className={styles.statLabel}>{s.label}</div>
+            <div className={styles.statSubtitle}>{s.subtitle}</div>
           </div>
         ))}
       </div>
