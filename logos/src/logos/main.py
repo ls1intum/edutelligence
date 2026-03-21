@@ -2341,9 +2341,21 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
 
+_LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
+    "apply_lanes": 180,
+    "reconfigure_lane": 180,
+    "sleep_lane": 30,
+    "wake_lane": 60,
+    "delete_lane": 30,
+}
+
+
 async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
     try:
-        return await _logosnode_registry.send_command(provider_id, action=action, params=params or {})
+        timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
+        return await _logosnode_registry.send_command(
+            provider_id, action=action, params=params or {}, timeout_seconds=timeout,
+        )
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
     except LogosNodeCommandError as exc:

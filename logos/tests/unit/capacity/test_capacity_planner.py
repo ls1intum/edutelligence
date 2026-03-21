@@ -477,8 +477,8 @@ def test_vllm_load_params_are_built_from_profile():
     assert action.action == "load"
     assert action.params["lane_id"] == action.lane_id
     assert action.params["vllm"] is True
-    # gpu_memory_utilization is now always 0.95 (ceiling)
-    assert action.params["vllm_config"]["gpu_memory_utilization"] == 0.95
+    # gpu_memory_utilization is 0.70 when kv_cache_memory_bytes is set (startup guard bypass)
+    assert action.params["vllm_config"]["gpu_memory_utilization"] == 0.70
     assert action.params["vllm_config"]["tensor_parallel_size"] == 2
     # kv_cache_memory_bytes = base_residency * 0.35 = 15000 * 0.35 = 5250 MB
     kv_str = action.params["vllm_config"]["kv_cache_memory_bytes"]

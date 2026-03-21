@@ -251,7 +251,7 @@ class CapacityPlanner:
         self,
         provider_id: int,
         model_name: str,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = 180.0,
     ) -> dict[str, Any] | None:
         """Prepare a lane for request-time execution.
 
@@ -386,7 +386,7 @@ class CapacityPlanner:
 
         logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, provider_id, lane_id)
         loaded = await self._execute_action_with_confirmation(
-            load_action, timeout_seconds=min(timeout_seconds, 90.0),
+            load_action, timeout_seconds=max(timeout_seconds, 180.0),
         )
         if not loaded:
             return None
@@ -1109,7 +1109,6 @@ class CapacityPlanner:
             return params
         params["vllm"] = True
         vllm_config: Dict[str, Any] = {
-            "gpu_memory_utilization": self.GPU_UTIL_MAX,  # 0.95 ceiling
             "enable_sleep_mode": True,
             "server_dev_mode": True,
         }
@@ -1119,7 +1118,12 @@ class CapacityPlanner:
             vllm_config["tensor_parallel_size"] = int(profile.tensor_parallel_size)
         kv = self._compute_kv_cache_bytes(profile, capacity)
         if kv:
+            # Explicit KV cache — vLLM skips memory profiling and ignores
+            # gpu_memory_utilization for allocation, but still checks it as
+            # a startup guard (free >= util × total). Set it low so it
+            # doesn't block hot-swaps where a sleeping process holds some VRAM.
             vllm_config["kv_cache_memory_bytes"] = kv
+            vllm_config["gpu_memory_utilization"] = 0.70
         params["vllm_config"] = vllm_config
         return params
 

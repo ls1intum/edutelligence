@@ -355,7 +355,10 @@ class LogosBridgeClient:
             lanes = [LaneConfig(**item) for item in (params.get("lanes") or [])]
             result = await lane_manager.apply_lanes(lanes)
             if result.success:
-                save_lanes_config(lanes)
+                try:
+                    save_lanes_config(lanes)
+                except OSError:
+                    logger.debug("Could not persist lane config (read-only filesystem)")
             return result.model_dump(mode="json")
 
         lane_id = str(params.get("lane_id", "")).strip()
