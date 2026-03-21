@@ -71,6 +71,8 @@
 }
 
 .sectionAltInner {
+  position: relative;
+  overflow: hidden;
   max-width: 1100px;
   margin: 0 auto;
 }
@@ -172,6 +174,8 @@
 }
 
 .sectionNavyInner {
+  position: relative;
+  overflow: hidden;
   max-width: 1100px;
   margin: 0 auto;
 }
@@ -2001,6 +2005,25 @@
 
 /* ─── Course Materials Section ─── */
 
+.courseMaterialWatermark {
+  position: absolute;
+  bottom: 1rem;
+  right: -2rem;
+  color: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+  z-index: 0;
+}
+
+[data-theme="dark"] .courseMaterialWatermark {
+  color: rgba(90, 159, 214, 0.06);
+}
+
+@media (max-width: 768px) {
+  .courseMaterialWatermark {
+    display: none;
+  }
+}
+
 .courseMaterialsGrid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -2064,7 +2087,31 @@
 
 /* ─── How It Works Section ─── */
 
+.howItWorksGridWrapper {
+  position: relative;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.howItWorksConnector {
+  position: absolute;
+  top: 48px;
+  left: 0;
+  width: 100%;
+  height: 24px;
+  z-index: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 996px) {
+  .howItWorksConnector {
+    display: none;
+  }
+}
+
 .howItWorksGrid {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 1.5rem;
@@ -2473,6 +2520,52 @@
   margin-bottom: 0;
 }
 
+/* ─── Pull Quote (magazine-style) ─── */
+
+.pullQuote {
+  position: relative;
+  margin: 2rem 0;
+  padding: 1.75rem 2rem 1.75rem 2.5rem;
+  border: none;
+  border-left: 4px solid var(--ifm-color-primary);
+  background: transparent;
+}
+
+.pullQuote::before {
+  content: "\201C";
+  font-family: "DM Serif Display", serif;
+  font-size: 5rem;
+  font-style: normal;
+  color: var(--ifm-color-primary);
+  opacity: 0.15;
+  position: absolute;
+  top: -0.5rem;
+  left: 0.5rem;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.pullQuoteText {
+  font-family: "DM Serif Display", serif;
+  font-size: 1.25rem;
+  font-style: italic;
+  line-height: 1.6;
+  color: var(--ifm-font-color-base);
+  margin: 0 0 0.75rem;
+}
+
+.pullQuoteCite {
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 0.85rem;
+  font-style: normal;
+  color: var(--iris-label-color);
+  display: block;
+}
+
+[data-theme="dark"] .pullQuote::before {
+  opacity: 0.1;
+}
+
 .comfortTrapCallout {
   backdrop-filter: blur(16px) saturate(180%);
   -webkit-backdrop-filter: blur(16px) saturate(180%);
@@ -2585,6 +2678,21 @@
 }
 
 /* ─── Privacy Section ─── */
+
+.privacyWatermark {
+  position: absolute;
+  top: 0;
+  left: -2rem;
+  color: var(--ifm-color-primary);
+  pointer-events: none;
+  z-index: 0;
+}
+
+@media (max-width: 768px) {
+  .privacyWatermark {
+    display: none;
+  }
+}
 
 .privacyGrid {
   display: grid;

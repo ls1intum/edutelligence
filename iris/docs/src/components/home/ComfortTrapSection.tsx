@@ -41,6 +41,16 @@ export default function ComfortTrapSection(): React.JSX.Element {
             keep going.
           </p>
         </div>
+        <blockquote className={styles.pullQuote}>
+          <p className={styles.pullQuoteText}>
+            &ldquo;A part of your brain turns off when you are basically telling
+            the AI to do the stuff and all of your focus is just diverted to see
+            that the input and output is basically working or not.&rdquo;
+          </p>
+          <cite className={styles.pullQuoteCite}>
+            &mdash; Student P22, Control Group (Koli Calling 2025)
+          </cite>
+        </blockquote>
         <div className={styles.comfortTrapCallout}>
           <h3 className={styles.comfortTrapCalloutTitle}>
             What is productive struggle?
