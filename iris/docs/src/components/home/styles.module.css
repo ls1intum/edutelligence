@@ -149,7 +149,7 @@
 
 .sectionNavy .sectionSubtitle,
 .sectionNavy .courseMaterialDesc {
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(255, 255, 255, 0.82);
 }
 
 .sectionNavy .courseMaterialIcon {
@@ -282,7 +282,7 @@
 }
 
 .sectionScaleBg .sectionSubtitle {
-  color: rgba(255, 255, 255, 0.78);
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .sectionScaleBg .scaleCard {
@@ -305,7 +305,7 @@
 }
 
 .sectionScaleBg .scaleDetail {
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(255, 255, 255, 0.78);
 }
 
 [data-theme="dark"] .sectionScaleBg {
@@ -3098,6 +3098,10 @@
 
   .quoteText {
     font-size: 1.05rem;
+  }
+
+  .quoteGrid {
+    grid-template-columns: 1fr;
   }
 
   .comparisonCol {
