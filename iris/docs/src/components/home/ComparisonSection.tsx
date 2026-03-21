@@ -30,8 +30,12 @@ export default function ComparisonSection(): React.JSX.Element {
                 <strong>Student:</strong> How do I do the BWT rotation step?
               </div>
               <div className={styles.comparisonBubble}>
-                <strong>Chatbot:</strong> Here&rsquo;s the solution for the BWT
-                rotation: <code>sorted(rotations)</code>
+                <strong>Chatbot:</strong> Sure! Here&rsquo;s the full
+                implementation for the BWT rotation step:{" "}
+                <code>
+                  rotations = [s[i:] + s[:i] for i in range(len(s))]; table =
+                  sorted(rotations); ...
+                </code>
               </div>
               <p className={styles.comparisonOutcome}>
                 Student copies the answer. Learns nothing.
