@@ -1,0 +1,206 @@
+- generic [ref=e2]:
+  - region "Skip to main content":
+    - link "Skip to main content" [ref=e3] [cursor=pointer]:
+      - /url: "#__docusaurus_skipToContent_fallback"
+  - navigation "Main" [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - link "Iris Logo Iris" [ref=e7] [cursor=pointer]:
+          - /url: /edutelligence/iris/
+          - img "Iris Logo" [ref=e188]
+          - generic [ref=e10]: Iris
+        - link "Overview" [ref=e11] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/overview/what-is-iris
+        - link "Student Guide" [ref=e12] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/student/getting-started
+        - link "Instructor Guide" [ref=e13] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/instructor/enabling-iris
+        - link "Developer Guide" [ref=e14] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/developer/local-setup
+        - link "Admin Guide" [ref=e15] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/admin/deployment
+        - link "Research" [ref=e16] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/research/pedagogical-design
+      - generic [ref=e17]:
+        - link "GitHub(opens in new tab)" [ref=e18] [cursor=pointer]:
+          - /url: https://github.com/ls1intum/edutelligence
+          - text: GitHub
+          - img "(opens in new tab)" [ref=e19]
+        - button "Switch between dark and light mode (currently dark mode)" [active] [ref=e189] [cursor=pointer]:
+          - img [ref=e190]
+  - generic [ref=e25]:
+    - banner [ref=e27]:
+      - img "Iris mascot" [ref=e28]
+      - heading "The AI tutor that teaches, not just answers" [level=1] [ref=e29]:
+        - text: The AI tutor that teaches, not just
+        - emphasis [ref=e30]: answers
+      - paragraph [ref=e31]: An AI tutor built into Artemis, grounded in course materials, and backed by peer-reviewed research at TU Munich.
+      - paragraph [ref=e32]: Used by 1,600+ students at TU Munich in Winter 2025/26
+      - generic [ref=e33]:
+        - link "See How It Works" [ref=e34] [cursor=pointer]:
+          - /url: "#comparison"
+        - link "Read the Research" [ref=e35] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/research/publications
+    - generic [ref=e36]:
+      - generic [ref=e37]: Integrated into Artemis at TUM
+      - generic [ref=e39]: 1,600+ students in Winter 2025/26
+      - generic [ref=e41]: MIT Licensed
+      - generic [ref=e43]: 3 Published Papers
+    - generic [ref=e45]:
+      - heading "Why Iris?" [level=2] [ref=e46]
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - heading "Hints, Not Answers" [level=3] [ref=e49]
+          - paragraph [ref=e50]: Guides students through the problem instead of solving it for them.
+        - generic [ref=e51]:
+          - heading "Context-Aware" [level=3] [ref=e52]
+          - paragraph [ref=e53]: Reads your code, tests, and course materials automatically.
+        - generic [ref=e54]:
+          - heading "Always Accurate" [level=3] [ref=e55]
+          - paragraph [ref=e56]: Grounded in lecture content with citations you can verify.
+    - generic [ref=e58]:
+      - heading "How Iris Is Different" [level=2] [ref=e59]
+      - paragraph [ref=e60]: A student is stuck on the Burrows–Wheeler Transform rotation step. Here’s what happens next.
+      - generic [ref=e62]:
+        - generic [ref=e63]:
+          - generic [ref=e64]: Generic Chatbot
+          - generic [ref=e65]:
+            - strong [ref=e66]: "Student:"
+            - text: How do I do the BWT rotation step?
+          - generic [ref=e67]:
+            - strong [ref=e68]: "Chatbot:"
+            - text: "Sure! Here’s the full implementation for the BWT rotation step:"
+            - code [ref=e69]: rotations = [s[i:] + s[:i] for i in range(len(s))]; table = sorted(rotations); ...
+          - paragraph [ref=e70]: Student copies the answer. Learns nothing.
+        - generic [ref=e71]:
+          - generic [ref=e72]: Iris
+          - generic [ref=e73]:
+            - strong [ref=e74]: "Student:"
+            - text: How do I do the BWT rotation step?
+          - generic [ref=e75]:
+            - strong [ref=e76]: "Iris:"
+            - text: I see you’re working on the BWT rotation step. Think about what happens when you rotate a string by moving the first character to the end. Can you see how to generate all rotations from there?
+          - paragraph [ref=e77]: Student works through the problem. Genuine understanding.
+      - paragraph [ref=e78]:
+        - text: Iris guides students to the answer instead of giving it away — that’s why they learn
+        - link "55% more effectively" [ref=e79] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/research/publications
+        - text: .
+    - generic [ref=e80]:
+      - heading "Research-Backed" [level=2] [ref=e81]
+      - paragraph [ref=e82]: Results from a randomized controlled trial with 275 students at TU Munich.
+      - generic [ref=e83]:
+        - generic [ref=e84]:
+          - generic [ref=e85]: "275"
+          - generic [ref=e86]: students
+          - generic [ref=e87]: in a randomized controlled trial
+        - generic [ref=e88]:
+          - generic [ref=e89]: "+0.55"
+          - generic [ref=e90]: effect size
+          - generic [ref=e91]: significantly more motivated
+        - generic [ref=e92]:
+          - generic [ref=e93]: −0.81
+          - generic [ref=e94]: effect size
+          - generic [ref=e95]: dramatically less frustrated
+        - generic [ref=e96]:
+          - generic [ref=e97]: "3"
+          - generic [ref=e98]: papers
+          - generic [ref=e99]: peer-reviewed and published
+      - paragraph [ref=e100]:
+        - link "Read the research →" [ref=e101] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/research/publications
+    - generic [ref=e103]:
+      - paragraph [ref=e104]: “ It pointed me in the right direction without me even mentioning the algorithm.
+      - paragraph [ref=e105]: — Computer Science Student, TU Munich
+      - generic [ref=e106]:
+        - button "Show quote 1" [ref=e107] [cursor=pointer]
+        - button "Show quote 2" [ref=e108] [cursor=pointer]
+        - button "Show quote 3" [ref=e109] [cursor=pointer]
+    - generic [ref=e110]:
+      - heading "Who Is Iris For?" [level=2] [ref=e111]
+      - generic [ref=e112]:
+        - link "Students Get unstuck on exercises without giving up →" [ref=e113] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/student/getting-started
+          - generic [ref=e114]: Students
+          - generic [ref=e115]: Get unstuck on exercises without giving up
+          - generic [ref=e116]: →
+        - link "Instructors See how students are learning, not just what they submitted →" [ref=e117] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/instructor/enabling-iris
+          - generic [ref=e118]: Instructors
+          - generic [ref=e119]: See how students are learning, not just what they submitted
+          - generic [ref=e120]: →
+        - link "Developers Extend Iris with new pipelines and tools →" [ref=e121] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/developer/local-setup
+          - generic [ref=e122]: Developers
+          - generic [ref=e123]: Extend Iris with new pipelines and tools
+          - generic [ref=e124]: →
+        - link "Administrators Deploy on-premise or cloud in under an hour →" [ref=e125] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/admin/deployment
+          - generic [ref=e126]: Administrators
+          - generic [ref=e127]: Deploy on-premise or cloud in under an hour
+          - generic [ref=e128]: →
+    - generic [ref=e130]:
+      - heading "Still Have Questions?" [level=2] [ref=e131]
+      - generic [ref=e132]:
+        - button "How is Iris different from ChatGPT?" [ref=e134] [cursor=pointer]:
+          - text: How is Iris different from ChatGPT?
+          - generic [ref=e135]: ▾
+        - button "Is Iris free?" [ref=e137] [cursor=pointer]:
+          - text: Is Iris free?
+          - generic [ref=e138]: ▾
+        - button "How does Iris protect student data?" [ref=e140] [cursor=pointer]:
+          - text: How does Iris protect student data?
+          - generic [ref=e141]: ▾
+        - button "Does Iris give away answers?" [ref=e143] [cursor=pointer]:
+          - text: Does Iris give away answers?
+          - generic [ref=e144]: ▾
+        - button "What courses does Iris work with?" [ref=e146] [cursor=pointer]:
+          - text: What courses does Iris work with?
+          - generic [ref=e147]: ▾
+    - generic [ref=e149]:
+      - img [ref=e150]
+      - heading "Ready to bring Iris to your university?" [level=2] [ref=e151]
+      - paragraph [ref=e152]: Deployment takes under an hour. We’ll walk you through setup, integration, and your first course — no commitment required.
+      - generic [ref=e153]:
+        - link "Request a Demo" [ref=e154] [cursor=pointer]:
+          - /url: mailto:krusche@tum.de
+        - link "Explore the Docs" [ref=e155] [cursor=pointer]:
+          - /url: /edutelligence/iris/docs/overview/what-is-iris
+  - contentinfo [ref=e156]:
+    - generic [ref=e157]:
+      - generic [ref=e158]:
+        - generic [ref=e159]:
+          - generic [ref=e160]: Guides
+          - list [ref=e161]:
+            - listitem [ref=e162]:
+              - link "Student Guide" [ref=e163] [cursor=pointer]:
+                - /url: /edutelligence/iris/docs/student/getting-started
+            - listitem [ref=e164]:
+              - link "Instructor Guide" [ref=e165] [cursor=pointer]:
+                - /url: /edutelligence/iris/docs/instructor/enabling-iris
+            - listitem [ref=e166]:
+              - link "Developer Guide" [ref=e167] [cursor=pointer]:
+                - /url: /edutelligence/iris/docs/developer/local-setup
+        - generic [ref=e168]:
+          - generic [ref=e169]: Community
+          - list [ref=e170]:
+            - listitem [ref=e171]:
+              - link "GitHub(opens in new tab)" [ref=e172] [cursor=pointer]:
+                - /url: https://github.com/ls1intum/edutelligence
+                - text: GitHub
+                - img "(opens in new tab)" [ref=e173]
+            - listitem [ref=e175]:
+              - link "Artemis(opens in new tab)" [ref=e176] [cursor=pointer]:
+                - /url: https://github.com/ls1intum/Artemis
+                - text: Artemis
+                - img "(opens in new tab)" [ref=e177]
+        - generic [ref=e179]:
+          - generic [ref=e180]: Research
+          - list [ref=e181]:
+            - listitem [ref=e182]:
+              - link "Publications" [ref=e183] [cursor=pointer]:
+                - /url: /edutelligence/iris/docs/research/publications
+            - listitem [ref=e184]:
+              - link "Citing Iris" [ref=e185] [cursor=pointer]:
+                - /url: /edutelligence/iris/docs/research/citing-iris
+      - generic [ref=e187]: Copyright © 2026 Technical University of Munich. Built with Docusaurus.

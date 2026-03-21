@@ -1,0 +1,323 @@
+- generic [ref=e2]:
+  - generic [ref=e6]:
+    - link [ref=e9] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e11]:
+      - link "Home" [ref=e12] [cursor=pointer]:
+        - /url: /
+      - link "About us" [ref=e13] [cursor=pointer]:
+        - /url: /about-us
+      - link "Research" [ref=e14] [cursor=pointer]:
+        - /url: /research
+      - link "Contact" [ref=e15] [cursor=pointer]:
+        - /url: /contact
+      - link "Product Updates" [ref=e16] [cursor=pointer]:
+        - /url: /updates
+      - text: 
+    - generic [ref=e18]:
+      - button "Language" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 
+        - generic [ref=e23]: Language
+      - link "Login" [ref=e24] [cursor=pointer]:
+        - /url: https://app.onetutor.ai/login
+        - generic [ref=e25]:
+          - generic [ref=e26]: Login
+          - generic [ref=e27]:
+            - img [ref=e29]
+            - img [ref=e32]
+  - generic [ref=e34]:
+    - generic [ref=e39]:
+      - generic [ref=e40]:
+        - img "icon-1" [ref=e41]
+        - generic [ref=e42]: AI-powered teaching - made in Germany 🇩🇪
+      - heading "An AI-tutor for every student." [level=1] [ref=e44]
+      - paragraph [ref=e46]: Empowering institutions to responsibly integrate AI into education. Enable instructors to maintain control over content and data while providing students with personalized, immediate feedback.
+      - generic [ref=e47]:
+        - link "Get in touch" [ref=e48] [cursor=pointer]:
+          - /url: /contact
+          - generic [ref=e49]:
+            - generic [ref=e50]: Get in touch
+            - img [ref=e53]
+        - link "Try it out" [ref=e55] [cursor=pointer]:
+          - /url: /contact
+          - generic [ref=e56]:
+            - generic [ref=e57]: Try it out
+            - generic [ref=e58]:
+              - img [ref=e60]
+              - img [ref=e63]
+    - generic [ref=e75]:
+      - paragraph [ref=e79]: Trusted by higher educational institutions
+      - generic [ref=e80]:
+        - img "shape-1" [ref=e103]
+        - img "shape-2" [ref=e105]
+    - generic [ref=e108]:
+      - generic [ref=e109]:
+        - generic [ref=e110]:
+          - img "icon-9" [ref=e111]
+          - generic [ref=e112]: Our key features
+        - heading "Responsible AI that keeps you in control." [level=2] [ref=e114]
+        - paragraph [ref=e116]: Integrate AI without the risks. You define the knowledge base, verifying every answer for factual accuracy and pedagogical value, while ensuring student data remains pseudonymized and private.
+      - generic [ref=e118]:
+        - generic [ref=e119]:
+          - img "icon-1" [ref=e120]
+          - generic [ref=e121]: AI-Powered Chat
+        - heading "AI answers grounded in your content" [level=2] [ref=e123]
+        - paragraph [ref=e125]: Provide students with a more reliable source than unvetted public models. You define the knowledge base, ensuring every AI response is based exclusively on your uploaded course materials.
+      - generic [ref=e128]:
+        - generic [ref=e130]:
+          - heading "Turn materials into interactive quizzes" [level=2] [ref=e132]
+          - paragraph [ref=e134]: Effortlessly transform static slides, texts, or videos into dynamic learning resources in minutes. The AI generates multiple-choice or free-text questions tailored to your specific topics.
+        - generic [ref=e139]:
+          - heading "Understand how students learn" [level=2] [ref=e141]
+          - paragraph [ref=e143]: Gain deep insights through a dashboard showing usage statistics, aggregated quiz results, and student feedback. Identify common questions and curriculum weak spots to enable targeted course improvements.
+    - generic [ref=e148]:
+      - generic [ref=e150]:
+        - img "icon-10"
+        - generic [ref=e151]: Featured in
+      - generic [ref=e152]:
+        - generic [ref=e153]:
+          - generic "blogs" [ref=e154]
+          - generic [ref=e156]:
+            - link "blogs" [ref=e157] [cursor=pointer]:
+              - /url: "#"
+              - paragraph [ref=e158]: Wie KI-Tutoren die Lehre verändern
+            - link "Listen to podcast" [ref=e160] [cursor=pointer]:
+              - /url: https://open.spotify.com/episode/3mI8Qs65yipmo8aOzGpxSA?nd=1&dlsi=af656514b8974d30
+              - generic [ref=e161]: Listen to podcast
+              - generic [ref=e162]:
+                - img [ref=e164]
+                - img [ref=e167]
+        - generic [ref=e169]:
+          - generic "blogs" [ref=e170]
+          - generic [ref=e172]:
+            - link "blogs" [ref=e173] [cursor=pointer]:
+              - /url: "#"
+              - paragraph [ref=e174]: "OneTutor: a startup for Students by Students (and One Professor...)"
+            - link "Listen to podcast" [ref=e176] [cursor=pointer]:
+              - /url: https://open.spotify.com/episode/4itScIKdxRKJ9Vu07C6Tqp?nd=1&dlsi=ce764838671a4712
+              - generic [ref=e177]: Listen to podcast
+              - generic [ref=e178]:
+                - img [ref=e180]
+                - img [ref=e183]
+        - generic [ref=e185]:
+          - generic "blogs" [ref=e186]
+          - generic [ref=e188]:
+            - link "blogs" [ref=e189] [cursor=pointer]:
+              - /url: "#"
+              - paragraph [ref=e190]: Tiefgreifende Umbrüche - KI im Lehr- und Prüfungsbetrieb
+            - link "Read more" [ref=e192] [cursor=pointer]:
+              - /url: https://cdn.prod.website-files.com/694c7310e8ea87cde75573f3/696423d966f7d5b7103a693d_Pretschner_Heckmann_25_09_FL.pdf
+              - strong [ref=e194]: Read more
+              - generic [ref=e195]:
+                - img [ref=e197]
+                - img [ref=e200]
+        - generic [ref=e202]:
+          - generic "blogs" [ref=e203]
+          - generic [ref=e205]:
+            - link "blogs" [ref=e206] [cursor=pointer]:
+              - /url: "#"
+              - paragraph [ref=e207]: Wie Studenten mit KI besser lernen sollen
+            - link "Read the article" [ref=e209] [cursor=pointer]:
+              - /url: https://www.sueddeutsche.de/muenchen/muenchen-studium-ki-onetutor-tum-li.3266749?reduced=true
+              - generic [ref=e210]: Read the article
+              - generic [ref=e211]:
+                - img [ref=e213]
+                - img [ref=e216]
+        - generic [ref=e218]:
+          - generic "blogs" [ref=e219]
+          - generic [ref=e221]:
+            - link "blogs" [ref=e222] [cursor=pointer]:
+              - /url: "#"
+              - paragraph [ref=e223]: START-UP OF THE WEEK
+            - link "Read the article" [ref=e225] [cursor=pointer]:
+              - /url: https://www.wiwo.de/erfolg/gruender/start-up-der-woche-onetutor-ein-digitaler-tutor-fuer-studierende/100187382.html
+              - generic [ref=e226]: Read the article
+              - generic [ref=e227]:
+                - img [ref=e229]
+                - img [ref=e232]
+        - generic [ref=e234]:
+          - generic "blogs" [ref=e235]
+          - generic [ref=e237]:
+            - link "blogs" [ref=e238] [cursor=pointer]:
+              - /url: "#"
+              - paragraph [ref=e239]: Digitalisierung und KI in der Juristischen Ausbildung
+            - link "Read more" [ref=e241] [cursor=pointer]:
+              - /url: https://cdn.prod.website-files.com/694c7310e8ea87cde75573f3/6988a0afde2fccca4eef062c_juristen-zeitung-onetutor.pdf
+              - strong [ref=e243]: Read more
+              - generic [ref=e244]:
+                - img [ref=e246]
+                - img [ref=e249]
+    - generic [ref=e255]:
+      - generic [ref=e256]:
+        - img "icon-1" [ref=e257]
+        - generic [ref=e258]: Research
+      - heading "Does AI help students learn better?" [level=2] [ref=e260]
+      - paragraph [ref=e262]: High adoption rates don't automatically mean high effectiveness. We are leading a state-wide study across 9 universities to measure the real-world impact of AI tutors on academic performance, trust, and student behavior.
+      - link "Our research approach" [ref=e263] [cursor=pointer]:
+        - /url: /research
+        - generic [ref=e264]:
+          - generic [ref=e265]: Our research approach
+          - generic [ref=e266]:
+            - img [ref=e268]
+            - img [ref=e271]
+    - generic [ref=e277]:
+      - generic [ref=e278]:
+        - generic [ref=e279]:
+          - img "icon-12"
+          - generic [ref=e280]: Testimonial
+        - heading "What do happy students have to say about us?" [level=2] [ref=e282]
+      - generic [ref=e283]:
+        - generic [ref=e284]:
+          - paragraph [ref=e287]: Image AI generated
+          - generic [ref=e288]:
+            - paragraph [ref=e291]: "\"I used OneTutor to study for the courses Trustworthy Machine Learning Systems and Introduction to Quantum Computing, and it was incredibly helpful. The quiz questions and chat made it easier to learn key concepts.\""
+            - paragraph [ref=e293]:
+              - text: ⎯ TUM Student,
+              - emphasis [ref=e294]: anonymized
+        - generic [ref=e295]:
+          - paragraph [ref=e298]: Image AI generated
+          - generic [ref=e299]:
+            - paragraph [ref=e302]: "\"I find TUMTutor really cool, but I wish more subjects were supported, especially math modules like DS and more knowledge-based modules like ERA.\""
+            - paragraph [ref=e304]:
+              - text: ⎯ TUM Student,
+              - emphasis [ref=e305]: anonymized
+        - generic [ref=e306]:
+          - paragraph [ref=e309]: Image AI generated
+          - generic [ref=e310]:
+            - paragraph [ref=e313]: "\"Very good bot! I was worried that it would mix general knowledge with the lecture knowledge but i get very confident result which reflect exactly whats stated in the Lecture.\""
+            - paragraph [ref=e315]:
+              - text: ⎯ WU Vienna Student,
+              - emphasis [ref=e316]: anonymized
+        - generic [ref=e317]:
+          - paragraph [ref=e320]: Image AI generated
+          - generic [ref=e321]:
+            - paragraph [ref=e324]: "\"Thank you for developing this very cool and timely app.\""
+            - paragraph [ref=e326]:
+              - text: ⎯ LMU Tutor,
+              - emphasis [ref=e327]: anonymized
+    - generic [ref=e332]:
+      - heading "Ready to bring responsible AI to your campus?" [level=2] [ref=e335]
+      - paragraph [ref=e337]: Join 40+ universities already transforming their lectures. Secure, privacy-compliant, and integrated seamlessly into your existing infrastructure.
+      - link "Get in touch" [ref=e339] [cursor=pointer]:
+        - /url: /contact
+        - generic [ref=e340]:
+          - generic [ref=e341]: Get in touch
+          - generic [ref=e342]:
+            - img [ref=e344]
+            - img [ref=e347]
+      - generic [ref=e349]:
+        - generic [ref=e350]:
+          - generic:
+            - img "icon-14"
+          - paragraph [ref=e352]: Validated by research
+        - generic [ref=e353]:
+          - generic:
+            - img "icon-14"
+          - paragraph [ref=e355]: Dedicated adoption support
+        - generic [ref=e356]:
+          - generic:
+            - img "icon-14"
+          - paragraph [ref=e358]: Made in Germany
+    - generic [ref=e361]:
+      - generic [ref=e363]:
+        - img "icon-13"
+        - generic [ref=e364]: Faq
+      - generic [ref=e365]:
+        - generic [ref=e366]:
+          - heading "How do I get started and integrate OneTutor into my course?" [level=2] [ref=e371] [cursor=pointer]
+          - paragraph [ref=e373]:
+            - text: 👉 If your university is already connected, simply log in with SSO. Otherwise, contact us to request a Guest Login.
+            - text: ‍
+            - text: Our system is fully pseudonymized, so we need to manually assign you the lecturer role.
+            - text: Upload your course materials (lecture slides, readings, recordings, etc.) to enable AI-powered tutoring tailored to your content.
+            - text: ‍
+            - text: Generate hundreds of quizzes in minutes to engage your students.
+            - text: Analyze student engagement, identify learning gaps, and improve your lectures accordingly.
+        - generic [ref=e374]:
+          - heading "How does the AI of OneTutor work and ensure accurate responses?" [level=2] [ref=e379] [cursor=pointer]
+          - paragraph [ref=e381]:
+            - text: 👉 OneTutor uses Retrieval-Augmented Generation (RAG) to pull information directly from your uploaded materials.
+            - text: ‍
+            - text: The AI understands student queries and generates contextually relevant, course-specific responses.
+            - text: OneTutor relies on your uploaded course materials to ensure accuracy and relevance. If no relevant information is found, it transparently communicates this to students.
+            - text: ‍
+            - text: While AI is not infallible, OneTutor is designed to minimize errors by referencing the sources of its responses. For quiz generation, we implement a Human-in-the-Loop approach - you have the ability to review and proofread each AI-generated question before it is made available.
+            - text: ‍
+            - text: Through student feedback, the AI system can be adjusted to improve accuracy and to edit or remove unreliable questions.
+        - generic [ref=e382]:
+          - heading "Who owns the content I upload to OneTutor?" [level=2] [ref=e387] [cursor=pointer]
+          - paragraph [ref=e389]:
+            - text: 👉 You retain full ownership of all content uploaded to OneTutor.
+            - text: We do not claim any rights over your materials - they are used only to support student learning.
+            - text: OneTutor follows strict security measures to protect your intellectual property.
+        - generic [ref=e390]:
+          - heading "Do you offer a trial or demo for lecturers?" [level=2] [ref=e395] [cursor=pointer]
+          - paragraph [ref=e397]:
+            - text: 👉 Yes! We offer a free trial and personalized demos so you can explore OneTutor before integrating it into your course.
+            - text: ‍
+            - text: Contact us to schedule a demo and see how OneTutor can enhance your teaching. Email us at
+            - link "contact@onetutor.ai" [ref=e398] [cursor=pointer]:
+              - /url: mailto:contact@onetutor.ai?subject=FAQ%20-%20OneTutor
+              - strong [ref=e399]: contact@onetutor.ai
+            - text: .
+    - generic [ref=e404]:
+      - heading "Get updates and insights from OneTutor" [level=2] [ref=e407]
+      - paragraph [ref=e409]: No spam. Unsubscribe anytime. We respect your privacy.
+      - link "Subscribe" [ref=e411] [cursor=pointer]:
+        - /url: /newsletter-sign-up
+        - generic [ref=e412]:
+          - generic [ref=e413]: Subscribe
+          - generic [ref=e414]:
+            - img [ref=e416]
+            - img [ref=e419]
+      - generic [ref=e421]:
+        - generic [ref=e422]:
+          - generic:
+            - img "icon-14"
+          - paragraph [ref=e424]: Product updates
+        - generic [ref=e425]:
+          - generic:
+            - img "icon-14"
+          - paragraph [ref=e427]: Research insights
+        - generic [ref=e428]:
+          - generic:
+            - img "icon-14"
+          - paragraph [ref=e430]: AI in education
+  - generic [ref=e433]:
+    - generic [ref=e434]:
+      - generic [ref=e435]:
+        - link [ref=e436] [cursor=pointer]:
+          - /url: "#"
+        - paragraph [ref=e438]: The AI tutor for higher education.
+      - generic [ref=e439]:
+        - generic [ref=e440]:
+          - heading "Pages" [level=2] [ref=e442]
+          - generic [ref=e443]:
+            - link "Home" [ref=e444] [cursor=pointer]:
+              - /url: /
+            - link "About us" [ref=e445] [cursor=pointer]:
+              - /url: /about-us
+            - link "Research" [ref=e446] [cursor=pointer]:
+              - /url: /research
+            - link "Contact" [ref=e447] [cursor=pointer]:
+              - /url: /contact
+        - generic [ref=e448]:
+          - heading "Company" [level=2] [ref=e450]
+          - generic [ref=e451]:
+            - link "Linkedin" [ref=e452] [cursor=pointer]:
+              - /url: https://www.linkedin.com/company/onetutor-ai
+            - link "Careers" [ref=e453] [cursor=pointer]:
+              - /url: https://join.com/companies/onetutorai
+            - link "Product Updates" [ref=e454] [cursor=pointer]:
+              - /url: /updates
+        - generic [ref=e455]:
+          - heading "Resources" [level=2] [ref=e457]
+          - link "Help center" [ref=e459] [cursor=pointer]:
+            - /url: https://help.onetutor.ai/de/
+    - generic [ref=e461]:
+      - paragraph [ref=e463]: Copyright © OneTutor 2026. All rights reserved
+      - generic [ref=e464]:
+        - link "Privacy policy" [ref=e465] [cursor=pointer]:
+          - /url: https://app.onetutor.ai/privacy
+        - link "Imprint" [ref=e466] [cursor=pointer]:
+          - /url: https://app.onetutor.ai/imprint

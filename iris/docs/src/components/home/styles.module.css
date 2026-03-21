@@ -250,14 +250,6 @@
   color: #ffffff;
 }
 
-.sectionScaleBg .sectionHeadingAccent {
-  color: #ffffff;
-}
-
-.sectionScaleBg .sectionHeadingAccent::after {
-  background: rgba(255, 255, 255, 0.5);
-}
-
 .sectionScaleBg .sectionSubtitle {
   color: rgba(255, 255, 255, 0.78);
 }
@@ -629,6 +621,215 @@
       opacity: 1;
       transform: translateY(0) scale(1);
     }
+  }
+}
+
+/* ─── Hero floating decorative elements ─── */
+
+.heroVisualInner {
+  position: relative;
+}
+
+.heroFloatingChip {
+  position: absolute;
+  padding: 0.35rem 0.7rem;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--iris-label-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  z-index: 3;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+[data-theme="dark"] .heroFloatingChip {
+  background: rgba(30, 30, 30, 0.65);
+  border-color: rgba(90, 159, 214, 0.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.heroFloatCitation {
+  top: -8px;
+  right: -16px;
+  transform: rotate(4deg);
+  color: var(--ifm-color-primary);
+}
+
+.heroFloatCitationBracket {
+  opacity: 0.5;
+}
+
+.heroFloatThinking {
+  bottom: 60px;
+  left: -30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transform: rotate(-2deg);
+}
+
+.heroFloatThinkingLabel {
+  color: var(--iris-label-color);
+  opacity: 0.8;
+}
+
+.heroFloatThinkingDots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.heroFloatDot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ifm-color-primary);
+}
+
+.heroFloatHelpful {
+  bottom: -4px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #16a34a;
+  transform: rotate(-1deg);
+}
+
+[data-theme="dark"] .heroFloatHelpful {
+  color: #4ade80;
+}
+
+.heroSparkle {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .heroFloatCitation {
+    opacity: 0;
+    animation:
+      floatChipIn 0.5s ease-out 1.4s forwards,
+      floatDrift1 5s ease-in-out 1.9s infinite;
+  }
+
+  .heroFloatThinking {
+    opacity: 0;
+    animation:
+      floatChipIn 0.5s ease-out 1.8s forwards,
+      floatDrift2 6s ease-in-out 2.3s infinite;
+  }
+
+  .heroFloatHelpful {
+    opacity: 0;
+    animation:
+      floatChipIn 0.5s ease-out 2.2s forwards,
+      floatDrift3 7s ease-in-out 2.7s infinite;
+  }
+
+  .heroSparkle {
+    opacity: 0;
+    animation:
+      floatChipIn 0.4s ease-out 1s forwards,
+      sparklePulse 3s ease-in-out 1.4s infinite;
+  }
+
+  .heroFloatDot:nth-child(1) {
+    animation: dotBounce 1.4s ease-in-out 2s infinite;
+  }
+  .heroFloatDot:nth-child(2) {
+    animation: dotBounce 1.4s ease-in-out 2.15s infinite;
+  }
+  .heroFloatDot:nth-child(3) {
+    animation: dotBounce 1.4s ease-in-out 2.3s infinite;
+  }
+
+  @keyframes floatChipIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.85);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes floatDrift1 {
+    0%,
+    100% {
+      transform: rotate(4deg) translateY(0);
+    }
+    50% {
+      transform: rotate(4deg) translateY(-6px);
+    }
+  }
+
+  @keyframes floatDrift2 {
+    0%,
+    100% {
+      transform: rotate(-2deg) translateY(0);
+    }
+    50% {
+      transform: rotate(-2deg) translateY(-5px);
+    }
+  }
+
+  @keyframes floatDrift3 {
+    0%,
+    100% {
+      transform: rotate(-1deg) translateY(0);
+    }
+    50% {
+      transform: rotate(-1deg) translateY(-7px);
+    }
+  }
+
+  @keyframes sparklePulse {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+    50% {
+      transform: scale(1.2);
+      opacity: 0.6;
+    }
+  }
+
+  @keyframes dotBounce {
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.4;
+    }
+    30% {
+      transform: translateY(-3px);
+      opacity: 1;
+    }
+  }
+}
+
+@media (max-width: 996px) {
+  .heroFloatCitation {
+    right: 0;
+    top: -12px;
+  }
+  .heroFloatThinking {
+    left: -10px;
+    bottom: 50px;
+  }
+  .heroFloatHelpful {
+    right: 0;
   }
 }
 
@@ -2559,6 +2760,18 @@
 
   .sectionHeading {
     font-size: 1.75rem;
+  }
+
+  .sectionHeadingAccent {
+    font-size: 1.75rem;
+  }
+
+  .statNumber {
+    font-size: 3.25rem;
+  }
+
+  .scaleNumber {
+    font-size: 3.25rem;
   }
 
   .hero {
