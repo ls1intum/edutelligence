@@ -39,7 +39,9 @@ export default function StudentQuotes(): React.JSX.Element {
             {quotes.map((_, i) => (
               <button
                 key={i}
-                className={`${styles.quoteDot} ${i === current ? styles.quoteDotActive : ""}`}
+                className={
+                  i === current ? styles.quoteDotActive : styles.quoteDot
+                }
                 onClick={() => setCurrent(i)}
                 aria-label={`Show quote ${i + 1}`}
               />
