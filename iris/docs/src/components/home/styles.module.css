@@ -7,7 +7,7 @@
 }
 
 .sectionHeading {
-  font-size: 2rem;
+  font-size: 2.125rem;
   font-weight: 700;
   text-align: center;
   margin-bottom: 0.75rem;
@@ -37,9 +37,9 @@
 }
 
 .heroLogo {
-  width: 120px;
+  width: 80px;
   height: auto;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 
 .heroHeadline {
@@ -115,6 +115,26 @@
   color: var(--ifm-color-primary);
   text-decoration: none;
   transform: translateY(-1px);
+}
+
+/* ─── Focus-visible outlines (a11y) ─── */
+
+.btnPrimary:focus-visible,
+.btnGhost:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+.featureCard:focus-visible,
+.audienceCard:focus-visible,
+.ecosystemCard:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+.faqQuestion:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: -2px;
 }
 
 /* ─── Trust Bar ─── */
