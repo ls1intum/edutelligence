@@ -2,25 +2,34 @@ import React from "react";
 import Link from "@docusaurus/Link";
 import styles from "./styles.module.css";
 import { useFadeIn } from "./useFadeIn";
+import AnimatedCounter from "./AnimatedCounter";
 
 const stats = [
   {
-    number: "275",
+    target: 275,
+    prefix: "",
+    decimals: 0,
     label: "students",
     subtitle: "in a randomized controlled trial",
   },
   {
-    number: "+0.55",
+    target: 0.55,
+    prefix: "+",
+    decimals: 2,
     label: "effect size",
     subtitle: "significantly more motivated",
   },
   {
-    number: "\u22120.81",
+    target: 0.81,
+    prefix: "\u2212",
+    decimals: 2,
     label: "effect size",
     subtitle: "dramatically less frustrated",
   },
   {
-    number: "3",
+    target: 3,
+    prefix: "",
+    decimals: 0,
     label: "papers",
     subtitle: "peer-reviewed and published",
   },
@@ -49,10 +58,17 @@ export default function ResearchHighlights(): React.JSX.Element {
       >
         {stats.map((s, i) => (
           <div
-            key={s.label}
+            key={s.label + s.prefix}
             className={`${styles.statCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}
           >
-            <div className={styles.statNumber}>{s.number}</div>
+            <div className={styles.statNumber}>
+              <AnimatedCounter
+                target={s.target}
+                prefix={s.prefix}
+                decimals={s.decimals}
+                duration={2000}
+              />
+            </div>
             <div className={styles.statLabel}>{s.label}</div>
             <div className={styles.statSubtitle}>{s.subtitle}</div>
           </div>
