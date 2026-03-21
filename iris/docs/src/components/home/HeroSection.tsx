@@ -58,7 +58,8 @@ export default function HeroSection(): React.JSX.Element {
             backed by peer-reviewed research at TU Munich.
           </p>
           <p className={styles.heroProof}>
-            Used by 1,600+ students at TU Munich in Winter 2025/26
+            <span aria-hidden="true">🎓</span> Used by 1,600+ students at TU
+            Munich in Winter 2025/26
           </p>
           <div className={styles.heroCtas}>
             <a className={styles.btnPrimary} href="#comparison">
@@ -70,7 +71,16 @@ export default function HeroSection(): React.JSX.Element {
           </div>
         </header>
         <div className={styles.heroVisual}>
-          <ChatMockup />
+          <div>
+            <ChatMockup />
+            <div className={styles.statsPill} aria-hidden="true">
+              <span className={styles.statsPillIcon}>📊</span>
+              <span>
+                <span className={styles.statsPillNumber}>10,000+</span>{" "}
+                conversations powered
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

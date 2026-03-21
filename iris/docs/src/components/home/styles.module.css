@@ -84,12 +84,12 @@
   background:
     radial-gradient(
       ellipse 120% 80% at 60% -20%,
-      rgba(42, 115, 180, 0.18) 0%,
+      rgba(42, 115, 180, 0.28) 0%,
       transparent 60%
     ),
     radial-gradient(
       ellipse 80% 60% at 20% 60%,
-      rgba(62, 138, 204, 0.1) 0%,
+      rgba(62, 138, 204, 0.14) 0%,
       transparent 50%
     ),
     radial-gradient(
@@ -97,7 +97,12 @@
       rgba(90, 159, 214, 0.08) 0%,
       transparent 50%
     ),
-    linear-gradient(180deg, #eef5fc 0%, #f8fbfe 40%, #ffffff 100%);
+    radial-gradient(
+      ellipse 70% 50% at 75% 30%,
+      rgba(0, 180, 160, 0.07) 0%,
+      transparent 45%
+    ),
+    linear-gradient(180deg, #e3eef8 0%, #f0f5fa 40%, #ffffff 100%);
 }
 
 [data-theme="dark"] .heroWrapper {
@@ -246,11 +251,71 @@
 }
 
 .heroProof {
-  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(42, 115, 180, 0.08);
+  border: 1px solid rgba(42, 115, 180, 0.15);
+  font-size: 0.8rem;
   font-weight: 600;
-  color: var(--iris-label-color);
+  color: var(--ifm-color-primary);
   letter-spacing: 0.01em;
   margin-bottom: 1.5rem;
+}
+
+[data-theme="dark"] .heroProof {
+  background: rgba(90, 159, 214, 0.1);
+  border-color: rgba(90, 159, 214, 0.2);
+}
+
+/* Stats pill floating near chat mockup */
+.statsPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ifm-font-color-base);
+  margin-top: 1rem;
+  z-index: 2;
+}
+
+[data-theme="dark"] .statsPill {
+  background: rgba(31, 31, 31, 0.85);
+  border-color: rgba(90, 159, 214, 0.2);
+}
+
+.statsPillIcon {
+  font-size: 1.1rem;
+}
+
+.statsPillNumber {
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .statsPill {
+    opacity: 0;
+    transform: translateY(12px) scale(0.9);
+    animation: pillFloat 0.6s ease-out 1.2s forwards;
+  }
+
+  @keyframes pillFloat {
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
 }
 
 /* ─── Floating Chat Mockup ─── */
@@ -556,11 +621,30 @@
 .featureCard {
   background: var(--ifm-background-surface-color);
   border: 1px solid var(--iris-border-color);
+  border-top: 3px solid transparent;
   border-radius: var(--iris-radius);
   padding: 1.5rem 1.25rem;
+  background-image:
+    linear-gradient(
+      var(--ifm-background-surface-color),
+      var(--ifm-background-surface-color)
+    ),
+    linear-gradient(90deg, #2a73b4, #00b4a0);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.05);
   transition:
     transform 0.2s,
     box-shadow 0.2s;
+}
+
+[data-theme="dark"] .featureCard {
+  background-image:
+    linear-gradient(
+      var(--ifm-background-surface-color),
+      var(--ifm-background-surface-color)
+    ),
+    linear-gradient(90deg, #5a9fd6, #00b4a0);
 }
 
 @media (hover: hover) {
@@ -1137,6 +1221,14 @@
 }
 
 /* ─── Closing CTA ─── */
+
+.closingCtaWrapper {
+  background: linear-gradient(180deg, #ffffff 0%, #e8f0f8 60%, #dce8f4 100%);
+}
+
+[data-theme="dark"] .closingCtaWrapper {
+  background: linear-gradient(180deg, #181818 0%, #0f1a2e 60%, #0d1826 100%);
+}
 
 .closingCta {
   max-width: 680px;
