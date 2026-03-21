@@ -610,7 +610,7 @@
   border-radius: 20px;
   background: rgba(42, 115, 180, 0.08);
   border: 1px solid rgba(42, 115, 180, 0.15);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 600;
   color: var(--ifm-color-primary);
   letter-spacing: 0.01em;
@@ -1295,7 +1295,7 @@
 
 .comparisonLabel {
   display: inline-block;
-  font-size: 0.75rem;
+  font-size: 0.85rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1466,13 +1466,13 @@
 }
 
 .chatUIMessageName {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 700;
   color: var(--ifm-font-color-base);
 }
 
 .chatUIMessageNameIris {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 700;
   color: var(--ifm-color-primary);
 }
@@ -1727,13 +1727,13 @@
 }
 
 .testimonialOrg {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--iris-label-color);
 }
 
 .testimonialNote {
   text-align: center;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--iris-label-color);
   margin-top: 2rem;
   font-style: italic;
@@ -2221,7 +2221,7 @@
 .comparisonTableFeatureHeader {
   text-align: left;
   padding: 1rem 1.25rem;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2237,7 +2237,7 @@
 .comparisonTableHeader {
   text-align: center;
   padding: 1rem 1.25rem;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2389,14 +2389,14 @@
 }
 
 .showcaseMessageName {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 700;
   color: var(--ifm-font-color-base);
   margin-bottom: 0.25rem;
 }
 
 .showcaseMessageNameIris {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 700;
   color: var(--ifm-color-primary);
   margin-bottom: 0.25rem;
@@ -2571,7 +2571,7 @@
 
 .quoteGridLabel {
   font-family: "DM Sans", system-ui, sans-serif;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2638,7 +2638,7 @@
 
 .quoteCardCite {
   font-family: "DM Sans", system-ui, sans-serif;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-style: normal;
   color: var(--iris-label-color);
   display: block;
@@ -2700,7 +2700,7 @@
 
 .endorseQuoteCite {
   font-family: "DM Sans", system-ui, sans-serif;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-style: normal;
   color: var(--iris-label-color);
   display: block;
@@ -3058,7 +3058,7 @@
   }
 
   .trustItem {
-    font-size: 0.8rem;
+    font-size: 0.85rem;
   }
 
   .heroCtas {
@@ -3140,7 +3140,7 @@
 }
 
 .quizBadge {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -3155,7 +3155,7 @@
 }
 
 .quizSource {
-  font-size: 0.78rem;
+  font-size: 0.85rem;
   color: var(--iris-label-color);
 }
 
@@ -3456,7 +3456,7 @@
 }
 
 .memoryCenterLabel {
-  font-size: 0.78rem;
+  font-size: 0.85rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -3468,7 +3468,7 @@
   top: 50%;
   left: 50%;
   white-space: nowrap;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 500;
   padding: 0.35rem 0.7rem;
   border-radius: 100px;
@@ -3509,7 +3509,7 @@
   }
 
   .memoryChip {
-    font-size: 0.72rem;
+    font-size: 0.8rem;
     padding: 0.3rem 0.65rem;
   }
 }
