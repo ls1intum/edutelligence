@@ -67,7 +67,7 @@
 .heroProof {
   font-size: 0.9rem;
   font-weight: 600;
-  color: var(--ifm-color-primary);
+  color: var(--iris-label-color);
   letter-spacing: 0.01em;
   margin-bottom: 1.5rem;
 }
@@ -91,7 +91,8 @@
   text-decoration: none;
   transition:
     background 0.2s,
-    transform 0.15s;
+    transform 0.15s,
+    box-shadow 0.2s;
   border: none;
 }
 
@@ -100,6 +101,7 @@
   color: #fff;
   text-decoration: none;
   transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(62, 138, 204, 0.25);
 }
 
 .btnGhost {
