@@ -360,7 +360,8 @@
 }
 
 [data-theme="dark"] .comparisonColIris .comparisonBubble {
-  background: rgba(90, 159, 214, 0.06);
+  background: rgba(90, 159, 214, 0.1);
+  border-color: var(--ifm-color-primary-light);
 }
 
 /* ─── Comparison staggered reveal (Iris side) ─── */
