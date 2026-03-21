@@ -1,6 +1,7 @@
 import React from "react";
 import Link from "@docusaurus/Link";
 import styles from "./styles.module.css";
+import { useFadeIn } from "./useFadeIn";
 
 interface EcosystemItem {
   name: string;
@@ -71,19 +72,31 @@ function CardContent({ item }: { item: EcosystemItem }): React.JSX.Element {
   );
 }
 
+const staggerClasses = [
+  styles.stagger1,
+  styles.stagger2,
+  styles.stagger3,
+  styles.stagger4,
+];
+
 export default function EcosystemFooter(): React.JSX.Element {
+  const [ref, visible] = useFadeIn();
+
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeading}>The EduTelligence Ecosystem</h2>
       <p className={styles.sectionSubtitle}>
         Iris is part of a broader family of AI-powered education tools.
       </p>
-      <div className={styles.ecosystemGrid}>
-        {ecosystem.map((item) =>
+      <div
+        ref={ref as React.RefObject<HTMLDivElement>}
+        className={styles.ecosystemGrid}
+      >
+        {ecosystem.map((item, i) =>
           item.external ? (
             <a
               key={item.name}
-              className={styles.ecosystemCard}
+              className={`${styles.ecosystemCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i % staggerClasses.length] || ""}`}
               href={item.href}
               target="_blank"
               rel="noopener noreferrer"
@@ -93,7 +106,7 @@ export default function EcosystemFooter(): React.JSX.Element {
           ) : (
             <Link
               key={item.name}
-              className={styles.ecosystemCard}
+              className={`${styles.ecosystemCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i % staggerClasses.length] || ""}`}
               to={item.href}
             >
               <CardContent item={item} />

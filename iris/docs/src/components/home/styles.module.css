@@ -152,7 +152,7 @@
   align-items: center;
   padding: 0.75rem 1.75rem;
   border-radius: var(--iris-radius);
-  background: var(--ifm-color-primary);
+  background: var(--iris-btn-bg);
   color: #fff;
   font-weight: 600;
   font-size: 1rem;
@@ -165,7 +165,7 @@
 }
 
 .btnPrimary:hover {
-  background: var(--ifm-color-primary-dark);
+  background: var(--iris-btn-bg-hover);
   color: #fff;
   text-decoration: none;
   transform: translateY(-1px);
@@ -269,12 +269,17 @@
 
 @media (hover: hover) {
   .featureCard:hover {
-    transform: translateY(-4px) scale(1.02);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
   }
 
   [data-theme="dark"] .featureCard:hover {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .featureCard:hover {
+    transform: translateY(-4px) scale(1.02);
   }
 }
 
@@ -504,10 +509,13 @@
   font-style: italic;
   position: relative;
   padding: 0 1rem;
-  animation: quoteFadeIn 0.4s ease-out;
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .quoteText {
+    animation: quoteFadeIn 0.4s ease-out;
+  }
+
   @keyframes quoteFadeIn {
     from {
       opacity: 0;
@@ -598,7 +606,6 @@
 
 @media (hover: hover) {
   .audienceCard:hover {
-    transform: translateY(-4px);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
     border-color: var(--ifm-color-primary);
     text-decoration: none;
@@ -607,6 +614,12 @@
 
   [data-theme="dark"] .audienceCard:hover {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .audienceCard:hover {
+    transform: translateY(-4px);
   }
 }
 
@@ -745,12 +758,21 @@
     border-color 0.2s;
 }
 
+[data-theme="dark"] .ecosystemCard {
+  border-color: #484848;
+}
+
 @media (hover: hover) {
   .ecosystemCard:hover {
-    transform: translateY(-2px);
     border-color: var(--ifm-color-primary);
     text-decoration: none;
     color: inherit;
+  }
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .ecosystemCard:hover {
+    transform: translateY(-2px);
   }
 }
 
@@ -803,6 +825,10 @@
   .heroHeadline {
     font-size: 2.25rem;
   }
+
+  .closingCtaHeadline {
+    font-size: 1.85rem;
+  }
 }
 
 @media (max-width: 600px) {
@@ -815,7 +841,7 @@
   }
 
   .statsRow {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
   }
 
   .ecosystemGrid {
@@ -824,6 +850,14 @@
 
   .heroHeadline {
     font-size: 1.85rem;
+  }
+
+  .closingCtaHeadline {
+    font-size: 1.5rem;
+  }
+
+  .sectionHeading {
+    font-size: 1.75rem;
   }
 
   .hero {
@@ -844,5 +878,29 @@
 
   .trustBar {
     gap: 1rem;
+    padding: 1.25rem 1rem;
+  }
+
+  .trustItem {
+    font-size: 0.8rem;
+  }
+
+  .heroCtas {
+    flex-direction: column;
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .btnPrimary,
+  .btnGhost {
+    justify-content: center;
+  }
+
+  .quoteText {
+    font-size: 1.05rem;
+  }
+
+  .comparisonCol {
+    padding: 1.5rem 1.25rem;
   }
 }

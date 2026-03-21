@@ -5,6 +5,8 @@
   --ifm-color-primary-dark: #2d7abf;
   --ifm-color-primary-darker: #2a73b4;
   --ifm-color-primary-darkest: #235f94;
+  --iris-btn-bg: #2a73b4;
+  --iris-btn-bg-hover: #235f94;
   --ifm-color-primary-light: #559bd4;
   --ifm-color-primary-lighter: #62a2d7;
   --ifm-color-primary-lightest: #84b7e1;
@@ -17,7 +19,7 @@
   --iris-tertiary-bg: #e9ecef;
   --iris-accent-bg: #dee2e6;
   --iris-label-color: #636b72;
-  --iris-success: #28a745;
+  --iris-success: #1e7e34;
   --iris-radius: 8px;
   --iris-radius-pill: 999px;
 
@@ -49,6 +51,8 @@
   --iris-accent-bg: #2d312e;
   --iris-label-color: #919191;
   --iris-success: #00bc8c;
+  --iris-btn-bg: #235f94;
+  --iris-btn-bg-hover: #1b4d7a;
 
   --docusaurus-highlighted-code-line-bg: rgba(90, 159, 214, 0.15);
 }

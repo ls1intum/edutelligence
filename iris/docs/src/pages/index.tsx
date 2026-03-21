@@ -40,11 +40,11 @@ export default function Home(): React.JSX.Element {
       {/* 8. FAQ */}
       <FaqSection />
 
-      {/* 9. Closing CTA */}
-      <ClosingCta />
-
-      {/* 10. EduTelligence Ecosystem */}
+      {/* 9. EduTelligence Ecosystem */}
       <EcosystemFooter />
+
+      {/* 10. Closing CTA — final action before footer */}
+      <ClosingCta />
     </Layout>
   );
 }
