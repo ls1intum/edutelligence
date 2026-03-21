@@ -7,13 +7,13 @@ const disciplines = [
     emoji: "\uD83D\uDCBB",
     title: "Computer Science",
     description:
-      "Debug code, understand algorithms, and work through programming exercises with context-aware guidance.",
+      "Debug code, understand algorithms, and work through programming exercises with guidance grounded in your course.",
   },
   {
     emoji: "\uD83E\uDDEC",
     title: "Biology & Life Sciences",
     description:
-      "Explore lecture concepts from cell biology to ecology with answers grounded in your course slides.",
+      "Explore concepts from cell biology to ecology with answers drawn directly from your lecture slides.",
   },
   {
     emoji: "\uD83D\uDCCA",
@@ -58,8 +58,8 @@ export default function DisciplinesSection(): React.JSX.Element {
           Works for Every Course, Every Discipline
         </h2>
         <p className={styles.sectionSubtitle}>
-          Iris isn&apos;t just for computer science. Any course that uses
-          Artemis can benefit from AI-guided learning &mdash; from biology to
+          Iris isn&apos;t just for computer science. Any course on Artemis gets
+          a teaching assistant that knows the material &mdash; from biology to
           law.
         </p>
         <div

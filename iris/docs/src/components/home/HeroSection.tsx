@@ -79,8 +79,9 @@ export default function HeroSection(): React.JSX.Element {
             <em>Course Materials</em>
           </h1>
           <p className={styles.heroSubtitle}>
-            Built into Artemis. Backed by peer-reviewed research. Used by 1,600+
-            students at TU Munich.
+            The AI teaching assistant built into Artemis. Guides students with
+            hints &mdash; not answers. Backed by 3 peer-reviewed studies at TU
+            Munich.
           </p>
           <p className={styles.heroProof}>
             <span aria-hidden="true">🎓</span> Used by 1,600+ students at TU
@@ -135,13 +136,6 @@ export default function HeroSection(): React.JSX.Element {
               94% helpful
             </div>
             <ChatMockup />
-            <div className={styles.statsPill} aria-hidden="true">
-              <span className={styles.statsPillIcon}>📊</span>
-              <span>
-                <span className={styles.statsPillNumber}>10,000+</span>{" "}
-                conversations powered
-              </span>
-            </div>
           </div>
         </div>
       </div>

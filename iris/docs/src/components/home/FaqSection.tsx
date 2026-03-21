@@ -10,12 +10,12 @@ const faqs: FaqEntry[] = [
   {
     question: "How is Iris different from ChatGPT?",
     answer:
-      "Iris is embedded in your course context and uses a calibrated hint system instead of direct answers. It references your actual lecture slides with citations, and in a controlled trial with 275 students, this approach led to measurably deeper learning and higher motivation.",
+      "Iris knows your course and guides students with hints instead of answers. It references your actual lecture slides with citations, and in a controlled trial with 275 students, this approach led to measurably deeper learning and higher motivation.",
   },
   {
     question: "What does it cost?",
     answer:
-      "Iris is free and open-source under the MIT license. You deploy it on your own infrastructure. Costs depend on your hosting setup and LLM provider. See our deployment guide for details.",
+      "Iris is free and open-source under the MIT license. You deploy it on your own infrastructure. Costs depend on your hosting setup and AI model provider. See our deployment guide for details.",
   },
   {
     question: "How long does setup take?",
@@ -45,7 +45,7 @@ const faqs: FaqEntry[] = [
   {
     question: "Does Iris give away answers?",
     answer:
-      "No. Iris uses a calibrated hint system that starts with Socratic questions and subtle nudges, only escalating to more explicit guidance when the student needs it. This preserves productive struggle \u2014 the kind of effort that builds real understanding.",
+      "No. Iris starts with questions and subtle nudges, only giving more direct guidance when the student truly needs it. This preserves productive struggle \u2014 the kind of effort that builds real understanding.",
   },
 ];
 

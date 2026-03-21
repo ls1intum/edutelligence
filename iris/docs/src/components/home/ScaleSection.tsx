@@ -5,18 +5,19 @@ import { useFadeIn } from "./useFadeIn";
 const stats = [
   {
     number: "1,655",
-    label: "Students",
-    detail: "Across 3 courses at TU Munich in Winter 2025/26",
+    label: "Students Supported",
+    detail: "Across 3 courses at TU Munich in a single semester",
   },
   {
     number: "11,400+",
-    label: "Conversations",
+    label: "Real Conversations",
     detail: "In-depth exchanges with 10 or more messages each",
   },
   {
     number: "3",
     label: "Published Studies",
-    detail: "Peer-reviewed at ITiCSE 2024, Koli Calling 2025, and C&E:AI 2026",
+    detail:
+      "Peer-reviewed at ITiCSE, Koli Calling, and Computers & Education: AI",
   },
 ];
 

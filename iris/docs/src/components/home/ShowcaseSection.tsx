@@ -118,6 +118,15 @@ export default function ShowcaseSection(): React.JSX.Element {
           Same approach, any subject. Iris guides students toward understanding
           through questions grounded in your actual course materials.
         </p>
+        <blockquote className={styles.endorseQuote}>
+          <p className={styles.endorseQuoteText}>
+            &ldquo;Iris was clearly aware of the context. It pointed me in the
+            right direction.&rdquo;
+          </p>
+          <cite className={styles.endorseQuoteCite}>
+            &mdash; Student P19 (Iris group), Koli Calling 2025
+          </cite>
+        </blockquote>
       </div>
     </section>
   );

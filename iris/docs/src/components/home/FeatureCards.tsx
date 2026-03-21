@@ -66,14 +66,15 @@ const features = [
   },
   {
     icon: <CodeIcon />,
-    title: "Context-Aware",
+    title: "Knows Your Course",
     description:
-      "Reads your course materials, exercises, and student submissions automatically.",
+      "Reads your lecture slides, exercises, and student submissions \u2014 no setup needed.",
   },
   {
     icon: <ShieldCheckIcon />,
-    title: "Always Accurate",
-    description: "Grounded in lecture content with citations you can verify.",
+    title: "Cites Its Sources",
+    description:
+      "Every answer links back to the exact slide or material, so students can verify it themselves.",
   },
 ];
 

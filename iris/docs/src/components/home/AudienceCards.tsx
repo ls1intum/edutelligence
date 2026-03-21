@@ -16,7 +16,7 @@ const audiences = [
   },
   {
     title: "Developers",
-    description: "Extend Iris with new pipelines and tools",
+    description: "Extend Iris with new capabilities and integrations",
     to: "/docs/developer/local-setup",
   },
   {

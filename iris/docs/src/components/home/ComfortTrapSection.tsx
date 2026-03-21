@@ -41,16 +41,30 @@ export default function ComfortTrapSection(): React.JSX.Element {
             keep going.
           </p>
         </div>
-        <blockquote className={styles.pullQuote}>
-          <p className={styles.pullQuoteText}>
-            &ldquo;A part of your brain turns off when you are basically telling
-            the AI to do the stuff and all of your focus is just diverted to see
-            that the input and output is basically working or not.&rdquo;
-          </p>
-          <cite className={styles.pullQuoteCite}>
-            &mdash; Student P22, Control Group (Koli Calling 2025)
-          </cite>
-        </blockquote>
+        <p className={styles.quoteGridLabel}>
+          What students say about generic AI tools
+        </p>
+        <div className={styles.quoteGrid}>
+          <blockquote className={styles.quoteCard}>
+            <p className={styles.quoteCardText}>
+              &ldquo;In my experience, I have seen that a part of your brain
+              turns off when you are basically telling the AI to do the
+              stuff.&rdquo;
+            </p>
+            <cite className={styles.quoteCardCite}>
+              &mdash; Student P22 (Control group), Koli Calling 2025
+            </cite>
+          </blockquote>
+          <blockquote className={styles.quoteCard}>
+            <p className={styles.quoteCardText}>
+              &ldquo;I think it is very easy to learn using ChatGPT. But next
+              day I will forget because I just learned it from ChatGPT.&rdquo;
+            </p>
+            <cite className={styles.quoteCardCite}>
+              &mdash; Student P20 (ChatGPT group), Koli Calling 2025
+            </cite>
+          </blockquote>
+        </div>
         <div className={styles.comfortTrapCallout}>
           <h3 className={styles.comfortTrapCalloutTitle}>
             What is productive struggle?

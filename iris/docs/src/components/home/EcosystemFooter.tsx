@@ -14,7 +14,8 @@ interface EcosystemItem {
 const ecosystem: EcosystemItem[] = [
   {
     name: "Iris",
-    description: "AI virtual tutor providing scaffolded guidance for students.",
+    description:
+      "AI teaching assistant that guides students with hints, not answers.",
     href: "/docs/overview/what-is-iris",
     highlight: true,
     external: false,

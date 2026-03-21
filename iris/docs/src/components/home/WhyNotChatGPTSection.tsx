@@ -125,6 +125,15 @@ export default function WhyNotChatGPTSection(): React.JSX.Element {
             </tbody>
           </table>
         </div>
+        <blockquote className={styles.endorseQuote}>
+          <p className={styles.endorseQuoteText}>
+            &ldquo;Context awareness &mdash; like if ChatGPT would already know
+            your code instead of you copy paste.&rdquo;
+          </p>
+          <cite className={styles.endorseQuoteCite}>
+            &mdash; Student P04 (ChatGPT group), Koli Calling 2025
+          </cite>
+        </blockquote>
       </div>
     </section>
   );

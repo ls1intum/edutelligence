@@ -14,7 +14,7 @@ const steps = [
     number: "2",
     title: "Iris Learns Your Course",
     description:
-      "Iris reads and indexes every slide and transcript. It understands your terminology, your examples, and the way you teach the material.",
+      "Iris reads every slide and transcript. It learns your terminology, your examples, and the way you teach the material.",
     emoji: "\uD83E\uDDE0",
   },
   {

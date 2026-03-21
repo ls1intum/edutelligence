@@ -3299,12 +3299,18 @@
 .idePanel {
   max-width: 820px;
   margin: 0 auto;
-  border-radius: 12px;
+  border-radius: 16px;
   overflow: hidden;
   background: #1e1e1e;
   box-shadow:
-    0 12px 48px rgba(0, 0, 0, 0.35),
+    0 8px 32px rgba(0, 0, 0, 0.15),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .idePanel {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .ideHeader {
@@ -3492,25 +3498,21 @@
   white-space: nowrap;
   font-size: 0.8rem;
   font-weight: 500;
-  padding: 0.4rem 0.85rem;
+  padding: 0.35rem 0.7rem;
   border-radius: 100px;
-  backdrop-filter: blur(16px) saturate(180%);
-  -webkit-backdrop-filter: blur(16px) saturate(180%);
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  box-shadow:
-    0 2px 12px rgba(42, 115, 180, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(42, 115, 180, 0.15);
+  box-shadow: 0 4px 12px rgba(42, 115, 180, 0.08);
   color: var(--ifm-font-color-base);
   z-index: 1;
 }
 
 [data-theme="dark"] .memoryChip {
-  background: rgba(30, 30, 30, 0.5);
-  border-color: rgba(255, 255, 255, 0.08);
-  box-shadow:
-    0 2px 12px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: rgba(30, 30, 30, 0.65);
+  border-color: rgba(90, 159, 214, 0.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
 @media (prefers-reduced-motion: no-preference) {

@@ -66,7 +66,7 @@ const cards = [
     icon: <SlidesIcon />,
     title: "Lecture Slides & Transcripts",
     description:
-      "Upload your slide decks and video transcripts. Iris indexes the content so it can reference specific slides when students ask questions \u2014 whether that\u2019s a history timeline, a biology diagram, or a legal case study.",
+      "Upload your slide decks and video transcripts. Iris learns the content so it can reference specific slides when students ask questions \u2014 whether that\u2019s a history timeline, a biology diagram, or a legal case study.",
   },
   {
     icon: <FaqIcon />,
