@@ -67,7 +67,8 @@ const features = [
   {
     icon: <CodeIcon />,
     title: "Context-Aware",
-    description: "Reads your code, tests, and course materials automatically.",
+    description:
+      "Reads your course materials, exercises, and student submissions automatically.",
   },
   {
     icon: <ShieldCheckIcon />,
