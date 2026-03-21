@@ -363,6 +363,43 @@
   background: rgba(90, 159, 214, 0.06);
 }
 
+/* ─── Comparison staggered reveal (Iris side) ─── */
+
+.irisBubble {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .irisBubble {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  .irisBubbleDelay1 {
+    transition:
+      opacity 0.4s ease-out 0.2s,
+      transform 0.4s ease-out 0.2s;
+  }
+
+  .irisBubbleDelay2 {
+    transition:
+      opacity 0.4s ease-out 0.6s,
+      transform 0.4s ease-out 0.6s;
+  }
+
+  .irisBubbleDelay3 {
+    transition:
+      opacity 0.4s ease-out 1s,
+      transform 0.4s ease-out 1s;
+  }
+
+  .irisBubble.irisBubbleVisible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .comparisonOutcome {
   font-size: 0.85rem;
   color: var(--iris-label-color);

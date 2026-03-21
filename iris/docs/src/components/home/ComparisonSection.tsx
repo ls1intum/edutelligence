@@ -42,16 +42,22 @@ export default function ComparisonSection(): React.JSX.Element {
               <span className={`${styles.comparisonLabel} ${styles.labelIris}`}>
                 Iris
               </span>
-              <div className={styles.comparisonBubble}>
+              <div
+                className={`${styles.comparisonBubble} ${styles.irisBubble} ${styles.irisBubbleDelay1} ${visible ? styles.irisBubbleVisible : ""}`}
+              >
                 <strong>Student:</strong> How do I do the BWT rotation step?
               </div>
-              <div className={styles.comparisonBubble}>
+              <div
+                className={`${styles.comparisonBubble} ${styles.irisBubble} ${styles.irisBubbleDelay2} ${visible ? styles.irisBubbleVisible : ""}`}
+              >
                 <strong>Iris:</strong> I see you&rsquo;re working on the BWT
                 rotation step. Think about what happens when you rotate a string
                 by moving the first character to the end. Can you see how to
                 generate all rotations from there?
               </div>
-              <p className={styles.comparisonOutcomeGood}>
+              <p
+                className={`${styles.comparisonOutcomeGood} ${styles.irisBubble} ${styles.irisBubbleDelay3} ${visible ? styles.irisBubbleVisible : ""}`}
+              >
                 Student works through the problem. Genuine understanding.
               </p>
             </div>
