@@ -33,26 +33,6 @@ const ecosystem: EcosystemItem[] = [
     href: "https://github.com/ls1intum/Athena",
     external: true,
   },
-  {
-    name: "Memiris",
-    description:
-      "Long-term memory layer enabling Iris to recall past interactions.",
-    href: "https://github.com/ls1intum/edutelligence",
-    external: true,
-  },
-  {
-    name: "Atlas",
-    description:
-      "Competency management and learning path recommendation system.",
-    href: "https://github.com/ls1intum/Artemis",
-    external: true,
-  },
-  {
-    name: "Nebula",
-    description: "Adaptive exercise generation powered by knowledge graphs.",
-    href: "https://github.com/ls1intum/edutelligence",
-    external: true,
-  },
 ];
 
 function CardContent({ item }: { item: EcosystemItem }): React.JSX.Element {
