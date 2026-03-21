@@ -25,12 +25,12 @@ const faqs: FaqEntry[] = [
   {
     question: "Does Iris give away answers?",
     answer:
-      "No. Iris uses a four-tier calibrated hint system that starts with subtle nudges and only escalates to more explicit guidance when needed. A built-in self-check mechanism ensures responses preserve productive struggle rather than short-circuiting learning.",
+      "No. Iris uses a four-tier hint system that starts with subtle nudges and only escalates to more explicit guidance when the student needs it.",
   },
   {
     question: "What courses does Iris work with?",
     answer:
-      "Iris works with any course hosted on Artemis. While it has particularly deep support for programming exercises (reading code, build logs, and test results), it also supports text exercises, modeling exercises, and general course Q&A through its Course Chat feature.",
+      "Any course on Artemis, with deep support for programming exercises and Course Chat for general Q&A.",
   },
 ];
 
