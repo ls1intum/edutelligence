@@ -839,7 +839,7 @@
   width: 100%;
   max-width: 440px;
   margin: 0 auto;
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   background: rgba(255, 255, 255, 0.6);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -1178,7 +1178,7 @@
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-top: 3px solid var(--ifm-color-primary);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   padding: 1.5rem 1.25rem;
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
@@ -1249,7 +1249,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -1563,7 +1563,7 @@
   padding: 2.5rem 1.25rem;
   background: #ffffff;
   border: 1px solid #d0d7de;
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.1),
     0 1px 4px rgba(0, 0, 0, 0.04);
@@ -1639,7 +1639,7 @@
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-left: 4px solid var(--ifm-color-primary);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -1752,7 +1752,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -1930,7 +1930,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -1989,7 +1989,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2038,7 +2038,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2125,7 +2125,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2197,7 +2197,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2315,7 +2315,7 @@
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 12px 48px rgba(42, 115, 180, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);
@@ -2453,7 +2453,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2593,7 +2593,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2656,7 +2656,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(180, 160, 130, 0.25);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(140, 120, 80, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
@@ -2712,7 +2712,7 @@
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-left: 4px solid var(--ifm-color-primary);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2758,7 +2758,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -2849,7 +2849,7 @@
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 4px 24px rgba(42, 115, 180, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -3116,7 +3116,7 @@
   margin: 0 auto;
   background: #ffffff;
   border: 1.5px solid #d0d7de;
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   box-shadow:
     0 12px 48px rgba(42, 115, 180, 0.12),
     0 2px 8px rgba(0, 0, 0, 0.06);
@@ -3271,7 +3271,7 @@
 .idePanel {
   max-width: 820px;
   margin: 0 auto;
-  border-radius: 16px;
+  border-radius: var(--iris-radius-card);
   overflow: hidden;
   background: #1e1e1e;
   box-shadow:
