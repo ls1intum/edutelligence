@@ -1277,14 +1277,14 @@
 }
 
 .audienceCardTitle {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   font-weight: 700;
   margin-bottom: 0.4rem;
   color: var(--ifm-font-color-base);
 }
 
 .audienceCardDesc {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   color: var(--iris-label-color);
   line-height: 1.5;
   flex: 1;
@@ -1536,14 +1536,14 @@
 }
 
 .courseMaterialTitle {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   font-weight: 700;
   margin-bottom: 0.5rem;
   color: var(--ifm-font-color-base);
 }
 
 .courseMaterialDesc {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   line-height: 1.6;
   color: var(--iris-label-color);
 }
@@ -1614,14 +1614,14 @@
 }
 
 .howItWorksTitle {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   font-weight: 700;
   margin-bottom: 0.5rem;
   color: var(--ifm-font-color-base);
 }
 
 .howItWorksDesc {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   line-height: 1.6;
   color: var(--iris-label-color);
 }
