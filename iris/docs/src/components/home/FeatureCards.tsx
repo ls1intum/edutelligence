@@ -4,7 +4,7 @@ import { useFadeIn } from "./useFadeIn";
 
 const features = [
   {
-    title: "Calibrated Scaffolding",
+    title: "Hints, Not Answers",
     description:
       "Four tiers of support \u2014 from subtle hints to generalized examples \u2014 preserving productive struggle instead of giving away answers.",
   },
@@ -14,7 +14,7 @@ const features = [
       "Deeply integrated into Artemis. Iris reads your code, build logs, test results, and course materials automatically \u2014 no copy-pasting needed.",
   },
   {
-    title: "RAG-Grounded",
+    title: "Always Accurate",
     description:
       "Responses grounded in lecture slides, transcripts, and FAQs with transparent citations you can verify.",
   },
