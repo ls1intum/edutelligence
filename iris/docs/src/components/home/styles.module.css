@@ -687,12 +687,12 @@
 }
 
 .heroFloatThinking {
-  bottom: 60px;
-  left: -30px;
+  bottom: -4px;
+  right: 20px;
   display: flex;
   align-items: center;
   gap: 6px;
-  transform: rotate(-2deg);
+  transform: rotate(-1deg);
 }
 
 .heroFloatThinkingLabel {
@@ -847,8 +847,8 @@
     top: -12px;
   }
   .heroFloatThinking {
-    left: -10px;
-    bottom: 50px;
+    right: 0;
+    bottom: -4px;
   }
   .heroFloatHelpful {
     right: 0;
