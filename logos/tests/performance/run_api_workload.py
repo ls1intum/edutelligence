@@ -32,9 +32,10 @@ import json
 import math
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import text
@@ -58,22 +59,9 @@ class WorkloadEntry:
 
     def render_payload(self) -> Dict[str, object]:
         try:
-            payload = json.loads(self.body_json)
-            # Add mode and priority to the payload for tracking
-            payload["mode"] = self.mode
-            payload["priority"] = self.map_priority_to_int()
-            return payload
+            return json.loads(self.body_json)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError(f"{self.request_id}: body_json column is not valid JSON.") from exc
-
-    def map_priority_to_int(self) -> int:
-        """Map priority string to integer value."""
-        priority_map = {
-            "low": 1,
-            "mid": 5,
-            "high": 10,
-        }
-        return priority_map.get(self.priority.lower(), 5)  # Default to mid (5)
 
 @dataclass(slots=True)
 class RequestResult:
@@ -82,11 +70,15 @@ class RequestResult:
     response_body: Optional[dict]
     error: Optional[str]
     duration_ms: float
+    server_request_id: Optional[str] = None
+
+
+DEFAULT_OUTPUT_DIR = Path("tests/performance/results")
 
 
 @dataclass(slots=True)
 class LogRecord:
-    log_id: int
+    log_id: Optional[int]
     request_id: Optional[str]
     request_ts: datetime
     ttft_ts: Optional[datetime]
@@ -102,6 +94,9 @@ class LogRecord:
     complete_ts: Optional[datetime] = None
     cold_start: Optional[bool] = None
     result_status: Optional[str] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
 
     @property
     def ttft_ms(self) -> Optional[float]:
@@ -137,6 +132,62 @@ class LogRecord:
         return None
 
 
+def parse_streaming_response(raw_text: str) -> dict:
+    content_parts: List[str] = []
+    usage: Optional[dict] = None
+    final_chunk: Optional[dict] = None
+    error_payload: Optional[dict] = None
+
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("data:"):
+            continue
+        data = stripped[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            item = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+
+        if isinstance(item, dict) and "error" in item:
+            error_payload = item
+            continue
+
+        if not isinstance(item, dict):
+            continue
+
+        final_chunk = item
+        item_usage = item.get("usage")
+        if isinstance(item_usage, dict):
+            usage = item_usage
+
+        for choice in item.get("choices", []):
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                piece = delta.get("content")
+                if isinstance(piece, str):
+                    content_parts.append(piece)
+            text = choice.get("text")
+            if isinstance(text, str):
+                content_parts.append(text)
+
+    if error_payload is not None:
+        return error_payload
+
+    content = "".join(content_parts)
+    if final_chunk is None:
+        return {"text": raw_text[:2000]}
+
+    reconstructed = dict(final_chunk)
+    reconstructed["choices"] = [{"message": {"role": "assistant", "content": content}}]
+    if usage is not None:
+        reconstructed["usage"] = usage
+    return reconstructed
+
+
 async def dispatch_request(
     client: httpx.AsyncClient,
     base_url: str,
@@ -155,25 +206,35 @@ async def dispatch_request(
 
     start = time.perf_counter()
     try:
-        response = await client.request(
-            "POST",
-            url,
-            json=payload,
-            headers=headers,
-        )
-        duration_ms = (time.perf_counter() - start) * 1000
-        body: Optional[dict]
-        try:
-            body = response.json()
-        except json.JSONDecodeError:
-            body = {"text": response.text}
-        error = None if response.status_code < 400 else body
+        if payload.get("stream") is True:
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
+                raw_text = await response.aread()
+                duration_ms = (time.perf_counter() - start) * 1000
+                body = parse_streaming_response(raw_text.decode("utf-8", errors="replace"))
+                status_code = response.status_code
+                server_request_id = response.headers.get("X-Request-ID") or response.headers.get("x-request-id")
+        else:
+            response = await client.request(
+                "POST",
+                url,
+                json=payload,
+                headers=headers,
+            )
+            duration_ms = (time.perf_counter() - start) * 1000
+            try:
+                body = response.json()
+            except json.JSONDecodeError:
+                body = {"text": response.text}
+            status_code = response.status_code
+            server_request_id = response.headers.get("X-Request-ID") or response.headers.get("x-request-id")
+        error = None if status_code < 400 else body
         return RequestResult(
             entry=entry,
-            status_code=response.status_code,
+            status_code=status_code,
             response_body=body,
             error=None if error is None else json.dumps(error)[:500],
             duration_ms=duration_ms,
+            server_request_id=server_request_id,
         )
     except Exception as exc:
         duration_ms = (time.perf_counter() - start) * 1000
@@ -263,6 +324,12 @@ def current_log_max(process_id: int) -> int:
             {"pid": process_id},
         ).scalar()
         return int(value or 0)
+
+
+def is_local_api_base(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    return host in {"", "localhost", "127.0.0.1", "0.0.0.0"}
 
 
 def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
@@ -379,6 +446,104 @@ def extract_token_count(payload: Optional[dict]) -> Optional[int]:
     return None
 
 
+def extract_usage_counts(payload: Optional[dict]) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    if payload is None or not isinstance(payload, dict):
+        return None, None, None
+
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        total_tokens = usage.get("total_tokens")
+        return (
+            prompt_tokens if isinstance(prompt_tokens, int) else None,
+            completion_tokens if isinstance(completion_tokens, int) else None,
+            total_tokens if isinstance(total_tokens, int) else None,
+        )
+
+    return None, None, None
+
+
+def fetch_request_logs_via_api(
+    base_url: str,
+    logos_key: str,
+    request_ids: Sequence[str],
+    timeout_s: float,
+) -> Dict[str, LogRecord]:
+    normalized_ids = []
+    seen_ids = set()
+    for request_id in request_ids:
+        value = str(request_id or "").strip()
+        if not value or value in seen_ids:
+            continue
+        normalized_ids.append(value)
+        seen_ids.add(value)
+
+    if not normalized_ids:
+        return {}
+
+    url = f"{base_url.rstrip('/')}/logosdb/request_logs"
+    headers = {"logos_key": logos_key, "Content-Type": "application/json"}
+    response = httpx.post(url, headers=headers, json={"request_ids": normalized_ids}, timeout=timeout_s)
+    response.raise_for_status()
+    payload = response.json()
+
+    records: Dict[str, LogRecord] = {}
+    for item in payload.get("requests", []):
+        request_id = item.get("request_id")
+        request_ts = item.get("enqueue_ts")
+        if not request_id or not request_ts:
+            continue
+        records[request_id] = LogRecord(
+            log_id=None,
+            request_id=request_id,
+            request_ts=datetime.fromisoformat(request_ts.replace("Z", "+00:00")),
+            ttft_ts=datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00")) + timedelta(milliseconds=float(item["ttft_ms"]))
+            if item.get("ttft_ms") is not None
+            else None,
+            response_ts=datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
+            if item.get("request_complete_ts")
+            else None,
+            provider_id=None,
+            provider_name=item.get("provider_name"),
+            model_id=None,
+            model_name=item.get("model_name"),
+            response_payload=None,
+            enqueue_ts=datetime.fromisoformat(item["enqueue_ts"].replace("Z", "+00:00"))
+            if item.get("enqueue_ts")
+            else None,
+            scheduled_ts=datetime.fromisoformat(item["scheduled_ts"].replace("Z", "+00:00"))
+            if item.get("scheduled_ts")
+            else None,
+            complete_ts=datetime.fromisoformat(item["request_complete_ts"].replace("Z", "+00:00"))
+            if item.get("request_complete_ts")
+            else None,
+            cold_start=item.get("cold_start"),
+            result_status=item.get("status"),
+            prompt_tokens=item.get("prompt_tokens"),
+            completion_tokens=item.get("completion_tokens"),
+            total_tokens=item.get("total_tokens"),
+        )
+    return records
+
+
+def wait_for_request_logs_via_api(
+    base_url: str,
+    logos_key: str,
+    request_ids: Sequence[str],
+    timeout: float = 30.0,
+    poll_interval: float = 1.0,
+) -> Dict[str, LogRecord]:
+    deadline = time.monotonic() + timeout
+    last_records: Dict[str, LogRecord] = {}
+    expected = {str(request_id).strip() for request_id in request_ids if str(request_id).strip()}
+    while True:
+        last_records = fetch_request_logs_via_api(base_url, logos_key, list(expected), timeout_s=max(5.0, poll_interval + 5.0))
+        if expected.issubset(last_records.keys()) or time.monotonic() >= deadline:
+            return last_records
+        time.sleep(poll_interval)
+
+
 def calculate_percentile(values: List[float], percentile: float) -> float:
     """Calculate the given percentile of a list of values."""
     if not values:
@@ -394,7 +559,7 @@ def calculate_percentile(values: List[float], percentile: float) -> float:
 
 def build_rows(
     results: Sequence[RequestResult],
-    logs: Sequence[LogRecord],
+    logs: Sequence[LogRecord] | Dict[str, LogRecord],
     latency_slo_ms: float,
 ) -> tuple[Dict[str, object], List[Dict[str, object]], int]:
     detail_records: List[Dict[str, object]] = []
@@ -406,10 +571,25 @@ def build_rows(
     scheduler_total_values: List[float] = []
     successes = 0
 
-    missing_logs = max(0, len(results) - len(logs))
-    padded_logs: List[Optional[LogRecord]] = list(logs[: len(results)]) + [None] * missing_logs
+    log_by_request_id = logs if isinstance(logs, dict) else {
+        log.request_id: log for log in logs if isinstance(log.request_id, str) and log.request_id
+    }
+    use_request_ids = isinstance(logs, dict) or any(result.server_request_id for result in results)
+    missing_logs = 0
 
-    for result, log in zip(results, padded_logs):
+    if use_request_ids:
+        result_log_pairs = []
+        for result in results:
+            log = log_by_request_id.get(result.server_request_id or "")
+            if log is None:
+                missing_logs += 1
+            result_log_pairs.append((result, log))
+    else:
+        missing_logs = max(0, len(results) - len(logs))
+        padded_logs: List[Optional[LogRecord]] = list(logs[: len(results)]) + [None] * missing_logs
+        result_log_pairs = list(zip(results, padded_logs))
+
+    for result, log in result_log_pairs:
         ttft: Optional[float] = None
         total_latency: Optional[float] = None
         provider_id: Optional[int] = None
@@ -417,12 +597,18 @@ def build_rows(
         model_id: Optional[int] = None
         model_name: Optional[str] = None
         response_text: Optional[str] = None
+        response_body_json: Optional[str] = None
         log_id: Optional[int] = None
         tokens: Optional[int] = None
         tpot: Optional[float] = None
         queue_wait: Optional[float] = None
         processing_ms: Optional[float] = None
         scheduler_total: Optional[float] = None
+        cold_start: Optional[bool] = None
+        result_status: Optional[str] = None
+        prompt_tokens: Optional[int] = None
+        completion_tokens: Optional[int] = None
+        total_tokens: Optional[int] = None
 
         if log is not None:
             ttft = log.ttft_ms
@@ -435,8 +621,21 @@ def build_rows(
             model_id = log.model_id
             model_name = log.model_name
             response_text = extract_response_text(log.response_payload)
+            response_body_json = json.dumps(log.response_payload, ensure_ascii=False)[:2000] if log.response_payload is not None else None
             tokens = extract_token_count(log.response_payload)
+            if tokens is None:
+                tokens = log.completion_tokens or log.total_tokens
             log_id = log.log_id
+            cold_start = log.cold_start
+            result_status = log.result_status
+            prompt_tokens = log.prompt_tokens
+            completion_tokens = log.completion_tokens
+            total_tokens = log.total_tokens
+            if prompt_tokens is None or completion_tokens is None or total_tokens is None:
+                payload_prompt_tokens, payload_completion_tokens, payload_total_tokens = extract_usage_counts(log.response_payload)
+                prompt_tokens = prompt_tokens if prompt_tokens is not None else payload_prompt_tokens
+                completion_tokens = completion_tokens if completion_tokens is not None else payload_completion_tokens
+                total_tokens = total_tokens if total_tokens is not None else payload_total_tokens
 
             # Calculate TPOT (Time Per Output Token)
             if ttft is not None and total_latency is not None and tokens is not None and tokens > 1:
@@ -459,6 +658,10 @@ def build_rows(
             successes += 1
 
         error_text = result.error
+        if response_body_json is None and result.response_body is not None:
+            response_body_json = json.dumps(result.response_body, ensure_ascii=False)[:2000]
+        if response_text is None and result.response_body is not None:
+            response_text = extract_response_text(result.response_body)
         if log is None:
             note = "log entry missing"
             error_text = f"{result.error} | {note}" if result.error else note
@@ -466,14 +669,21 @@ def build_rows(
         record = {
             "log_id": log_id,
             "request_id": result.entry.request_id,
+            "server_request_id": result.server_request_id,
             "mode": result.entry.mode,
             "priority": result.entry.priority,
             "http_status": result.status_code,
             "client_duration_ms": result.duration_ms,
+            "request_body_json": result.entry.body_json,
             "provider_id": provider_id,
             "provider_name": provider_name,
             "model_id": model_id,
             "model_name": model_name,
+            "cold_start": cold_start,
+            "result_status": result_status,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
             "ttft_ms": ttft,
             "tpot_ms": tpot,
             "tokens": tokens,
@@ -483,9 +693,16 @@ def build_rows(
             "scheduler_total_ms": scheduler_total,
             "_request_ts": log.request_ts if log is not None else None,
             "_response_ts": log.response_ts if log is not None else None,
+            "response_body_json": response_body_json,
             "response_text": response_text,
             "error": error_text,
         }
+        if not result.server_request_id:
+            note = "missing_request_id_header"
+            record["error"] = f"{record['error']} | {note}" if record["error"] else note
+        elif use_request_ids and log is None:
+            note = "log entry missing"
+            record["error"] = f"{record['error']} | {note}" if record["error"] else note
         detail_records.append(record)
 
     total_requests = len(results)
@@ -627,12 +844,19 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
     headers = [
         "log_id",
         "request_id",
+        "server_request_id",
         "mode",
         "priority",
         "http_status",
         "client_duration_ms",
+        "request_body_json",
         "provider_name",
         "model_name",
+        "cold_start",
+        "result_status",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
         "ttft_ms",
         "tpot_ms",
         "tokens",
@@ -640,6 +864,7 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
         "queue_wait_ms",
         "processing_ms",
         "scheduler_total_ms",
+        "response_body_json",
         "response_text",
         "error",
     ]
@@ -658,12 +883,19 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
             writer.writerow([
                 fmt(rec.get("log_id")),
                 rec.get("request_id", ""),
+                rec.get("server_request_id", ""),
                 rec.get("mode", ""),
                 rec.get("priority", ""),
                 fmt(rec.get("http_status")),
                 fmt(rec.get("client_duration_ms")),
+                rec.get("request_body_json", ""),
                 rec.get("provider_name", ""),
                 rec.get("model_name", ""),
+                fmt(rec.get("cold_start")),
+                rec.get("result_status", ""),
+                fmt(rec.get("prompt_tokens")),
+                fmt(rec.get("completion_tokens")),
+                fmt(rec.get("total_tokens")),
                 fmt(rec.get("ttft_ms")),
                 fmt(rec.get("tpot_ms")),
                 fmt(rec.get("tokens")),
@@ -671,9 +903,14 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
                 fmt(rec.get("queue_wait_ms")),
                 fmt(rec.get("processing_ms")),
                 fmt(rec.get("scheduler_total_ms")),
+                rec.get("response_body_json", ""),
                 rec.get("response_text", ""),
                 rec.get("error", ""),
             ])
+
+
+def default_output_path() -> Path:
+    return DEFAULT_OUTPUT_DIR / f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
 
 def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, object]]) -> None:
@@ -816,7 +1053,7 @@ def main() -> None:
     parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
     parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
     parser.add_argument("--api-base", default="http://localhost:8080", help="Base URL for the Logos API.")
-    parser.add_argument("--output", type=Path, default=Path("api_benchmark.csv"), help="Destination CSV file.")
+    parser.add_argument("--output", type=Path, default=default_output_path(), help="Destination CSV file.")
     parser.add_argument("--latency-slo-ms", type=float, default=10_000.0, help="Latency SLO threshold in milliseconds.")
     parser.add_argument(
         "--request-timeout-s",
@@ -827,22 +1064,38 @@ def main() -> None:
     args = parser.parse_args()
 
     workload = parse_workload(args.workload)
-    process_id, original_log = fetch_process_metadata(args.logos_key)
-    restore_log = original_log if original_log else "BILLING"
-    if original_log != "FULL":
-        set_log_level(process_id, "FULL")
-    start_log_id = current_log_max(process_id)
+    local_mode = is_local_api_base(args.api_base)
+    process_id = None
+    original_log = None
+    restore_log = "BILLING"
+    start_log_id = 0
+    if local_mode:
+        process_id, original_log = fetch_process_metadata(args.logos_key)
+        restore_log = original_log if original_log else "BILLING"
+        if original_log != "FULL":
+            set_log_level(process_id, "FULL")
+        start_log_id = current_log_max(process_id)
 
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
         results = asyncio.run(run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s))
-        logs = wait_for_log_records(
-            process_id,
-            start_log_id,
-            expected_count=len(results),
-            timeout=30.0,
-            poll_interval=1.0,
-        )
+        if local_mode:
+            logs = wait_for_log_records(
+                process_id,
+                start_log_id,
+                expected_count=len(results),
+                timeout=30.0,
+                poll_interval=1.0,
+            )
+        else:
+            server_request_ids = [result.server_request_id for result in results if result.server_request_id]
+            logs = wait_for_request_logs_via_api(
+                args.api_base,
+                args.logos_key,
+                server_request_ids,
+                timeout=30.0,
+                poll_interval=1.0,
+            )
         summary_stats, detail_records, missing_logs = build_rows(results, logs, args.latency_slo_ms)
 
         # Generate output file paths
@@ -865,7 +1118,7 @@ def main() -> None:
         print(f"  Summary metrics: {summary_path}")
         print(f"  Detailed results: {detailed_path}")
     finally:
-        if original_log != "FULL":
+        if local_mode and original_log != "FULL":
             set_log_level(process_id, restore_log)
         print("Restored process log level.")
 

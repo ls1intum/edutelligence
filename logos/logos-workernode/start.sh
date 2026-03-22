@@ -5,12 +5,14 @@ cd "$(dirname "$0")"
 mode="local"
 follow_logs=false
 stop_only=false
+build_images=false
 
 for arg in "$@"; do
   case "$arg" in
     --gpu) mode="gpu" ;;
     --logs) follow_logs=true ;;
     --stop) stop_only=true ;;
+    --build) build_images=true ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -42,13 +44,20 @@ if $stop_only; then
 fi
 
 echo "Starting LogosWorkerNode (mode=$mode)"
-docker compose "${compose_files[@]}" up --build -d
+if $build_images; then
+  docker compose "${compose_files[@]}" up --build -d
+else
+  docker compose "${compose_files[@]}" up -d
+fi
 
 echo "Health: curl http://localhost:8444/health"
 echo "Runtime: curl -H 'Authorization: Bearer <worker_api_key>' http://localhost:8444/admin/runtime"
 echo "Lanes:   curl -H 'Authorization: Bearer <worker_api_key>' http://localhost:8444/admin/lanes"
 if [[ "$mode" == "gpu" ]]; then
   echo "GPU mode enabled via docker-compose.gpu.yml"
+fi
+if ! $build_images; then
+  echo "Tip: pass --build when Dockerfile/dependencies changed."
 fi
 
 if $follow_logs; then

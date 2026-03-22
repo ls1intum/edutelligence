@@ -32,6 +32,8 @@ _DEFAULT_PORT_END = 11499
 
 _HOT_SWAP_TIMEOUT = 90  # seconds total for spawn + preload on new process
 _MAX_EVENT_LOG = 500    # max events kept in memory
+_HANDLE_DESTROY_TIMEOUT = 45
+_HANDLE_CLOSE_TIMEOUT = 10
 
 
 class PortAllocator:
@@ -489,11 +491,20 @@ class LaneManager:
     async def destroy_all(self) -> None:
         """Stop all lane processes and clean up."""
         async with self._lock:
+            detached: list[tuple[str, ProcessHandle, int | None]] = []
             for lid in list(self._handles.keys()):
-                try:
-                    await self._remove_lane_unlocked(lid)
-                except Exception:
-                    logger.warning("Error destroying lane '%s'", lid, exc_info=True)
+                handle, port = self._detach_lane_unlocked(lid)
+                if handle is not None:
+                    detached.append((lid, handle, port))
+
+        if not detached:
+            return
+
+        logger.info("Destroying %d lane(s) during worker shutdown", len(detached))
+        await asyncio.gather(
+            *(self._finalize_detached_lane(lid, handle, port) for lid, handle, port in detached),
+            return_exceptions=False,
+        )
 
     async def close(self) -> None:
         """Release HTTP clients for all handles."""
@@ -576,16 +587,10 @@ class LaneManager:
                      lane_id, lane_config.vllm, lane_config.model, port)
 
     async def _remove_lane_unlocked(self, lane_id: str) -> None:
-        handle = self._handles.pop(lane_id, None)
+        handle, port = self._detach_lane_unlocked(lane_id)
         if handle is None:
             return
-        await handle.destroy()
-        await handle.close()
-        self._port_alloc.release(lane_id)
-        self._active_requests.pop(lane_id, None)
-        self._starting_deadlines.pop(lane_id, None)
-        self._record_event(lane_id, "stopped")
-        logger.info("Lane '%s' removed", lane_id)
+        await self._finalize_detached_lane(lane_id, handle, port)
 
     async def _hot_swap_lane_unlocked(
         self, lane_id: str, new_config: LaneConfig,
@@ -670,6 +675,47 @@ class LaneManager:
             lane_id, temp_port, new_config.num_parallel,
         )
         return old_handle
+    
+    def _detach_lane_unlocked(self, lane_id: str) -> tuple[ProcessHandle | None, int | None]:
+        handle = self._handles.pop(lane_id, None)
+        if handle is None:
+            return None, None
+        port = self._port_alloc.get_port(lane_id)
+        self._port_alloc.release(lane_id)
+        self._active_requests.pop(lane_id, None)
+        self._starting_deadlines.pop(lane_id, None)
+        return handle, port
+
+    async def _finalize_detached_lane(
+        self,
+        lane_id: str,
+        handle: ProcessHandle,
+        port: int | None,
+    ) -> None:
+        try:
+            await asyncio.wait_for(handle.destroy(), timeout=_HANDLE_DESTROY_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Timed out destroying lane '%s' after %ss; continuing shutdown with the lane detached",
+                lane_id,
+                _HANDLE_DESTROY_TIMEOUT,
+            )
+        except Exception:
+            logger.warning("Error destroying lane '%s'", lane_id, exc_info=True)
+
+        try:
+            await asyncio.wait_for(handle.close(), timeout=_HANDLE_CLOSE_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Timed out closing lane '%s' after %ss; continuing shutdown with the handle detached",
+                lane_id,
+                _HANDLE_CLOSE_TIMEOUT,
+            )
+        except Exception:
+            logger.warning("Error closing lane '%s'", lane_id, exc_info=True)
+
+        self._record_event(lane_id, "stopped", port=port)
+        logger.info("Lane '%s' removed", lane_id)
 
     async def _rollback_unlocked(
         self,

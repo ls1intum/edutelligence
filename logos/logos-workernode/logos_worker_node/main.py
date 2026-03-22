@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -25,6 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("logos_worker_node")
 
+_LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -98,7 +100,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error stopping Logos bridge", exc_info=True)
     try:
-        await lane_manager.destroy_all()
+        await asyncio.wait_for(lane_manager.destroy_all(), timeout=_LANE_MANAGER_SHUTDOWN_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.error(
+            "Timed out destroying lanes after %ss; continuing shutdown with best-effort cleanup",
+            _LANE_MANAGER_SHUTDOWN_TIMEOUT,
+        )
     except Exception:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()

@@ -195,13 +195,33 @@ class LogosBridgeClient:
             if not token:
                 raise RuntimeError("Logos auth response missing session token")
             ws_url = self._derive_ws_url(token)
-            data["ws_url"] = ws_url
+        ws_url = self._normalize_ws_url(ws_url)
+        data["ws_url"] = ws_url
         return data
 
     def _derive_ws_url(self, token: str) -> str:
         parsed = urlparse(self._cfg.logos_url)
         ws_scheme = "ws" if parsed.scheme == "http" else "wss"
         return f"{ws_scheme}://{parsed.netloc}/logosdb/providers/logosnode/session?token={token}"
+    
+    def _normalize_ws_url(self, ws_url: str) -> str:
+        ws_url = (ws_url or "").strip()
+        if not ws_url:
+            return ws_url
+        logos_scheme = urlparse(self._cfg.logos_url).scheme.lower()
+        parsed_ws = urlparse(ws_url)
+        ws_scheme = parsed_ws.scheme.lower()
+        # Some deployments behind TLS-terminating proxies can still return ws://
+        # even when logos_url is https://. Upgrade this automatically.
+        if logos_scheme == "https" and ws_scheme == "ws":
+            upgraded = parsed_ws._replace(scheme="wss").geturl()
+            logger.warning(
+                "Auth returned insecure websocket URL for HTTPS Logos URL; upgrading '%s' -> '%s'",
+                ws_url,
+                upgraded,
+            )
+            return upgraded
+        return ws_url
 
     async def _heartbeat_loop(self, ws) -> None:
         interval = max(1, self._cfg.heartbeat_interval_seconds)

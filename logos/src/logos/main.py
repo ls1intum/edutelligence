@@ -19,7 +19,7 @@ from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments
+from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.jobs.job_service import JobService, JobSubmission
@@ -989,10 +989,7 @@ def _require_root_access(logos_key: str) -> None:
 
 
 def _normalize_provider_type(provider_type: str | None) -> str:
-    normalized = (provider_type or "").strip().lower()
-    if normalized in {"node", "node_controller", "ollama", "logos_worker_node", "logos-workernode", "logosnode"}:
-        return "logosnode"
-    return normalized
+    return normalize_provider_type(provider_type)
 
 
 def _logosnode_insecure_dev_mode_enabled() -> bool:
@@ -1149,8 +1146,6 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
         for deployment in deployments:
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
-            provider_type = _normalize_provider_type(deployment.get("type"))
-
             if model_id not in model_cache:
                 model_info = db.get_model(model_id)
                 if not model_info:
@@ -1164,6 +1159,11 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                 provider_cache[provider_id] = db.get_provider(provider_id) or {}
             provider_info = provider_cache[provider_id]
             provider_name = provider_info.get("name", f"provider-{provider_id}")
+            provider_type = normalize_provider_type(
+                deployment.get("type"),
+                provider_name=provider_name,
+                base_url=provider_info.get("base_url"),
+            )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
             provider_config = db.get_provider_config(provider_id) or {}
@@ -1221,7 +1221,12 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
         for deployment in db.get_all_deployments():
             model_id = deployment["model_id"]
             provider_id = deployment["provider_id"]
-            provider_type = _normalize_provider_type(deployment.get("type"))
+            provider_info = db.get_provider(provider_id) or {}
+            provider_type = normalize_provider_type(
+                deployment.get("type"),
+                provider_name=provider_info.get("name"),
+                base_url=provider_info.get("base_url"),
+            )
             if provider_type:
                 registry[(model_id, provider_id)] = provider_type
     return registry
@@ -1292,6 +1297,7 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
 def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None):
     """Build streaming response using executor."""
     from fastapi.responses import StreamingResponse
+    request_id = scheduling_stats.get("request_id") if scheduling_stats else None
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
@@ -1388,12 +1394,14 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                 except Exception as e:
                     logger.error(f"Failed to release scheduler resources: {e}")
     
-    return StreamingResponse(streamer(), media_type="text/event-stream")
+    response_headers = {"X-Request-ID": request_id} if request_id else None
+    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, is_async_job=False):
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
+    request_id = scheduling_stats.get("request_id") if scheduling_stats else None
 
     try:
         # Prepare headers and payload using context resolver
@@ -1508,7 +1516,8 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
             return {"status_code": status_code, "data": response_payload}
         else:
             status_code = status_override if status_override is not None else (504 if timed_out else (200 if exec_result.success else 500))
-            return JSONResponse(content=exec_result.response, status_code=status_code)
+            headers = {"X-Request-ID": request_id} if request_id else None
+            return JSONResponse(content=exec_result.response, status_code=status_code, headers=headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -1525,7 +1534,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
 
 def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: dict,
                                log_id: Optional[int], provider_id: int, model_id: Optional[int],
-                               policy_id: int, classified: dict):
+                               policy_id: int, classified: dict, request_id: Optional[str] = None):
     """
     Build streaming response for PROXY MODE using executor.
     """
@@ -1576,12 +1585,13 @@ def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: di
                         error_message=error_message,
                     )
 
-    return StreamingResponse(streamer(), media_type="text/event-stream")
+    response_headers = {"X-Request-ID": request_id} if request_id else None
+    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: dict,
                                 log_id: Optional[int], provider_id: int, model_id: Optional[int],
-                                policy_id: int, classified: dict, is_async_job=False):
+                                policy_id: int, classified: dict, is_async_job=False, request_id: Optional[str] = None):
     """
     Build synchronous response for PROXY MODE using executor.
     """
@@ -1617,7 +1627,12 @@ async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: d
     if is_async_job:
         return {"status_code": 200 if exec_result.success else 500, "data": response_payload}
     else:
-        return JSONResponse(content=response_payload, status_code=200 if exec_result.success else 500)
+        headers = {"X-Request-ID": request_id} if request_id else None
+        return JSONResponse(
+            content=response_payload,
+            status_code=200 if exec_result.success else 500,
+            headers=headers,
+        )
 
 
 async def _execute_proxy_mode(
@@ -3009,8 +3024,45 @@ async def latest_requests(request: Request):
         return JSONResponse(content=payload, status_code=status)
 
 
+@app.post("/logosdb/request_logs")
+async def request_logs(request: Request):
+    """
+    Fetch request logs by request_id for performance replay correlation.
+    """
+    headers = dict(request.headers)
+    logos_key, _ = authenticate_logos_key(headers)
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
+
+    if not isinstance(body, dict):
+        return JSONResponse(content={"error": "JSON payload must be an object"}, status_code=400)
+
+    request_ids = body.get("request_ids")
+    if not isinstance(request_ids, list) or any(not isinstance(item, str) for item in request_ids):
+        return JSONResponse(content={"error": "request_ids must be a list of strings"}, status_code=400)
+
+    with DBManager() as db:
+        payload, status = db.get_request_logs(logos_key, request_ids)
+        return JSONResponse(content=payload, status_code=status)
+
+
 @app.options("/logosdb/latest_requests")
 async def latest_requests_options():
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+    )
+
+
+@app.options("/logosdb/request_logs")
+async def request_logs_options():
     return JSONResponse(
         content={},
         headers={

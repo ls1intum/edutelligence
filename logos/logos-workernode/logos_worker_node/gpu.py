@@ -20,6 +20,15 @@ _NVIDIA_SMI_FORMAT = "csv,noheader,nounits"
 _SUBPROCESS_TIMEOUT = 10
 
 
+def _parse_nvidia_float(value: str) -> float | None:
+    raw = (value or "").strip()
+    if not raw or raw in {"[N/A]", "N/A", "ERR!", "[ERR!]", "[Unknown Error]"}:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
 class GpuMetricsCollector:
     def __init__(self, poll_interval: int = 5) -> None:
         self._poll_interval = poll_interval
@@ -97,32 +106,61 @@ class GpuMetricsCollector:
             return
 
         devices: list[DeviceInfo] = []
+        degraded_messages: list[str] = []
         for line in raw.strip().splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 8:
                 continue
             try:
-                mem_used = float(parts[3])
-                mem_total = float(parts[4])
-                devices.append(
-                    DeviceInfo(
-                        device_id=parts[1] or parts[0],
-                        kind="nvidia",
-                        name=parts[2],
-                        memory_used_mb=mem_used,
-                        memory_total_mb=mem_total,
-                        memory_free_mb=mem_total - mem_used,
-                        utilization_percent=float(parts[5]),
-                        temperature_celsius=float(parts[6]),
-                        power_draw_watts=float(parts[7]) if parts[7] != "[N/A]" else None,
-                        extra={"index": int(parts[0])},
-                    )
-                )
+                device_index = int(parts[0])
             except (ValueError, IndexError):
                 logger.debug("Skipping malformed nvidia-smi line: %s", line)
+                continue
+
+            mem_used = _parse_nvidia_float(parts[3])
+            mem_total = _parse_nvidia_float(parts[4])
+            if mem_used is None or mem_total is None:
+                logger.warning("Skipping nvidia-smi line with invalid memory fields: %s", line)
+                degraded_messages.append(f"gpu{device_index}: invalid memory telemetry")
+                continue
+
+            utilization = _parse_nvidia_float(parts[5])
+            temperature = _parse_nvidia_float(parts[6])
+            power_draw = _parse_nvidia_float(parts[7])
+            partial_fields: list[str] = []
+            if utilization is None:
+                partial_fields.append("utilization")
+            if temperature is None:
+                partial_fields.append("temperature")
+            if parts[7].strip() != "[N/A]" and power_draw is None:
+                partial_fields.append("power")
+            if partial_fields:
+                logger.warning(
+                    "Partial nvidia-smi telemetry for gpu%s (%s): missing %s",
+                    device_index,
+                    parts[1] or parts[0],
+                    ", ".join(partial_fields),
+                )
+                degraded_messages.append(f"gpu{device_index}: missing {', '.join(partial_fields)}")
+
+            devices.append(
+                DeviceInfo(
+                    device_id=parts[1] or parts[0],
+                    kind="nvidia",
+                    name=parts[2],
+                    memory_used_mb=mem_used,
+                    memory_total_mb=mem_total,
+                    memory_free_mb=max(mem_total - mem_used, 0.0),
+                    utilization_percent=utilization,
+                    temperature_celsius=temperature,
+                    power_draw_watts=power_draw,
+                    extra={"index": device_index},
+                )
+            )
 
         async with self._lock:
             self._devices = devices
+            self._degraded_reason = "; ".join(degraded_messages[:3]) if degraded_messages else ""
 
     @staticmethod
     def _run_nvidia_smi() -> str | None:

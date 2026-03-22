@@ -22,6 +22,7 @@ logger = logging.getLogger("logos_worker_node.ollama_process")
 _READY_TIMEOUT = 60
 _PRELOAD_TIMEOUT = 120
 _STOP_TIMEOUT = 10
+_FORCE_KILL_WAIT_TIMEOUT = 5
 
 
 class OllamaProcessHandle:
@@ -33,6 +34,7 @@ class OllamaProcessHandle:
         self._global_config = global_config
         self._lane_config: LaneConfig | None = None
         self._process: asyncio.subprocess.Process | None = None
+        self._process_group_id: int | None = None
         self._http: httpx.AsyncClient | None = None
         self._preload_tasks: list[asyncio.Task] = []
         self._reconfigure_lock = asyncio.Lock()
@@ -78,12 +80,21 @@ class OllamaProcessHandle:
             env=process_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
+        self._process_group_id = self._process.pid
 
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
         self._log_task = asyncio.create_task(
             self._stream_logs(), name=f"logs-{self.lane_id}"
+        )
+
+        logger.info(
+            "[%s] Process spawned (pid=%d, pgid=%d)",
+            self.lane_id,
+            self._process.pid,
+            self._process_group_id,
         )
 
         logger.info("[%s] Process spawned (pid=%d)", self.lane_id, self._process.pid)
@@ -346,23 +357,52 @@ class OllamaProcessHandle:
         if self._process is None or self._process.returncode is not None:
             return
         pid = self._process.pid
-        logger.info("[%s] Stopping process (pid=%d)", self.lane_id, pid)
+        pgid = self._process_group_id or pid
+        logger.info("[%s] Stopping process group (pid=%d, pgid=%d)", self.lane_id, pid, pgid)
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
         try:
-            self._process.send_signal(signal.SIGTERM)
+            os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
-            return
+            try:
+                self._process.send_signal(signal.SIGTERM)
+            except ProcessLookupError:
+                self._process_group_id = None
+                return
         try:
             await asyncio.wait_for(self._process.wait(), timeout=_STOP_TIMEOUT)
             logger.info("[%s] Process (pid=%d) exited gracefully", self.lane_id, pid)
         except asyncio.TimeoutError:
-            logger.warning("[%s] Process (pid=%d) did not exit in %ds — SIGKILL", self.lane_id, pid, _STOP_TIMEOUT)
+            logger.warning(
+                "[%s] Process group (pid=%d, pgid=%d) did not exit in %ds — SIGKILL",
+                self.lane_id,
+                pid,
+                pgid,
+                _STOP_TIMEOUT,
+            )
             try:
-                self._process.kill()
-                await self._process.wait()
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                try:
+                    self._process.kill()
+                except ProcessLookupError:
+                    pass
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=_FORCE_KILL_WAIT_TIMEOUT)
+                logger.info("[%s] Process group (pid=%d, pgid=%d) exited after SIGKILL", self.lane_id, pid, pgid)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "[%s] Process group (pid=%d, pgid=%d) still did not exit %ds after SIGKILL; "
+                    "continuing shutdown to avoid wedging the worker",
+                    self.lane_id,
+                    pid,
+                    pgid,
+                    _FORCE_KILL_WAIT_TIMEOUT,
+                )
             except ProcessLookupError:
                 pass
+        finally:
+            self._process_group_id = None
 
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:

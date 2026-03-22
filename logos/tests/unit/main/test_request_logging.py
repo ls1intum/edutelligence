@@ -151,6 +151,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     body = await _read_stream_response(response)
 
     assert "data: [DONE]" in body
+    assert response.headers["x-request-id"] == "req-stream"
     assert dummy_db.ttft_calls == [42]
     assert dummy_db.payload_calls[0]["usage"] == {
         "prompt_tokens": 3,
@@ -194,10 +195,12 @@ async def test_proxy_streaming_response_logs_usage_and_status(monkeypatch):
         9,
         -1,
         {"classified": True},
+        request_id="req-proxy-stream",
     )
     body = await _read_stream_response(response)
 
     assert "data: [DONE]" in body
+    assert response.headers["x-request-id"] == "req-proxy-stream"
     assert dummy_db.ttft_calls == [43]
     assert dummy_db.payload_calls[0]["usage"] == {
         "prompt_tokens": 2,
@@ -256,6 +259,7 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     )
 
     assert response.status_code == 500
+    assert response.headers["x-request-id"] == "req-sync-error"
     assert dummy_db.ttft_calls == []
     assert dummy_db.payload_calls[0]["payload"] == {"error": "bad request"}
     assert completion_calls == [
@@ -359,9 +363,11 @@ async def test_proxy_sync_response_logs_status_and_skips_ttft_on_error(monkeypat
         -1,
         {"classified": True},
         is_async_job=False,
+        request_id="req-proxy-sync",
     )
 
     assert response.status_code == 500
+    assert response.headers["x-request-id"] == "req-proxy-sync"
     assert dummy_db.ttft_calls == []
     assert dummy_db.metric_calls == [
         {

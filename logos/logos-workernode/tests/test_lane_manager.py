@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 from typing import Any
 from unittest.mock import AsyncMock
@@ -329,3 +330,39 @@ async def test_status_revision_advances_on_active_request_change() -> None:
     await manager.decrement_active_requests(lane_id)
     after_dec = await manager.wait_for_status_revision(after_inc, timeout=0.01)
     assert after_dec > after_inc
+
+
+
+@pytest.mark.asyncio
+async def test_remove_lane_releases_bookkeeping_on_destroy_timeout() -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15080, lane_port_end=15090)
+    lane = LaneConfig(model="qwen2.5-coder:32b")
+    lane_id = "qwen2.5-coder_32b"
+
+    class SlowHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15080
+            self.lane_config = lane
+            self.close_called = False
+
+        async def destroy(self) -> None:
+            raise asyncio.TimeoutError
+
+        async def close(self) -> None:
+            self.close_called = True
+
+    handle = SlowHandle()
+    manager._handles[lane_id] = handle  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15080  # noqa: SLF001
+    manager._active_requests[lane_id] = 1  # noqa: SLF001
+    manager._starting_deadlines[lane_id] = 123.0  # noqa: SLF001
+
+    async with manager._lock:  # noqa: SLF001
+        await manager._remove_lane_unlocked(lane_id)  # noqa: SLF001
+
+    assert lane_id not in manager._handles  # noqa: SLF001
+    assert manager._port_alloc.get_port(lane_id) is None
+    assert lane_id not in manager._active_requests  # noqa: SLF001
+    assert lane_id not in manager._starting_deadlines  # noqa: SLF001
+    assert handle.close_called is True

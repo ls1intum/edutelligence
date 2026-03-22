@@ -11,6 +11,7 @@ from pathlib import Path
 from starlette.requests import Request
 
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.types import normalize_provider_type
 
 
 def get_client_ip(request: Request) -> str:
@@ -144,12 +145,30 @@ def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = Non
             # TODO: change for the get_deployments_by_key once available
             deployments = db.get_all_deployments()
 
-    if not deployments:
+        provider_cache: Dict[int, Dict[str, Any]] = {}
+        normalized_deployments = []
+        for deployment in deployments:
+            provider_id = deployment["provider_id"]
+            if provider_id not in provider_cache:
+                provider_cache[provider_id] = db.get_provider(provider_id) or {}
+            provider_info = provider_cache[provider_id]
+            normalized_deployments.append(
+                {
+                    **deployment,
+                    "type": normalize_provider_type(
+                        deployment.get("type"),
+                        provider_name=provider_info.get("name"),
+                        base_url=provider_info.get("base_url"),
+                    ),
+                }
+            )
+
+    if not normalized_deployments:
         return list()
     else:
         # Return ids of all available models
-        logging.info(f"Found deployments {deployments} for classification")
-        return deployments
+        logging.info(f"Found deployments {normalized_deployments} for classification")
+        return normalized_deployments
 
 
 def proxy_behaviour(headers: dict, providers: list, path: str):

@@ -8,7 +8,10 @@ services:
         INSTALL_VLLM: ${INSTALL_VLLM:-0}
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
     container_name: logos-workernode
+    init: true
     restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 2m
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
     extra_hosts:

@@ -1,0 +1,11 @@
+request_id,arrival_offset,mode,priority,body_json
+req-1,0,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-1""}]}"
+req-2,500,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-2""}]}"
+req-3,1000,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-3""}]}"
+req-4,1500,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-4""}]}"
+req-5,2000,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-5""}]}"
+req-6,2500,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-6""}]}"
+req-7,3000,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-7""}]}"
+req-8,3500,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-8""}]}"
+req-9,4000,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-9""}]}"
+req-10,4500,interactive,mid,"{""model"":""azure-gpt-4-omni"",""stream"":false,""messages"":[{""role"":""user"",""content"":""Reply with exactly: item-10""}]}"

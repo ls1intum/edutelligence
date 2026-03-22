@@ -1085,6 +1085,116 @@ class DBManager:
 
         return {"requests": results}, 200
 
+    def get_request_logs(self, logos_key: str, request_ids: list[str]):
+        """
+        Fetch request logs by request_id for the authenticated process.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        normalized_ids = []
+        seen_ids = set()
+        for request_id in request_ids:
+            if not isinstance(request_id, str):
+                continue
+            value = request_id.strip()
+            if not value or value in seen_ids:
+                continue
+            normalized_ids.append(value)
+            seen_ids.add(value)
+
+        if not normalized_ids:
+            return {"requests": [], "missing_request_ids": []}, 200
+
+        process_row = self.session.execute(
+            text("SELECT id FROM process WHERE logos_key = :logos_key"),
+            {"logos_key": logos_key},
+        ).fetchone()
+        if process_row is None:
+            return {"error": "Unknown user."}, 500
+
+        sql = text("""
+            SELECT
+                le.request_id,
+                COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
+                COALESCE(p.name, CONCAT('Provider ', le.provider_id::text)) AS provider_name,
+                le.result_status,
+                le.timestamp_request AS enqueue_ts,
+                le.timestamp_forwarding AS scheduled_ts,
+                le.timestamp_response AS request_complete_ts,
+                le.time_at_first_token,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.time_at_first_token IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.time_at_first_token - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS ttft_ms,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS total_latency_ms,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS queue_wait_ms,
+                CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) * 1000
+                     ELSE NULL
+                END AS processing_ms,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS scheduler_total_ms,
+                le.was_cold_start AS cold_start,
+                le.error_message,
+                MAX(CASE WHEN tt.name = 'prompt_tokens' THEN ut.token_count END) AS prompt_tokens,
+                MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completion_tokens,
+                MAX(CASE WHEN tt.name = 'total_tokens' THEN ut.token_count END) AS total_tokens
+            FROM log_entry le
+            LEFT JOIN models m ON m.id = le.model_id
+            LEFT JOIN providers p ON p.id = le.provider_id
+            LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
+            LEFT JOIN token_types tt ON tt.id = ut.type_id
+            WHERE le.process_id = :process_id
+              AND le.request_id = ANY(:request_ids)
+            GROUP BY
+                le.request_id, m.name, le.model_id, p.name, le.provider_id, le.result_status,
+                le.timestamp_request, le.timestamp_forwarding, le.timestamp_response,
+                le.time_at_first_token, le.was_cold_start, le.error_message
+            ORDER BY le.timestamp_request ASC NULLS LAST
+        """)
+
+        rows = self.session.execute(
+            sql,
+            {"process_id": int(process_row.id), "request_ids": normalized_ids},
+        ).mappings().all()
+
+        results = []
+        found_ids = set()
+        for row in rows:
+            request_id = row["request_id"]
+            found_ids.add(request_id)
+            results.append({
+                "request_id": request_id,
+                "status": row["result_status"] if row["result_status"] else "pending",
+                "provider_name": row["provider_name"],
+                "model_name": row["model_name"],
+                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
+                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
+                "ttft_ms": float(row["ttft_ms"]) if row["ttft_ms"] is not None else None,
+                "total_latency_ms": float(row["total_latency_ms"]) if row["total_latency_ms"] is not None else None,
+                "queue_wait_ms": float(row["queue_wait_ms"]) if row["queue_wait_ms"] is not None else None,
+                "processing_ms": float(row["processing_ms"]) if row["processing_ms"] is not None else None,
+                "scheduler_total_ms": float(row["scheduler_total_ms"]) if row["scheduler_total_ms"] is not None else None,
+                "cold_start": row["cold_start"],
+                "error_message": row["error_message"],
+                "prompt_tokens": int(row["prompt_tokens"]) if row["prompt_tokens"] is not None else None,
+                "completion_tokens": int(row["completion_tokens"]) if row["completion_tokens"] is not None else None,
+                "total_tokens": int(row["total_tokens"]) if row["total_tokens"] is not None else None,
+            })
+
+        missing_request_ids = [request_id for request_id in normalized_ids if request_id not in found_ids]
+        return {"requests": results, "missing_request_ids": missing_request_ids}, 200
+
     def get_token_name(self, name):
         sql = text("""
                    SELECT *
