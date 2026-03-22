@@ -126,9 +126,19 @@ class ContextResolver:
                         logger.error("logosnode lane missing lane_id for provider=%s", provider_id)
                         return None
                 else:
-                    forward_url = self._merge_url(base_url, endpoint)
+                    logger.info(
+                        "No logosnode lane available yet for provider=%s model=%s; waiting instead of falling back to HTTP",
+                        provider_id,
+                        model_name,
+                    )
+                    return None
             else:
-                forward_url = self._merge_url(base_url, endpoint)
+                logger.error(
+                    "logosnode registry unavailable for provider=%s model=%s; cannot resolve execution without a lane",
+                    provider_id,
+                    model_name,
+                )
+                return None
         else:
             forward_url = self._merge_url(base_url, endpoint)
 

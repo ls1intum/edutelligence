@@ -667,8 +667,7 @@ async def test_context_resolver_uses_logosnode_lane_selection(monkeypatch):
 
     resolver_no_lane = ContextResolver(logosnode_registry=_NoLaneRegistry())
     ctx_no_lane = await resolver_no_lane.resolve_context(1, 77)
-    assert ctx_no_lane is not None
-    assert ctx_no_lane.forward_url == "https://node.example/"
+    assert ctx_no_lane is None
 
 
 @pytest.mark.asyncio

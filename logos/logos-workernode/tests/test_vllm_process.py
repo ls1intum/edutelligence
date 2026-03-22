@@ -84,6 +84,36 @@ def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
     assert cmd[idx + 1] == "4G"
 
 
+def test_build_cmd_injects_low_gpu_memory_utilization_with_kv_cache(monkeypatch) -> None:
+    """When kv_cache_memory_bytes is set but gpu_memory_utilization is not,
+    a low fallback value (0.1) must be injected to satisfy vLLM's startup
+    free-memory guard while letting kv_cache_memory_bytes control cache sizing."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(kv_cache_memory_bytes="4G"),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--gpu-memory-utilization")
+    assert cmd[idx + 1] == "0.1"
+
+
+def test_build_cmd_omits_gpu_memory_utilization_when_no_kv_cache(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--gpu-memory-utilization" not in cmd
+
+
 def test_build_cmd_omits_kv_cache_when_empty(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")

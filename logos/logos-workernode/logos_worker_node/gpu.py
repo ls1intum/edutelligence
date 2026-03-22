@@ -47,6 +47,13 @@ class GpuMetricsCollector:
         """Number of GPU devices detected (0 if nvidia-smi unavailable)."""
         return len(self._devices)
 
+    @property
+    def per_gpu_vram_mb(self) -> float:
+        """Average VRAM per GPU in MB (0 if unavailable)."""
+        if not self._devices:
+            return 0.0
+        return sum(d.memory_total_mb for d in self._devices) / len(self._devices)
+
     async def start(self) -> None:
         if shutil.which("nvidia-smi") is None:
             logger.warning("nvidia-smi not found in PATH — GPU metrics disabled")

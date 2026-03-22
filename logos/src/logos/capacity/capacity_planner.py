@@ -1118,12 +1118,10 @@ class CapacityPlanner:
             vllm_config["tensor_parallel_size"] = int(profile.tensor_parallel_size)
         kv = self._compute_kv_cache_bytes(profile, capacity)
         if kv:
-            # Explicit KV cache — vLLM skips memory profiling and ignores
-            # gpu_memory_utilization for allocation, but still checks it as
-            # a startup guard (free >= util × total). Set it low so it
-            # doesn't block hot-swaps where a sleeping process holds some VRAM.
+            # When we have an explicit KV budget, send only the KV cache size.
+            # Do not also force gpu_memory_utilization: vLLM still treats that
+            # as a startup guard, which can block an otherwise valid load.
             vllm_config["kv_cache_memory_bytes"] = kv
-            vllm_config["gpu_memory_utilization"] = 0.70
         params["vllm_config"] = vllm_config
         return params
 

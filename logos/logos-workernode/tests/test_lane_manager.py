@@ -333,13 +333,22 @@ async def test_status_revision_advances_on_active_request_change() -> None:
 
 
 
-def test_auto_tp_keeps_tp1_by_default() -> None:
-    """Auto-TP should NOT escalate to all GPUs — TP=1 is the safe default."""
+def test_auto_tp_keeps_tp1_when_model_fits() -> None:
+    """Model fits on one GPU — auto-TP should keep TP=1."""
+    from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    # 8B model ~ 10 GB base residency, fits easily on a 24 GB GPU
+    profiles._profiles["deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"] = ModelProfileRecord(
+        base_residency_mb=10_000.0, engine="vllm",
+    )
     manager = LaneManager(
         OllamaConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,  # 24 GB per GPU
+        model_profiles=profiles,
     )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
@@ -348,6 +357,34 @@ def test_auto_tp_keeps_tp1_by_default() -> None:
     )
     result = manager._auto_tensor_parallel(lane)
     assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_escalates_when_model_does_not_fit() -> None:
+    """Model too large for one GPU — auto-TP should escalate to minimum needed TP."""
+    from logos_worker_node.model_profiles import ModelProfileRegistry, ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    # 70B model ~ 42 GB base residency, needs 2 x 24 GB GPUs
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0, engine="vllm",
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    # 42000 / (24000*0.85=20400) = ceil(2.06) = 3, but model should need TP=3
+    assert result.vllm_config.tensor_parallel_size >= 2
+    assert result.vllm_config.tensor_parallel_size <= 4  # capped at gpu_count
 
 
 def test_auto_tp_respects_explicit_tp() -> None:
@@ -395,6 +432,24 @@ def test_auto_tp_noop_for_non_vllm() -> None:
     lane = LaneConfig(model="qwen2.5-coder:32b")
     result = manager._auto_tensor_parallel(lane)
     assert result.vllm_config is None
+
+
+def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
+    """If per-GPU VRAM is unknown, keep TP=1 (safe default)."""
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 0.0,  # unknown
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
 
 
 @pytest.mark.asyncio

@@ -423,9 +423,19 @@ class VllmProcessHandle:
             "--host", "0.0.0.0",
             "--port", str(self.port),
             "--tensor-parallel-size", str(vc.tensor_parallel_size),
-            "--gpu-memory-utilization", str(vc.gpu_memory_utilization),
             "--dtype", vc.dtype,
         ]
+        if vc.gpu_memory_utilization is not None:
+            cmd.extend(["--gpu-memory-utilization", str(vc.gpu_memory_utilization)])
+        elif vc.kv_cache_memory_bytes:
+            # When kv_cache_memory_bytes is set, vLLM uses it for KV cache
+            # sizing and ignores gpu_memory_utilization for that purpose.
+            # However, vLLM v1 still has a startup guard in request_memory()
+            # that rejects launch if free VRAM < gpu_memory_utilization * total.
+            # Default is 0.9 which fails on shared GPUs. Pass a minimal value
+            # to satisfy the guard while letting kv_cache_memory_bytes control
+            # actual cache allocation.
+            cmd.extend(["--gpu-memory-utilization", "0.1"])
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
         elif lane_config.context_length > 0:

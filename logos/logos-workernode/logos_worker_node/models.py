@@ -64,11 +64,11 @@ class VllmConfig(BaseModel):
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
-    gpu_memory_utilization: float = Field(default=0.90, ge=0.1, le=1.0)
+    gpu_memory_utilization: float | None = Field(default=None, ge=0.1, le=1.0)
     kv_cache_memory_bytes: str = Field(
         default="",
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
-        "Empty = let vLLM decide from gpu_memory_utilization.",
+        "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
     enforce_eager: bool = False
     enable_prefix_caching: bool = True

@@ -160,10 +160,12 @@ class LaneManager:
         nvidia_smi_available: Callable[[], bool] | None = None,
         model_profiles: ModelProfileRegistry | None = None,
         gpu_device_count: Callable[[], int] | None = None,
+        per_gpu_vram_mb: Callable[[], float] | None = None,
     ) -> None:
         self._global_config = global_config
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
+        self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -521,15 +523,16 @@ class LaneManager:
     # ------------------------------------------------------------------
 
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
-        """Validate tensor_parallel_size for vLLM lanes.
+        """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
-        Conservative policy: TP=1 is the safe default.  Multi-GPU tensor
-        parallelism introduces NCCL process-group complexity and orphan risk,
-        so it must be requested explicitly via ``tensor_parallel_size > 1``
-        in the lane config.
-
-        If the model appears too large for a single GPU based on its profile,
-        log a warning suggesting the operator set TP explicitly.
+        Policy:
+        - TP=1 is the safe default when the model fits on one GPU.
+        - If TP is explicitly set > 1, respect the operator's choice.
+        - If TP is at default (1) and the model **provably** does not fit on
+          a single GPU (based on model profile vs actual per-GPU VRAM), auto-
+          escalate to the minimum TP needed.  This avoids the previous
+          "always use all GPUs" approach while still preventing guaranteed
+          OOM failures.
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
@@ -553,21 +556,49 @@ class LaneManager:
                 )
             return lane_config
 
-        # TP=1 (default): warn if model might not fit on a single GPU
-        if gpu_count > 1 and self._model_profiles is not None:
-            profile = self._model_profiles.get_profile(lane_config.model)
-            if profile:
-                base_mb = profile.estimate_base_residency_mb(lane_config.model)
-                if base_mb is not None and base_mb > 20_000:
-                    logger.warning(
-                        "Lane '%s' model=%s has estimated base residency %.0f MB "
-                        "which may not fit on a single GPU.  Consider setting "
-                        "tensor_parallel_size=%d in vllm_config if startup fails.",
-                        lane_config.model, lane_config.model,
-                        base_mb, min(gpu_count, 2),
-                    )
+        # TP=1 (default): check if the model actually fits on one GPU
+        if gpu_count <= 1:
+            return lane_config
 
-        return lane_config
+        per_gpu_mb = self._per_gpu_vram_mb()
+        if per_gpu_mb <= 0 or self._model_profiles is None:
+            # Can't determine GPU size — keep TP=1 (safe default)
+            return lane_config
+
+        profile = self._model_profiles.get_profile(lane_config.model)
+        if profile is None:
+            return lane_config
+
+        base_mb = profile.estimate_base_residency_mb(lane_config.model)
+        if base_mb is None or base_mb <= 0:
+            return lane_config
+
+        # Use 85% of GPU VRAM as the usable threshold (CUDA context + runtime overhead)
+        usable_per_gpu_mb = per_gpu_mb * 0.85
+
+        if base_mb <= usable_per_gpu_mb:
+            # Model fits on one GPU — keep TP=1
+            return lane_config
+
+        # Model does NOT fit on one GPU — compute minimum TP needed
+        import math
+        needed_tp = math.ceil(base_mb / usable_per_gpu_mb)
+        needed_tp = min(needed_tp, gpu_count)
+
+        if needed_tp <= 1:
+            return lane_config
+
+        new_vc = vc.model_copy(update={"tensor_parallel_size": needed_tp})
+        new_config = lane_config.model_copy(update={"vllm_config": new_vc})
+        logger.info(
+            "\033[36mAuto-TP\033[0m lane '%s' model=%s: "
+            "model needs ~%.0f MB but single GPU has ~%.0f MB usable — "
+            "auto-escalating tensor_parallel_size 1 → %d (%d GPU(s) available)",
+            lane_config.model, lane_config.model,
+            base_mb, usable_per_gpu_mb,
+            needed_tp, gpu_count,
+        )
+        return new_config
 
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
         lane_config = self._auto_tensor_parallel(lane_config)
@@ -945,7 +976,8 @@ class LaneManager:
         tensor_parallel_size = None
         lane_config = status.lane_config
         if status.vllm and lane_config is not None and lane_config.vllm_config is not None:
-            observed_gpu_memory_utilization = float(lane_config.vllm_config.gpu_memory_utilization)
+            if lane_config.vllm_config.gpu_memory_utilization is not None:
+                observed_gpu_memory_utilization = float(lane_config.vllm_config.gpu_memory_utilization)
             tensor_parallel_size = int(lane_config.vllm_config.tensor_parallel_size)
         previous_state = self._last_profile_state.get(status.lane_id)
         if status.runtime_state in ("loaded", "running"):

@@ -25,6 +25,11 @@ def test_lane_config_rejects_vllm_block_on_ollama_backend() -> None:
         )
 
 
+def test_vllm_config_gpu_memory_utilization_is_optional() -> None:
+    cfg = VllmConfig()
+    assert cfg.gpu_memory_utilization is None
+
+
 def test_lane_config_rejects_tensor_parallel_size_above_explicit_gpu_count() -> None:
     with pytest.raises(ValidationError):
         LaneConfig(
