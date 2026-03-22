@@ -2147,7 +2147,7 @@
 /* ─── Why Not ChatGPT — Comparison Table ─── */
 
 .comparisonTableWrapper {
-  max-width: 740px;
+  max-width: 860px;
   margin: 0 auto;
   backdrop-filter: blur(16px) saturate(180%);
   -webkit-backdrop-filter: blur(16px) saturate(180%);
@@ -2200,7 +2200,7 @@
   color: var(--iris-label-color);
   background: rgba(42, 115, 180, 0.04);
   border-bottom: 1px solid var(--iris-border-color);
-  width: 120px;
+  width: 160px;
 }
 
 [data-theme="dark"] .comparisonTableHeader {
@@ -3381,19 +3381,42 @@
 
 /* ─── Memory Section (Memiris) ─── */
 
-.memoryGrid {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.75rem;
-  max-width: 700px;
+.memoryOrbit {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  height: 380px;
   margin: 1.5rem auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.memoryCenter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 2;
+  color: var(--ifm-color-primary);
+}
+
+.memoryCenterLabel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iris-label-color);
 }
 
 .memoryChip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  white-space: nowrap;
   font-size: 0.9rem;
   font-weight: 500;
-  padding: 0.5rem 1rem;
+  padding: 0.45rem 0.85rem;
   border-radius: 100px;
   background: var(--ifm-background-surface-color);
   border: 1px solid rgba(42, 115, 180, 0.2);
@@ -3405,6 +3428,33 @@
   background: rgba(30, 30, 30, 0.75);
   border-color: rgba(90, 159, 214, 0.25);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .memoryChip {
+    animation: memoryFloat 4s ease-in-out infinite alternate;
+  }
+
+  @keyframes memoryFloat {
+    0% {
+      translate: 0 0;
+    }
+    100% {
+      translate: 0 -6px;
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .memoryOrbit {
+    height: 320px;
+    max-width: 340px;
+  }
+
+  .memoryChip {
+    font-size: 0.8rem;
+    padding: 0.35rem 0.7rem;
+  }
 }
 
 /* ─── Real screenshot styles ─── */
