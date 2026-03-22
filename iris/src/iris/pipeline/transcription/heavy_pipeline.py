@@ -53,6 +53,7 @@ class HeavyTranscriptionPipeline:
             chunk_duration=settings.transcription.chunk_duration_seconds,
             max_workers=settings.transcription.whisper_max_workers,
             request_timeout=settings.transcription.whisper_request_timeout_seconds,
+            no_speech_threshold=settings.transcription.no_speech_filter_threshold,
         )
 
     @observe(name="Heavy Transcription Pipeline")

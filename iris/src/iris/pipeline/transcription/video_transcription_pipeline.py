@@ -35,12 +35,20 @@ class VideoTranscriptionPipeline:
 
     implementation_id = "video_transcription_pipeline"
 
-    def __init__(self, dto: VideoTranscriptionPipelineExecutionDto):
+    def __init__(
+        self,
+        dto: VideoTranscriptionPipelineExecutionDto,
+        callback: Optional[VideoTranscriptionCallback] = None,
+    ):
         """
         Initialize the transcription pipeline.
 
         Args:
             dto: Execution DTO with video URL, lecture info, and settings.
+            callback: Optional pre-created callback. When provided (e.g. by
+                TranscriptionWorker) the same instance is reused so the worker
+                can call callback.error() on SIGTERM or __init__ failure.
+                If None, a new callback is created at the start of __call__().
 
         Raises:
             ValueError: If dto.settings is None or transcription is not enabled in settings.
@@ -60,16 +68,19 @@ class VideoTranscriptionPipeline:
 
         self._heavy_result: Optional[dict] = None
         self._heavy: Optional[HeavyTranscriptionPipeline] = None
+        self._callback = callback
 
     @observe(name="Video Transcription Pipeline")
     def __call__(self) -> None:
         """Execute the full transcription pipeline."""
-        callback = VideoTranscriptionCallback(
-            run_id=self.dto.settings.authentication_token,
-            base_url=self.dto.settings.artemis_base_url,
-            initial_stages=self.dto.initial_stages,
-            lecture_unit_id=self.dto.lecture_unit_id,
-        )
+        if self._callback is None:
+            self._callback = VideoTranscriptionCallback(
+                run_id=self.dto.settings.authentication_token,
+                base_url=self.dto.settings.artemis_base_url,
+                initial_stages=self.dto.initial_stages,
+                lecture_unit_id=self.dto.lecture_unit_id,
+            )
+        callback = self._callback
 
         logger.info(
             "[Lecture %d] Starting transcription pipeline for course '%s', lecture '%s'",

@@ -15,6 +15,7 @@ from iris.domain.transcription.video_transcription_execution_dto import (
 from iris.pipeline.transcription.video_transcription_pipeline import (
     VideoTranscriptionPipeline,
 )
+from iris.web.status.video_transcription_callback import VideoTranscriptionCallback
 
 logger = get_logger(__name__)
 
@@ -27,6 +28,10 @@ class TranscriptionWorker:
 
     Manages semaphore slot acquisition, SIGTERM handling, and cleanup
     to limit concurrent Whisper jobs (CPU/memory intensive).
+
+    The callback is created early (before semaphore acquisition) so that
+    every failure path — SIGTERM, pipeline __init__ error, or a pipeline
+    execution error — can notify Artemis and trigger its retry scheduler.
     """
 
     def __init__(
@@ -45,11 +50,23 @@ class TranscriptionWorker:
         )
         self._slot_acquired = False
         self._pipeline = None
+        self._callback = None
+        self._pipeline_completed = False
 
     def run(self):
         setup_logging()
         os.setpgrp()  # own process group so ffmpeg children can be killed together
         signal.signal(signal.SIGTERM, self._on_sigterm)
+
+        # Create the callback before acquiring the semaphore so SIGTERM can
+        # always notify Artemis regardless of when termination is received.
+        if self.dto.settings is not None:
+            self._callback = VideoTranscriptionCallback(
+                run_id=self.dto.settings.authentication_token,
+                base_url=self.dto.settings.artemis_base_url,
+                initial_stages=self.dto.initial_stages,
+                lecture_unit_id=self.dto.lecture_unit_id,
+            )
 
         logger.info(
             "[Job %s, Lecture %d] Worker spawned - waiting for semaphore slot",
@@ -107,8 +124,14 @@ class TranscriptionWorker:
             MAX_SLOTS - current,
         )
         try:
-            self._pipeline = VideoTranscriptionPipeline(self.dto)
+            # Pass the pre-created callback so the pipeline reuses the same
+            # instance; if __init__ raises before __call__ is reached, the
+            # except block below can still report the failure to Artemis.
+            self._pipeline = VideoTranscriptionPipeline(
+                self.dto, callback=self._callback
+            )
             self._pipeline()
+            self._pipeline_completed = True
             logger.info(
                 "[Job %s, Lecture %d] Video transcription completed successfully",
                 self.job_id,
@@ -123,6 +146,18 @@ class TranscriptionWorker:
                 exc_info=True,
             )
             capture_exception(e)
+            # VideoTranscriptionPipeline.__call__() already sends callback.error()
+            # and re-raises for normal execution failures (self._pipeline is set).
+            # Only send error here when __init__ raised before __call__ was reached.
+            if self._pipeline is None and self._callback is not None:
+                try:
+                    self._callback.error(str(e))
+                except Exception:
+                    logger.warning(
+                        "[Job %s, Lecture %d] Failed to send error callback after init failure",
+                        self.job_id,
+                        self.dto.lecture_unit_id,
+                    )
 
     def _on_sigterm(self, signum, frame):  # pylint: disable=unused-argument
         logger.warning(
@@ -130,6 +165,19 @@ class TranscriptionWorker:
             self.job_id,
             self.dto.lecture_unit_id,
         )
+        # Notify Artemis so it can schedule a retry immediately instead of
+        # waiting for the 2-hour stuck-state timeout.
+        # Only send if the pipeline did not already complete successfully
+        # (avoids overwriting a DONE callback with a spurious ERROR).
+        if not self._pipeline_completed and self._callback is not None:
+            try:
+                self._callback.error("Transcription job was terminated (SIGTERM)")
+            except Exception:
+                logger.warning(
+                    "[Job %s, Lecture %d] Failed to send error callback on SIGTERM",
+                    self.job_id,
+                    self.dto.lecture_unit_id,
+                )
         if self._pipeline is not None:
             self._pipeline.cleanup()
         if self._slot_acquired:

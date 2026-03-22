@@ -85,6 +85,16 @@ class TranscriptionSettings(BaseModel):
         default=600,
         description="Timeout in seconds for audio extraction via FFmpeg (default: 10 minutes)",
     )
+    no_speech_filter_threshold: float = Field(
+        default=0.8,
+        description=(
+            "Whisper no_speech_prob threshold for filtering non-speech segments (0.0–1.0). "
+            "Segments whose no_speech_prob exceeds this value are discarded. "
+            "Higher values are more conservative (keep more segments). "
+            "Default 0.8 is calibrated for noisy lecture halls — lower to 0.6 for quiet studio recordings. "
+            "Set to 1.0 to disable filtering entirely."
+        ),
+    )
 
 
 class Settings(BaseModel):

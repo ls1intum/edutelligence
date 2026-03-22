@@ -57,6 +57,7 @@ class WhisperClient:
         max_retries: int = 6,
         max_workers: int = 2,
         request_timeout: int = 300,
+        no_speech_threshold: float = 0.8,
     ):
         """
         Initialize the Whisper client.
@@ -67,6 +68,9 @@ class WhisperClient:
             max_retries: Maximum retry attempts for rate limiting.
             max_workers: Max parallel chunk uploads (default: 2).
             request_timeout: Timeout in seconds for a single Whisper API request (default: 300).
+            no_speech_threshold: Segments with no_speech_prob above this value are discarded
+                (0.0–1.0, default: 0.8). Higher values keep more segments — use 0.8 for noisy
+                lecture halls, 0.6 for quiet studio recordings, 1.0 to disable filtering.
         """
         self.llm = LlmManager().get_llm_by_id(model)
         if self.llm is None:
@@ -81,6 +85,7 @@ class WhisperClient:
         self.max_retries = max_retries
         self.max_workers = max_workers
         self.request_timeout = request_timeout
+        self.no_speech_threshold = no_speech_threshold
         self.provider_name = (
             "Azure" if isinstance(self.llm, AzureWhisperModel) else "OpenAI"
         )
@@ -261,8 +266,26 @@ class WhisperClient:
 
                     response.raise_for_status()
                     body = response.json()
-                    segments = body.get("segments", [])
+                    raw_segments = body.get("segments", [])
                     language = body.get("language")
+
+                    segments = [
+                        seg
+                        for seg in raw_segments
+                        if seg.get("no_speech_prob", 0.0) <= self.no_speech_threshold
+                    ]
+                    filtered_count = len(raw_segments) - len(segments)
+                    if filtered_count:
+                        logger.info(
+                            "%s Chunk %d/%d: filtered %d/%d segments with no_speech_prob > %.2f",
+                            prefix,
+                            chunk_index + 1,
+                            total_chunks,
+                            filtered_count,
+                            len(raw_segments),
+                            self.no_speech_threshold,
+                        )
+
                     logger.info(
                         "%s Chunk %d/%d done: %d segments, language=%s",
                         prefix,
