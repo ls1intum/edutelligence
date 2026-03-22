@@ -333,6 +333,70 @@ async def test_status_revision_advances_on_active_request_change() -> None:
 
 
 
+def test_auto_tp_keeps_tp1_by_default() -> None:
+    """Auto-TP should NOT escalate to all GPUs — TP=1 is the safe default."""
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_respects_explicit_tp() -> None:
+    """Explicit TP>1 should be respected."""
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 2
+
+
+def test_auto_tp_noop_for_single_gpu() -> None:
+    """With 1 GPU, auto-TP should be a no-op regardless of config."""
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 1,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_noop_for_non_vllm() -> None:
+    """Ollama lanes should never have TP modified."""
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+    )
+    lane = LaneConfig(model="qwen2.5-coder:32b")
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config is None
+
+
 @pytest.mark.asyncio
 async def test_remove_lane_releases_bookkeeping_on_destroy_timeout() -> None:
     manager = LaneManager(OllamaConfig(), lane_port_start=15080, lane_port_end=15090)

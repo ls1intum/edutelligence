@@ -248,6 +248,47 @@ vllm:time_to_first_token_seconds_bucket{model_name=\"Qwen\",le=\"+Inf\"} 10
 
 
 
+def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    assert env["NCCL_P2P_DISABLE"] == "1"
+    assert env["NCCL_ASYNC_ERROR_HANDLING"] == "1"
+    assert env["NCCL_CUMEM_ENABLE"] == "0"
+
+
+def test_build_env_no_nccl_safety_for_tp_1(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    # NCCL safety vars should NOT be injected for TP=1
+    assert "NCCL_ASYNC_ERROR_HANDLING" not in env
+    assert "NCCL_CUMEM_ENABLE" not in env
+
+
+def test_build_env_nccl_safety_respects_explicit_disable_nccl_p2p(monkeypatch) -> None:
+    """When disable_nccl_p2p is explicitly set in config, it should still be set for TP>1."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2, disable_nccl_p2p=True),
+    )
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    assert env["NCCL_P2P_DISABLE"] == "1"
+
+
 @pytest.mark.asyncio
 async def test_spawn_uses_new_process_session(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())

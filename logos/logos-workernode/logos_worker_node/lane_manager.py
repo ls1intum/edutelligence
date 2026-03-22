@@ -179,6 +179,11 @@ class LaneManager:
         self._status_event = asyncio.Event()
         self._model_profiles = model_profiles
         self._last_profile_state: dict[str, str] = {}
+        # Stuck-inference detection: track generation_tokens_total per lane
+        self._last_gen_tokens: dict[str, float] = {}
+        self._stuck_polls: dict[str, int] = {}  # consecutive polls with no progress
+        _STUCK_POLL_THRESHOLD = 6  # ~30s at 5s heartbeat
+        self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [
@@ -516,45 +521,53 @@ class LaneManager:
     # ------------------------------------------------------------------
 
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
-        """Auto-detect tensor_parallel_size for vLLM lanes based on GPU count.
+        """Validate tensor_parallel_size for vLLM lanes.
 
-        If TP is not explicitly set (default=1) and multiple GPUs are available,
-        check if the model needs more than one GPU based on its base_residency.
-        This mirrors Ollama's behavior of automatically spreading across GPUs.
+        Conservative policy: TP=1 is the safe default.  Multi-GPU tensor
+        parallelism introduces NCCL process-group complexity and orphan risk,
+        so it must be requested explicitly via ``tensor_parallel_size > 1``
+        in the lane config.
+
+        If the model appears too large for a single GPU based on its profile,
+        log a warning suggesting the operator set TP explicitly.
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
         vc = lane_config.vllm_config
         gpu_count = self._gpu_device_count()
-        if gpu_count <= 1:
+
+        # Explicit TP > 1: respect the operator's choice, just validate
+        if vc.tensor_parallel_size > 1:
+            if vc.tensor_parallel_size > gpu_count:
+                logger.warning(
+                    "Lane '%s' requests tensor_parallel_size=%d but only %d GPU(s) detected; "
+                    "vLLM startup will likely fail",
+                    lane_config.model, vc.tensor_parallel_size, gpu_count,
+                )
+            else:
+                logger.info(
+                    "\033[36mTP\033[0m lane '%s' model=%s: "
+                    "tensor_parallel_size=%d (explicit), %d GPU(s) available",
+                    lane_config.model, lane_config.model,
+                    vc.tensor_parallel_size, gpu_count,
+                )
             return lane_config
-        # Only auto-adjust if TP was left at default (1)
-        if vc.tensor_parallel_size != 1:
-            return lane_config
-        # Check model profile for base residency
-        needed_tp = gpu_count  # default: use all GPUs
-        if self._model_profiles is not None:
+
+        # TP=1 (default): warn if model might not fit on a single GPU
+        if gpu_count > 1 and self._model_profiles is not None:
             profile = self._model_profiles.get_profile(lane_config.model)
-            if profile and profile.base_residency_mb and profile.base_residency_mb > 0:
-                # Estimate per-GPU VRAM (total / gpu_count) with 90% usable
-                per_gpu_mb = (profile.base_residency_mb * 1024) / gpu_count  # rough
-                # Actually: we need to check if model fits on 1 GPU.
-                # base_residency_mb is in MB. Per-GPU total VRAM is unknown here
-                # directly, but we can use a heuristic: if base_residency > 85%
-                # of what a single GPU likely has, we need TP > 1.
-                # Simpler: just use all GPUs for vLLM — it's always beneficial.
-                pass
-        # Use all available GPUs — vLLM benefits from TP across GPUs
-        # (more VRAM for KV cache, faster inference via parallelism)
-        new_vc = vc.model_copy(update={"tensor_parallel_size": gpu_count})
-        new_config = lane_config.model_copy(update={"vllm_config": new_vc})
-        logger.info(
-            "\033[36mAuto-TP\033[0m lane '%s' model=%s: "
-            "tensor_parallel_size %d → %d (detected %d GPU(s))",
-            lane_config.model, lane_config.model,
-            vc.tensor_parallel_size, gpu_count, gpu_count,
-        )
-        return new_config
+            if profile:
+                base_mb = profile.estimate_base_residency_mb(lane_config.model)
+                if base_mb is not None and base_mb > 20_000:
+                    logger.warning(
+                        "Lane '%s' model=%s has estimated base residency %.0f MB "
+                        "which may not fit on a single GPU.  Consider setting "
+                        "tensor_parallel_size=%d in vllm_config if startup fails.",
+                        lane_config.model, lane_config.model,
+                        base_mb, min(gpu_count, 2),
+                    )
+
+        return lane_config
 
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
         lane_config = self._auto_tensor_parallel(lane_config)
@@ -859,7 +872,63 @@ class LaneManager:
             status = await self._build_lane_status(handle, pid_vram_map)
             statuses.append(status)
             self._record_profile_from_status(status)
+
+        # Check for stuck vLLM lanes (no token generation progress while requests active)
+        await self._check_stuck_lanes(statuses)
         return statuses
+
+    async def _check_stuck_lanes(self, statuses: list[LaneStatus]) -> None:
+        """Detect vLLM lanes that have stopped generating tokens while requests are active.
+
+        If ``generation_tokens_total`` doesn't increase for several consecutive
+        polls while ``requests_running > 0``, the lane is likely stuck in an
+        NCCL deadlock or similar hang.  Kill and log the event.
+        """
+        for status in statuses:
+            lid = status.lane_id
+            if not status.vllm:
+                continue
+            metrics = status.backend_metrics or {}
+            gen_tokens = metrics.get("generation_tokens_total")
+            requests_running = metrics.get("requests_running")
+
+            if gen_tokens is None or requests_running is None:
+                # Metrics not available — can't detect stuck state
+                self._stuck_polls.pop(lid, None)
+                continue
+
+            prev_tokens = self._last_gen_tokens.get(lid)
+            self._last_gen_tokens[lid] = gen_tokens
+
+            if prev_tokens is None:
+                self._stuck_polls.pop(lid, None)
+                continue
+
+            if requests_running > 0 and gen_tokens <= prev_tokens:
+                count = self._stuck_polls.get(lid, 0) + 1
+                self._stuck_polls[lid] = count
+                if count >= self._stuck_poll_threshold:
+                    logger.error(
+                        "Lane '%s' appears stuck: %d consecutive polls with "
+                        "requests_running=%.0f but generation_tokens_total unchanged (%.0f). "
+                        "Killing the lane process.",
+                        lid, count, requests_running, gen_tokens,
+                    )
+                    self._record_event(lid, "stuck_detected",
+                                       model=status.model,
+                                       details=f"gen_tokens={gen_tokens}, running={requests_running}, polls={count}")
+                    self._stuck_polls.pop(lid, None)
+                    self._last_gen_tokens.pop(lid, None)
+                    # Kill the stuck lane (outside the lock since stop acquires it)
+                    handle = self._handles.get(lid)
+                    if handle is not None:
+                        try:
+                            await handle.stop()
+                            logger.info("Lane '%s' stopped after stuck detection", lid)
+                        except Exception:
+                            logger.warning("Failed to stop stuck lane '%s'", lid, exc_info=True)
+            else:
+                self._stuck_polls.pop(lid, None)
 
     def _record_profile_from_status(self, status: LaneStatus) -> None:
         """Update model profile with VRAM measurements from lane status."""

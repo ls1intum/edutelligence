@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from datetime import datetime
 import logging
 import os
 import shutil
@@ -52,6 +53,9 @@ class VllmProcessHandle:
         self._http: httpx.AsyncClient | None = None
         self._log_task: asyncio.Task | None = None
         self._recent_logs: deque[str] = deque(maxlen=200)
+        self._stuck_vram: bool = False
+        self._known_child_pids: set[int] = set()
+        self._process_group_id: int | None = None
 
     async def init(self) -> None:
         self._http = httpx.AsyncClient(
@@ -101,7 +105,11 @@ class VllmProcessHandle:
             env=process_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,  # Own process group so we can kill the entire TP tree
         )
+        # Cache the process group ID so we can kill the whole tree even after
+        # the root process exits (os.getpgid would fail on a dead PID).
+        self._process_group_id = self._process.pid
 
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
@@ -115,6 +123,7 @@ class VllmProcessHandle:
         if not ready:
             failure = self._format_startup_failure(_READY_TIMEOUT)
             logger.error(failure)
+            self._persist_failure_logs("startup_failed")
             await self._kill_process()
             raise RuntimeError(failure)
 
@@ -123,8 +132,24 @@ class VllmProcessHandle:
     async def stop(self) -> ProcessStatus:
         if self._process is None or self._process.returncode is not None:
             return self.status()
+        pid = self._process.pid
         await self._kill_process()
+        vram_clean = await self._verify_vram_released(pid)
+        if not vram_clean:
+            logger.error(
+                "[%s] VRAM still held after stopping pid=%d — GPU memory may be leaked",
+                self.lane_id, pid,
+            )
+            self._stuck_vram = True
+            self._persist_failure_logs("stuck_vram")
+        else:
+            self._stuck_vram = False
         return self.status()
+
+    @property
+    def has_stuck_vram(self) -> bool:
+        """True if the last stop detected residual GPU memory."""
+        return getattr(self, "_stuck_vram", False)
 
     async def reconfigure(self, lane_config: LaneConfig) -> ProcessStatus:
         """Reconfigure = full restart for vLLM (model/config change)."""
@@ -549,6 +574,14 @@ class VllmProcessHandle:
         if vc.disable_nccl_p2p:
             env["NCCL_P2P_DISABLE"] = "1"
 
+        # NCCL safety defaults for tensor-parallel lanes (TP > 1).
+        # These prevent NCCL hangs from cascading into driver crashes.
+        # Each can be overridden by the host environment or disable_nccl_p2p config.
+        if vc.tensor_parallel_size > 1:
+            env.setdefault("NCCL_P2P_DISABLE", "1")
+            env.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+            env.setdefault("NCCL_CUMEM_ENABLE", "0")
+
         return env
 
     def _resolve_hf_home(self, models_path: str) -> str:
@@ -590,23 +623,142 @@ class VllmProcessHandle:
         if self._process is None or self._process.returncode is not None:
             return
         pid = self._process.pid
-        logger.info("[%s] Stopping vLLM process (pid=%d)", self.lane_id, pid)
+        pgid = self._process_group_id
+        logger.info("[%s] Stopping vLLM process (pid=%d, pgid=%s)", self.lane_id, pid, pgid)
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
-        try:
-            self._process.send_signal(signal.SIGTERM)
-        except ProcessLookupError:
-            return
+
+        # Phase 1: SIGTERM the entire process group (kills TP workers too)
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                try:
+                    self._process.send_signal(signal.SIGTERM)
+                except ProcessLookupError:
+                    self._process_group_id = None
+                    return
+        else:
+            try:
+                self._process.send_signal(signal.SIGTERM)
+            except ProcessLookupError:
+                return
+
+        # Phase 2: Wait for the root process to exit
         try:
             await asyncio.wait_for(self._process.wait(), timeout=_STOP_TIMEOUT)
             logger.info("[%s] vLLM process (pid=%d) exited gracefully", self.lane_id, pid)
         except asyncio.TimeoutError:
             logger.warning("[%s] vLLM (pid=%d) did not exit in %ds — SIGKILL", self.lane_id, pid, _STOP_TIMEOUT)
+            # Phase 3: SIGKILL the entire process group
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    try:
+                        self._process.kill()
+                    except ProcessLookupError:
+                        pass
+            else:
+                try:
+                    self._process.kill()
+                except ProcessLookupError:
+                    pass
             try:
-                self._process.kill()
                 await self._process.wait()
             except ProcessLookupError:
                 pass
+
+        self._process_group_id = None
+
+        # Phase 4: Sweep for any orphaned descendants still holding GPU memory
+        await self._kill_descendant_processes(pid)
+
+    async def _kill_descendant_processes(self, root_pid: int) -> None:
+        """Kill any remaining child processes that survived process-group kill.
+
+        With TP>1 vLLM spawns worker subprocesses. If the process-group kill
+        missed any (e.g. they re-parented to init), walk /proc to find and
+        kill them.  This is a best-effort safety net.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pgrep", "-P", str(root_pid),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except (FileNotFoundError, asyncio.TimeoutError, OSError):
+            return
+
+        if not stdout:
+            return
+
+        child_pids = []
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                child_pids.append(int(line))
+
+        for cpid in child_pids:
+            try:
+                os.kill(cpid, signal.SIGKILL)
+                logger.warning(
+                    "[%s] Killed orphaned descendant pid=%d of root pid=%d",
+                    self.lane_id, cpid, root_pid,
+                )
+            except (ProcessLookupError, OSError):
+                pass
+
+    async def _verify_vram_released(
+        self, pid: int, timeout: float = 10.0, poll_interval: float = 1.0,
+    ) -> bool:
+        """Poll nvidia-smi to confirm the killed process no longer holds VRAM.
+
+        Returns True if VRAM is clean, False if memory is still pinned after
+        *timeout* seconds.  This catches the common failure mode where the
+        process exits but CUDA contexts remain in the driver.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        # Collect known child PIDs to also watch for
+        check_pids = {pid} | self._known_child_pids
+
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "nvidia-smi",
+                    "--query-compute-apps=pid,used_memory",
+                    "--format=csv,noheader,nounits",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            except (FileNotFoundError, asyncio.TimeoutError, OSError):
+                return True  # Can't verify — assume clean
+
+            if proc.returncode != 0:
+                return True  # nvidia-smi failed — can't verify
+
+            found_leaked = False
+            for raw_line in stdout.decode("utf-8", errors="replace").splitlines():
+                line = raw_line.strip()
+                if not line or "," not in line:
+                    continue
+                pid_str = line.split(",", 1)[0].strip()
+                if pid_str.isdigit() and int(pid_str) in check_pids:
+                    found_leaked = True
+                    break
+
+            if not found_leaked:
+                return True
+
+            await asyncio.sleep(poll_interval)
+
+        logger.warning(
+            "[%s] VRAM still held by pid(s) %s after %.0fs — stuck CUDA context detected",
+            self.lane_id, check_pids, timeout,
+        )
+        return False
 
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:
@@ -641,6 +793,20 @@ class VllmProcessHandle:
                 "Install build-essential (gcc/g++/make) in the runtime image."
             )
         return ""
+
+    def _persist_failure_logs(self, reason: str) -> None:
+        """Write recent vLLM logs to disk for post-mortem debugging."""
+        if not self._recent_logs:
+            return
+        try:
+            log_dir = Path("/tmp/logos-vllm-logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = log_dir / f"{self.lane_id}_{timestamp}_{reason}.log"
+            path.write_text("\n".join(self._recent_logs), encoding="utf-8")
+            logger.info("[%s] Failure logs saved to %s", self.lane_id, path)
+        except OSError:
+            logger.debug("[%s] Could not persist failure logs", self.lane_id, exc_info=True)
 
     def _format_startup_failure(self, timeout_s: int) -> str:
         status = self.status()
