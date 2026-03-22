@@ -75,10 +75,10 @@ export default function HowItWorksSection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.section}>
+    <section id="how-it-works" className={styles.section}>
       <h2 className={styles.sectionHeading}>How It Works</h2>
       <p className={styles.sectionSubtitle}>
-        Three steps. Five minutes of setup. Unlimited student support.
+        Three steps. Minutes of setup. Unlimited student support.
       </p>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}

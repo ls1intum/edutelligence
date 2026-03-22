@@ -66,7 +66,7 @@ export default function HeroSection(): React.JSX.Element {
             TU Munich
           </p>
           <div className={styles.heroCtas}>
-            <a className={styles.btnPrimary} href="#comparison">
+            <a className={styles.btnPrimary} href="#how-it-works">
               See How It Works
             </a>
             <Link className={styles.btnGhost} to="/docs/research/publications">

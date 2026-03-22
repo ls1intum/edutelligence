@@ -88,9 +88,9 @@ export default function QuizSection(): React.JSX.Element {
             <path d="M12 16v-4M12 8h.01" />
           </svg>
           <span>
-            Based on <strong>slide 12</strong> of your Organic Chemistry
-            lecture. Mitochondria use oxidative phosphorylation to convert
-            nutrients into ATP, the cell's primary energy currency.
+            Based on <strong>slide 12</strong> of your Cell Biology lecture.
+            Mitochondria use oxidative phosphorylation to convert nutrients into
+            ATP, the cell's primary energy currency.
           </span>
         </div>
       </div>
