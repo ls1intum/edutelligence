@@ -253,7 +253,7 @@ class SlideTurnDetector:
 
             response = self.request_handler.chat(
                 messages=messages,
-                arguments=CompletionArguments(temperature=0, max_tokens=50),
+                arguments=CompletionArguments(temperature=0),
                 tools=None,
             )
 
