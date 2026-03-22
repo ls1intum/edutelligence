@@ -62,8 +62,8 @@ export default function HeroSection(): React.JSX.Element {
             Munich.
           </p>
           <p className={styles.heroProof}>
-            <span aria-hidden="true">🎓</span> Used by 1,600+ students at TU
-            Munich in Winter 2025/26
+            <span aria-hidden="true">🎓</span> 30,000+ conversations powered at
+            TU Munich
           </p>
           <div className={styles.heroCtas}>
             <a className={styles.btnPrimary} href="#comparison">
