@@ -3,7 +3,7 @@
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import ffmpeg  # type: ignore
 import requests
@@ -18,9 +18,25 @@ logger = get_logger(__name__)
 
 
 def get_audio_duration(audio_path: str) -> float:
-    """Get the duration of an audio file using ffprobe."""
-    probe = ffmpeg.probe(audio_path)
-    return float(probe["format"]["duration"])
+    """
+    Get the duration of an audio file using ffprobe.
+
+    Args:
+        audio_path: Path to the audio file.
+
+    Returns:
+        Duration of the audio file in seconds.
+
+    Raises:
+        RuntimeError: If ffprobe fails or the duration cannot be read.
+    """
+    try:
+        probe = ffmpeg.probe(audio_path)
+        return float(probe["format"]["duration"])
+    except ffmpeg.Error as e:  # type: ignore[attr-defined]
+        raise RuntimeError(f"ffprobe failed for '{audio_path}': {e.stderr}") from e
+    except (KeyError, ValueError) as e:
+        raise RuntimeError(f"Could not read duration from '{audio_path}': {e}") from e
 
 
 class WhisperClient:
@@ -31,7 +47,7 @@ class WhisperClient:
     Configuration is loaded from llm_config.yml.
 
     Automatically handles audio chunking for long files and includes
-    retry logic with exponential backoff for rate limiting.
+    retry logic with linear backoff for rate limiting.
     """
 
     def __init__(
@@ -40,6 +56,7 @@ class WhisperClient:
         chunk_duration: int = 900,
         max_retries: int = 6,
         max_workers: int = 2,
+        request_timeout: int = 300,
     ):
         """
         Initialize the Whisper client.
@@ -49,14 +66,21 @@ class WhisperClient:
             chunk_duration: Duration of audio chunks in seconds (default: 900 = 15 min).
             max_retries: Maximum retry attempts for rate limiting.
             max_workers: Max parallel chunk uploads (default: 2).
+            request_timeout: Timeout in seconds for a single Whisper API request (default: 300).
         """
         self.llm = LlmManager().get_llm_by_id(model)
+        if self.llm is None:
+            raise ValueError(f"Model '{model}' not found in llm_config.yml")
         if not isinstance(self.llm, (AzureWhisperModel, OpenAIWhisperModel)):
-            raise ValueError(f"Model '{model}' is not a Whisper model")
+            raise ValueError(
+                f"Model '{model}' is not a Whisper model (expected azure_whisper or openai_whisper, "
+                f"got {type(self.llm).__name__})"
+            )
 
         self.chunk_duration = chunk_duration
         self.max_retries = max_retries
         self.max_workers = max_workers
+        self.request_timeout = request_timeout
         self.provider_name = (
             "Azure" if isinstance(self.llm, AzureWhisperModel) else "OpenAI"
         )
@@ -93,7 +117,8 @@ class WhisperClient:
         """
         Get provider-specific retry wait time for rate limiting.
 
-        Uses exponential backoff: base_time * (attempt + 1).
+        Uses linear backoff: base_time * (attempt + 1).
+        Azure: 30, 60, 90, 120, 150, 180s. OpenAI: 10, 20, 30, 40, 50, 60s.
 
         Args:
             attempt: Current attempt number (0-indexed).
@@ -121,8 +146,9 @@ class WhisperClient:
             lecture_unit_id: Used for log prefixing.
 
         Returns:
-            Dict with "segments" key containing list of transcript segments.
-            Each segment has "start", "end", and "text" keys.
+            Dict with:
+            - "segments": list of transcript segments, each with "start", "end", and "text" keys.
+            - "language": detected language code (e.g. "en", "de") from the first chunk.
 
         Raises:
             RuntimeError: If transcription fails after all retries.
@@ -142,6 +168,7 @@ class WhisperClient:
 
         total = len(chunk_paths)
         results: List[List[Dict[str, Any]]] = [None] * total  # type: ignore[list-item]
+        detected_language: Optional[str] = None
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
@@ -153,7 +180,9 @@ class WhisperClient:
             for future in as_completed(futures):
                 i = futures[future]
                 offset = offsets[i]
-                segments = future.result()
+                segments, language = future.result()
+                if detected_language is None and language is not None:
+                    detected_language = language
                 results[i] = [
                     {
                         "start": offset + seg["start"],
@@ -164,7 +193,7 @@ class WhisperClient:
                 ]
 
         all_segments = [seg for chunk_segs in results for seg in chunk_segs]
-        return {"segments": all_segments}
+        return {"segments": all_segments, "language": detected_language}
 
     def _transcribe_chunk(
         self,
@@ -172,7 +201,7 @@ class WhisperClient:
         chunk_index: int,
         total_chunks: int,
         lecture_unit_id: int | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """
         Transcribe a single audio chunk with retry logic.
 
@@ -183,7 +212,9 @@ class WhisperClient:
             lecture_unit_id: Used for log prefixing.
 
         Returns:
-            List of segment dicts with "start", "end", "text" keys.
+            Tuple of (segments, language) where segments is a list of dicts with
+            "start", "end", "text" keys, and language is the detected language code
+            (e.g. "en") or None if not present in the response.
 
         Raises:
             RuntimeError: If transcription fails after all retries.
@@ -211,7 +242,7 @@ class WhisperClient:
                         headers=headers,
                         files={"file": (os.path.basename(chunk_path), f, "audio/mp3")},
                         data=data,
-                        timeout=120,
+                        timeout=self.request_timeout,
                     )
 
                     if response.status_code == 429:
@@ -229,15 +260,18 @@ class WhisperClient:
                         continue
 
                     response.raise_for_status()
-                    segments = response.json().get("segments", [])
+                    body = response.json()
+                    segments = body.get("segments", [])
+                    language = body.get("language")
                     logger.info(
-                        "%s Chunk %d/%d done: %d segments",
+                        "%s Chunk %d/%d done: %d segments, language=%s",
                         prefix,
                         chunk_index + 1,
                         total_chunks,
                         len(segments),
+                        language,
                     )
-                    return segments
+                    return segments, language
 
                 except requests.RequestException as e:
                     logger.error(

@@ -16,12 +16,14 @@ def align_slides_with_segments(
         segments: List of transcript segments from Whisper.
             Each segment has "start", "end", and "text" keys.
         slide_timestamps: List of (timestamp, slide_number) tuples indicating
-            when each slide change occurred.
+            when each slide change occurred. Must be sorted ascending by timestamp;
+            this function sorts defensively to guarantee correct results.
 
     Returns:
         List of aligned segments with "startTime", "endTime", "text", and
         "slideNumber" keys.
     """
+    slide_timestamps = sorted(slide_timestamps, key=lambda x: x[0])
     result = []
 
     for segment in segments:

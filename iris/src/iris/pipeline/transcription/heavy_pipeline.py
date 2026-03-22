@@ -52,6 +52,7 @@ class HeavyTranscriptionPipeline:
             model=settings.transcription.whisper_model,
             chunk_duration=settings.transcription.chunk_duration_seconds,
             max_workers=settings.transcription.whisper_max_workers,
+            request_timeout=settings.transcription.whisper_request_timeout_seconds,
         )
 
     @observe(name="Heavy Transcription Pipeline")
@@ -91,6 +92,7 @@ class HeavyTranscriptionPipeline:
             self.dto.video_url,
             str(video_path),
             lecture_unit_id=self.dto.lecture_unit_id,
+            timeout=settings.transcription.download_timeout_seconds,
         )
         self.callback.done("Video downloaded")
         logger.info(
@@ -107,7 +109,10 @@ class HeavyTranscriptionPipeline:
             audio_path,
         )
         extract_audio(
-            str(video_path), str(audio_path), lecture_unit_id=self.dto.lecture_unit_id
+            str(video_path),
+            str(audio_path),
+            lecture_unit_id=self.dto.lecture_unit_id,
+            timeout=settings.transcription.extract_audio_timeout_seconds,
         )
         self.callback.done("Audio extracted")
         logger.info(

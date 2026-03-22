@@ -45,6 +45,9 @@ class TranscriptionSettings(BaseModel):
     Note: Whisper API configuration is loaded from llm_config.yml,
     not from application.yml. Add a whisper entry to llm_config.yml
     with type 'azure_whisper' or 'openai_whisper'.
+
+    FFmpeg timeout fields (download_timeout_seconds, extract_audio_timeout_seconds)
+    guard against stalled network streams or corrupt files blocking a worker indefinitely.
     """
 
     enabled: bool = Field(default=False, description="Enable video transcription")
@@ -63,9 +66,24 @@ class TranscriptionSettings(BaseModel):
         default=2,
         description="Max parallel Whisper API requests per transcription job",
     )
+    whisper_request_timeout_seconds: int = Field(
+        default=300,
+        description=(
+            "Timeout in seconds for a single Whisper API request. "
+            "Should be at least chunk_duration_seconds / 3 to account for processing time."
+        ),
+    )
     max_concurrent_jobs: int = Field(
         default=2,
         description="Max concurrent video transcription jobs (semaphore slots)",
+    )
+    download_timeout_seconds: int = Field(
+        default=3600,
+        description="Timeout in seconds for video download via FFmpeg (default: 1 hour)",
+    )
+    extract_audio_timeout_seconds: int = Field(
+        default=600,
+        description="Timeout in seconds for audio extraction via FFmpeg (default: 10 minutes)",
     )
 
 

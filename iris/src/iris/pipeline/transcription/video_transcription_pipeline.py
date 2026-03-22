@@ -43,8 +43,13 @@ class VideoTranscriptionPipeline:
             dto: Execution DTO with video URL, lecture info, and settings.
 
         Raises:
-            ValueError: If transcription is not enabled in settings.
+            ValueError: If dto.settings is None or transcription is not enabled in settings.
         """
+        if dto.settings is None:
+            raise ValueError(
+                "VideoTranscriptionPipelineExecutionDto.settings is required"
+            )
+
         self.dto = dto
 
         if not settings.transcription.enabled:
@@ -97,7 +102,7 @@ class VideoTranscriptionPipeline:
 
             result = {
                 "lectureUnitId": self.dto.lecture_unit_id,
-                "language": self._heavy_result["transcription"].get("language", "en"),
+                "language": self._heavy_result["transcription"].get("language"),
                 "segments": aligned_segments,
             }
 

@@ -1,3 +1,4 @@
+import signal
 from multiprocessing import Process
 from multiprocessing import Semaphore as ProcessSemaphore
 from multiprocessing import Value
@@ -54,14 +55,32 @@ def run_lecture_update_pipeline_worker(
     dto: IngestionPipelineExecutionDto, proc_semaphore: ProcessSemaphore
 ):
     """
-    Run the lecture unit ingestion pipeline in a separate process
+    Run the lecture unit ingestion pipeline in a separate process.
+
+    Installs a SIGTERM handler to release the semaphore slot on forced termination,
+    since Python's finally block is not guaranteed to run when Process.terminate()
+    is called.
     """
     setup_logging()
+    slot_acquired = False
+
+    def _on_sigterm(*_):
+        nonlocal slot_acquired
+        if slot_acquired:
+            slot_acquired = False
+            proc_semaphore.release()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     proc_semaphore.acquire()
+    slot_acquired = True
     try:
         LectureIngestionUpdatePipeline(dto)()
     finally:
-        proc_semaphore.release()
+        if slot_acquired:
+            slot_acquired = False
+            proc_semaphore.release()
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
