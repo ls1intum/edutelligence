@@ -2172,6 +2172,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.95rem;
+  table-layout: fixed;
 }
 
 .comparisonTableFeatureHeader {
@@ -2184,6 +2185,7 @@
   color: var(--iris-label-color);
   background: rgba(42, 115, 180, 0.04);
   border-bottom: 1px solid var(--iris-border-color);
+  width: 55%;
 }
 
 [data-theme="dark"] .comparisonTableFeatureHeader {
@@ -2200,7 +2202,7 @@
   color: var(--iris-label-color);
   background: rgba(42, 115, 180, 0.04);
   border-bottom: 1px solid var(--iris-border-color);
-  width: 160px;
+  width: 22.5%;
 }
 
 [data-theme="dark"] .comparisonTableHeader {
