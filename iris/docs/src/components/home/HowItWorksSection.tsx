@@ -21,7 +21,7 @@ const steps = [
     number: "3",
     title: "Students Get Real Answers",
     description:
-      "When students ask questions, Iris responds using your course content \u2014 with citations back to specific slides. You stay in control of what Iris knows.",
+      "When students ask questions, Iris responds using your course content \u2014 with citations back to specific slides.",
     emoji: "\uD83D\uDCAC",
   },
 ];
