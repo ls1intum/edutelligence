@@ -125,7 +125,7 @@
 
 /* 1. CourseMaterials — Deep navy/indigo */
 .sectionNavy {
-  padding: 5rem 1.5rem 6rem;
+  padding: calc(5rem + 4vw) 1.5rem calc(6rem + 4vw);
   background: linear-gradient(135deg, #0f1e3d 0%, #1a2d52 45%, #162847 100%);
   position: relative;
   overflow: hidden;
@@ -286,7 +286,7 @@
 /* 4. Scale — Diagonal primary gradient with clip-path */
 .sectionScaleBg {
   position: relative;
-  padding: 5rem 1.5rem 6rem;
+  padding: calc(5rem + 4vw) 1.5rem calc(6rem + 4vw);
   background: linear-gradient(135deg, #1a3a5c 0%, #2a73b4 45%, #1e8a7a 100%);
   clip-path: polygon(0 4vw, 100% 0, 100% calc(100% - 4vw), 0 100%);
   margin-top: -2vw;
@@ -2074,6 +2074,7 @@
   gap: 1.5rem;
   max-width: 1100px;
   margin: 0 auto;
+  padding-top: 2rem;
 }
 
 .howItWorksCard {
@@ -3050,14 +3051,14 @@
     clip-path: polygon(0 2vw, 100% 0, 100% calc(100% - 2vw), 0 100%);
     margin-top: -1vw;
     margin-bottom: -1vw;
-    padding: 3.5rem 1rem 4rem;
+    padding: calc(3.5rem + 2vw) 1rem calc(4rem + 2vw);
   }
 
   .sectionNavy {
     clip-path: polygon(0 2vw, 100% 0, 100% calc(100% - 2vw), 0 100%);
     margin-top: -1vw;
     margin-bottom: -1vw;
-    padding: 3.5rem 1rem 4rem;
+    padding: calc(3.5rem + 2vw) 1rem calc(4rem + 2vw);
   }
 
   .sectionParchment {
