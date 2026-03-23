@@ -539,7 +539,7 @@ class PromptUserStatusCallback(StatusCallback):
 
     def __init__(self, run_id: str, base_url: str, **_kwargs):
         url = (
-            f"{base_url}/{self.api_url}/programming-exercise-prompt-user/runs/{run_id}/status"
+            f"{base_url}/{self.api_url}/prompt-user/runs/{run_id}/status"
         )
         super().__init__(
             url,
