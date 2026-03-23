@@ -125,12 +125,13 @@
 
 /* 1. CourseMaterials — Deep navy/indigo */
 .sectionNavy {
-  padding: 5rem 1.5rem 4rem;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 4%),
-    linear-gradient(165deg, #0f1e3d 0%, #1a2d52 60%, #162847 100%);
+  padding: 5rem 1.5rem 6rem;
+  background: linear-gradient(165deg, #0f1e3d 0%, #1a2d52 60%, #162847 100%);
   position: relative;
   overflow: hidden;
+  clip-path: polygon(0 4vw, 100% 0, 100% calc(100% - 4vw), 0 100%);
+  margin-top: -2vw;
+  margin-bottom: -2vw;
 }
 
 .sectionNavy::before {
@@ -2046,7 +2047,8 @@
 .howItWorksGridWrapper {
   position: relative;
   max-width: 1100px;
-  margin: 2rem auto 0;
+  margin: 0 auto;
+  padding-top: 3rem;
 }
 
 .howItWorksConnector {
@@ -3053,7 +3055,10 @@
   }
 
   .sectionNavy {
-    padding: 3rem 1rem;
+    clip-path: polygon(0 2vw, 100% 0, 100% calc(100% - 2vw), 0 100%);
+    margin-top: -1vw;
+    margin-bottom: -1vw;
+    padding: 3.5rem 1rem 4rem;
   }
 
   .sectionParchment {
