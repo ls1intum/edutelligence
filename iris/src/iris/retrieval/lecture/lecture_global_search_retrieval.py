@@ -46,19 +46,47 @@ class LectureGlobalSearchRetrieval:
         :return: Segments sorted by relevance.
         """
         query_embedding = self.llm_embedding.embed(query)
+        return self._run_hybrid_search(
+            query=query, vector=query_embedding, alpha=0.9, limit=limit
+        )
 
+    def search_with_vector_override(
+        self, query: str, vector_text: str, alpha: float, limit: int
+    ) -> list[LectureSearchResultDTO]:
+        """
+        Search using a custom text to generate the search vector, while keeping the
+        original query for BM25 keyword matching. Used by HyDE: pass the hypothetical
+        answer as ``vector_text`` so the semantic search operates in answer-space.
+
+        :param query: The original query used for BM25 keyword matching.
+        :param vector_text: The text to embed and use as the semantic search vector.
+        :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
+        :param limit: The maximum number of results to return.
+        :return: Segments sorted by relevance.
+        """
+        vector = self.llm_embedding.embed(vector_text)
+        return self._run_hybrid_search(
+            query=query, vector=vector, alpha=alpha, limit=limit
+        )
+
+    def _run_hybrid_search(
+        self, query: str, vector: list[float], alpha: float, limit: int
+    ) -> list[LectureSearchResultDTO]:
+        """Run a hybrid search and map results to DTOs."""
         results = self.collection.query.hybrid(
             query=query,
-            alpha=0.9,
-            vector=query_embedding,
+            alpha=alpha,
+            vector=vector,
             limit=limit,
         ).objects
 
         # Collect unique lecture_unit_ids and fetch all metadata in one batch query
         unit_ids = list(
             {
-                obj.properties[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
+                obj.properties.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
                 for obj in results
+                if obj.properties.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
+                is not None
             }
         )
         lu_by_id = self._fetch_lecture_units(unit_ids)
@@ -87,7 +115,7 @@ class LectureGlobalSearchRetrieval:
 
     @staticmethod
     def _to_search_result_dto(
-        segment_props, lu_by_id: dict[int, Any]
+        segment_props: dict[str, Any], lu_by_id: dict[int, Any]
     ) -> LectureSearchResultDTO | None:
         """Map segment properties to a result DTO using pre-fetched lecture unit metadata."""
         snippet = segment_props[LectureUnitSegmentSchema.SEGMENT_SUMMARY.value]
