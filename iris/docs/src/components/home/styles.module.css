@@ -2077,6 +2077,9 @@
 
 .howItWorksCard {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   backdrop-filter: blur(16px) saturate(180%);
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: rgba(255, 255, 255, 0.55);
@@ -2128,6 +2131,7 @@
 
 .howItWorksEmoji {
   font-size: 2rem;
+  margin-top: 0.5rem;
   margin-bottom: 0.75rem;
 }
 
@@ -2135,6 +2139,7 @@
   font-size: 1.15rem;
   font-weight: 700;
   margin-bottom: 0.5rem;
+  min-height: 1.5em;
   color: var(--ifm-font-color-base);
 }
 
@@ -2142,6 +2147,7 @@
   font-size: 0.95rem;
   line-height: 1.6;
   color: var(--iris-label-color);
+  flex: 1;
 }
 
 /* ─── Why Not ChatGPT — Comparison Table ─── */
