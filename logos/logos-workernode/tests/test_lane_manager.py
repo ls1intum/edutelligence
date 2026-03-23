@@ -309,6 +309,181 @@ async def test_sleep_lane_rejects_non_vllm_lane() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hot_swap_sleeps_old_vllm_lane_before_replacement(monkeypatch) -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15070, lane_port_end=15080)
+    lane_id = "planner-Qwen_Qwen2.5-0.5B-Instruct"
+    old_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True, kv_cache_memory_bytes="384M"),
+    )
+    new_config = old_config.model_copy(
+        update={"vllm_config": old_config.vllm_config.model_copy(update={"kv_cache_memory_bytes": "512M"})}
+    )
+    call_order: list[str] = []
+
+    class FakeOldHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15070
+            self.lane_config = old_config
+            self.sleep_called_with: tuple[int, str] | None = None
+            self.wake_called = False
+            self.stop_called = False
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            call_order.append("old_sleep")
+            self.sleep_called_with = (level, mode)
+            return {"ok": True}
+
+        async def wake_up(self) -> dict[str, Any]:
+            call_order.append("old_wake")
+            self.wake_called = True
+            return {"ok": True}
+
+        async def stop(self) -> ProcessStatus:
+            call_order.append("old_stop")
+            self.stop_called = True
+            return ProcessStatus(state=ProcessState.STOPPED, pid=1234, return_code=0)
+
+    class FakeNewHandle:
+        def __init__(self, port: int) -> None:
+            self.lane_id = lane_id
+            self.port = port
+            self.lane_config = new_config
+            self.destroy_called = False
+            self.closed = False
+
+        async def init(self) -> None:
+            call_order.append("new_init")
+
+        async def spawn(self, _lane_config: LaneConfig) -> ProcessStatus:
+            call_order.append("new_spawn")
+            return ProcessStatus(state=ProcessState.RUNNING, pid=5678)
+
+        async def get_version(self) -> str | None:
+            call_order.append("new_get_version")
+            return "ok"
+
+        async def destroy(self) -> None:
+            self.destroy_called = True
+
+        async def close(self) -> None:
+            self.closed = True
+
+    old_handle = FakeOldHandle()
+    manager._handles[lane_id] = old_handle  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15070  # noqa: SLF001
+
+    def _fake_create_handle(
+        _lid: str,
+        port: int,
+        _global_config: OllamaConfig,
+        _lane_config: LaneConfig,
+    ) -> FakeNewHandle:
+        return FakeNewHandle(port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+
+    returned_old = await manager._hot_swap_lane_unlocked(lane_id, new_config)  # noqa: SLF001
+
+    assert returned_old is old_handle
+    assert old_handle.sleep_called_with == (1, "wait")
+    assert old_handle.stop_called is True
+    assert old_handle.wake_called is False
+    assert call_order.index("old_sleep") < call_order.index("new_spawn")
+
+
+@pytest.mark.asyncio
+async def test_hot_swap_wakes_old_vllm_lane_when_replacement_fails(monkeypatch) -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15081, lane_port_end=15090)
+    lane_id = "planner-Qwen_Qwen2.5-0.5B-Instruct"
+    old_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True, kv_cache_memory_bytes="384M"),
+    )
+    new_config = old_config.model_copy(
+        update={"vllm_config": old_config.vllm_config.model_copy(update={"kv_cache_memory_bytes": "512M"})}
+    )
+    call_order: list[str] = []
+
+    class FakeOldHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15081
+            self.lane_config = old_config
+            self.sleep_called_with: tuple[int, str] | None = None
+            self.wake_called = False
+            self.stop_called = False
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            call_order.append("old_sleep")
+            self.sleep_called_with = (level, mode)
+            return {"ok": True}
+
+        async def wake_up(self) -> dict[str, Any]:
+            call_order.append("old_wake")
+            self.wake_called = True
+            return {"ok": True}
+
+        async def stop(self) -> ProcessStatus:
+            self.stop_called = True
+            return ProcessStatus(state=ProcessState.STOPPED, pid=1234, return_code=0)
+
+    class FailingNewHandle:
+        def __init__(self, port: int) -> None:
+            self.lane_id = lane_id
+            self.port = port
+            self.lane_config = new_config
+            self.destroy_called = False
+            self.closed = False
+
+        async def init(self) -> None:
+            call_order.append("new_init")
+
+        async def spawn(self, _lane_config: LaneConfig) -> ProcessStatus:
+            call_order.append("new_spawn")
+            raise RuntimeError("spawn boom")
+
+        async def destroy(self) -> None:
+            call_order.append("new_destroy")
+            self.destroy_called = True
+
+        async def close(self) -> None:
+            call_order.append("new_close")
+            self.closed = True
+
+    old_handle = FakeOldHandle()
+    manager._handles[lane_id] = old_handle  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15081  # noqa: SLF001
+
+    def _fake_create_handle(
+        _lid: str,
+        port: int,
+        _global_config: OllamaConfig,
+        _lane_config: LaneConfig,
+    ) -> FailingNewHandle:
+        return FailingNewHandle(port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+
+    with pytest.raises(RuntimeError, match="spawn boom"):
+        await manager._hot_swap_lane_unlocked(lane_id, new_config)  # noqa: SLF001
+
+    assert old_handle.sleep_called_with == (1, "wait")
+    assert old_handle.wake_called is True
+    assert old_handle.stop_called is False
+    assert manager._handles[lane_id] is old_handle  # noqa: SLF001
+    assert call_order.index("old_sleep") < call_order.index("new_spawn")
+    assert call_order.index("new_close") < call_order.index("old_wake")
+
+
+@pytest.mark.asyncio
 async def test_status_revision_advances_on_active_request_change() -> None:
     manager = LaneManager(OllamaConfig(), lane_port_start=15060, lane_port_end=15070)
     lane = LaneConfig(model="qwen2.5-coder:32b")

@@ -640,15 +640,46 @@ class LaneManager:
         self, lane_id: str, new_config: LaneConfig,
     ) -> ProcessHandle:
         """
-        Hot-swap reconfiguration: spawn new process on a temp port, preload
-        the model, then atomically replace the old handle.  If the new
-        process fails to come up, the old handle remains untouched (rollback).
+        Hot-swap reconfiguration: when possible, put the old vLLM lane into
+        sleep mode to reduce VRAM pressure, spawn the new process on a temp
+        port, preload the model, then atomically replace the old handle.  If
+        the new process fails to come up, the old handle remains untouched and
+        is woken back up when we slept it.
 
         Returns the OLD handle (caller must close it after success).
         """
         new_config = self._auto_tensor_parallel(new_config)
         old_handle = self._handles[lane_id]
         old_port = self._port_alloc.get_port(lane_id)
+        old_config = old_handle.lane_config
+        old_slept = False
+
+        if (
+            old_config is not None
+            and old_config.vllm
+            and old_config.vllm_config is not None
+            and old_config.vllm_config.enable_sleep_mode
+        ):
+            try:
+                await old_handle.sleep(level=1, mode="wait")
+                old_slept = True
+                self._record_event(
+                    lane_id,
+                    "hot_swap_sleep_old",
+                    model=old_config.model,
+                    port=old_port,
+                )
+                logger.info(
+                    "Hot-swap '%s': put old vLLM lane into sleep mode before replacement",
+                    lane_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Hot-swap '%s': failed to sleep old lane before replacement; "
+                    "continuing with old lane fully resident",
+                    lane_id,
+                    exc_info=True,
+                )
 
         # Allocate a temporary port for the new process
         temp_id = f"_swap_{lane_id}"
@@ -690,6 +721,21 @@ class LaneManager:
                 pass
             await new_handle.close()
             self._port_alloc.release(temp_id)
+            if old_slept:
+                try:
+                    await old_handle.wake_up()
+                    self._record_event(
+                        lane_id,
+                        "hot_swap_wake_old",
+                        model=old_config.model if old_config is not None else new_config.model,
+                        port=old_port,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Hot-swap '%s': failed to wake old sleeping lane after rollback",
+                        lane_id,
+                        exc_info=True,
+                    )
             raise
 
         # Success: swap handles
