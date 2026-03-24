@@ -86,15 +86,6 @@ export default function HeroSection(): React.JSX.Element {
                 <span className={styles.heroFloatDot} />
               </span>
             </div>
-            <img
-              src={useBaseUrl("/img/screenshots/iris-chat-response-hd.png")}
-              alt=""
-              className={styles.heroGhostScreenshot}
-              width={960}
-              height={540}
-              aria-hidden="true"
-              loading="lazy"
-            />
             <ChatMockup />
           </div>
         </div>
