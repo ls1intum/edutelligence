@@ -3,6 +3,45 @@ import Link from "@docusaurus/Link";
 import useBaseUrl from "@docusaurus/useBaseUrl";
 import styles from "./styles.module.css";
 
+function ChatMockup(): React.JSX.Element {
+  return (
+    <div className={styles.chatMockup} aria-hidden="true">
+      <div className={styles.chatMockupHeader}>
+        <div className={styles.chatMockupDots}>
+          <span className={styles.chatMockupDotRed} />
+          <span className={styles.chatMockupDotYellow} />
+          <span className={styles.chatMockupDotGreen} />
+        </div>
+        <span className={styles.chatMockupTitle}>Iris Chat</span>
+      </div>
+      <div className={styles.chatMockupBody}>
+        <div className={styles.chatBubbleUser}>
+          <div className={styles.chatAvatar}>S</div>
+          <div className={styles.chatBubbleContent}>
+            Can you explain what photosynthesis does?
+          </div>
+        </div>
+        <div className={styles.chatBubbleIris}>
+          <div className={styles.chatAvatarIris}>
+            <img
+              src={useBaseUrl("/img/iris/iris-logo-big-right.png")}
+              alt=""
+              className={styles.chatAvatarImg}
+            />
+          </div>
+          <div className={styles.chatBubbleContentIris}>
+            Good question! Before I explain, what do you already know about how
+            plants get their energy? Your instructor covered this on{" "}
+            <strong>slide 7</strong> with a great diagram.{" "}
+            <span className={styles.chatCitation}>[1]</span>{" "}
+            <span className={styles.chatTypingDots}>...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function HeroSection(): React.JSX.Element {
   return (
     <div className={styles.heroWrapper}>
@@ -34,13 +73,9 @@ export default function HeroSection(): React.JSX.Element {
           </div>
         </header>
         <div className={styles.heroVisual}>
-          <img
-            src={useBaseUrl("/img/screenshots/iris-chat-response-hd.png")}
-            alt="Iris AI tutor responding to a student question in Artemis with a citation to lecture slides"
-            className={styles.heroScreenshot}
-            width={960}
-            height={540}
-          />
+          <div className={styles.heroVisualInner}>
+            <ChatMockup />
+          </div>
         </div>
       </div>
     </div>
