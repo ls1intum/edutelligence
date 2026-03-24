@@ -1663,9 +1663,9 @@
 
 .testimonialGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
   gap: 1.5rem;
-  max-width: 900px;
+  max-width: 560px;
   margin: 0 auto;
 }
 
@@ -3578,13 +3578,13 @@
 }
 
 .badgeAvailable {
-  background: rgba(34, 197, 94, 0.12);
-  color: #16a34a;
+  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
 }
 
 .badgeComingSoon {
-  background: rgba(245, 158, 11, 0.12);
-  color: #d97706;
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
 }
 
 [data-theme="dark"] .badgeAvailable {
@@ -3653,8 +3653,14 @@
   white-space: nowrap;
 }
 
-.sectionNavItem:hover .sectionNavLabel {
+.sectionNavItem:hover .sectionNavLabel,
+.sectionNavItem:focus-visible .sectionNavLabel {
   opacity: 1;
+}
+
+.sectionNavItem:focus-visible .sectionNavDot {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
 }
 
 .sectionNavItemActive .sectionNavLabel {

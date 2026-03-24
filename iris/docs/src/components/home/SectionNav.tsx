@@ -57,12 +57,6 @@ export default function SectionNav(): React.JSX.Element {
           href={`#${s.id}`}
           className={`${styles.sectionNavItem} ${activeId === s.id ? styles.sectionNavItemActive : ""}`}
           title={s.label}
-          onClick={(e) => {
-            e.preventDefault();
-            document
-              .getElementById(s.id)
-              ?.scrollIntoView({ behavior: "smooth" });
-          }}
         >
           <span className={styles.sectionNavDot} />
           <span className={styles.sectionNavLabel}>{s.label}</span>
