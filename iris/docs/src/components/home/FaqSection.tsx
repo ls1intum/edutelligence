@@ -23,6 +23,11 @@ const faqs: FaqEntry[] = [
       "Upload your lecture slides to Artemis, click ingest, and Iris is ready. Most instructors get started in minutes, not hours.",
   },
   {
+    question: "What if my university doesn't use Artemis yet?",
+    answer:
+      "Artemis is open-source and free to deploy. Over 20 universities already run it for programming courses. The Artemis team at TUM supports new adopters with documentation and direct guidance. Iris is part of Artemis — once Artemis is running, enabling Iris takes minutes.",
+  },
+  {
     question: "What if Iris gives a wrong answer?",
     answer:
       "Every response includes citation markers linking to specific lecture slides. Students and instructors can verify any answer against the source material. Iris also runs a self-check on every response before sending it.",

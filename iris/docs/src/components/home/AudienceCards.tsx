@@ -7,7 +7,7 @@ const paths = [
   {
     title: "Launch in a Course",
     description:
-      "Upload your slides and transcripts, enable Iris in Artemis, and your students get AI support in minutes.",
+      "Already on Artemis? Upload your slides and enable Iris in minutes. New to Artemis? It's open-source and free to deploy.",
     to: "/docs/instructor/enabling-iris",
   },
   {
