@@ -90,6 +90,14 @@ services:
       - "traefik.http.routers.logos-server-docs.service=logos-server"
       - "traefik.http.routers.logos-server-docs.priority=100"
 
+      # === Routing: /metrics (Prometheus) ===
+      - "traefik.http.routers.logos-server-metrics.rule=PathPrefix(`/metrics`)"
+      - "traefik.http.routers.logos-server-metrics.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-metrics.tls=true"
+      - "traefik.http.routers.logos-server-metrics.tls.certresolver=${LOGOS_CERT_RESOLVER:-}"
+      - "traefik.http.routers.logos-server-metrics.service=logos-server"
+      - "traefik.http.routers.logos-server-metrics.priority=100"
+
       # === Routing: /ws (WebSocket) ===
       - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
       - "traefik.http.routers.logos-server-ws.entrypoints=secure8080"

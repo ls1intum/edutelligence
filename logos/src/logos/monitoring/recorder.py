@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import datetime
 import logging
+import time
 from typing import Callable, Optional, Dict, Any
 
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import ResultStatus
+from logos.monitoring import prometheus_metrics as prom
 
 logger = logging.getLogger(__name__)
+
+# Track in-flight request start times for duration histograms
+_request_start_times: Dict[str, float] = {}
 
 
 class MonitoringRecorder:
@@ -35,6 +40,12 @@ class MonitoringRecorder:
         queue_depth: Optional[int],
         timeout_s: Optional[int] = None,
     ) -> None:
+        prom.REQUESTS_TOTAL.labels(status="enqueued").inc()
+        prom.REQUESTS_IN_FLIGHT.inc()
+        if queue_depth is not None:
+            prom.QUEUE_DEPTH.set(queue_depth)
+        _request_start_times[request_id] = time.monotonic()
+
         payload = {
             "model_id": model_id,
             "provider_id": provider_id,
@@ -64,6 +75,9 @@ class MonitoringRecorder:
             queue_depth_at_schedule: Total system queue depth at scheduling time.
             provider_metrics: Dictionary of provider-specific metrics (e.g. VRAM, rate limits).
         """
+        prom.REQUESTS_TOTAL.labels(status="scheduled").inc()
+        prom.SCHEDULING_DECISIONS_TOTAL.labels(result="scheduled").inc()
+
         payload = {
             "model_id": model_id,
             "provider_id": provider_id,
@@ -71,7 +85,7 @@ class MonitoringRecorder:
             "queue_depth_at_schedule": queue_depth_at_schedule,
             "scheduled_ts": datetime.datetime.now(datetime.timezone.utc),
         }
-        
+
         # Flatten provider metrics for DB columns
         if provider_metrics:
             for key, value in provider_metrics.items():
@@ -87,6 +101,20 @@ class MonitoringRecorder:
         error_message: Optional[str] = None,
     ) -> None:
         status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
+
+        prom.REQUESTS_TOTAL.labels(status=status_value).inc()
+        prom.REQUESTS_IN_FLIGHT.dec()
+
+        start = _request_start_times.pop(request_id, None)
+        if start is not None:
+            duration = time.monotonic() - start
+            prom.REQUEST_DURATION_SECONDS.labels(
+                model="unknown", provider="unknown", status=status_value,
+            ).observe(duration)
+
+        if cold_start:
+            prom.COLD_STARTS_TOTAL.labels(model="unknown").inc()
+
         payload = {
             "request_complete_ts": datetime.datetime.now(datetime.timezone.utc),
             "result_status": status_value,
