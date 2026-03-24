@@ -1,11 +1,13 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from iris.domain.status.stage_state_dto import StageStateEnum
 
 
 class StageDTO(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: Optional[str] = None
     weight: int
     state: StageStateEnum
