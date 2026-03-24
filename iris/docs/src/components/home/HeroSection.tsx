@@ -21,8 +21,8 @@ export default function HeroSection(): React.JSX.Element {
             peer-reviewed studies at TU Munich.
           </p>
           <p className={styles.heroProof}>
-            <span aria-hidden="true">🎓</span> 30,000+ conversations powered at
-            TU Munich
+            <span aria-hidden="true">🎓</span> Studied across 3 peer-reviewed
+            publications at TU Munich
           </p>
           <div className={styles.heroCtas}>
             <a className={styles.btnPrimary} href="mailto:krusche@tum.de">

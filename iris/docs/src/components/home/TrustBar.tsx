@@ -3,7 +3,7 @@ import styles from "./styles.module.css";
 
 const items = [
   "Integrated into Artemis at TUM",
-  "1,600+ students at TU Munich",
+  "Used across 10+ courses at TUM",
   "MIT Licensed",
   "3 Published Papers",
 ];

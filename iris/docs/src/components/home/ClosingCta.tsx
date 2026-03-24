@@ -23,7 +23,7 @@ export default function ClosingCta(): React.JSX.Element {
           Bring Course-Grounded AI to Your Teaching
         </h2>
         <p className={styles.closingCtaSubtitle}>
-          Built into Artemis. Studied at TU Munich. Used by 1,600+ students.
+          Built into Artemis. Backed by peer-reviewed research at TU Munich.
           Talk to the team about a pilot, or explore the documentation.
         </p>
         <div className={styles.heroCtas}>
