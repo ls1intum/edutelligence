@@ -451,8 +451,25 @@ class LaneManager:
     # ------------------------------------------------------------------
 
     async def get_all_statuses(self) -> list[LaneStatus]:
-        async with self._lock:
-            return await self._collect_statuses_unlocked()
+        # Snapshot handles without the lock so status collection (which does
+        # async I/O like nvidia-smi queries) doesn't block behind long-running
+        # operations like apply_lanes / add_lane that hold self._lock during
+        # vLLM process startup.
+        handles = list(self._handles.values())
+        pids = []
+        for handle in handles:
+            ps = handle.status()
+            if ps.state == ProcessState.RUNNING and ps.pid is not None:
+                pids.append(ps.pid)
+        pid_vram_map = await self._query_process_vram_map(pids)
+
+        statuses = []
+        for handle in handles:
+            status = await self._build_lane_status(handle, pid_vram_map)
+            statuses.append(status)
+            self._record_profile_from_status(status)
+        await self._check_stuck_lanes(statuses)
+        return statuses
 
     async def get_lane_status(self, lane_id: str) -> LaneStatus:
         async with self._lock:

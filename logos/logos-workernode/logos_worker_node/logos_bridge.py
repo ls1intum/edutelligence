@@ -269,6 +269,7 @@ class LogosBridgeClient:
                     "get_runtime",
                     "get_lanes",
                     "apply_lanes",
+                    "add_lane",
                     "delete_lane",
                     "sleep_lane",
                     "wake_lane",
@@ -397,6 +398,11 @@ class LogosBridgeClient:
                 except OSError:
                     logger.debug("Could not persist lane config (read-only filesystem)")
             return result.model_dump(mode="json")
+
+        if action == "add_lane":
+            lane_config = LaneConfig(**params)
+            status = await lane_manager.add_lane(lane_config)
+            return status.model_dump(mode="json")
 
         lane_id = str(params.get("lane_id", "")).strip()
         if action == "delete_lane":

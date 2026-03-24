@@ -133,6 +133,16 @@ class CapacityPlanner:
         self._log_cluster_summary(provider_ids)
 
         for provider_id in provider_ids:
+            # Skip providers that haven't sent their first status yet —
+            # we don't know what lanes are already loaded and acting on
+            # stale/empty state can destroy existing lanes.
+            if self._registry and not self._registry.has_received_first_status(provider_id):
+                logger.debug(
+                    "Skipping provider %s: waiting for first status report after connect",
+                    provider_id,
+                )
+                continue
+
             try:
                 lanes = self._facade.get_all_provider_lane_signals(provider_id)
             except Exception:
@@ -336,6 +346,17 @@ class CapacityPlanner:
         1. Wake a sleeping lane (reclaiming VRAM from idle competitors if needed)
         2. Cold-load a model that has no lane at all (with VRAM budget validation)
         """
+        # Don't attempt lane preparation until the worker has reported its
+        # current state — otherwise we may cold-load a model that is already
+        # loaded, or issue a declarative apply_lanes that destroys existing lanes.
+        if self._registry and not self._registry.has_received_first_status(provider_id):
+            logger.info(
+                "Deferring lane preparation for provider=%s model=%s: "
+                "waiting for first status report after connect",
+                provider_id, model_name,
+            )
+            return None
+
         target = self._pick_request_target_lane(provider_id, model_name)
 
         if target is not None:
@@ -1547,7 +1568,7 @@ class CapacityPlanner:
             "sleep_l2": ("sleep_lane", {"lane_id": action.lane_id, "level": 2}),
             "wake": ("wake_lane", {"lane_id": action.lane_id}),
             "stop": ("delete_lane", {"lane_id": action.lane_id}),
-            "load": ("apply_lanes", self._build_apply_lanes_params_for_load(action)),
+            "load": ("add_lane", action.params),
         }
 
         command_entry = command_map.get(action.action)

@@ -247,6 +247,7 @@ class ProviderSession:
     websocket: WebSocket
     capabilities_models: set[str] = field(default_factory=set)
     last_heartbeat: datetime = field(default_factory=_utc_now)
+    first_status_received: bool = False
     latest_runtime: dict[str, Any] = field(default_factory=dict)
     latest_events: list[dict[str, Any]] = field(default_factory=list)
     recent_samples: deque[dict[str, Any]] = field(default_factory=deque)
@@ -519,6 +520,7 @@ class LogosNodeRuntimeRegistry:
             return
         old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
+        session.first_status_received = True
         session.last_heartbeat = _utc_now()
         if capabilities_models is not None:
             session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
@@ -769,6 +771,7 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
             "events": list(session.latest_events),
@@ -782,10 +785,16 @@ class LogosNodeRuntimeRegistry:
             "provider_id": session.provider_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
+            "first_status_received": session.first_status_received,
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
             "events": list(session.latest_events),
         }
+
+    def has_received_first_status(self, provider_id: int) -> bool:
+        """Check if a provider has sent at least one status update since connecting."""
+        session = self._sessions.get(int(provider_id))
+        return session is not None and session.first_status_received
 
     async def get_lanes(self, provider_id: int, stale_after_seconds: int = 30) -> list[dict[str, Any]]:
         snap = await self.get_runtime_snapshot(provider_id, stale_after_seconds)
