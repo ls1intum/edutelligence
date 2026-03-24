@@ -1,4 +1,3 @@
-import json
 import os
 import random
 import re
@@ -15,14 +14,12 @@ from iris.pipeline.session_title_generation_pipeline import (
 )
 from iris.tracing import observe
 
-from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.variant.course_chat_variant import CourseChatVariant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
@@ -74,18 +71,12 @@ class CourseChatPipeline(
     faq_retriever: Optional[FaqRetrieval]
     jinja_env: Environment
     system_prompt_template: Any
-    event: Optional[str]
 
-    def __init__(self, event: Optional[str] = None, local: bool = False):
+    def __init__(self, local: bool = False):
         """
         Initialize the course chat pipeline.
-
-        Args:
-            event: Optional event type
         """
         super().__init__(implementation_id="course_chat_pipeline")
-
-        self.event = event
 
         # Initialize retrievers and pipelines (db will be created in abstract pipeline)
         self.lecture_retriever = None
@@ -110,10 +101,10 @@ class CourseChatPipeline(
         )
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(event={self.event})"
+        return f"{self.__class__.__name__}()"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(event={self.event})"
+        return f"{self.__class__.__name__}()"
 
     # ========================================
     # === MUST override (abstract methods) ===
@@ -327,7 +318,6 @@ class CourseChatPipeline(
             "allow_memiris_tool": allow_memiris_tool,
             "metrics_enabled": metrics_enabled,
             "has_chat_history": bool(state.message_history),
-            "event": self.event,
             "custom_instructions": custom_instructions_formatted,
             "course_name": (
                 state.dto.course.name
@@ -336,35 +326,6 @@ class CourseChatPipeline(
             ),
             "mcq_parallel": getattr(state, "mcq_parallel", False),
         }
-
-        # Handle JOL event specific data
-        if self.event == "jol" and state.dto.event_payload:
-            event_payload = CompetencyJolDTO.model_validate(
-                state.dto.event_payload.event
-            )
-            comp = next(
-                (
-                    c
-                    for c in state.dto.course.competencies
-                    if c.id == event_payload.competency_id
-                ),
-                None,
-            )
-
-            # Handle potential None values for competency progress and confidence
-            competency_progress = event_payload.competency_progress or 0.0
-            competency_confidence = event_payload.competency_confidence or 0.0
-
-            template_context["jol"] = json.dumps(
-                {
-                    "value": event_payload.jol_value,
-                    "competency_mastery": get_mastery(
-                        competency_progress,
-                        competency_confidence,
-                    ),
-                }
-            )
-            template_context["competency"] = comp.model_dump_json() if comp else "{}"
 
         # Render the complete system prompt
         complete_system_prompt = self.system_prompt_template.render(template_context)
@@ -628,7 +589,7 @@ class CourseChatPipeline(
             step: The current step information.
         """
         # Update progress
-        if step.get("intermediate_steps"):
+        if step.get("intermediate_steps") or step.get("intermediate_step"):
             state.callback.in_progress("Thinking ...")
 
     def post_agent_hook(
