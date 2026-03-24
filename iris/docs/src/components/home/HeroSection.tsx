@@ -53,13 +53,11 @@ export default function HeroSection(): React.JSX.Element {
             className={styles.heroLogo}
           />
           <h1 className={styles.heroHeadline}>
-            Your AI Teaching Assistant &mdash; Grounded in Your{" "}
-            <em>Course Materials</em>
+            AI That <em>Teaches</em>, Not Just Answers
           </h1>
           <p className={styles.heroSubtitle}>
-            The AI teaching assistant built into Artemis. Guides students with
-            hints &mdash; not answers. Backed by 3 peer-reviewed studies at TU
-            Munich.
+            Grounded in your course materials. Built into Artemis. Backed by 3
+            peer-reviewed studies at TU Munich.
           </p>
           <p className={styles.heroProof}>
             <span aria-hidden="true">🎓</span> 30,000+ conversations powered at
