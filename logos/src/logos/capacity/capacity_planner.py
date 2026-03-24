@@ -33,6 +33,7 @@ from logos.terminal_logging import (
 )
 
 from .demand_tracker import DemandTracker
+from logos.monitoring import prometheus_metrics as prom
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,16 @@ class CapacityPlanner:
 
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
+        cycle_start = time.time()
         self._demand.decay_all()
+
+        # Update demand gauges
+        for model_name, score in self._demand.get_ranked_models():
+            prom.DEMAND_SCORE.labels(model=model_name).set(score)
+            prom.DEMAND_RAW_COUNT.labels(model=model_name).set(
+                self._demand.get_raw_count(model_name)
+            )
+
         all_actions: List[CapacityPlanAction] = []
 
         provider_ids = self._facade.provider_ids()
@@ -162,16 +172,22 @@ class CapacityPlanner:
         for action in validated:
             try:
                 await self._execute_action_with_confirmation(action)
+                prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action=action.action).inc()
             except Exception:
                 logger.exception(
                     "Failed to execute capacity action: %s on lane %s",
                     action.action, action.lane_id,
                 )
 
+        prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
+
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
         """Print a colored cluster overview for the current planner cycle."""
         lines: list[str] = []
         connected = 0
+        total_used_vram = 0.0
+        total_free_vram = 0.0
+        state_counts: dict[str, int] = {}
         for pid in provider_ids:
             snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
             if snap is None:
@@ -186,6 +202,12 @@ class CapacityPlanner:
             lanes_list = rt.get("lanes") or []
             total_vram = (rt.get("devices") or {}).get("total_memory_mb", 0)
             free_vram = cap.get("free_memory_mb", 0)
+            total_used_vram += total_vram - free_vram
+            total_free_vram += free_vram
+            for lane in (lanes_list if isinstance(lanes_list, list) else []):
+                if isinstance(lane, dict):
+                    rs = str(lane.get("runtime_state") or "unknown")
+                    state_counts[rs] = state_counts.get(rs, 0) + 1
             used_pct = ((total_vram - free_vram) / total_vram * 100) if total_vram > 0 else 0
             heartbeat_age_s = self._heartbeat_age_seconds(snap.get("last_heartbeat"))
             worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
@@ -233,6 +255,13 @@ class CapacityPlanner:
                 accent=CYAN,
             )
         )
+
+        # Update Prometheus gauges
+        prom.WORKER_NODES_CONNECTED.set(connected)
+        prom.WORKER_VRAM_USED_MB.set(total_used_vram)
+        prom.WORKER_VRAM_FREE_MB.set(total_free_vram)
+        for state in ("cold", "starting", "loaded", "running", "sleeping", "stopped", "error"):
+            prom.WORKER_LANES_BY_STATE.labels(state=state).set(state_counts.get(state, 0))
 
     @staticmethod
     def _heartbeat_age_seconds(last_heartbeat: Any) -> float:

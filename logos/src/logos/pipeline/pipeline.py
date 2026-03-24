@@ -12,6 +12,7 @@ from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.types import Deployment
 from logos.monitoring.recorder import MonitoringRecorder
+from logos.monitoring import prometheus_metrics as prom
 
 from logos.queue.models import Priority
 
@@ -167,6 +168,7 @@ class RequestPipeline:
             scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
             logger.warning("Request %s timed out waiting in queue", request_id)
+            prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
             self.record_completion(
                 request_id=request_id,
                 result_status="timeout",
@@ -189,6 +191,7 @@ class RequestPipeline:
 
         if not scheduling_result:
             logger.warning(f"Request {request_id} failed scheduling: All models unavailable")
+            prom.SCHEDULING_DECISIONS_TOTAL.labels(result="no_capacity").inc()
             self.record_completion(
                 request_id=request_id,
                 result_status="error",
@@ -346,7 +349,10 @@ class RequestPipeline:
         )
         
         elapsed = time.time() - start
-        
+
+        prom.CLASSIFICATION_DURATION_SECONDS.observe(elapsed)
+        prom.CLASSIFICATION_CANDIDATES.observe(len(candidates))
+
         # Build classification stats
         stats = {
             "classification_time": elapsed,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from starlette.responses import Response
 
 from logos_worker_node.auth import verify_api_key
 from logos_worker_node.config import save_lanes_config
@@ -17,9 +18,19 @@ from logos_worker_node.models import (
     LaneStatus,
     WorkerRuntimeStatus,
 )
+from logos_worker_node.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos_worker_node.runtime import build_runtime_status
 
 router = APIRouter(tags=["admin"])
+
+
+@router.get("/metrics", tags=["monitoring"], summary="Prometheus metrics")
+async def prometheus_metrics(request: Request) -> Response:
+    """Prometheus metrics endpoint."""
+    from logos_worker_node.prometheus_metrics import update_from_runtime
+    await update_from_runtime(request.app)
+    body, content_type = _prometheus_metrics_response()
+    return Response(content=body, media_type=content_type)
 
 
 @router.get("/health", response_model=HealthResponse, summary="Public health check")

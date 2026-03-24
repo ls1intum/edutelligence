@@ -23,6 +23,7 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node.config import save_lanes_config
 from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
+from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
@@ -145,6 +146,8 @@ class LogosBridgeClient:
                 raise
             except ConnectionClosed as exc:
                 self._consecutive_failures += 1
+                prom.BRIDGE_RECONNECTS_TOTAL.inc()
+                prom.BRIDGE_ERRORS_TOTAL.inc()
                 logger.warning(
                     "%s══ BRIDGE DISCONNECTED ══%s websocket closed: %s "
                     "(consecutive_failures=%d)",
@@ -152,6 +155,8 @@ class LogosBridgeClient:
                 )
             except Exception as exc:  # noqa: BLE001
                 self._consecutive_failures += 1
+                prom.BRIDGE_RECONNECTS_TOTAL.inc()
+                prom.BRIDGE_ERRORS_TOTAL.inc()
                 logger.warning(
                     "%s══ BRIDGE ERROR ══%s %s (consecutive_failures=%d, "
                     "retrying in %ds)",
@@ -325,6 +330,7 @@ class LogosBridgeClient:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
+        prom.BRIDGE_HEARTBEATS_TOTAL.inc()
 
     async def _send_json(self, ws, payload: dict[str, Any]) -> None:
         async with self._send_lock:

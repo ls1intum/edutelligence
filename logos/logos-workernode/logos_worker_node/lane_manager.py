@@ -22,6 +22,7 @@ from logos_worker_node.models import (
 )
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.ollama_process import OllamaProcessHandle
+from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 logger = logging.getLogger("logos_worker_node.lane_manager")
@@ -350,6 +351,7 @@ class LaneManager:
                     await old_handle.close()
 
             lane_statuses = await self._collect_statuses_unlocked()
+            prom.LANE_TRANSITIONS_TOTAL.labels(action="apply").inc()
 
             return LaneApplyResult(
                 success=len(errors) == 0,
@@ -379,6 +381,7 @@ class LaneManager:
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
             await self._remove_lane_unlocked(lane_id)
+            prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
 
     async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
         """Apply partial updates to an existing lane via hot-swap."""
@@ -406,6 +409,7 @@ class LaneManager:
             if _lane_needs_restart(current, new_lc):
                 old_handle = await self._hot_swap_lane_unlocked(lane_id, new_lc)
                 await old_handle.close()
+            prom.LANE_TRANSITIONS_TOTAL.labels(action="reconfigure").inc()
 
             return await self._get_status_unlocked(lane_id)
 
@@ -419,6 +423,7 @@ class LaneManager:
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
             await handle.sleep(level=level, mode=mode)
+            prom.LANE_TRANSITIONS_TOTAL.labels(action="sleep").inc()
             self._record_event(
                 lane_id,
                 "sleep",
@@ -438,6 +443,7 @@ class LaneManager:
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
             await handle.wake_up()
+            prom.LANE_TRANSITIONS_TOTAL.labels(action="wake").inc()
             self._record_event(
                 lane_id,
                 "wake",

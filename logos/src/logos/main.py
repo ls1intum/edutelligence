@@ -47,6 +47,7 @@ from logos.logosnode_registry import (
     LogosNodeRuntimeRegistry,
 )
 from logos.terminal_logging import MultiLineFormatter, UvicornAccessFilter, UvicornErrorFilter
+from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from scripts import setup_proxy
 
 _SERVER_START_TIME = int(time.time())
@@ -979,6 +980,14 @@ async def add_star_cors_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
+
+
+@app.get("/metrics", tags=["monitoring"])
+async def prometheus_metrics():
+    """Prometheus metrics endpoint."""
+    body, content_type = _prometheus_metrics_response()
+    from starlette.responses import Response
+    return Response(content=body, media_type=content_type)
 
 
 # ============================================================================
