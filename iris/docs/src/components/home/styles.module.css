@@ -125,7 +125,7 @@
 
 /* 1. CourseMaterials — Deep navy/indigo */
 .sectionNavy {
-  padding: calc(5rem + 4vw) 1.5rem calc(6rem + 4vw);
+  padding: calc(6rem + 5vw) 1.5rem calc(6rem + 5vw);
   background: linear-gradient(135deg, #0f1e3d 0%, #1a2d52 45%, #162847 100%);
   position: relative;
   overflow: hidden;
@@ -302,7 +302,7 @@
 /* 4. Scale — Diagonal primary gradient with clip-path */
 .sectionScaleBg {
   position: relative;
-  padding: calc(5rem + 4vw) 1.5rem calc(6rem + 4vw);
+  padding: calc(6rem + 5vw) 1.5rem calc(6rem + 5vw);
   background: linear-gradient(135deg, #1a3a5c 0%, #2a73b4 45%, #1e8a7a 100%);
   clip-path: polygon(0 4vw, 100% 0, 100% calc(100% - 4vw), 0 100%);
   margin-top: -2vw;
