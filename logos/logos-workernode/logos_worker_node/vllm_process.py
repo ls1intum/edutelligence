@@ -39,6 +39,15 @@ _READY_TIMEOUT = 300  # vLLM startup can be slow (model download + compilation)
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
+_SCRUBBED_ENV_VARS = (
+    "LOCAL_RANK",
+    "RANK",
+    "WORLD_SIZE",
+    "LOCAL_WORLD_SIZE",
+    "NODE_RANK",
+    "MASTER_ADDR",
+    "MASTER_PORT",
+)
 
 
 class VllmProcessHandle:
@@ -89,17 +98,7 @@ class VllmProcessHandle:
             self.lane_id, self.port, lane_config.model,
         )
 
-        process_env = {**os.environ, **env}
-        # Keep helper tools from the same virtualenv (for example `ninja`
-        # used by FlashInfer JIT) available even when the venv is not activated.
-        vllm_bin_dir = str(Path(cmd[0]).resolve().parent)
-        current_path = process_env.get("PATH", "")
-        if vllm_bin_dir:
-            process_env["PATH"] = (
-                vllm_bin_dir
-                if not current_path
-                else f"{vllm_bin_dir}{os.pathsep}{current_path}"
-            )
+        process_env = self._build_process_env(lane_config, env, cmd)
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             env=process_env,
@@ -593,6 +592,43 @@ class VllmProcessHandle:
             env.setdefault("NCCL_CUMEM_ENABLE", "0")
 
         return env
+
+    def _build_process_env(
+        self,
+        lane_config: LaneConfig,
+        env: dict[str, str],
+        cmd: list[str],
+    ) -> dict[str, str]:
+        """Build the final subprocess environment for a vLLM lane.
+
+        vLLM should not inherit distributed launcher variables from the worker
+        process. In particular, stale LOCAL_RANK/RANK values can make a
+        single-GPU lane try to address logical device 1 inside a process that
+        only sees one visible GPU.
+        """
+        process_env = dict(os.environ)
+        for key in _SCRUBBED_ENV_VARS:
+            process_env.pop(key, None)
+
+        resolved_gpu_devices = lane_config.gpu_devices or self._global_config.gpu_devices
+        if resolved_gpu_devices.lower() == "all":
+            # When a lane is meant to see all worker GPUs, do not leak an
+            # inherited CUDA_VISIBLE_DEVICES restriction from the parent.
+            process_env.pop("CUDA_VISIBLE_DEVICES", None)
+
+        process_env.update(env)
+
+        # Keep helper tools from the same virtualenv (for example `ninja`
+        # used by FlashInfer JIT) available even when the venv is not activated.
+        vllm_bin_dir = str(Path(cmd[0]).resolve().parent)
+        current_path = process_env.get("PATH", "")
+        if vllm_bin_dir:
+            process_env["PATH"] = (
+                vllm_bin_dir
+                if not current_path
+                else f"{vllm_bin_dir}{os.pathsep}{current_path}"
+            )
+        return process_env
 
     def _resolve_hf_home(self, models_path: str) -> str:
         """Pick a writable HuggingFace cache path for vLLM downloads.

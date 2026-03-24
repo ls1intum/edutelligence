@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
-from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus, VllmConfig
+from logos_worker_node.models import (
+    DeviceInfo,
+    DeviceSummary,
+    LaneConfig,
+    OllamaConfig,
+    ProcessState,
+    ProcessStatus,
+    VllmConfig,
+)
 
 
 def test_port_allocator_skips_reserved_and_used_ports(monkeypatch) -> None:
@@ -625,6 +634,150 @@ def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
     )
     result = manager._auto_tensor_parallel(lane)
     assert result.vllm_config.tensor_parallel_size == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0,
+        engine="vllm",
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(device_id="gpu0", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=16000.0, extra={"index": 0}),
+                DeviceInfo(device_id="gpu1", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=12000.0, extra={"index": 1}),
+                DeviceInfo(device_id="gpu2", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=7600.0, extra={"index": 2}),
+            ],
+            total_memory_mb=3 * 24576.0,
+            free_memory_mb=35600.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0,
+        engine="vllm",
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(device_id="gpu0", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=15000.0, extra={"index": 0}),
+                DeviceInfo(device_id="gpu1", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=9000.0, extra={"index": 1}),
+                DeviceInfo(device_id="gpu2", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=7600.0, extra={"index": 2}),
+            ],
+            total_memory_mb=3 * 24576.0,
+            free_memory_mb=31600.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane_id = "planner-Qwen_Qwen2.5-0.5B-Instruct"
+    current_lane = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices="1",
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15100
+            self.lane_config = current_lane
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+
+    new_lane = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await manager._auto_place_gpu_devices(lane_id, new_lane)  # noqa: SLF001
+    assert placed.gpu_devices == "1"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(  # noqa: SLF001
+        base_residency_mb=14000.0,
+        kv_budget_mb=6000.0,
+        loaded_vram_mb=20000.0,
+        engine="vllm",
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(device_id="gpu0", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=24000.0, extra={"index": 0}),
+                DeviceInfo(device_id="gpu1", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=15000.0, extra={"index": 1}),
+                DeviceInfo(device_id="gpu2", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=16000.0, extra={"index": 2}),
+                DeviceInfo(device_id="gpu3", kind="nvidia", memory_total_mb=24576.0, memory_free_mb=40000.0, extra={"index": 3}),
+            ],
+            total_memory_mb=4 * 24576.0,
+            free_memory_mb=95000.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane = LaneConfig(
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-big-model_70B", lane)  # noqa: SLF001
+    assert placed.gpu_devices == "1,2"
 
 
 @pytest.mark.asyncio

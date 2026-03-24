@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model_profiles=model_profiles,
         gpu_device_count=lambda: gpu_collector.device_count,
         per_gpu_vram_mb=lambda: gpu_collector.per_gpu_vram_mb,
+        gpu_snapshot=gpu_collector.get_snapshot,
     )
 
     if cfg.lanes:

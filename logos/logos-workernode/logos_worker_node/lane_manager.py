@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from itertools import combinations
 import logging
 import socket
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 
 from logos_worker_node.models import (
+    DeviceSummary,
     LaneAction,
     LaneApplyResult,
     LaneConfig,
@@ -34,6 +36,8 @@ _HOT_SWAP_TIMEOUT = 90  # seconds total for spawn + preload on new process
 _MAX_EVENT_LOG = 500    # max events kept in memory
 _HANDLE_DESTROY_TIMEOUT = 45
 _HANDLE_CLOSE_TIMEOUT = 10
+_GPU_PLACEMENT_HEADROOM_RATIO = 0.10
+_GPU_PLACEMENT_MIN_HEADROOM_MB = 1024.0
 
 
 class PortAllocator:
@@ -161,11 +165,13 @@ class LaneManager:
         model_profiles: ModelProfileRegistry | None = None,
         gpu_device_count: Callable[[], int] | None = None,
         per_gpu_vram_mb: Callable[[], float] | None = None,
+        gpu_snapshot: Callable[[], Awaitable[DeviceSummary]] | None = None,
     ) -> None:
         self._global_config = global_config
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
+        self._gpu_snapshot = gpu_snapshot
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -600,8 +606,215 @@ class LaneManager:
         )
         return new_config
 
+    @staticmethod
+    def _parse_gpu_selector(selector: str, allowed_indices: set[int] | None = None) -> list[int]:
+        raw = (selector or "").strip().replace(" ", "")
+        lowered = raw.lower()
+        if lowered in {"", "all"}:
+            if allowed_indices is None:
+                return []
+            return sorted(allowed_indices)
+        if lowered == "none":
+            return []
+
+        result: list[int] = []
+        for part in raw.split(","):
+            if not part.isdigit():
+                continue
+            index = int(part)
+            if allowed_indices is not None and index not in allowed_indices:
+                continue
+            result.append(index)
+        return result
+
+    def _estimate_lane_vram_mb(self, lane_config: LaneConfig) -> float:
+        """Estimate total lane VRAM footprint for placement decisions."""
+        if self._model_profiles is None:
+            return 0.0
+
+        profile = self._model_profiles.get_profile(lane_config.model)
+        if profile is None:
+            return 0.0
+
+        if not lane_config.vllm:
+            if profile.loaded_vram_mb and profile.loaded_vram_mb > 0:
+                return float(profile.loaded_vram_mb)
+            estimated = profile.estimate_vram_mb()
+            return float(estimated) if estimated > 0 else 0.0
+
+        base_mb = float(profile.base_residency_mb or profile.estimate_base_residency_mb(lane_config.model) or 0.0)
+        kv_mb = 0.0
+        if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
+            kv_mb = self._parse_memory_to_mb(lane_config.vllm_config.kv_cache_memory_bytes)
+        elif profile.kv_budget_mb and profile.kv_budget_mb > 0:
+            kv_mb = float(profile.kv_budget_mb)
+        elif profile.loaded_vram_mb and profile.loaded_vram_mb > 0 and base_mb > 0:
+            kv_mb = max(float(profile.loaded_vram_mb) - base_mb, 0.0)
+        elif base_mb > 0:
+            kv_mb = base_mb * 0.35
+
+        total_mb = base_mb + kv_mb
+        if total_mb > 0:
+            return total_mb
+        if profile.loaded_vram_mb and profile.loaded_vram_mb > 0:
+            return float(profile.loaded_vram_mb)
+        return 0.0
+
+    @staticmethod
+    def _parse_memory_to_mb(value: str) -> float:
+        raw = (value or "").strip().upper()
+        if not raw:
+            return 0.0
+        if raw.endswith("G"):
+            return float(raw[:-1]) * 1024.0
+        if raw.endswith("M"):
+            return float(raw[:-1])
+        if raw.endswith("K"):
+            return float(raw[:-1]) / 1024.0
+        return float(raw) / (1024.0 * 1024.0)
+
+    @staticmethod
+    def _pick_best_gpu_subset(
+        device_rows: list[dict[str, float]],
+        tp_size: int,
+        per_gpu_required_mb: float,
+        headroom_mb: float,
+    ) -> list[int] | None:
+        feasible = [
+            row for row in device_rows
+            if float(row["free_mb"]) >= per_gpu_required_mb + headroom_mb
+        ]
+        if len(feasible) < tp_size:
+            return None
+
+        best_indices: list[int] | None = None
+        best_score: tuple[float, float, float, tuple[int, ...]] | None = None
+        for combo in combinations(feasible, tp_size):
+            indices = tuple(sorted(int(row["index"]) for row in combo))
+            leftover = sum(float(row["free_mb"]) - per_gpu_required_mb for row in combo)
+            utilization = sum(float(row["utilization"]) for row in combo)
+            widest_free = max(float(row["free_mb"]) for row in combo)
+            score = (leftover, utilization, widest_free, indices)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_indices = list(indices)
+        return best_indices
+
+    async def _auto_place_gpu_devices(self, lane_id: str, lane_config: LaneConfig) -> LaneConfig:
+        """Pick an explicit GPU set for auto-managed vLLM lanes.
+
+        Strategy:
+        - Respect explicit lane gpu_devices.
+        - Preserve the current placement when it still fits.
+        - Otherwise choose the smallest feasible GPU subset by free-memory
+          leftover (best fit) within the worker's allowed GPU pool.
+        """
+        if not lane_config.vllm or lane_config.vllm_config is None:
+            return lane_config
+        if lane_config.gpu_devices:
+            return lane_config
+        if self._gpu_snapshot is None:
+            return lane_config
+
+        try:
+            snapshot = await self._gpu_snapshot()
+        except Exception:
+            logger.debug("Auto-placement: failed to read GPU snapshot for lane '%s'", lane_id, exc_info=True)
+            return lane_config
+
+        if not snapshot.nvidia_smi_available:
+            return lane_config
+
+        device_rows: list[dict[str, float]] = []
+        for fallback_index, device in enumerate(snapshot.devices):
+            if device.kind != "nvidia":
+                continue
+            raw_index = device.extra.get("index", fallback_index)
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                index = fallback_index
+            device_rows.append(
+                {
+                    "index": float(index),
+                    "free_mb": float(device.memory_free_mb or 0.0),
+                    "utilization": float(device.utilization_percent or 0.0),
+                }
+            )
+        if not device_rows:
+            return lane_config
+
+        available_indices = {int(row["index"]) for row in device_rows}
+        allowed_indices = self._parse_gpu_selector(self._global_config.gpu_devices, available_indices)
+        if not allowed_indices:
+            return lane_config
+
+        allowed_rows = [row for row in device_rows if int(row["index"]) in set(allowed_indices)]
+        tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
+        if len(allowed_rows) < tp_size:
+            logger.warning(
+                "Auto-placement skipped for lane '%s': only %d allowed GPU(s) for tp=%d",
+                lane_id, len(allowed_rows), tp_size,
+            )
+            return lane_config
+
+        required_total_mb = self._estimate_lane_vram_mb(lane_config)
+        if required_total_mb <= 0:
+            logger.debug(
+                "Auto-placement skipped for lane '%s' model=%s: no VRAM estimate available",
+                lane_id, lane_config.model,
+            )
+            return lane_config
+
+        per_gpu_required_mb = required_total_mb / float(tp_size)
+        headroom_mb = max(
+            _GPU_PLACEMENT_MIN_HEADROOM_MB,
+            per_gpu_required_mb * _GPU_PLACEMENT_HEADROOM_RATIO,
+        )
+
+        current_handle = self._handles.get(lane_id)
+        current_selector = ""
+        if current_handle is not None and current_handle.lane_config is not None:
+            current_selector = current_handle.lane_config.gpu_devices
+        sticky_indices = self._parse_gpu_selector(current_selector, available_indices)
+        selected_indices: list[int] | None = None
+        if len(sticky_indices) == tp_size:
+            sticky_rows = [
+                row for row in allowed_rows if int(row["index"]) in set(sticky_indices)
+            ]
+            if len(sticky_rows) == tp_size and all(
+                float(row["free_mb"]) >= per_gpu_required_mb + headroom_mb
+                for row in sticky_rows
+            ):
+                selected_indices = sorted(sticky_indices)
+
+        if selected_indices is None:
+            selected_indices = self._pick_best_gpu_subset(
+                allowed_rows,
+                tp_size,
+                per_gpu_required_mb,
+                headroom_mb,
+            )
+        if selected_indices is None:
+            logger.warning(
+                "Auto-placement found no feasible GPU subset for lane '%s' model=%s "
+                "(required≈%.0fMB total, tp=%d, headroom≈%.0fMB)",
+                lane_id, lane_config.model, required_total_mb, tp_size, headroom_mb,
+            )
+            return lane_config
+
+        selector = ",".join(str(index) for index in selected_indices)
+        logger.info(
+            "Auto-placement lane '%s' model=%s: gpu_devices=%s "
+            "(required≈%.0fMB total, %.0fMB/GPU, tp=%d)",
+            lane_id, lane_config.model, selector,
+            required_total_mb, per_gpu_required_mb, tp_size,
+        )
+        return lane_config.model_copy(update={"gpu_devices": selector})
+
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
         lane_config = self._auto_tensor_parallel(lane_config)
+        lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)
         handle = _create_handle(lane_id, port, self._global_config, lane_config)
         try:
@@ -680,6 +893,8 @@ class LaneManager:
                     lane_id,
                     exc_info=True,
                 )
+
+        new_config = await self._auto_place_gpu_devices(lane_id, new_config)
 
         # Allocate a temporary port for the new process
         temp_id = f"_swap_{lane_id}"

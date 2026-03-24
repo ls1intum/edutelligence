@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi import FastAPI
 
 import logos_worker_node.main as worker_main
-from logos_worker_node.models import AppConfig, LaneConfig, VllmConfig
+from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, VllmConfig
 
 
 class _FakeGpuCollector:
     def __init__(self, poll_interval: int) -> None:  # noqa: ARG002
         self.available = False
+        self.device_count = 0
+        self.per_gpu_vram_mb = 0.0
         self.stopped = False
 
     async def start(self) -> None:
@@ -17,6 +21,13 @@ class _FakeGpuCollector:
 
     async def stop(self) -> None:
         self.stopped = True
+
+    async def get_snapshot(self) -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="none",
+            nvidia_smi_available=False,
+        )
 
 
 @pytest.mark.asyncio

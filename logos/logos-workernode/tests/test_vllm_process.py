@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -317,6 +318,59 @@ def test_build_env_nccl_safety_respects_explicit_disable_nccl_p2p(monkeypatch) -
     monkeypatch.delenv("HF_HOME", raising=False)
     env = handle._build_env(lane)
     assert env["NCCL_P2P_DISABLE"] == "1"
+
+
+def test_build_process_env_scrubs_inherited_distributed_vars_for_all_gpus(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("RANK", "1")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    monkeypatch.setenv("MASTER_PORT", "29500")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+    env = handle._build_env(lane)
+    process_env = handle._build_process_env(lane, env, ["/tmp/vllm", "serve"])
+    expected_prefix = str(Path("/tmp/vllm").resolve().parent)
+
+    assert "LOCAL_RANK" not in process_env
+    assert "RANK" not in process_env
+    assert "WORLD_SIZE" not in process_env
+    assert "MASTER_ADDR" not in process_env
+    assert "MASTER_PORT" not in process_env
+    assert "CUDA_VISIBLE_DEVICES" not in process_env
+    assert process_env["PATH"] == f"{expected_prefix}{os.pathsep}/usr/bin"
+
+
+def test_build_process_env_keeps_explicit_gpu_pin(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices="0",
+        vllm_config=VllmConfig(),
+    )
+
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+    env = handle._build_env(lane)
+    process_env = handle._build_process_env(lane, env, ["/tmp/vllm", "serve"])
+    expected_prefix = str(Path("/tmp/vllm").resolve().parent)
+
+    assert "LOCAL_RANK" not in process_env
+    assert process_env["CUDA_VISIBLE_DEVICES"] == "0"
+    assert process_env["PATH"] == f"{expected_prefix}{os.pathsep}/usr/bin"
 
 
 @pytest.mark.asyncio
