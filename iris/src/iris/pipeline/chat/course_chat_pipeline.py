@@ -245,7 +245,10 @@ class CourseChatPipeline(
             user_language = "en"
             if state.dto.user and state.dto.user.lang_key:
                 user_language = state.dto.user.lang_key
-            lecture_content, _ = self._retrieve_lecture_content_for_mcq(state)
+            lecture_content, lecture_units_meta = (
+                self._retrieve_lecture_content_for_mcq(state)
+            )
+            setattr(state, "mcq_lecture_units_meta", lecture_units_meta)
             tool_list.append(
                 create_tool_generate_mcq_questions(
                     self.mcq_pipeline,
@@ -618,6 +621,8 @@ class CourseChatPipeline(
             mcq_storage = getattr(state, "mcq_result_storage", {})
             if mcq_storage.get("mcq_json"):
                 mcq_json = mcq_storage["mcq_json"]
+                lecture_units_meta = getattr(state, "mcq_lecture_units_meta", [])
+                mcq_json = self._add_mcq_citations(mcq_json, lecture_units_meta)
                 if "[MCQ_RESULT]" in state.result:
                     state.result = state.result.replace("[MCQ_RESULT]", mcq_json)
                 else:
