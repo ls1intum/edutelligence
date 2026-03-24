@@ -134,16 +134,20 @@ async def test_registry_command_roundtrip():
     assert ticket is not None
     ws = _FakeWebSocket()
     await registry.attach_session(ticket, ws)
+    session = await registry._get_session(9)  # noqa: SLF001
+    assert session is not None
 
     task = asyncio.create_task(
         registry.send_command(9, "get_status", {}, timeout_seconds=3)
     )
     await asyncio.sleep(0)
     assert len(ws.sent) == 1
+    session.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=120)
     cmd_id = ws.sent[0]["cmd_id"]
     await registry.on_command_result(9, {"cmd_id": cmd_id, "success": True, "result": {"ok": True}})
     result = await task
     assert result == {"ok": True}
+    assert session.is_stale(30) is False
 
 
 @pytest.mark.asyncio

@@ -5,10 +5,27 @@ import torch
 import pickle
 import os
 
+try:
+    from huggingface_hub.utils import disable_progress_bars as hf_disable_progress_bars
+except ImportError:  # pragma: no cover
+    hf_disable_progress_bars = None
+
+try:
+    from transformers.utils import logging as transformers_logging
+except ImportError:  # pragma: no cover
+    transformers_logging = None
+
 
 # noinspection PyTypeChecker
 class LauraEmbeddingClassifier:
     def __init__(self, model_name="all-MiniLM-L6-v2", db_path="laura_embeddings.pkl", allowed=None):
+        if hf_disable_progress_bars is not None:
+            hf_disable_progress_bars()
+        if transformers_logging is not None:
+            transformers_logging.set_verbosity_error()
+            disable_progress = getattr(transformers_logging, "disable_progress_bar", None)
+            if callable(disable_progress):
+                disable_progress()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = SentenceTransformer(model_name, device=str(self.device))
         self.db_path = db_path
@@ -34,7 +51,12 @@ class LauraEmbeddingClassifier:
         # Model descriptions can come from nullable DB fields; treat missing text as empty input.
         normalized = text.strip() if isinstance(text, str) else ""
         full_text = f"{prefix} {normalized}".strip()
-        embedding = self.model.encode(full_text, convert_to_tensor=True, normalize_embeddings=True)
+        embedding = self.model.encode(
+            full_text,
+            convert_to_tensor=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
         return embedding
 
     def register_model(self, model_id: str, description: str):

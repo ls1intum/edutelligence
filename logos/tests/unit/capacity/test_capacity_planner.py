@@ -67,10 +67,17 @@ class MockFacade:
 class MockRegistry:
     def __init__(self):
         self.commands_sent = []
-        self._snapshot = None
+        self._snapshot = {"runtime": {"lanes": []}}
 
     async def send_command(self, provider_id, action, params=None, timeout_seconds=20):
-        self.commands_sent.append({"provider_id": provider_id, "action": action, "params": params})
+        self.commands_sent.append(
+            {
+                "provider_id": provider_id,
+                "action": action,
+                "params": params,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
         return {"success": True}
 
     def peek_runtime_snapshot(self, provider_id):
@@ -244,7 +251,9 @@ def test_demand_load_new_model():
     for _ in range(3):
         demand.record_request("model-b")  # score=3.0 > DEMAND_LOAD_THRESHOLD
 
-    planner = _make_planner(facade=MockFacade(lanes=[]), demand=demand)
+    registry = MockRegistry()
+    registry._snapshot = {"runtime": {"lanes": []}}
+    planner = _make_planner(facade=MockFacade(lanes=[]), registry=registry, demand=demand)
     actions = planner._compute_demand_actions(10, [])
     assert len(actions) == 1
     assert actions[0].action == "load"
@@ -259,7 +268,43 @@ def test_demand_below_threshold_no_action():
     for _ in range(50):
         demand.decay_all()
 
-    planner = _make_planner(demand=demand)
+    registry = MockRegistry()
+    registry._snapshot = {"runtime": {"lanes": []}}
+    planner = _make_planner(registry=registry, demand=demand)
+    actions = planner._compute_demand_actions(10, [])
+    assert actions == []
+
+
+def test_demand_actions_skip_offline_provider():
+    """No load actions should be emitted for a provider without an active worker snapshot."""
+    demand = DemandTracker()
+    for _ in range(3):
+        demand.record_request("model-b")
+
+    registry = MockRegistry()
+    registry._snapshot = None
+    planner = _make_planner(facade=MockFacade(lanes=[]), registry=registry, demand=demand)
+    actions = planner._compute_demand_actions(10, [])
+    assert actions == []
+
+
+def test_demand_actions_respect_worker_capabilities():
+    """Demanded models outside the worker capability set must not get load actions."""
+    demand = DemandTracker()
+    for _ in range(3):
+        demand.record_request("logosnode")
+
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {"lanes": []},
+        "capabilities_models": ["Qwen/Qwen2.5-0.5B-Instruct"],
+    }
+    facade = MockFacade(
+        lanes=[],
+        capabilities=["Qwen/Qwen2.5-0.5B-Instruct"],
+    )
+    planner = _make_planner(facade=facade, registry=registry, demand=demand)
+
     actions = planner._compute_demand_actions(10, [])
     assert actions == []
 
@@ -876,6 +921,112 @@ async def test_wake_confirmation_resets_idle_timer_and_clears_sleep_tracking():
     planner._update_idle_tracking(10, [lane])
     actions = planner._compute_idle_actions(10, [lane])
     assert actions == []
+
+
+@pytest.mark.asyncio
+async def test_wake_command_uses_full_timeout_budget():
+    """Wake actions should not be capped to the generic 30s control timeout."""
+    from logos.sdi.models import CapacityPlanAction
+
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [
+                {"lane_id": "lane-1", "runtime_state": "loaded", "sleep_state": "awake"},
+            ],
+        },
+    }
+    planner = _make_planner(registry=registry)
+
+    action = CapacityPlanAction(
+        action="wake", provider_id=10, lane_id="lane-1",
+        model_name="model-a", reason="test",
+    )
+
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=120.0)
+    assert result is True
+    assert registry.commands_sent[-1]["action"] == "wake_lane"
+    assert registry.commands_sent[-1]["timeout_seconds"] == 120
+
+
+@pytest.mark.asyncio
+async def test_load_confirmation_preserves_existing_lanes_in_apply_payload():
+    """Load should send the full desired lane set, not a single-lane replacement."""
+    from logos.sdi.models import CapacityPlanAction
+
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [
+                {
+                    "lane_id": "planner-Qwen_Qwen2.5-0.5B-Instruct",
+                    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "runtime_state": "sleeping",
+                    "sleep_state": "sleeping",
+                    "lane_config": {
+                        "lane_id": "planner-Qwen_Qwen2.5-0.5B-Instruct",
+                        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+                        "vllm": True,
+                        "gpu_devices": "0",
+                        "vllm_config": {
+                            "enable_sleep_mode": True,
+                            "server_dev_mode": True,
+                        },
+                    },
+                },
+                {
+                    "lane_id": "planner-Qwen_Qwen2.5-Coder-7B-Instruct",
+                    "model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+                    "runtime_state": "loaded",
+                    "sleep_state": "awake",
+                },
+            ],
+        },
+    }
+    planner = _make_planner(registry=registry)
+    planner._poll_confirmation = AsyncMock(return_value=True)
+
+    action = CapacityPlanAction(
+        action="load",
+        provider_id=10,
+        lane_id="planner-Qwen_Qwen2.5-Coder-7B-Instruct",
+        model_name="Qwen/Qwen2.5-Coder-7B-Instruct",
+        params={
+            "vllm": True,
+            "gpu_devices": "0,1",
+            "vllm_config": {
+                "enable_sleep_mode": True,
+                "server_dev_mode": True,
+                "tensor_parallel_size": 2,
+            },
+        },
+        reason="Request-time cold load",
+    )
+
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
+
+    assert result is True
+    assert len(registry.commands_sent) == 1
+    assert registry.commands_sent[0]["action"] == "apply_lanes"
+
+    lanes = registry.commands_sent[0]["params"]["lanes"]
+    lane_ids = {lane["lane_id"] for lane in lanes}
+    assert lane_ids == {
+        "planner-Qwen_Qwen2.5-0.5B-Instruct",
+        "planner-Qwen_Qwen2.5-Coder-7B-Instruct",
+    }
+
+    preserved_lane = next(
+        lane for lane in lanes if lane["lane_id"] == "planner-Qwen_Qwen2.5-0.5B-Instruct"
+    )
+    assert preserved_lane["model"] == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert preserved_lane["gpu_devices"] == "0"
+
+    new_lane = next(
+        lane for lane in lanes if lane["lane_id"] == "planner-Qwen_Qwen2.5-Coder-7B-Instruct"
+    )
+    assert new_lane["gpu_devices"] == "0,1"
+    assert new_lane["vllm_config"]["tensor_parallel_size"] == 2
 
 
 # ---------------------------------------------------------------------------

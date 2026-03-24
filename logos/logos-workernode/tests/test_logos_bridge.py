@@ -190,6 +190,60 @@ async def test_send_runtime_status_skips_unchanged_payload(monkeypatch):
     assert [payload["type"] for payload in sends] == ["status", "status"]
 
 
+@pytest.mark.asyncio
+async def test_send_heartbeat_uses_lightweight_payload():
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=13, shared_key="secret")
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_heartbeat(object())  # noqa: SLF001
+
+    assert len(sends) == 1
+    payload = sends[0]
+    assert payload["type"] == "heartbeat"
+    assert payload["provider_id"] == 13
+    assert payload["worker_id"] == client.worker_id
+    assert isinstance(payload.get("timestamp"), str)
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        provider_id=13,
+        shared_key="secret",
+        heartbeat_interval_seconds=1,
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    runtime_status = AsyncMock(side_effect=AssertionError("heartbeat should not build runtime status"))
+    monkeypatch.setattr("logos_worker_node.logos_bridge.build_runtime_status", runtime_status)
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+        client._stopping.set()
+
+    async def _fake_sleep(_seconds):
+        return None
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+    monkeypatch.setattr("logos_worker_node.logos_bridge.asyncio.sleep", _fake_sleep)
+
+    await client._heartbeat_loop(object())  # noqa: SLF001
+
+    assert [payload["type"] for payload in sends] == ["heartbeat"]
+    runtime_status.assert_not_awaited()
+
+
 def test_runtime_has_transient_lanes_uses_last_payload():
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
     client = LogosBridgeClient(_DummyApp(), cfg)

@@ -227,7 +227,7 @@ class LogosBridgeClient:
         interval = max(1, self._cfg.heartbeat_interval_seconds)
         while not self._stopping.is_set():
             await asyncio.sleep(interval)
-            await self._send_runtime_status(ws, force=True)
+            await self._send_heartbeat(ws)
 
     async def _status_refresh_loop(self, ws) -> None:
         lane_manager = self._app.state.lane_manager
@@ -307,6 +307,23 @@ class LogosBridgeClient:
             },
         )
         return True
+
+    async def _send_heartbeat(self, ws) -> None:
+        """Send a lightweight liveness heartbeat without runtime polling.
+
+        Heartbeats must stay cheap so the server does not mark the worker
+        session stale while expensive lane status collection is in progress,
+        e.g. during TP startup, torch.compile, or backend warmup.
+        """
+        await self._send_json(
+            ws,
+            {
+                "type": "heartbeat",
+                "provider_id": self._cfg.provider_id,
+                "worker_id": self.worker_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     async def _send_json(self, ws, payload: dict[str, Any]) -> None:
         async with self._send_lock:

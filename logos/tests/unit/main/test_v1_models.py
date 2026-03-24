@@ -213,6 +213,31 @@ async def test_retrieve_model_with_slashes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
+    """Planner-safe aliases with underscores resolve back to canonical model ids."""
+    canonical_model = "Qwen/Qwen2.5-0.5B-Instruct"
+    alias_model = "Qwen_Qwen2.5-0.5B-Instruct"
+    fake_models = [
+        {"id": 1, "name": canonical_model, "description": "Qwen 0.5B"},
+    ]
+    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+
+    with patch("logos.auth.authenticate_with_profile") as mock_auth:
+        from logos.auth import AuthContext
+        mock_auth.return_value = AuthContext(
+            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
+        )
+
+        response = await main.retrieve_model(alias_model, _make_request())
+
+    import json
+    data = json.loads(response.body)
+
+    assert data["id"] == canonical_model
+    assert data["object"] == "model"
+
+
+@pytest.mark.asyncio
 async def test_retrieve_model_auth_failure():
     """Missing/invalid key on retrieve returns 401."""
     with patch("logos.auth.authenticate_with_profile") as mock_auth:

@@ -13,17 +13,20 @@ from typing import Any, AsyncIterator
 import uuid
 
 from fastapi import WebSocket
+from logos.terminal_logging import (
+    BOLD,
+    CYAN,
+    DIM,
+    GREEN,
+    RED,
+    YELLOW,
+    format_state,
+    paint,
+    render_section,
+    wrap_plain,
+)
 
 logger = logging.getLogger(__name__)
-
-# ANSI color codes
-_GREEN = "\033[32m"
-_YELLOW = "\033[33m"
-_RED = "\033[31m"
-_CYAN = "\033[36m"
-_BOLD = "\033[1m"
-_DIM = "\033[2m"
-_RESET = "\033[0m"
 
 
 class LogosNodeOfflineError(RuntimeError):
@@ -103,6 +106,127 @@ def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _lane_gpu_devices(lane: dict[str, Any]) -> str:
+    lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+    return str(
+        lane_config.get("gpu_devices")
+        or lane.get("gpu_devices")
+        or lane.get("effective_gpu_devices")
+        or "-"
+    )
+
+
+def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
+    backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+    queue_waiting = _lane_metric_float(backend_metrics.get("queue_waiting"))
+    requests_running = _lane_metric_float(backend_metrics.get("requests_running"))
+    if requests_running <= 0:
+        requests_running = _lane_metric_float(lane.get("active_requests"))
+    cache_pressure = backend_metrics.get("gpu_cache_usage_percent")
+    if cache_pressure is None:
+        cache_pressure = backend_metrics.get("gpu_cache_usage_perc")
+    prefix_hit = _lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+    ttft_p95 = _lane_ttft_p95_seconds(backend_metrics)
+
+    return {
+        "lane_id": str(lane.get("lane_id") or "?"),
+        "model": str(lane.get("model") or "?"),
+        "runtime_state": str(lane.get("runtime_state") or "?"),
+        "sleep_state": str(lane.get("sleep_state") or "?"),
+        "active_requests": int(lane.get("active_requests", 0) or 0),
+        "effective_vram_mb": round(float(lane.get("effective_vram_mb", 0.0) or 0.0), 1),
+        "queue_waiting": round(queue_waiting, 1),
+        "requests_running": round(requests_running, 1),
+        "gpu_cache_usage_percent": (
+            round(float(cache_pressure), 1) if cache_pressure is not None else None
+        ),
+        "prefix_cache_hit_rate": round(prefix_hit, 3) if prefix_hit is not None else None,
+        "ttft_p95_seconds": round(ttft_p95, 3) if ttft_p95 is not None else None,
+        "gpu_devices": _lane_gpu_devices(lane),
+    }
+
+
+def _format_optional_float(value: Any, suffix: str = "") -> str:
+    if value is None:
+        return "--"
+    return f"{value}{suffix}"
+
+
+def _render_lane_summary(snapshot: dict[str, Any], *, indent: str = "    ") -> list[str]:
+    state_text = format_state(snapshot["runtime_state"], snapshot["sleep_state"])
+    queue_text = _format_optional_float(snapshot.get("queue_waiting"))
+    running_text = _format_optional_float(snapshot.get("requests_running"))
+    cache_text = _format_optional_float(snapshot.get("gpu_cache_usage_percent"), "%")
+    ttft_text = _format_optional_float(snapshot.get("ttft_p95_seconds"), "s")
+    prefix_text = _format_optional_float(snapshot.get("prefix_cache_hit_rate"))
+
+    lines = wrap_plain(f"model: {snapshot['model']}", indent=indent)
+    lines.append(
+        f"{indent}state={state_text} mem={snapshot['effective_vram_mb']:.0f}MB gpus={snapshot['gpu_devices']}"
+    )
+    lines.append(
+        f"{indent}active={snapshot['active_requests']} run={running_text} "
+        f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
+    )
+    return lines
+
+
+def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str = "    ") -> list[str]:
+    lines: list[str] = []
+
+    def _append_change(label: str, old_value: str, new_value: str) -> None:
+        lines.append(f"{indent}{paint(label, DIM)}: {old_value} {paint('→', YELLOW)} {new_value}")
+
+    if old.get("model") != new.get("model"):
+        _append_change("model", str(old.get("model")), str(new.get("model")))
+
+    old_state = f"{old.get('runtime_state')} / {old.get('sleep_state')}"
+    new_state = format_state(str(new.get("runtime_state")), str(new.get("sleep_state")))
+    if (old.get("runtime_state"), old.get("sleep_state")) != (
+        new.get("runtime_state"), new.get("sleep_state")
+    ):
+        _append_change("state", old_state, new_state)
+
+    if old.get("active_requests") != new.get("active_requests"):
+        _append_change("active", str(old.get("active_requests")), str(new.get("active_requests")))
+    if old.get("effective_vram_mb") != new.get("effective_vram_mb"):
+        _append_change(
+            "mem",
+            f"{old.get('effective_vram_mb', 0):.0f}MB",
+            f"{new.get('effective_vram_mb', 0):.0f}MB",
+        )
+    if old.get("queue_waiting") != new.get("queue_waiting"):
+        _append_change(
+            "queue",
+            _format_optional_float(old.get("queue_waiting")),
+            _format_optional_float(new.get("queue_waiting")),
+        )
+    if old.get("requests_running") != new.get("requests_running"):
+        _append_change(
+            "running",
+            _format_optional_float(old.get("requests_running")),
+            _format_optional_float(new.get("requests_running")),
+        )
+    if old.get("gpu_cache_usage_percent") != new.get("gpu_cache_usage_percent"):
+        _append_change(
+            "kv_cache",
+            _format_optional_float(old.get("gpu_cache_usage_percent"), "%"),
+            _format_optional_float(new.get("gpu_cache_usage_percent"), "%"),
+        )
+    if old.get("ttft_p95_seconds") != new.get("ttft_p95_seconds"):
+        _append_change(
+            "ttft_p95",
+            _format_optional_float(old.get("ttft_p95_seconds"), "s"),
+            _format_optional_float(new.get("ttft_p95_seconds"), "s"),
+        )
+    if old.get("gpu_devices") != new.get("gpu_devices"):
+        _append_change("gpus", str(old.get("gpu_devices")), str(new.get("gpu_devices")))
+
+    if not lines:
+        lines.append(f"{indent}{paint('no tracked field changes', DIM)}")
+    return lines
+
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -143,6 +267,98 @@ class LogosNodeRuntimeRegistry:
         self._lock = asyncio.Lock()
         self._recent_sample_window = timedelta(hours=1)
         self._recent_sample_max = 5000
+        self._diag_log_cooldowns: dict[tuple[str, int], datetime] = {}
+
+    def _session_diagnostic_lines(
+        self,
+        session: ProviderSession,
+        *,
+        headline: str,
+        stale_after_seconds: int | None = None,
+        command_action: str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> list[str]:
+        now = _utc_now()
+        heartbeat_age_s = max(0.0, (now - session.last_heartbeat).total_seconds())
+        status = "stale" if stale_after_seconds is not None and heartbeat_age_s > stale_after_seconds else "active"
+        status_color = RED if status == "stale" else GREEN
+
+        lines = [
+            f"provider={session.provider_id} worker={paint(session.worker_id, BOLD)} status={paint(status, status_color, BOLD)}",
+            f"  reason: {headline}",
+            f"  heartbeat_age={heartbeat_age_s:.1f}s last_heartbeat={session.last_heartbeat.isoformat()}",
+            f"  pending_commands={len(session.pending_commands)} pending_streams={len(session.pending_streams)}",
+        ]
+        if stale_after_seconds is not None:
+            lines.append(f"  stale_after={stale_after_seconds}s")
+        if command_action is not None:
+            timeout_text = f" timeout={timeout_seconds}s" if timeout_seconds is not None else ""
+            lines.append(f"  command={command_action}{timeout_text}")
+
+        runtime = session.latest_runtime if isinstance(session.latest_runtime, dict) else {}
+        lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
+        capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+        lane_count = len(lanes)
+        loaded_count = int(capacity.get("loaded_lane_count", 0) or 0)
+        sleeping_count = int(capacity.get("sleeping_lane_count", 0) or 0)
+        active_requests = int(capacity.get("active_requests", 0) or 0)
+        lines.append(
+            f"  lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} active_requests={active_requests}"
+        )
+
+        if session.capabilities_models:
+            capabilities_text = ", ".join(sorted(session.capabilities_models))
+            lines.extend(wrap_plain(f"capabilities: {capabilities_text}", indent="  "))
+
+        for lane in sorted(
+            (
+                _lane_log_snapshot(lane)
+                for lane in lanes
+                if isinstance(lane, dict)
+            ),
+            key=_lane_sort_key,
+        )[:3]:
+            lines.append(f"  ▸ {paint(lane['lane_id'], BOLD)}")
+            lines.extend(_render_lane_summary(lane, indent="    "))
+
+        if lane_count > 3:
+            lines.append(f"  {paint(f'+{lane_count - 3} more lane(s)', DIM)}")
+        return lines
+
+    def _emit_session_diagnostic(
+        self,
+        *,
+        kind: str,
+        session: ProviderSession,
+        title: str,
+        headline: str,
+        accent: str,
+        level: int = logging.WARNING,
+        stale_after_seconds: int | None = None,
+        command_action: str | None = None,
+        timeout_seconds: int | None = None,
+        cooldown_seconds: float = 15.0,
+    ) -> None:
+        now = _utc_now()
+        key = (kind, session.provider_id)
+        last = self._diag_log_cooldowns.get(key)
+        if last is not None and (now - last).total_seconds() < cooldown_seconds:
+            return
+        self._diag_log_cooldowns[key] = now
+        logger.log(
+            level,
+            render_section(
+                title,
+                self._session_diagnostic_lines(
+                    session,
+                    headline=headline,
+                    stale_after_seconds=stale_after_seconds,
+                    command_action=command_action,
+                    timeout_seconds=timeout_seconds,
+                ),
+                accent=accent,
+            ),
+        )
 
     async def issue_ticket(
         self,
@@ -189,24 +405,39 @@ class LogosNodeRuntimeRegistry:
                 )
             self._sessions[ticket.provider_id] = session
         if old is not None:
+            body_lines = [
+                f"provider={ticket.provider_id} worker={paint(ticket.worker_id, BOLD)} status={paint('reconnected', YELLOW, BOLD)}",
+                *wrap_plain(
+                    "capabilities: " + (", ".join(sorted(ticket.capabilities_models)) or "none"),
+                    indent="  ",
+                ),
+                "  previous session replaced",
+                f"  {paint(f'active sessions: {len(self._sessions)}', DIM)}",
+            ]
             logger.info(
-                "%s●● WORKER RECONNECTED%s provider=%s worker=%s capabilities=%s "
-                "(replaced old session)",
-                _YELLOW + _BOLD, _RESET, ticket.provider_id,
-                ticket.worker_id, sorted(ticket.capabilities_models),
+                render_section(
+                    "Worker Session Update",
+                    body_lines,
+                    accent=YELLOW,
+                )
             )
             await self._close_session(old)
         else:
+            body_lines = [
+                f"provider={ticket.provider_id} worker={paint(ticket.worker_id, BOLD)} status={paint('connected', GREEN, BOLD)}",
+                *wrap_plain(
+                    "capabilities: " + (", ".join(sorted(ticket.capabilities_models)) or "none"),
+                    indent="  ",
+                ),
+                f"  {paint(f'active sessions: {len(self._sessions)}', DIM)}",
+            ]
             logger.info(
-                "%s●● WORKER CONNECTED%s provider=%s worker=%s capabilities=%s",
-                _GREEN + _BOLD, _RESET, ticket.provider_id,
-                ticket.worker_id, sorted(ticket.capabilities_models),
+                render_section(
+                    "Worker Session Update",
+                    body_lines,
+                    accent=GREEN,
+                )
             )
-        total = len(self._sessions)
-        logger.info(
-            "%sActive worker sessions: %d%s",
-            _DIM, total, _RESET,
-        )
         return session
 
     async def get_conflicting_session(
@@ -236,10 +467,15 @@ class LogosNodeRuntimeRegistry:
         pending_cmds = len(session.pending_commands)
         pending_streams = len(session.pending_streams)
         logger.warning(
-            "%s●● WORKER DISCONNECTED%s provider=%s worker=%s "
-            "(pending_commands=%d, pending_streams=%d, remaining_sessions=%d)",
-            _RED + _BOLD, _RESET, provider_id, session.worker_id,
-            pending_cmds, pending_streams, len(self._sessions),
+            render_section(
+                "Worker Session Update",
+                [
+                    f"provider={provider_id} worker={paint(session.worker_id, BOLD)} status={paint('disconnected', RED, BOLD)}",
+                    f"  pending_commands={pending_cmds} pending_streams={pending_streams}",
+                    f"  {paint(f'remaining sessions: {len(self._sessions)}', DIM)}",
+                ],
+                accent=RED,
+            )
         )
         for fut in list(session.pending_commands.values()):
             if not fut.done():
@@ -287,36 +523,56 @@ class LogosNodeRuntimeRegistry:
         if capabilities_models is not None:
             session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
 
-        # Detect lane state changes and log them
+        # Detect lane state and metric changes and log them as structured blocks.
         old_lanes = {
-            l.get("lane_id"): l.get("runtime_state")
-            for l in (old_runtime.get("lanes") or [])
-            if isinstance(l, dict)
+            snapshot["lane_id"]: snapshot
+            for snapshot in (
+                _lane_log_snapshot(l)
+                for l in (old_runtime.get("lanes") or [])
+                if isinstance(l, dict)
+            )
         }
         new_lanes = {
-            l.get("lane_id"): l.get("runtime_state")
-            for l in (runtime.get("lanes") or []) if isinstance(runtime, dict)
-            if isinstance(l, dict)
+            snapshot["lane_id"]: snapshot
+            for snapshot in (
+                _lane_log_snapshot(l)
+                for l in (runtime.get("lanes") or [])
+                if isinstance(runtime, dict) and isinstance(l, dict)
+            )
         }
         if old_lanes != new_lanes:
-            added = set(new_lanes) - set(old_lanes)
-            removed = set(old_lanes) - set(new_lanes)
-            changed = {
+            added = sorted(set(new_lanes) - set(old_lanes))
+            removed = sorted(set(old_lanes) - set(new_lanes))
+            changed = sorted(
                 lid for lid in set(old_lanes) & set(new_lanes)
                 if old_lanes[lid] != new_lanes[lid]
-            }
-            parts = []
+            )
+
+            body_lines: list[str] = [
+                f"provider={provider_id} worker={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"
+            ]
             for lid in added:
-                parts.append(f"{_GREEN}+{lid}({new_lanes[lid]}){_RESET}")
+                snapshot = new_lanes[lid]
+                body_lines.append(f"{paint('+', GREEN, BOLD)} {paint(lid, BOLD)} added")
+                body_lines.extend(_render_lane_summary(snapshot))
             for lid in removed:
-                parts.append(f"{_RED}-{lid}{_RESET}")
+                snapshot = old_lanes[lid]
+                body_lines.append(f"{paint('-', RED, BOLD)} {paint(lid, BOLD)} removed")
+                body_lines.extend(_render_lane_summary(snapshot))
             for lid in changed:
-                parts.append(f"{_YELLOW}{lid}: {old_lanes[lid]}→{new_lanes[lid]}{_RESET}")
-            if parts:
-                logger.info(
-                    "%s⚡ LANE CHANGE%s provider=%s: %s",
-                    _CYAN + _BOLD, _RESET, provider_id, " ".join(parts),
+                old_snapshot = old_lanes[lid]
+                new_snapshot = new_lanes[lid]
+                body_lines.append(f"{paint('~', YELLOW, BOLD)} {paint(lid, BOLD)} changed")
+                body_lines.extend(_render_lane_diff(old_snapshot, new_snapshot))
+                body_lines.extend(_render_lane_summary(new_snapshot))
+
+            logger.info(
+                render_section(
+                    "Lane Change",
+                    body_lines,
+                    accent=CYAN,
                 )
+            )
 
     async def record_runtime_sample(self, provider_id: int, sample: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
@@ -364,6 +620,7 @@ class LogosNodeRuntimeRegistry:
         session = await self._get_session(provider_id)
         if session is None:
             return
+        session.last_heartbeat = _utc_now()
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -445,6 +702,17 @@ class LogosNodeRuntimeRegistry:
             result = await asyncio.wait_for(fut, timeout=max(1, timeout_seconds))
         except asyncio.TimeoutError as exc:
             session.pending_commands.pop(cmd_id, None)
+            self._emit_session_diagnostic(
+                kind="command-timeout",
+                session=session,
+                title="Worker Command Timeout",
+                headline="worker did not answer before command timeout",
+                accent=RED,
+                level=logging.ERROR,
+                command_action=action,
+                timeout_seconds=int(max(1, timeout_seconds)),
+                cooldown_seconds=5.0,
+            )
             raise LogosNodeOfflineError("Command timeout waiting for worker response") from exc
 
         if not bool(result.get("success", False)):
@@ -570,6 +838,14 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             raise LogosNodeOfflineError("No active logosnode worker session")
         if session.is_stale(stale_after_seconds):
+            self._emit_session_diagnostic(
+                kind="session-stale",
+                session=session,
+                title="Worker Session Stale",
+                headline="server has not received a heartbeat in time",
+                accent=YELLOW,
+                stale_after_seconds=stale_after_seconds,
+            )
             raise LogosNodeOfflineError("logosnode worker session is stale")
         return session
 

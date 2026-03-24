@@ -121,6 +121,60 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     assert called["request_id"] is None
 
 
+async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
+    """Planner-safe underscore aliases resolve to canonical DB model names."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get_models_info(logos_key):  # noqa: ARG002
+            return [(32, "Qwen/Qwen2.5-0.5B-Instruct")]
+
+    called = {}
+
+    async def fake_resource_mode(  # noqa: ARG001
+        deployments,
+        body,
+        headers,
+        logos_key,
+        log_id,
+        is_async_job,
+        allowed_models_override=None,
+        profile_id=None,
+        request_id=None,
+    ):
+        called["deployments"] = deployments
+        called["body"] = body
+        called["allowed_models_override"] = allowed_models_override
+        return {"status": "resource"}
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
+
+    result = await main._execute_proxy_mode(
+        body={"model": "Qwen_Qwen2.5-0.5B-Instruct", "stream": True},
+        headers={"Authorization": "Bearer x"},
+        logos_key="lg-key",
+        deployments=[
+            {"model_id": 32, "provider_id": 13},
+            {"model_id": 99, "provider_id": 1},
+        ],
+        log_id=None,
+        is_async_job=False,
+        profile_id=1,
+    )
+
+    assert result == {"status": "resource"}
+    assert called["deployments"] == [{"model_id": 32, "provider_id": 13}]
+    assert called["body"]["model"] == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert called["allowed_models_override"] == [32]
+
+
 async def test_pipeline_releases_capacity_when_context_resolution_fails():
     """A scheduled reservation is released if context resolution fails afterwards."""
 

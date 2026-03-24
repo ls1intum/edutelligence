@@ -245,6 +245,37 @@ async def test_is_sleeping_parses_boolean_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wake_up_uses_extended_timeout() -> None:
+    class DummyResponse:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json() -> dict:
+            return {"ok": True}
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, float]] = []
+
+        async def post(self, url: str, timeout: float = 0.0):
+            self.calls.append((url, timeout))
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._lane_config = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    client = DummyClient()
+    handle._http = client  # type: ignore[assignment]
+
+    assert await handle.wake_up() == {"ok": True}
+    assert client.calls == [("http://127.0.0.1:19000/wake_up", 120.0)]
+
+
+@pytest.mark.asyncio
 async def test_get_backend_metrics_parses_labeled_prometheus_lines() -> None:
     class DummyResponse:
         status_code = 200

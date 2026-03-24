@@ -352,7 +352,7 @@ class VllmProcessHandle:
         self._ensure_sleep_mode_ready()
         url = f"{self._base_url()}/wake_up"
         try:
-            resp = await self._http.post(url, timeout=30.0)
+            resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
             raise RuntimeError(f"[{self.lane_id}] Failed to call vLLM /wake_up: {exc}") from exc
 

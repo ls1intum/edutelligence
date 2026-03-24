@@ -8,6 +8,8 @@ via LOGOS_CAPACITY_PLANNER_ENABLED=false.
 """
 
 import asyncio
+import copy
+from datetime import datetime, timezone
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -15,22 +17,24 @@ from typing import Any, Dict, List, Optional
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.models import CapacityPlanAction, LaneSchedulerSignals, ModelProfile
+from logos.terminal_logging import (
+    BOLD,
+    CYAN,
+    DIM,
+    GREEN,
+    RED,
+    YELLOW,
+    format_state,
+    lane_metric_float,
+    lane_ttft_p95_seconds,
+    paint,
+    render_section,
+    wrap_plain,
+)
 
 from .demand_tracker import DemandTracker
 
 logger = logging.getLogger(__name__)
-
-# ANSI color codes for structured log output
-_GREEN = "\033[32m"
-_YELLOW = "\033[33m"
-_RED = "\033[31m"
-_CYAN = "\033[36m"
-_BOLD = "\033[1m"
-_DIM = "\033[2m"
-_RESET = "\033[0m"
-
-# How often to print a full cluster summary (every N cycles)
-_SUMMARY_EVERY_N_CYCLES = 5
 
 
 class CapacityPlanner:
@@ -69,6 +73,9 @@ class CapacityPlanner:
     # Preemptive load-then-sleep
     PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO = 0.20
     PREEMPTIVE_SLEEP_MAX_MODELS = 3
+
+    # Slow-path request preparation
+    REQUEST_WAKE_TIMEOUT_SECONDS = 120.0
 
     def __init__(
         self,
@@ -123,31 +130,13 @@ class CapacityPlanner:
         all_actions: List[CapacityPlanAction] = []
 
         provider_ids = self._facade.provider_ids()
-        is_summary_cycle = (self._cycle_count % _SUMMARY_EVERY_N_CYCLES == 0)
-
-        # Periodic cluster summary
-        if is_summary_cycle:
-            self._log_cluster_summary(provider_ids)
+        self._log_cluster_summary(provider_ids)
 
         for provider_id in provider_ids:
             try:
                 lanes = self._facade.get_all_provider_lane_signals(provider_id)
             except Exception:
-                if is_summary_cycle:
-                    logger.info(
-                        "  %s⊘ provider=%s OFFLINE%s", _RED, provider_id, _RESET,
-                    )
                 continue
-
-            if lanes:
-                logger.info(
-                    "Planner cycle %d: provider=%s lane_count=%d [%s]",
-                    self._cycle_count, provider_id, len(lanes),
-                    ", ".join(
-                        f"{l.lane_id}({l.runtime_state}/{l.sleep_state} active={l.active_requests})"
-                        for l in lanes
-                    ),
-                )
 
             self._update_idle_tracking(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
@@ -156,16 +145,7 @@ class CapacityPlanner:
             all_actions.extend(self._compute_preemptive_sleep_actions(provider_id, lanes))
 
         if all_actions:
-            logger.info(
-                "%s═══ Planner cycle %d: %d actions ═══%s",
-                _CYAN + _BOLD, self._cycle_count, len(all_actions), _RESET,
-            )
-            for a in all_actions:
-                logger.info(
-                    "  %s→ %s%s %s on provider=%s lane=%s — %s",
-                    _YELLOW, a.action, _RESET, a.model_name,
-                    a.provider_id, a.lane_id, a.reason,
-                )
+            self._log_action_plan(all_actions)
 
         validated = self._validate_vram_budget(all_actions)
 
@@ -179,75 +159,170 @@ class CapacityPlanner:
                 )
 
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
-        """Print a periodic colored cluster overview."""
-        lines = [
-            f"{_BOLD}{_CYAN}══════ CLUSTER STATUS (cycle {self._cycle_count}) ══════{_RESET}",
-        ]
-
-        # Connected workers
+        """Print a colored cluster overview for the current planner cycle."""
+        lines: list[str] = []
         connected = 0
         for pid in provider_ids:
             snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
             if snap is None:
-                lines.append(f"  {_RED}⊘{_RESET} provider={pid} {_DIM}(no session){_RESET}")
+                lines.append(f"{paint('⊘', RED)} provider={pid} {paint('offline', DIM)}")
                 continue
+
             connected += 1
             rt = snap.get("runtime") or {}
             worker_id = snap.get("worker_id", "?")
-            caps = snap.get("capabilities_models") or []
+            caps = sorted(snap.get("capabilities_models") or [])
             cap = rt.get("capacity") or {}
             lanes_list = rt.get("lanes") or []
-            profiles = rt.get("model_profiles") or {}
             total_vram = (rt.get("devices") or {}).get("total_memory_mb", 0)
             free_vram = cap.get("free_memory_mb", 0)
             used_pct = ((total_vram - free_vram) / total_vram * 100) if total_vram > 0 else 0
+            heartbeat_age_s = self._heartbeat_age_seconds(snap.get("last_heartbeat"))
+            worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
 
             lines.append(
-                f"  {_GREEN}●{_RESET} provider={pid} worker={_BOLD}{worker_id}{_RESET} "
-                f"lanes={cap.get('lane_count', 0)} "
-                f"({cap.get('loaded_lane_count', 0)} loaded, "
-                f"{cap.get('sleeping_lane_count', 0)} sleeping) "
-                f"VRAM={_BOLD}{total_vram - free_vram:.0f}{_RESET}/{total_vram:.0f}MB "
-                f"({used_pct:.0f}%) capabilities={caps}"
+                f"{paint('●', worker_color)} provider={pid} worker={paint(str(worker_id), BOLD)} "
+                f"status={paint('active', worker_color)} hb={heartbeat_age_s:.0f}s "
+                f"vram={paint(f'{total_vram - free_vram:.0f}/{total_vram:.0f}MB', BOLD)} ({used_pct:.0f}%)"
             )
-            for lane in lanes_list:
+            capabilities_text = ", ".join(caps) if caps else "none"
+            lines.extend(wrap_plain(f"capabilities: {capabilities_text}", indent="    "))
+
+            lane_count = int(cap.get("lane_count", len(lanes_list)) or len(lanes_list))
+            loaded_count = int(cap.get("loaded_lane_count", 0) or 0)
+            sleeping_count = int(cap.get("sleeping_lane_count", 0) or 0)
+            active_requests = int(cap.get("active_requests", 0) or 0)
+            lines.append(
+                f"    lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} active_requests={active_requests}"
+            )
+
+            if not isinstance(lanes_list, list) or not lanes_list:
+                lines.append(f"    {paint('no lanes reported', DIM)}")
+                continue
+
+            for lane in sorted(lanes_list, key=self._lane_log_sort_key):
                 if not isinstance(lane, dict):
                     continue
-                state = lane.get("runtime_state", "?")
-                sleep = lane.get("sleep_state", "none")
-                color = _GREEN if state in ("loaded", "running") else (_YELLOW if sleep == "sleeping" else _DIM)
-                lines.append(
-                    f"    {color}▸{_RESET} {lane.get('lane_id', '?')}: "
-                    f"model={lane.get('model', '?')} state={color}{state}/{sleep}{_RESET} "
-                    f"active={lane.get('active_requests', 0)} "
-                    f"vram={lane.get('effective_vram_mb', 0):.0f}MB"
-                )
-            if profiles:
-                for model_name, pdata in profiles.items():
-                    if not isinstance(pdata, dict):
-                        continue
-                    lines.append(
-                        f"    {_DIM}📋 {model_name}: engine={pdata.get('engine', '?')} "
-                        f"base={pdata.get('base_residency_mb', 0) or 0:.0f}MB "
-                        f"kv_per_tok={pdata.get('kv_per_token_bytes', '?')} "
-                        f"measured={pdata.get('measurement_count', 0)}x{_RESET}"
-                    )
+                lines.extend(self._format_runtime_lane_lines(lane, indent="    "))
 
         # Demand scores
         demand_stats = self._demand.get_stats()
         active_demand = {k: v for k, v in demand_stats.get("scores", {}).items() if v > 0.1}
         if active_demand:
-            lines.append(f"  {_YELLOW}Demand:{_RESET} " + ", ".join(
+            lines.append(paint("Demand", YELLOW, BOLD) + ": " + ", ".join(
                 f"{m}={s:.2f}" for m, s in sorted(active_demand.items(), key=lambda x: -x[1])
             ))
 
         lines.append(
-            f"  {_DIM}Workers: {connected}/{len(provider_ids)} connected{_RESET}"
+            paint(f"Workers connected: {connected}/{len(provider_ids)}", DIM)
         )
-        lines.append(f"{_BOLD}{_CYAN}═══════════════════════════════════════{_RESET}")
+        logger.info(
+            render_section(
+                f"Planner Cycle {self._cycle_count}",
+                lines,
+                accent=CYAN,
+            )
+        )
 
-        for line in lines:
-            logger.info(line)
+    @staticmethod
+    def _heartbeat_age_seconds(last_heartbeat: Any) -> float:
+        """Return heartbeat age in seconds from an ISO timestamp."""
+        if not isinstance(last_heartbeat, str) or not last_heartbeat.strip():
+            return 0.0
+        try:
+            parsed = datetime.fromisoformat(last_heartbeat.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, time.time() - parsed.timestamp())
+
+    @staticmethod
+    def _lane_log_sort_key(lane: dict[str, Any]) -> tuple[int, str]:
+        """Prefer warmer lanes first in cycle summaries."""
+        runtime_state = str(lane.get("runtime_state") or "")
+        order = {
+            "running": 0,
+            "loaded": 1,
+            "sleeping": 2,
+            "starting": 3,
+            "cold": 4,
+            "stopped": 5,
+            "error": 6,
+        }
+        return (order.get(runtime_state, 99), str(lane.get("lane_id") or ""))
+
+    def _format_runtime_lane_lines(self, lane: dict[str, Any], *, indent: str) -> list[str]:
+        """Render a single runtime lane into concise, wrapped log lines."""
+        lane_id = str(lane.get("lane_id") or "?")
+        model = str(lane.get("model") or "?")
+        runtime_state = str(lane.get("runtime_state") or "?")
+        sleep_state = str(lane.get("sleep_state") or "?")
+        active_requests = int(lane.get("active_requests", 0) or 0)
+        effective_vram_mb = float(lane.get("effective_vram_mb", 0.0) or 0.0)
+        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+        lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+
+        queue_waiting = lane_metric_float(backend_metrics.get("queue_waiting"))
+        requests_running = lane_metric_float(backend_metrics.get("requests_running"))
+        if requests_running is None:
+            requests_running = float(active_requests)
+        cache_pressure = lane_metric_float(
+            backend_metrics.get("gpu_cache_usage_percent", backend_metrics.get("gpu_cache_usage_perc"))
+        )
+        ttft_p95 = lane_ttft_p95_seconds(backend_metrics)
+        prefix_hit = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+        gpu_devices = (
+            lane_config.get("gpu_devices")
+            or lane.get("gpu_devices")
+            or lane.get("effective_gpu_devices")
+            or "-"
+        )
+
+        queue_text = f"{queue_waiting:.1f}" if queue_waiting is not None else "--"
+        running_text = f"{requests_running:.1f}" if requests_running is not None else "--"
+        cache_text = f"{cache_pressure:.0f}%" if cache_pressure is not None else "--"
+        ttft_text = f"{ttft_p95:.2f}s" if ttft_p95 is not None else "--"
+        prefix_text = f"{prefix_hit:.0%}" if prefix_hit is not None else "--"
+
+        lines = [f"{indent}{paint('▸', GREEN if runtime_state in {'loaded', 'running'} else YELLOW)} {lane_id}"]
+        lines.extend(wrap_plain(f"model: {model}", indent=f"{indent}  "))
+        lines.append(
+            f"{indent}  state={format_state(runtime_state, sleep_state)} "
+            f"mem={effective_vram_mb:.0f}MB gpus={gpu_devices}"
+        )
+        lines.append(
+            f"{indent}  active={active_requests} run={running_text} "
+            f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
+        )
+        return lines
+
+    def _log_action_plan(self, actions: list[CapacityPlanAction]) -> None:
+        """Render pending planner actions as a separate log section."""
+        lines: list[str] = []
+        action_colors = {
+            "load": GREEN,
+            "wake": GREEN,
+            "sleep_l1": YELLOW,
+            "sleep_l2": YELLOW,
+            "stop": RED,
+            "reconfigure_kv_cache": CYAN,
+        }
+        for action in actions:
+            color = action_colors.get(action.action, CYAN)
+            lines.append(
+                f"{paint('→', color)} {paint(action.action, color, BOLD)} "
+                f"provider={action.provider_id} lane={action.lane_id}"
+            )
+            lines.extend(wrap_plain(f"model: {action.model_name}", indent="    "))
+            lines.extend(wrap_plain(f"reason: {action.reason}", indent="    "))
+        logger.info(
+            render_section(
+                f"Planner Actions · cycle {self._cycle_count} · {len(actions)} change(s)",
+                lines,
+                accent=CYAN,
+            )
+        )
 
     async def prepare_lane_for_request(
         self,
@@ -301,7 +376,7 @@ class CapacityPlanner:
                     model_name=model_name,
                     reason="Request-time wake for selected sleeping lane",
                 ),
-                timeout_seconds=min(timeout_seconds, 45.0),
+                timeout_seconds=max(timeout_seconds, self.REQUEST_WAKE_TIMEOUT_SECONDS),
             )
             if not woke:
                 return None
@@ -601,12 +676,23 @@ class CapacityPlanner:
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns."""
+        if self._registry.peek_runtime_snapshot(provider_id) is None:
+            logger.debug(
+                "Skipping demand actions for provider=%s: no active logosnode runtime snapshot",
+                provider_id,
+            )
+            return []
+
         actions = []
         ranked = self._demand.get_ranked_models()
         try:
             profiles = self._facade.get_model_profiles(provider_id)
         except Exception:
             profiles = {}
+        try:
+            capabilities = set(self._facade.get_worker_capabilities(provider_id))
+        except Exception:
+            capabilities = set()
         try:
             capacity = self._facade.get_capacity_info(provider_id)
         except Exception:
@@ -620,6 +706,8 @@ class CapacityPlanner:
         planned_models: set[str] = set()
 
         for model_name, score in ranked:
+            if capabilities and model_name not in capabilities:
+                continue
             model_lanes = lanes_by_model.get(model_name, [])
 
             # Wake a sleeping lane if demand exceeds threshold
@@ -659,7 +747,6 @@ class CapacityPlanner:
         # Capability seeding: if worker has zero lanes but declared capabilities,
         # seed load actions for in-demand models it can serve.
         if not lanes:
-            capabilities = self._facade.get_worker_capabilities(provider_id)
             for model_name in capabilities:
                 if model_name in planned_models:
                     continue
@@ -1193,6 +1280,86 @@ class CapacityPlanner:
         params["vllm_config"] = vllm_config
         return params
 
+    def _build_apply_lanes_params_for_load(
+        self,
+        action: CapacityPlanAction,
+    ) -> Dict[str, Any]:
+        """Build a full desired lane set for a load action.
+
+        ``apply_lanes`` on the worker is declarative: any lane omitted from the
+        payload is removed. Request-time cold loads therefore must preserve the
+        existing worker lane set and merge the new lane into it, instead of
+        sending a single-lane replacement payload.
+        """
+        desired_by_lane_id: dict[str, dict[str, Any]] = {}
+
+        snap = self._registry.peek_runtime_snapshot(action.provider_id) if self._registry else None
+        runtime = snap.get("runtime") if isinstance(snap, dict) else None
+        lanes = runtime.get("lanes") if isinstance(runtime, dict) else None
+
+        if isinstance(lanes, list):
+            for lane in lanes:
+                if not isinstance(lane, dict):
+                    continue
+
+                runtime_state = str(lane.get("runtime_state") or "").strip().lower()
+                if runtime_state in {"stopped", "error"}:
+                    continue
+
+                lane_config = lane.get("lane_config")
+                if isinstance(lane_config, dict):
+                    desired_lane = copy.deepcopy(lane_config)
+                else:
+                    desired_lane = self._reconstruct_lane_config_from_runtime_lane(lane)
+                    if desired_lane is None:
+                        continue
+
+                lane_id = str(
+                    desired_lane.get("lane_id")
+                    or lane.get("lane_id")
+                    or self._planner_lane_id(str(desired_lane.get("model") or lane.get("model") or ""))
+                ).strip()
+                if not lane_id:
+                    continue
+                desired_lane["lane_id"] = lane_id
+                desired_by_lane_id[lane_id] = desired_lane
+
+        desired_by_lane_id[action.lane_id] = {
+            "lane_id": action.lane_id,
+            "model": action.model_name,
+            **copy.deepcopy(action.params),
+        }
+        return {"lanes": list(desired_by_lane_id.values())}
+
+    def _reconstruct_lane_config_from_runtime_lane(
+        self,
+        lane: dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        """Best-effort fallback when a runtime lane lacks explicit lane_config."""
+        model_name = str(lane.get("model") or "").strip()
+        if not model_name:
+            return None
+
+        config: dict[str, Any] = {
+            "lane_id": str(lane.get("lane_id") or self._planner_lane_id(model_name)),
+            "model": model_name,
+        }
+        if bool(lane.get("vllm")):
+            config["vllm"] = True
+
+        for field in (
+            "num_parallel",
+            "context_length",
+            "keep_alive",
+            "kv_cache_type",
+            "flash_attention",
+            "gpu_devices",
+        ):
+            value = lane.get(field)
+            if value not in (None, ""):
+                config[field] = value
+        return config
+
     # KV cache estimation
     KV_CACHE_HEADROOM_RATIO = 0.35  # last-resort fallback for models without HF config
     DEFAULT_CONTEXT_CAP = 8192      # conservative initial context window
@@ -1380,7 +1547,7 @@ class CapacityPlanner:
             "sleep_l2": ("sleep_lane", {"lane_id": action.lane_id, "level": 2}),
             "wake": ("wake_lane", {"lane_id": action.lane_id}),
             "stop": ("delete_lane", {"lane_id": action.lane_id}),
-            "load": ("apply_lanes", {"lanes": [{"model": action.model_name, **action.params}]}),
+            "load": ("apply_lanes", self._build_apply_lanes_params_for_load(action)),
         }
 
         command_entry = command_map.get(action.action)
@@ -1390,9 +1557,13 @@ class CapacityPlanner:
 
         command_action, command_params = command_entry
 
-        # Load actions need longer command timeout since the worker blocks
-        # until apply_lanes completes (vLLM cold start can take 60-120s).
-        cmd_timeout = int(timeout_seconds) if action.action == "load" else int(min(timeout_seconds, 30))
+        # Slow-path actions need longer command timeouts since the worker blocks
+        # until vLLM finishes the operation.
+        cmd_timeout = (
+            int(timeout_seconds)
+            if action.action in {"load", "wake"}
+            else int(min(timeout_seconds, 30))
+        )
         try:
             await self._registry.send_command(
                 action.provider_id,

@@ -46,6 +46,7 @@ from logos.logosnode_registry import (
     LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
 )
+from logos.terminal_logging import MultiLineFormatter, UvicornAccessFilter, UvicornErrorFilter
 from scripts import setup_proxy
 
 _SERVER_START_TIME = int(time.time())
@@ -158,6 +159,43 @@ def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]
             if current is None or candidate["size_vram"] > current["size_vram"]:
                 deduped[name] = candidate
     return sorted(deduped.values(), key=lambda item: item["name"].lower())
+
+
+def _planner_model_alias(model_name: str) -> str:
+    """Return the planner/worker-safe alias used in lane ids and logs."""
+    return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
+
+
+def _resolve_requested_model_name(
+    requested_name: str,
+    available_model_names: list[str],
+) -> Optional[str]:
+    """Resolve user-supplied model ids to canonical DB model names.
+
+    Accepts exact OpenAI-style model names as stored in the DB and also the
+    planner-safe alias form where ``/``, ``:``, and spaces are rewritten as
+    underscores. This lets users copy model ids from lane names or worker logs
+    without breaking access-controlled model lookup.
+    """
+    requested = str(requested_name or "").strip()
+    if not requested:
+        return None
+
+    alias_matches: set[str] = set()
+    for raw_name in available_model_names:
+        canonical = str(raw_name or "").strip()
+        if not canonical:
+            continue
+        if canonical == requested:
+            return canonical
+
+        sanitized = _planner_model_alias(canonical)
+        if requested in {sanitized, f"planner-{sanitized}"}:
+            alias_matches.add(canonical)
+
+    if len(alias_matches) == 1:
+        return next(iter(alias_matches))
+    return None
 
 
 def _runtime_modes_for_lanes(lanes: list[dict[str, Any]]) -> list[str]:
@@ -874,11 +912,29 @@ async def lifespan(app: FastAPI):
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         force=True
     )
+    formatter = MultiLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        handler.setFormatter(formatter)
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
+        named_logger = logging.getLogger(logger_name)
+        named_logger.handlers.clear()
+        named_logger.propagate = True
+    uvicorn_access_logger = logging.getLogger("uvicorn.access")
+    uvicorn_access_logger.filters.clear()
+    uvicorn_access_logger.addFilter(UvicornAccessFilter())
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+    uvicorn_error_logger.filters.clear()
+    uvicorn_error_logger.addFilter(UvicornErrorFilter())
     logging.getLogger("logos").setLevel(logging.INFO)
     logging.getLogger("logos.sdi.providers.logosnode_provider").setLevel(logging.DEBUG)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
     # Start Pipeline
     await start_pipeline()
@@ -1651,12 +1707,19 @@ async def _execute_proxy_mode(
     Resolves the requested model from the DB (access-controlled by logos_key), then reuses the
     resource-mode pipeline with allowed_models restricted to that model.
     """
-    model_name = body.get("model")
-    if not model_name:
+    requested_model_name = str(body.get("model") or "").strip()
+    if not requested_model_name:
         raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
     with DBManager() as db:
         models_info = db.get_models_info(logos_key)
+
+    model_name = _resolve_requested_model_name(
+        requested_model_name,
+        [str(row[1]) for row in models_info if len(row) > 1 and str(row[1]).strip()],
+    )
+    if model_name is None:
+        raise HTTPException(status_code=404, detail=f"Model '{requested_model_name}' not available for this key")
 
     model_id = None
     for row in models_info:
@@ -1666,7 +1729,7 @@ async def _execute_proxy_mode(
             break
 
     if model_id is None:
-        raise HTTPException(status_code=404, detail=f"Model '{model_name}' not available for this key")
+        raise HTTPException(status_code=404, detail=f"Model '{requested_model_name}' not available for this key")
 
     # Ensure payload model matches DB name (avoid user-supplied mismatch)
     body = {**body, "model": model_name}
@@ -2360,7 +2423,7 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
     "apply_lanes": 180,
     "reconfigure_lane": 180,
     "sleep_lane": 30,
-    "wake_lane": 60,
+    "wake_lane": 120,
     "delete_lane": 30,
 }
 
@@ -2883,6 +2946,14 @@ async def retrieve_model(model_id: str, request: Request):
 
     with DBManager() as db:
         model = db.get_model_for_profile(auth.profile_id, model_id)
+        if not model:
+            models = db.get_models_for_profile(auth.profile_id)
+            canonical_model_name = _resolve_requested_model_name(
+                model_id,
+                [str(entry.get("name") or "").strip() for entry in models],
+            )
+            if canonical_model_name is not None:
+                model = next((entry for entry in models if entry.get("name") == canonical_model_name), None)
 
     if not model:
         raise HTTPException(status_code=404, detail="Model not found or access denied")

@@ -13,6 +13,8 @@ from starlette.requests import Request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import normalize_provider_type
 
+logger = logging.getLogger(__name__)
+
 
 def get_client_ip(request: Request) -> str:
     forwarded_for = request.headers.get("x-forwarded-for")
@@ -167,7 +169,10 @@ def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = Non
         return list()
     else:
         # Return ids of all available models
-        logging.info(f"Found deployments {normalized_deployments} for classification")
+        logger.debug(
+            "Found %d deployments for classification",
+            len(normalized_deployments),
+        )
         return normalized_deployments
 
 
