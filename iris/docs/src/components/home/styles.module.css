@@ -128,7 +128,6 @@
   padding: calc(6rem + 5vw) 1.5rem calc(6rem + 5vw);
   background: linear-gradient(135deg, #0f1e3d 0%, #1a2d52 45%, #162847 100%);
   position: relative;
-  overflow: hidden;
   clip-path: polygon(0 4vw, 100% 0, 100% calc(100% - 4vw), 0 100%);
   margin-top: -2vw;
   margin-bottom: -2vw;

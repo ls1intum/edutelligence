@@ -35,20 +35,16 @@ export default function Home(): React.JSX.Element {
       {/* 4. Why Generic AI Falls Short */}
       <WhyGenericAISection />
 
-      {/* 5. How Iris Works */}
-      <div className={styles.sectionLazy}>
-        <HowIrisWorksSection />
-      </div>
+      {/* 5. How Iris Works (no sectionLazy — content-visibility clips the diagonal) */}
+      <HowIrisWorksSection />
 
       {/* 6. See Iris in Action */}
       <div className={styles.sectionLazy}>
         <ShowcaseSection />
       </div>
 
-      {/* 7. Evidence & Scale */}
-      <div className={styles.sectionLazy}>
-        <EvidenceSection />
-      </div>
+      {/* 7. Evidence & Scale (no sectionLazy — content-visibility clips the diagonal) */}
+      <EvidenceSection />
 
       {/* 8. Beyond Chat */}
       <div className={styles.sectionLazy}>
