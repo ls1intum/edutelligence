@@ -748,6 +748,8 @@ class CourseChatPipeline(
             parsed = json.loads(mcq_json_str)
         except (json.JSONDecodeError, TypeError):
             return mcq_json_str
+        if not isinstance(parsed, dict):
+            return mcq_json_str
 
         citation_re = re.compile(r"\[cite:[^\]]*\]")
 
