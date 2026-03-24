@@ -13,6 +13,7 @@ import StudentQuotes from "../components/home/StudentQuotes";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
 import ClosingCta from "../components/home/ClosingCta";
+import SectionNav from "../components/home/SectionNav";
 import styles from "../components/home/styles.module.css";
 
 export default function Home(): React.JSX.Element {
@@ -21,6 +22,7 @@ export default function Home(): React.JSX.Element {
       title="Iris — The AI Tutor that Teaches"
       description="An AI tutor that teaches, not just answers. Built into Artemis, backed by peer-reviewed research at TU Munich."
     >
+      <SectionNav />
       {/* 1. Hero */}
       <HeroSection />
 

@@ -55,7 +55,7 @@ export default function FaqSection(): React.JSX.Element {
   };
 
   return (
-    <section className={styles.sectionAlt}>
+    <section id="faq" className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
         <h2 className={styles.sectionHeading}>Questions Academic Teams Ask</h2>
         <div className={styles.faqList}>

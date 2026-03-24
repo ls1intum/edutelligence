@@ -53,7 +53,7 @@ export default function EvidenceSection(): React.JSX.Element {
   const [papersRef, papersVisible] = useFadeIn();
 
   return (
-    <section className={styles.sectionScaleBg}>
+    <section id="evidence" className={styles.sectionScaleBg}>
       <div className={styles.sectionScaleInner}>
         <h2 className={styles.sectionHeadingAccent}>
           Used at Scale. Studied in Real Courses.

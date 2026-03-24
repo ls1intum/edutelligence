@@ -157,7 +157,7 @@ export default function PrivacySection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section className={styles.sectionAlt}>
+    <section id="privacy" className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
         <ShieldWatermark />
         <h2 className={styles.sectionHeading}>

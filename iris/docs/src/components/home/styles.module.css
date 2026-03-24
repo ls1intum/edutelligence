@@ -3596,3 +3596,74 @@
   background: rgba(245, 158, 11, 0.2);
   color: #fbbf24;
 }
+
+/* ============================================================
+   Section Nav - floating sidebar
+   ============================================================ */
+
+.sectionNav {
+  position: fixed;
+  right: 1.25rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.sectionNavVisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sectionNavItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  flex-direction: row-reverse;
+}
+
+.sectionNavDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ifm-color-emphasis-400);
+  transition:
+    background 0.2s,
+    transform 0.2s;
+  flex-shrink: 0;
+}
+
+.sectionNavItemActive .sectionNavDot {
+  background: var(--ifm-color-primary);
+  transform: scale(1.3);
+}
+
+.sectionNavLabel {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--ifm-color-emphasis-600);
+  opacity: 0;
+  transition: opacity 0.2s;
+  white-space: nowrap;
+}
+
+.sectionNavItem:hover .sectionNavLabel {
+  opacity: 1;
+}
+
+.sectionNavItemActive .sectionNavLabel {
+  color: var(--ifm-color-primary);
+}
+
+/* Hide on mobile */
+@media (max-width: 996px) {
+  .sectionNav {
+    display: none;
+  }
+}
