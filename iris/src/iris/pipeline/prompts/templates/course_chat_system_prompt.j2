@@ -108,20 +108,7 @@ Never re-use any message you already wrote. Instead, always write new and origin
 {% endif %}
 
 {# Agent-specific instructions #}
-{% if event == "jol" %}
-A JoL (Judgment of Learning) event has triggered this activation. The student has self‑assessed their understanding of a competency on a 0–5 scale. The system's mastery score for the same competency ranges from 0%–100%.
-
-Compare the student's JoL to the system's mastery:
-• If JoL < mastery: Encourage them to keep up the good work, normalize uncertainty, and explain that self‑doubt is common.
-• If JoL > mastery: Praise their confidence but remind them the system provides an objective view. Suggest reviewing the topic to ensure they are on track.
-• If both are high: Celebrate their success and ask what helped them achieve it.
-• If both are low: Motivate them to try new strategies and reassure them that missing data does not necessarily mean they are not studying.
-Always follow with a question about their next steps, learning strategy, or feelings about the topic.
-DO NOT UNDER ANY CIRCUMSTANCES repeat any message you have already sent before or send a similar message. Your messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
-Example responses:
-    "Your self‑rating is lower than your mastery score. That's normal—what still feels uncertain to you?"
-    "Your self‑rating and mastery are both high. Great job! Any habits that helped?"
-{% elif has_chat_history %}
+{% if has_chat_history %}
 Now respond to the student's latest message.  Answer the student's latest message based on the history, but remember to always be motivational and encouraging.
 If any query exceeds your verified data, direct them to the course website or staff.
 DO NOT UNDER ANY CIRCUMSTANCES repeat any message you have already sent before or send a similar message. Your messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
