@@ -5,7 +5,7 @@ const items = [
   "Integrated into Artemis at TUM",
   "Used across 10+ courses at TUM",
   "MIT Licensed",
-  "3 Published Papers",
+  "GDPR Compliant",
 ];
 
 export default function TrustBar(): React.JSX.Element {
