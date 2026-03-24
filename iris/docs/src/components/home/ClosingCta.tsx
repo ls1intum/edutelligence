@@ -20,11 +20,11 @@ export default function ClosingCta(): React.JSX.Element {
           aria-hidden="true"
         />
         <h2 className={styles.closingCtaHeadline}>
-          Ready to bring Iris to your university?
+          Bring Course-Grounded AI to Your Teaching
         </h2>
         <p className={styles.closingCtaSubtitle}>
-          Deployment takes under an hour. We&rsquo;ll walk you through setup,
-          integration, and your first course &mdash; no commitment required.
+          Built into Artemis. Studied at TU Munich. Used by 1,600+ students.
+          Talk to the team about a pilot, or explore the documentation.
         </p>
         <div className={styles.heroCtas}>
           <a className={styles.btnPrimary} href="mailto:krusche@tum.de">

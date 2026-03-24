@@ -27,16 +27,50 @@ function IrisAvatar() {
   );
 }
 
-export default function ComparisonSection(): React.JSX.Element {
+interface DifferentiatorRow {
+  feature: string;
+  chatgpt: boolean;
+  iris: boolean;
+}
+
+const differentiators: DifferentiatorRow[] = [
+  {
+    feature: "Knows your specific course content",
+    chatgpt: false,
+    iris: true,
+  },
+  {
+    feature: "Guides with hints instead of giving full answers",
+    chatgpt: false,
+    iris: true,
+  },
+  {
+    feature: "Cites lecture slides and course materials",
+    chatgpt: false,
+    iris: true,
+  },
+  {
+    feature: "GDPR compliant & university-hosted",
+    chatgpt: false,
+    iris: true,
+  },
+];
+
+export default function WhyGenericAISection(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
-    <section id="comparison" className={styles.section}>
-      <h2 className={styles.sectionHeading}>How Iris Is Different</h2>
+    <section className={styles.section}>
+      <h2 className={styles.sectionHeading}>
+        Why Generic AI Falls Short for Teaching
+      </h2>
       <p className={styles.sectionSubtitle}>
-        A student is preparing for their biology exam and asks about
-        photosynthesis. Here&rsquo;s what happens next.
+        Generic chatbots give fluent, confident answers &mdash; but they
+        don&rsquo;t teach. Without course context or pedagogical design, they
+        hand students the answer and skip the learning.
       </p>
+
+      {/* ── Side-by-side chat comparison ── */}
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={`${styles.comparisonWrapper} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""}`}
@@ -130,13 +164,75 @@ export default function ComparisonSection(): React.JSX.Element {
           </div>
         </div>
       </div>
+
       <p
         className={`${styles.comparisonTakeaway} ${styles.irisBubble} ${styles.irisBubbleDelay4} ${visible ? styles.irisBubbleVisible : ""}`}
       >
         Iris guides students to the answer instead of giving it away
-        &mdash;&nbsp;that&rsquo;s why they learn{" "}
-        <Link to="/docs/research/publications">55% more effectively</Link>.
+        &mdash;&nbsp;research shows a{" "}
+        <Link to="/docs/research/publications">
+          significant boost in intrinsic motivation
+        </Link>{" "}
+        (Cohen&rsquo;s <em>d</em>&nbsp;=&nbsp;0.55).
       </p>
+
+      {/* ── Key differentiators ── */}
+      <div className={styles.comparisonTableWrapper}>
+        <table className={styles.comparisonTable}>
+          <thead>
+            <tr>
+              <th className={styles.comparisonTableFeatureHeader}>Feature</th>
+              <th className={styles.comparisonTableHeader}>
+                Generic AI Chatbot
+              </th>
+              <th
+                className={`${styles.comparisonTableHeader} ${styles.comparisonTableHeaderIris}`}
+              >
+                Iris
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {differentiators.map((row) => (
+              <tr key={row.feature} className={styles.comparisonTableRow}>
+                <td className={styles.comparisonTableFeature}>{row.feature}</td>
+                <td className={styles.comparisonTableCell}>
+                  <span
+                    className={
+                      row.chatgpt ? styles.checkMark : styles.crossMark
+                    }
+                    role="img"
+                    aria-label={row.chatgpt ? "Yes" : "No"}
+                  >
+                    {row.chatgpt ? "\u2713" : "\u2717"}
+                  </span>
+                </td>
+                <td className={styles.comparisonTableCellIris}>
+                  <span
+                    className={row.iris ? styles.checkMark : styles.crossMark}
+                    role="img"
+                    aria-label={row.iris ? "Yes" : "No"}
+                  >
+                    {row.iris ? "\u2713" : "\u2717"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* ── Research quote ── */}
+      <blockquote className={styles.endorseQuote}>
+        <p className={styles.endorseQuoteText}>
+          &ldquo;If you need to do something fast and efficiently, you would use
+          it. But if you do something just for learning, you would not.&rdquo;
+        </p>
+        <cite className={styles.endorseQuoteCite}>
+          &mdash; Participant P20, ChatGPT user, Koli Calling 2025 (Bassner,
+          Lottner &amp; Krusche)
+        </cite>
+      </blockquote>
     </section>
   );
 }

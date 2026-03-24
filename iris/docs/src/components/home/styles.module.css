@@ -187,6 +187,22 @@
   border-color: rgba(255, 255, 255, 0.06);
 }
 
+/* How It Works cards on navy background (both themes) */
+.sectionNavy .howItWorksCard,
+[data-theme="dark"] .sectionNavy .howItWorksCard {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+.sectionNavy .howItWorksTitle {
+  color: #ffffff;
+}
+
+.sectionNavy .howItWorksDesc {
+  color: rgba(255, 255, 255, 0.82);
+}
+
 .sectionNavyInner {
   position: relative;
   overflow: hidden;
@@ -401,6 +417,14 @@
 
 .sectionScaleBg .sectionHeadingAccent::after {
   background: rgba(255, 255, 255, 0.4);
+}
+
+.sectionScaleBg .quoteGridLabel {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.sectionScaleBg .statsLink a {
+  color: rgba(255, 255, 255, 0.9);
 }
 
 /* ─── Hero ─── */
@@ -1643,6 +1667,7 @@
 .statsLink {
   text-align: center;
   font-size: 0.9rem;
+  margin-top: 2rem;
 }
 
 /* ─── Trusted by Educators (Testimonials) ─── */

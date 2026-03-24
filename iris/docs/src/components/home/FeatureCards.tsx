@@ -81,19 +81,14 @@ const features = [
   },
 ];
 
-const staggerClasses = [
-  styles.stagger1,
-  styles.stagger2,
-  styles.stagger3,
-  styles.stagger4,
-];
+const staggerClasses = [styles.stagger1, styles.stagger2, styles.stagger3];
 
 export default function FeatureCards(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
     <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>Why Iris?</h2>
+      <h2 className={styles.sectionHeading}>Why Instructors Choose Iris</h2>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={styles.featureGrid}

@@ -10,7 +10,7 @@ const faqs: FaqEntry[] = [
   {
     question: "How is Iris different from ChatGPT?",
     answer:
-      "Iris knows your course and guides students with hints instead of answers. It references your actual lecture slides with citations, and in a controlled trial with 275 students, this approach led to measurably deeper learning and higher motivation.",
+      "Iris is integrated into Artemis and grounded in your actual course materials. It guides students with calibrated hints instead of direct answers, and every response cites specific lecture slides. In a controlled study with 275 students, this approach preserved intrinsic motivation while ChatGPT did not.",
   },
   {
     question: "What does it cost?",
@@ -20,32 +20,17 @@ const faqs: FaqEntry[] = [
   {
     question: "How long does setup take?",
     answer:
-      "Most instructors get started in under 15 minutes. Upload your lecture slides to Artemis, click ingest, and Iris is ready to help your students.",
+      "Upload your lecture slides to Artemis, click ingest, and Iris is ready. Most instructors get started in minutes, not hours.",
   },
   {
     question: "What if Iris gives a wrong answer?",
     answer:
-      "Every response includes citation markers linking to specific lecture slides. Students and instructors can verify any answer against the source material. Iris also runs a self-check on every response before sending it, filtering out answers that don\u2019t meet quality standards.",
-  },
-  {
-    question: "Is this just a prototype?",
-    answer:
-      "No. Iris has been in production since 2023, used by 1,600+ students across multiple semesters, and validated in 3 peer-reviewed studies. It is actively maintained open-source software with continuous development.",
+      "Every response includes citation markers linking to specific lecture slides. Students and instructors can verify any answer against the source material. Iris also runs a self-check on every response before sending it.",
   },
   {
     question: "How does Iris protect student data?",
     answer:
-      "Deploy on-premise so no data leaves your infrastructure, or use EU-based cloud hosting. Iris is fully GDPR compliant and never trains on student data. Instructors control exactly what materials Iris has access to.",
-  },
-  {
-    question: "What courses does Iris work with?",
-    answer:
-      "Any course on Artemis \u2014 from computer science and engineering to biology, mathematics, law, and the humanities. Iris works with programming exercises, lecture Q&A, and any course content you upload.",
-  },
-  {
-    question: "Does Iris give away answers?",
-    answer:
-      "No. Iris starts with questions and subtle nudges, only giving more direct guidance when the student truly needs it. This preserves productive struggle \u2014 the kind of effort that builds real understanding.",
+      "Deploy on-premise so no data leaves your infrastructure, or use EU-based cloud hosting. Iris is GDPR compliant and never trains on student data. Instructors control exactly which materials Iris can access.",
   },
 ];
 
@@ -67,7 +52,7 @@ export default function FaqSection(): React.JSX.Element {
   return (
     <section className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>Common Questions</h2>
+        <h2 className={styles.sectionHeading}>Questions Academic Teams Ask</h2>
         <div className={styles.faqList}>
           {faqs.map((faq, i) => {
             const panelId = `faq-panel-${i}`;

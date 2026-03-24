@@ -3,22 +3,15 @@ import Layout from "@theme/Layout";
 import HeroSection from "../components/home/HeroSection";
 import TrustBar from "../components/home/TrustBar";
 import FeatureCards from "../components/home/FeatureCards";
-import CourseMaterialsSection from "../components/home/CourseMaterialsSection";
-import HowItWorksSection from "../components/home/HowItWorksSection";
+import WhyGenericAISection from "../components/home/WhyGenericAISection";
+import HowIrisWorksSection from "../components/home/HowIrisWorksSection";
 import ShowcaseSection from "../components/home/ShowcaseSection";
-import ComparisonSection from "../components/home/ComparisonSection";
-import WhyNotChatGPTSection from "../components/home/WhyNotChatGPTSection";
-import ResearchHighlights from "../components/home/ResearchHighlights";
-import DisciplinesSection from "../components/home/DisciplinesSection";
-import ComfortTrapSection from "../components/home/ComfortTrapSection";
-import StudentQuotes from "../components/home/StudentQuotes";
-import ScaleSection from "../components/home/ScaleSection";
+import EvidenceSection from "../components/home/EvidenceSection";
 import PrivacySection from "../components/home/PrivacySection";
+import BeyondChatSection from "../components/home/BeyondChatSection";
+import StudentQuotes from "../components/home/StudentQuotes";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
-import QuizSection from "../components/home/QuizSection";
-import IdeSection from "../components/home/IdeSection";
-import MemorySection from "../components/home/MemorySection";
 import ClosingCta from "../components/home/ClosingCta";
 import styles from "../components/home/styles.module.css";
 
@@ -34,18 +27,15 @@ export default function Home(): React.JSX.Element {
       {/* 2. Trust Bar */}
       <TrustBar />
 
-      {/* 3. Feature Cards — Why Iris? */}
+      {/* 3. Core Value Props */}
       <FeatureCards />
 
-      {/* 3.5. Gets Smarter the More You Use It */}
-      <MemorySection />
+      {/* 4. Why Generic AI Falls Short */}
+      <WhyGenericAISection />
 
-      {/* 4. Powered by Your Course Materials */}
-      <CourseMaterialsSection />
-
-      {/* 5. How It Works — below the fold, lazy-rendered */}
+      {/* 5. How Iris Works */}
       <div className={styles.sectionLazy}>
-        <HowItWorksSection />
+        <HowIrisWorksSection />
       </div>
 
       {/* 6. See Iris in Action */}
@@ -53,67 +43,37 @@ export default function Home(): React.JSX.Element {
         <ShowcaseSection />
       </div>
 
-      {/* 6.5. Turn Any Lecture into a Quiz */}
+      {/* 7. Evidence & Scale */}
       <div className={styles.sectionLazy}>
-        <QuizSection />
+        <EvidenceSection />
       </div>
 
-      {/* 7. How Iris Is Different (chat comparison) */}
+      {/* 8. Beyond Chat */}
       <div className={styles.sectionLazy}>
-        <ComparisonSection />
+        <BeyondChatSection />
       </div>
 
-      {/* 8. Why Not Just Use a Generic AI Chatbot? */}
-      <div className={styles.sectionLazy}>
-        <WhyNotChatGPTSection />
-      </div>
-
-      {/* 9. Research Highlights */}
-      <div className={styles.sectionLazy}>
-        <ResearchHighlights />
-      </div>
-
-      {/* 10. Works for Every Course */}
-      <div className={styles.sectionLazy}>
-        <DisciplinesSection />
-      </div>
-
-      {/* 10.5. Iris in Your IDE */}
-      <div className={styles.sectionLazy}>
-        <IdeSection />
-      </div>
-
-      {/* 11. The Comfort Trap */}
-      <div className={styles.sectionLazy}>
-        <ComfortTrapSection />
-      </div>
-
-      {/* 12. Trusted by Educators */}
+      {/* 9. Student Perspectives */}
       <div className={styles.sectionLazy}>
         <StudentQuotes />
       </div>
 
-      {/* 13. Built for Scale */}
-      <div className={styles.sectionLazy}>
-        <ScaleSection />
-      </div>
-
-      {/* 14. Your Data, Your Control */}
+      {/* 10. Privacy & Governance */}
       <div className={styles.sectionLazy}>
         <PrivacySection />
       </div>
 
-      {/* 15. Audience Quickstart Cards */}
+      {/* 11. Getting Started */}
       <div className={styles.sectionLazy}>
         <AudienceCards />
       </div>
 
-      {/* 16. FAQ */}
+      {/* 12. FAQ */}
       <div className={styles.sectionLazy}>
         <FaqSection />
       </div>
 
-      {/* 17. Closing CTA */}
+      {/* 13. Closing CTA */}
       <div className={styles.sectionLazy}>
         <ClosingCta />
       </div>

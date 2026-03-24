@@ -3,47 +3,40 @@ import Link from "@docusaurus/Link";
 import styles from "./styles.module.css";
 import { useFadeIn } from "./useFadeIn";
 
-const audiences = [
+const paths = [
   {
-    title: "Students",
-    description: "Get unstuck on exercises without giving up",
-    to: "/docs/student/getting-started",
-  },
-  {
-    title: "Instructors",
-    description: "See how students are learning, not just what they submitted",
+    title: "Launch in a Course",
+    description:
+      "Upload your slides and transcripts, enable Iris in Artemis, and your students get AI support in minutes.",
     to: "/docs/instructor/enabling-iris",
   },
   {
-    title: "Developers",
-    description: "Extend Iris with new capabilities and integrations",
-    to: "/docs/developer/local-setup",
+    title: "Use Iris in Artemis",
+    description:
+      "Open the Iris chat inside any programming exercise or course. Ask questions, get hints grounded in your course materials.",
+    to: "/docs/student/getting-started",
   },
   {
-    title: "Administrators",
-    description: "Deploy on-premise or cloud in under an hour",
-    to: "/docs/admin/deployment",
+    title: "Read the Research",
+    description:
+      "Explore the peer-reviewed studies behind Iris, contribute to the open-source project, or collaborate with the team at TUM.",
+    to: "/docs/research/publications",
   },
 ];
 
-const staggerClasses = [
-  styles.stagger1,
-  styles.stagger2,
-  styles.stagger3,
-  styles.stagger4,
-];
+const staggerClasses = [styles.stagger1, styles.stagger2, styles.stagger3];
 
 export default function AudienceCards(): React.JSX.Element {
   const [ref, visible] = useFadeIn();
 
   return (
     <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>Who Is Iris For?</h2>
+      <h2 className={styles.sectionHeading}>Choose Your Starting Point</h2>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={styles.audienceGrid}
       >
-        {audiences.map((a, i) => (
+        {paths.map((a, i) => (
           <Link
             key={a.title}
             className={`${styles.audienceCard} ${styles.fadeIn} ${visible ? styles.fadeInVisible : ""} ${staggerClasses[i] || ""}`}

@@ -160,10 +160,12 @@ export default function PrivacySection(): React.JSX.Element {
     <section className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
         <ShieldWatermark />
-        <h2 className={styles.sectionHeading}>Your Data, Your Control</h2>
+        <h2 className={styles.sectionHeading}>
+          Designed for Institutional Trust
+        </h2>
         <p className={styles.sectionSubtitle}>
-          Privacy isn&apos;t an afterthought. Iris is designed from the ground
-          up to keep student data safe and give instructors full control.
+          Governance, transparency, and course control are core product
+          requirements &mdash; not afterthoughts.
         </p>
         <div
           ref={ref as React.RefObject<HTMLDivElement>}
