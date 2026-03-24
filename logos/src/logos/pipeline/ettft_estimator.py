@@ -42,7 +42,8 @@ TIER_THRESHOLDS = {
 _DEFAULT_WARM_MS = 200.0
 _DEFAULT_SLEEPING_MS = 2000.0
 _DEFAULT_COLD_MS = 45000.0
-_BUSY_QUEUE_MULTIPLIER = 1.0  # each queued request adds ~1 TTFT worth of delay
+_BUSY_QUEUE_MULTIPLIER = 1.0  # legacy linear multiplier (unused, kept for reference)
+_BUSY_QUEUE_EXPONENT_BASE = 1.3  # exponential backoff: penalty = base_ttft * (1.3^depth - 1)
 
 
 def classify_tier(ettft_ms: float) -> tuple[ReadinessTier, float]:
@@ -63,12 +64,20 @@ def compute_corrected_score(classification_weight: float, penalty: float) -> flo
     return classification_weight - penalty
 
 
-def estimate_ettft_local(view: ModelSchedulerView) -> EttftEstimate:
+def estimate_ettft_local(
+    view: ModelSchedulerView,
+    eviction_cost_ms: float = 0.0,
+) -> EttftEstimate:
     """Estimate ETTFT for a local (logosnode) model from its scheduler view.
+
+    Args:
+        view: Current model scheduler state.
+        eviction_cost_ms: Additional latency if loading this model requires
+            evicting another lane to free VRAM. Only applied to COLD tier.
 
     Decision tree:
     1. No lanes or all stopped/error → UNAVAILABLE
-    2. All lanes cold/starting → COLD (~45s median cold-start)
+    2. All lanes cold/starting → COLD (~45s + eviction_cost_ms)
     3. Best lane sleeping → SLEEPING (~2s wake time)
     4. Best lane loaded, queue_waiting > 0 → BUSY (TTFT * (1 + queue_depth))
     5. Best lane loaded, low queue → WARM (measured TTFT or 200ms default)
@@ -95,13 +104,14 @@ def estimate_ettft_local(view: ModelSchedulerView) -> EttftEstimate:
 
     # Cold: no loaded/running lanes
     if best_state in ("cold", "starting"):
-        ettft_ms = _DEFAULT_COLD_MS
+        ettft_ms = _DEFAULT_COLD_MS + eviction_cost_ms
+        eviction_note = f" +{eviction_cost_ms:.0f}ms eviction" if eviction_cost_ms > 0 else ""
         tier, penalty = classify_tier(ettft_ms)
         return EttftEstimate(
             ettft_ms=ettft_ms,
             tier=tier,
             penalty=penalty,
-            reasoning=f"Best lane state is '{best_state}', cold-start estimated at {ettft_ms:.0f}ms",
+            reasoning=f"Best lane state is '{best_state}', cold-start estimated at {ettft_ms:.0f}ms{eviction_note}",
         )
 
     # Sleeping: best lane is sleeping, needs wake
@@ -119,15 +129,19 @@ def estimate_ettft_local(view: ModelSchedulerView) -> EttftEstimate:
     base_ttft_ms = (view.warmest_ttft_p95_seconds * 1000) if view.warmest_ttft_p95_seconds > 0 else _DEFAULT_WARM_MS
 
     if view.aggregate_queue_waiting > 0:
-        queue_delay = view.aggregate_queue_waiting * base_ttft_ms * _BUSY_QUEUE_MULTIPLIER
+        # Exponential backoff: penalty grows super-linearly with queue depth.
+        # Cap at _DEFAULT_COLD_MS so hot+queued never scores worse than cold start.
+        queue_depth = view.aggregate_queue_waiting
+        queue_delay = base_ttft_ms * (_BUSY_QUEUE_EXPONENT_BASE ** queue_depth - 1)
+        queue_delay = min(queue_delay, _DEFAULT_COLD_MS)
         ettft_ms = base_ttft_ms + queue_delay
         tier, penalty = classify_tier(ettft_ms)
         return EttftEstimate(
             ettft_ms=ettft_ms,
             tier=tier,
             penalty=penalty,
-            reasoning=f"Loaded with queue_waiting={view.aggregate_queue_waiting:.0f}, "
-                      f"base_ttft={base_ttft_ms:.0f}ms, total={ettft_ms:.0f}ms",
+            reasoning=f"Loaded with queue_waiting={queue_depth:.0f}, "
+                      f"base_ttft={base_ttft_ms:.0f}ms, queue_penalty={queue_delay:.0f}ms, total={ettft_ms:.0f}ms",
         )
 
     # Warm: loaded, no queue pressure

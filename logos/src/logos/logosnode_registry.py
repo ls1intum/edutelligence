@@ -254,6 +254,7 @@ class ProviderSession:
     pending_commands: dict[str, asyncio.Future] = field(default_factory=dict)
     pending_streams: dict[str, asyncio.Queue] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def is_stale(self, stale_after_seconds: int) -> bool:
         return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
@@ -520,8 +521,11 @@ class LogosNodeRuntimeRegistry:
             return
         old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
+        was_first = not session.first_status_received
         session.first_status_received = True
         session.last_heartbeat = _utc_now()
+        if was_first:
+            self.sync_desired_lanes_from_runtime(provider_id)
         if capabilities_models is not None:
             session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
 
@@ -795,6 +799,75 @@ class LogosNodeRuntimeRegistry:
         """Check if a provider has sent at least one status update since connecting."""
         session = self._sessions.get(int(provider_id))
         return session is not None and session.first_status_received
+
+    def get_desired_lane_set(self, provider_id: int) -> list[dict[str, Any]]:
+        """Return the server's last-intended lane configuration for a provider."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return []
+        return list(session.desired_lanes.values())
+
+    def update_desired_lanes(self, provider_id: int, lane_configs: list[dict[str, Any]]) -> None:
+        """Record the server's intended lane set after a successful apply_lanes."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        session.desired_lanes = {
+            str(lc.get("lane_id") or lc.get("model", "")): dict(lc)
+            for lc in lane_configs
+            if isinstance(lc, dict)
+        }
+
+    def update_desired_lane_add(self, provider_id: int, lane_config: dict[str, Any]) -> None:
+        """Record a single lane addition to the desired state."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        lane_id = str(lane_config.get("lane_id") or lane_config.get("model", ""))
+        if lane_id:
+            session.desired_lanes[lane_id] = dict(lane_config)
+
+    def update_desired_lane_remove(self, provider_id: int, lane_id: str) -> None:
+        """Record a lane removal from the desired state."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        session.desired_lanes.pop(lane_id, None)
+
+    def sync_desired_lanes_from_runtime(self, provider_id: int) -> None:
+        """Seed desired_lanes from the worker's reported runtime state.
+
+        Called after first_status_received to bootstrap the server's view
+        of what lanes the worker currently has.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        lanes = (session.latest_runtime or {}).get("lanes") or []
+        if not isinstance(lanes, list):
+            return
+        desired: dict[str, dict[str, Any]] = {}
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            runtime_state = str(lane.get("runtime_state") or "").strip().lower()
+            if runtime_state in {"stopped", "error"}:
+                continue
+            lane_config = lane.get("lane_config")
+            if isinstance(lane_config, dict):
+                lid = str(lane_config.get("lane_id") or lane.get("lane_id") or "")
+                if lid:
+                    desired[lid] = dict(lane_config)
+            else:
+                lid = str(lane.get("lane_id") or "")
+                model = str(lane.get("model") or "")
+                if lid and model:
+                    desired[lid] = {"lane_id": lid, "model": model}
+        session.desired_lanes = desired
+        logger.info(
+            "Synced desired lanes from runtime for provider %s: %s",
+            provider_id, sorted(desired.keys()),
+        )
 
     async def get_lanes(self, provider_id: int, stale_after_seconds: int = 30) -> list[dict[str, Any]]:
         snap = await self.get_runtime_snapshot(provider_id, stale_after_seconds)

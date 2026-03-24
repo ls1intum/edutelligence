@@ -547,6 +547,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
             "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
             "total_vram_mb": 32768,
             "provider_id": 13,
+            "db_parallel": None,
         }
     ]
     assert main_mod._azure_facade.registrations == [

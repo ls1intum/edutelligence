@@ -417,13 +417,32 @@ class PriorityQueueManager:
         Returns:
             Total number of queued tasks
         """
-        result = 0
+        with self._lock:
+            result = 0
+            for (model_id, pid) in self._queues:
+                if pid == provider_id:
+                    result += self.get_total_depth_by_deployment(model_id, provider_id)
+            return result
 
-        for (model_id, pid), deployment_queues in self._queues.keys():
-            if pid == provider_id:
-                result += self.get_total_depth_by_deployment(model_id, provider_id)
+    def reassign_entries(self, model_id: int, from_provider_id: int, to_provider_id: int) -> int:
+        """Move all queued entries for a model from one provider to another.
 
-        return result
+        Returns the number of entries moved. Thread-safe.
+        """
+        if from_provider_id == to_provider_id:
+            return 0
+        with self._lock:
+            moved = 0
+            for priority in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+                src_queue = self._queues[(model_id, from_provider_id)][priority]
+                dst_queue = self._queues[(model_id, to_provider_id)][priority]
+                while src_queue:
+                    entry_tuple = heapq.heappop(src_queue)
+                    neg_pri, ts, entry_id, entry = entry_tuple
+                    heapq.heappush(dst_queue, entry_tuple)
+                    self._entry_lookup[entry_id] = (model_id, to_provider_id, priority)
+                    moved += 1
+            return moved
 
     def get_total_depth_all(self) -> int:
         """

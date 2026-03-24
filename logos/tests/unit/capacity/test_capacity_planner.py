@@ -68,6 +68,7 @@ class MockRegistry:
     def __init__(self):
         self.commands_sent = []
         self._snapshot = {"runtime": {"lanes": []}, "first_status_received": True}
+        self._desired_lanes: dict[str, dict] = {}
 
     async def send_command(self, provider_id, action, params=None, timeout_seconds=20):
         self.commands_sent.append(
@@ -93,6 +94,23 @@ class MockRegistry:
             if lane.get("model") == model_name and lane.get("runtime_state") in {"loaded", "running", "cold", "starting"}:
                 return lane
         return None
+
+    def get_desired_lane_set(self, provider_id):
+        return list(self._desired_lanes.values())
+
+    def update_desired_lanes(self, provider_id, lane_configs):
+        self._desired_lanes = {
+            str(lc.get("lane_id") or lc.get("model", "")): dict(lc)
+            for lc in lane_configs if isinstance(lc, dict)
+        }
+
+    def update_desired_lane_add(self, provider_id, lane_config):
+        lid = str(lane_config.get("lane_id") or lane_config.get("model", ""))
+        if lid:
+            self._desired_lanes[lid] = dict(lane_config)
+
+    def update_desired_lane_remove(self, provider_id, lane_id):
+        self._desired_lanes.pop(lane_id, None)
 
 
 def _make_planner(facade=None, registry=None, demand=None, cycle_seconds=30.0):
@@ -953,23 +971,21 @@ async def test_wake_command_uses_full_timeout_budget():
 
 
 @pytest.mark.asyncio
-async def test_load_uses_add_lane_not_apply_lanes():
-    """Load should use add_lane (additive) instead of apply_lanes (declarative)."""
+async def test_load_uses_apply_lanes_with_state_merge():
+    """Load uses declarative apply_lanes and preserves existing lanes."""
     from logos.sdi.models import CapacityPlanAction
 
     registry = MockRegistry()
+    # Existing lane already tracked in desired state
+    registry._desired_lanes = {
+        "planner-Qwen_Qwen2.5-0.5B-Instruct": {
+            "lane_id": "planner-Qwen_Qwen2.5-0.5B-Instruct",
+            "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        },
+    }
     registry._snapshot = {
         "first_status_received": True,
-        "runtime": {
-            "lanes": [
-                {
-                    "lane_id": "planner-Qwen_Qwen2.5-0.5B-Instruct",
-                    "model": "Qwen/Qwen2.5-0.5B-Instruct",
-                    "runtime_state": "sleeping",
-                    "sleep_state": "sleeping",
-                },
-            ],
-        },
+        "runtime": {"lanes": []},
     }
     planner = _make_planner(registry=registry)
     planner._poll_confirmation = AsyncMock(return_value=True)
@@ -983,11 +999,7 @@ async def test_load_uses_add_lane_not_apply_lanes():
             "lane_id": "planner-Qwen_Qwen2.5-Coder-7B-Instruct",
             "model": "Qwen/Qwen2.5-Coder-7B-Instruct",
             "vllm": True,
-            "vllm_config": {
-                "enable_sleep_mode": True,
-                "server_dev_mode": True,
-                "tensor_parallel_size": 2,
-            },
+            "vllm_config": {"enable_sleep_mode": True},
         },
         reason="Request-time cold load",
     )
@@ -996,11 +1008,50 @@ async def test_load_uses_add_lane_not_apply_lanes():
 
     assert result is True
     assert len(registry.commands_sent) == 1
-    # Must be add_lane, NOT apply_lanes — apply_lanes is declarative and
-    # would destroy existing lanes if the snapshot was stale.
-    assert registry.commands_sent[0]["action"] == "add_lane"
-    assert registry.commands_sent[0]["params"]["model"] == "Qwen/Qwen2.5-Coder-7B-Instruct"
-    assert registry.commands_sent[0]["params"]["vllm"] is True
+    cmd = registry.commands_sent[0]
+    assert cmd["action"] == "apply_lanes"
+    # Must include BOTH the existing lane and the new lane
+    sent_lanes = cmd["params"]["lanes"]
+    lane_ids = {l["lane_id"] for l in sent_lanes}
+    assert "planner-Qwen_Qwen2.5-0.5B-Instruct" in lane_ids
+    assert "planner-Qwen_Qwen2.5-Coder-7B-Instruct" in lane_ids
+
+
+async def test_stop_uses_apply_lanes_removing_target():
+    """Stop uses declarative apply_lanes and removes only the target lane."""
+    from logos.sdi.models import CapacityPlanAction
+
+    registry = MockRegistry()
+    registry._desired_lanes = {
+        "lane-keep": {"lane_id": "lane-keep", "model": "model-a"},
+        "lane-remove": {"lane_id": "lane-remove", "model": "model-b"},
+    }
+    registry._snapshot = {
+        "first_status_received": True,
+        "runtime": {"lanes": [
+            {"lane_id": "lane-remove", "runtime_state": "loaded"},
+        ]},
+    }
+    planner = _make_planner(registry=registry)
+    planner._poll_confirmation = AsyncMock(return_value=True)
+
+    action = CapacityPlanAction(
+        action="stop",
+        provider_id=10,
+        lane_id="lane-remove",
+        model_name="model-b",
+        reason="idle stop",
+    )
+
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
+
+    assert result is True
+    cmd = registry.commands_sent[0]
+    assert cmd["action"] == "apply_lanes"
+    sent_lanes = cmd["params"]["lanes"]
+    lane_ids = {l["lane_id"] for l in sent_lanes}
+    assert "lane-keep" in lane_ids
+    assert "lane-remove" not in lane_ids
 
 
 # ---------------------------------------------------------------------------
@@ -1522,3 +1573,142 @@ async def test_prepare_lane_proceeds_with_first_status():
     result = await planner.prepare_lane_for_request(10, "model-a", timeout_seconds=1.0)
     assert result is not None
     assert result["lane_id"] == "lane-1"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Anti-flip cooldown
+# ---------------------------------------------------------------------------
+
+
+def test_anti_flip_blocks_stop_within_cooldown():
+    """Lane loaded within cooldown period should not be stopped."""
+    lane = _make_signal(lane_id="lane-1", model_name="model-a", runtime_state="loaded", active_requests=0)
+    demand = DemandTracker()
+    # Create demand for another model to trigger VRAM pressure
+    for _ in range(10):
+        demand.record_request("model-b")
+    facade = MockFacade(lanes=[lane], capabilities=["model-a", "model-b"])
+    planner = _make_planner(facade=facade, demand=demand)
+
+    now = time.time()
+    # Lane idle long enough for stop
+    planner._lane_idle_since[(10, "lane-1")] = now - 1000
+    # But loaded only 30s ago (within 60s cooldown)
+    planner._lane_loaded_at[(10, "lane-1")] = now - 30
+
+    actions = planner._compute_idle_actions(10, [lane])
+    stop_actions = [a for a in actions if a.action == "stop"]
+    assert len(stop_actions) == 0
+
+
+def test_anti_flip_allows_stop_after_cooldown():
+    """Lane loaded beyond cooldown period can be stopped."""
+    lane = _make_signal(lane_id="lane-1", model_name="model-a", runtime_state="loaded", active_requests=0)
+    demand = DemandTracker()
+    for _ in range(10):
+        demand.record_request("model-b")
+    facade = MockFacade(lanes=[lane], capabilities=["model-a", "model-b"])
+    planner = _make_planner(facade=facade, demand=demand)
+
+    now = time.time()
+    planner._lane_idle_since[(10, "lane-1")] = now - 1000
+    # Loaded 120s ago (beyond 60s cooldown)
+    planner._lane_loaded_at[(10, "lane-1")] = now - 120
+
+    actions = planner._compute_idle_actions(10, [lane])
+    stop_actions = [a for a in actions if a.action == "stop"]
+    assert len(stop_actions) == 1
+
+
+def test_anti_flip_does_not_block_sleep():
+    """Sleep actions are exempt from anti-flip cooldown."""
+    lane = _make_signal(
+        lane_id="lane-1", model_name="model-a", runtime_state="loaded",
+        sleep_state="awake", is_vllm=True, active_requests=0,
+    )
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+
+    now = time.time()
+    planner._lane_idle_since[(10, "lane-1")] = now - 301
+    # Recently loaded
+    planner._lane_loaded_at[(10, "lane-1")] = now - 10
+
+    actions = planner._compute_idle_actions(10, [lane])
+    sleep_actions = [a for a in actions if a.action == "sleep_l1"]
+    assert len(sleep_actions) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: would_require_eviction
+# ---------------------------------------------------------------------------
+
+
+def test_would_require_eviction_true_when_vram_tight():
+    """would_require_eviction returns True when free VRAM < estimated model VRAM."""
+    capacity = OllamaCapacity(available_vram_mb=2000, total_vram_mb=48000, loaded_models=[])
+    profile = ModelProfile(
+        model_name="model-a", engine="vllm",
+        base_residency_mb=8000, kv_budget_mb=2000,
+    )
+    facade = MockFacade(capacity=capacity, profiles={"model-a": profile})
+    planner = _make_planner(facade=facade)
+
+    assert planner.would_require_eviction(10, "model-a") is True
+
+
+def test_would_require_eviction_false_when_vram_available():
+    """would_require_eviction returns False when plenty of VRAM available."""
+    capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=48000, loaded_models=[])
+    profile = ModelProfile(
+        model_name="model-a", engine="vllm",
+        base_residency_mb=8000, kv_budget_mb=2000,
+    )
+    facade = MockFacade(capacity=capacity, profiles={"model-a": profile})
+    planner = _make_planner(facade=facade)
+
+    assert planner.would_require_eviction(10, "model-a") is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: on_state_change callback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_triggers_on_state_change_callback():
+    """Successful load action should trigger on_state_change callback."""
+    callback_calls = []
+    facade = MockFacade(lanes=[])
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [{
+                "lane_id": "planner-model_a",
+                "model": "model-a",
+                "runtime_state": "loaded",
+                "sleep_state": "awake",
+            }]
+        },
+        "first_status_received": True,
+    }
+    planner = CapacityPlanner(
+        logosnode_facade=facade,
+        logosnode_registry=registry,
+        demand_tracker=DemandTracker(),
+        cycle_seconds=30.0,
+        enabled=True,
+        on_state_change=lambda model_name: callback_calls.append(model_name),
+    )
+
+    from logos.sdi.models import CapacityPlanAction
+    action = CapacityPlanAction(
+        action="load",
+        provider_id=10,
+        lane_id="planner-model_a",
+        model_name="model-a",
+        params={"lane_id": "planner-model_a", "model": "model-a"},
+        reason="test",
+    )
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
+    assert result is True
+    assert "model-a" in callback_calls

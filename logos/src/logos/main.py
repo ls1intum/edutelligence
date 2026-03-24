@@ -1178,6 +1178,7 @@ async def start_pipeline():
         logosnode_registry=_logosnode_registry,
         demand_tracker=_demand_tracker,
         enabled=planner_enabled,
+        on_state_change=scheduler.reevaluate_model_queues,
     )
     _context_resolver = ContextResolver(
         logosnode_registry=_logosnode_registry,
@@ -1251,6 +1252,7 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
                         "provider_id": provider_id,
+                        "db_parallel": model_info.get("parallel"),
                     }
                 )
             elif provider_type == "azure":

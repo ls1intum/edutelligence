@@ -85,3 +85,17 @@ def test_remove_entry_decrements_depth():
     state = mgr.get_state(4, provider_id)
     assert state.normal == 0
     assert mgr.dequeue(4, provider_id) is None
+
+
+def test_get_total_depth_by_provider():
+    mgr = PriorityQueueManager()
+    # Provider 1: two models with tasks
+    mgr.enqueue(DummyTask("a"), model_id=10, provider_id=1, priority=Priority.HIGH)
+    mgr.enqueue(DummyTask("b"), model_id=10, provider_id=1, priority=Priority.NORMAL)
+    mgr.enqueue(DummyTask("c"), model_id=20, provider_id=1, priority=Priority.LOW)
+    # Provider 2: one model with a task
+    mgr.enqueue(DummyTask("d"), model_id=10, provider_id=2, priority=Priority.NORMAL)
+
+    assert mgr.get_total_depth_by_provider(1) == 3
+    assert mgr.get_total_depth_by_provider(2) == 1
+    assert mgr.get_total_depth_by_provider(99) == 0

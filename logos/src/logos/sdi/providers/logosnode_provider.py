@@ -60,6 +60,7 @@ class LogosNodeDataProvider:
         self._last_refresh = 0.0
         self._model_active: Dict[int, int] = {}
         self._active_request_ids: Dict[str, int] = {}
+        self._db_parallel_ceiling: Dict[int, int] = {}
         self._lock = threading.RLock()
         self._provider_config = self._load_provider_config()
 
@@ -109,6 +110,11 @@ class LogosNodeDataProvider:
             ]
             for request_id in stale_request_ids:
                 self._active_request_ids.pop(request_id, None)
+
+    def set_db_parallel_ceilings(self, ceilings: Dict[int, int]) -> None:
+        """Set DB-configured parallel ceilings per model_id."""
+        with self._lock:
+            self._db_parallel_ceiling = dict(ceilings)
 
     def refresh_data(self) -> None:
         now = time.time()
@@ -369,15 +375,26 @@ class LogosNodeDataProvider:
     def get_parallel_capacity(self, model_id: int) -> tuple[int, str]:
         configured = self.get_config_value(model_id, "parallel_capacity", None)
         if configured is not None and int(configured) != self.DEFAULT_PARALLEL_CAPACITY:
-            return int(configured), "config"
+            capacity, source = int(configured), "config"
+        else:
+            runtime_capacity, source = self._get_runtime_parallel_capacity(model_id)
+            if runtime_capacity is not None:
+                capacity, source = runtime_capacity, source
+            elif configured is not None:
+                capacity, source = int(configured), "config"
+            else:
+                capacity, source = self.DEFAULT_PARALLEL_CAPACITY, "default"
 
-        runtime_capacity, source = self._get_runtime_parallel_capacity(model_id)
-        if runtime_capacity is not None:
-            return runtime_capacity, source
-
-        if configured is not None:
-            return int(configured), "config"
-        return self.DEFAULT_PARALLEL_CAPACITY, "default"
+        # DB parallel ceiling: hard ceiling from the models table
+        db_ceiling = self._db_parallel_ceiling.get(model_id)
+        if db_ceiling is not None and db_ceiling > 0:
+            if capacity > db_ceiling:
+                logger.debug(
+                    "Capping parallel capacity for model %d from %d (%s) to %d (db_ceiling)",
+                    model_id, capacity, source, db_ceiling,
+                )
+                return db_ceiling, "db_ceiling"
+        return capacity, source
 
     def get_model_status(self, model_id: int) -> ModelStatus:
         self.refresh_data()
@@ -682,17 +699,53 @@ class LogosNodeDataProvider:
             current_active = self._model_active.get(model_id, 0)
             self._model_active[model_id] = max(0, current_active - 1)
 
+    # Maximum backend queue_waiting before we refuse new reservations.
+    # Prevents piling requests on an already-backlogged vLLM process.
+    BACKEND_QUEUE_PRESSURE_THRESHOLD = 2
+
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         with self._lock:
             current_active = self._model_active.get(model_id, 0)
             max_capacity, _source = self.get_parallel_capacity(model_id)
             if current_active < max_capacity:
+                # Check backend queue pressure before accepting
+                if self._backend_queue_exceeds_threshold(model_id):
+                    logger.debug(
+                        "Refusing reservation for model %d: backend queue pressure exceeds threshold",
+                        model_id,
+                    )
+                    return False
                 if request_id in self._active_request_ids:
                     return True
                 self._active_request_ids[request_id] = model_id
                 self._model_active[model_id] = current_active + 1
                 return True
             return False
+
+    def _backend_queue_exceeds_threshold(self, model_id: int) -> bool:
+        """Check if the backend (vLLM) queue_waiting exceeds the threshold."""
+        if self._runtime_registry is None:
+            return False
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return False
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return False
+        lanes = ((snap.get("runtime") or {}).get("lanes") or [])
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if lane.get("model") != model_name:
+                continue
+            if lane.get("runtime_state") in {"stopped", "error"}:
+                continue
+            backend = lane.get("backend_metrics")
+            if isinstance(backend, dict):
+                queue_waiting = float(backend.get("queue_waiting") or 0)
+                if queue_waiting > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
+                    return True
+        return False
 
     def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
         with self._lock:

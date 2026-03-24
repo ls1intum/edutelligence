@@ -11,6 +11,7 @@ import asyncio
 import copy
 from datetime import datetime, timezone
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -85,17 +86,26 @@ class CapacityPlanner:
         demand_tracker: DemandTracker,
         cycle_seconds: float = 30.0,
         enabled: bool = True,
+        on_state_change: Optional[Any] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
         self._demand = demand_tracker
         self._cycle_seconds = cycle_seconds
         self._enabled = enabled
+        self._on_state_change = on_state_change
         self._lane_idle_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
+        self._lane_loaded_at: dict[tuple[int, str], float] = {}
+        self._load_cooldown_seconds = float(
+            os.environ.get("LOGOS_LOAD_COOLDOWN_SECONDS", "60")
+        )
         self._task: Optional[asyncio.Task] = None
         self._cycle_count = 0
+        self._use_additive_loads = os.environ.get(
+            "LOGOS_USE_ADDITIVE_LOADS", ""
+        ).strip().lower() in ("1", "true", "yes")
 
     async def start(self) -> None:
         """Start the planner background loop."""
@@ -561,10 +571,13 @@ class CapacityPlanner:
             self._lane_sleep_since.pop(key, None)
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
+            if action.action == "load":
+                self._lane_loaded_at[key] = confirmed_at
             return
 
         if action.action == "stop":
             self._clear_lane_tracking(key)
+            self._lane_loaded_at.pop(key, None)
 
     def _update_idle_tracking(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Track idle durations per lane."""
@@ -631,6 +644,14 @@ class CapacityPlanner:
                 and idle_seconds >= self.IDLE_STOP
                 and lane.active_requests == 0
             ):
+                # Anti-flip cooldown: don't stop lanes loaded within cooldown period
+                loaded_at = self._lane_loaded_at.get(key)
+                if loaded_at is not None and (now - loaded_at) < self._load_cooldown_seconds:
+                    logger.debug(
+                        "Skipping stop for lane %s: loaded %.0fs ago (cooldown=%.0fs)",
+                        lane.lane_id, now - loaded_at, self._load_cooldown_seconds,
+                    )
+                    continue
                 if self._has_vram_pressure(provider_id, lane.model_name):
                     actions.append(CapacityPlanAction(
                         action="stop",
@@ -682,6 +703,48 @@ class CapacityPlanner:
                 ))
 
         return actions
+
+    def _would_evict_cooled_lane(
+        self,
+        provider_id: int,
+        model_name: str,
+        profiles: dict[str, "ModelProfile"],
+        capacity,
+    ) -> bool:
+        """Check if loading a model would require evicting a lane still in cooldown.
+
+        Only blocks planner-initiated loads. Request-time cold loads bypass this.
+        """
+        if capacity is None or self._load_cooldown_seconds <= 0:
+            return False
+
+        profile = profiles.get(model_name)
+        estimated_mb: float
+        if profile is not None:
+            estimated_mb = profile.estimate_vram_mb()
+        else:
+            return False  # Can't estimate, don't block
+
+        available = float(capacity.available_vram_mb)
+        if available >= estimated_mb * self.VRAM_SAFETY_MARGIN:
+            return False  # Enough free VRAM, no eviction needed
+
+        # Would need eviction — check if any candidate lane is in cooldown
+        now = time.time()
+        try:
+            lanes = self._facade.get_all_provider_lane_signals(provider_id)
+        except Exception:
+            return False
+        for lane in lanes:
+            if lane.model_name == model_name:
+                continue
+            if lane.active_requests > 0:
+                continue
+            key = self._lane_key(provider_id, lane.lane_id)
+            loaded_at = self._lane_loaded_at.get(key)
+            if loaded_at is not None and (now - loaded_at) < self._load_cooldown_seconds:
+                return True
+        return False
 
     def _has_vram_pressure(self, provider_id: int, exclude_model: str) -> bool:
         """Check if other models need VRAM on this provider.
@@ -780,6 +843,13 @@ class CapacityPlanner:
 
             # Load a new lane if demand is high and no lane exists
             if score >= self.DEMAND_LOAD_THRESHOLD and not model_lanes:
+                # Skip load if it would evict a lane loaded within cooldown
+                if self._would_evict_cooled_lane(provider_id, model_name, profiles, capacity):
+                    logger.debug(
+                        "Skipping planner load of %s: would evict a recently loaded lane (cooldown=%.0fs)",
+                        model_name, self._load_cooldown_seconds,
+                    )
+                    continue
                 profile = profiles.get(model_name)
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity):
                     continue
@@ -1154,12 +1224,16 @@ class CapacityPlanner:
                     ),
                 ))
             elif cache_pct < self.GPU_CACHE_LOW:
+                # Only shrink if lane has low throughput AND other models need VRAM.
+                # Lanes with high throughput keep their KV cache even if usage is
+                # momentarily low — prevents thrashing during bursty workloads.
+                lane_throughput = (lane.requests_running or 0.0) + (lane.queue_waiting or 0.0)
                 other_demand = any(
                     score > 0
                     for model_name, score in self._demand.get_ranked_models()
                     if model_name != lane.model_name
                 )
-                if other_demand:
+                if other_demand and lane_throughput < 2.0:
                     new_kv_mb = max(self.KV_CACHE_MIN_MB, current_kv_mb - step_mb)
                     if abs(new_kv_mb - current_kv_mb) < 64:  # <64MB change not worth it
                         continue
@@ -1330,86 +1404,6 @@ class CapacityPlanner:
         params["vllm_config"] = vllm_config
         return params
 
-    def _build_apply_lanes_params_for_load(
-        self,
-        action: CapacityPlanAction,
-    ) -> Dict[str, Any]:
-        """Build a full desired lane set for a load action.
-
-        ``apply_lanes`` on the worker is declarative: any lane omitted from the
-        payload is removed. Request-time cold loads therefore must preserve the
-        existing worker lane set and merge the new lane into it, instead of
-        sending a single-lane replacement payload.
-        """
-        desired_by_lane_id: dict[str, dict[str, Any]] = {}
-
-        snap = self._registry.peek_runtime_snapshot(action.provider_id) if self._registry else None
-        runtime = snap.get("runtime") if isinstance(snap, dict) else None
-        lanes = runtime.get("lanes") if isinstance(runtime, dict) else None
-
-        if isinstance(lanes, list):
-            for lane in lanes:
-                if not isinstance(lane, dict):
-                    continue
-
-                runtime_state = str(lane.get("runtime_state") or "").strip().lower()
-                if runtime_state in {"stopped", "error"}:
-                    continue
-
-                lane_config = lane.get("lane_config")
-                if isinstance(lane_config, dict):
-                    desired_lane = copy.deepcopy(lane_config)
-                else:
-                    desired_lane = self._reconstruct_lane_config_from_runtime_lane(lane)
-                    if desired_lane is None:
-                        continue
-
-                lane_id = str(
-                    desired_lane.get("lane_id")
-                    or lane.get("lane_id")
-                    or self._planner_lane_id(str(desired_lane.get("model") or lane.get("model") or ""))
-                ).strip()
-                if not lane_id:
-                    continue
-                desired_lane["lane_id"] = lane_id
-                desired_by_lane_id[lane_id] = desired_lane
-
-        desired_by_lane_id[action.lane_id] = {
-            "lane_id": action.lane_id,
-            "model": action.model_name,
-            **copy.deepcopy(action.params),
-        }
-        return {"lanes": list(desired_by_lane_id.values())}
-
-    def _reconstruct_lane_config_from_runtime_lane(
-        self,
-        lane: dict[str, Any],
-    ) -> Dict[str, Any] | None:
-        """Best-effort fallback when a runtime lane lacks explicit lane_config."""
-        model_name = str(lane.get("model") or "").strip()
-        if not model_name:
-            return None
-
-        config: dict[str, Any] = {
-            "lane_id": str(lane.get("lane_id") or self._planner_lane_id(model_name)),
-            "model": model_name,
-        }
-        if bool(lane.get("vllm")):
-            config["vllm"] = True
-
-        for field in (
-            "num_parallel",
-            "context_length",
-            "keep_alive",
-            "kv_cache_type",
-            "flash_attention",
-            "gpu_devices",
-        ):
-            value = lane.get(field)
-            if value not in (None, ""):
-                config[field] = value
-        return config
-
     # KV cache estimation
     KV_CACHE_HEADROOM_RATIO = 0.35  # last-resort fallback for models without HF config
     DEFAULT_CONTEXT_CAP = 8192      # conservative initial context window
@@ -1540,6 +1534,69 @@ class CapacityPlanner:
     # Execution with confirmation
     # ------------------------------------------------------------------
 
+    async def _drain_lane(
+        self, provider_id: int, lane_id: str, timeout_seconds: float = 30.0
+    ) -> bool:
+        """Wait for a lane's active requests to drain before a destructive action.
+
+        Returns True if drained (active_requests == 0), False on timeout.
+        """
+        deadline = time.time() + timeout_seconds
+        poll_interval = 2.0
+        while time.time() < deadline:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+            if snap is None:
+                return True  # no snapshot = no active requests visible
+            lanes = (snap.get("runtime") or {}).get("lanes") or []
+            lane = next(
+                (l for l in lanes if isinstance(l, dict) and l.get("lane_id") == lane_id),
+                None,
+            )
+            if lane is None:
+                return True  # lane already gone
+            active = int(lane.get("active_requests") or 0)
+            if active == 0:
+                return True
+            logger.info(
+                "Waiting for lane %s to drain (%d active requests, %.0fs remaining)",
+                lane_id, active, deadline - time.time(),
+            )
+            await asyncio.sleep(poll_interval)
+        logger.warning(
+            "Drain timeout for lane %s on provider %s after %.0fs",
+            lane_id, provider_id, timeout_seconds,
+        )
+        return False
+
+    def _build_desired_lane_set(
+        self,
+        provider_id: int,
+        *,
+        add_lane: Optional[Dict[str, Any]] = None,
+        remove_lane_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Build the full desired lane set by merging current state with a change.
+
+        Reads current lanes from the registry's desired_lanes (seeded from
+        the worker's first status report), then applies the requested mutation.
+        """
+        current = self._registry.get_desired_lane_set(provider_id)
+        desired: dict[str, dict[str, Any]] = {}
+        for lc in current:
+            lid = str(lc.get("lane_id") or lc.get("model", ""))
+            if lid:
+                desired[lid] = copy.deepcopy(lc)
+
+        if remove_lane_id:
+            desired.pop(remove_lane_id, None)
+
+        if add_lane:
+            lid = str(add_lane.get("lane_id") or add_lane.get("model", ""))
+            if lid:
+                desired[lid] = copy.deepcopy(add_lane)
+
+        return list(desired.values())
+
     async def _execute_action_with_confirmation(
         self, action: CapacityPlanAction, timeout_seconds: float = 60.0
     ) -> bool:
@@ -1592,40 +1649,117 @@ class CapacityPlanner:
                 )
             return confirmed
 
-        command_map = {
-            "sleep_l1": ("sleep_lane", {"lane_id": action.lane_id, "level": 1}),
-            "sleep_l2": ("sleep_lane", {"lane_id": action.lane_id, "level": 2}),
-            "wake": ("wake_lane", {"lane_id": action.lane_id}),
-            "stop": ("delete_lane", {"lane_id": action.lane_id}),
-            "load": ("add_lane", action.params),
-        }
+        # Sleep/wake are lightweight individual commands.
+        # Load/stop use declarative apply_lanes (unless additive fallback is enabled).
+        if action.action in ("sleep_l1", "sleep_l2", "wake"):
+            command_map = {
+                "sleep_l1": ("sleep_lane", {"lane_id": action.lane_id, "level": 1}),
+                "sleep_l2": ("sleep_lane", {"lane_id": action.lane_id, "level": 2}),
+                "wake": ("wake_lane", {"lane_id": action.lane_id}),
+            }
+            command_action, command_params = command_map[action.action]
+            cmd_timeout = (
+                int(timeout_seconds) if action.action == "wake"
+                else int(min(timeout_seconds, 30))
+            )
+            try:
+                await self._registry.send_command(
+                    action.provider_id, command_action, command_params,
+                    timeout_seconds=cmd_timeout,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send %s command for lane %s",
+                    action.action, action.lane_id,
+                )
+                return False
 
-        command_entry = command_map.get(action.action)
-        if command_entry is None:
+        elif action.action == "load":
+            if self._use_additive_loads:
+                try:
+                    await self._registry.send_command(
+                        action.provider_id, "add_lane", action.params,
+                        timeout_seconds=int(timeout_seconds),
+                    )
+                    self._registry.update_desired_lane_add(
+                        action.provider_id, action.params,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to send add_lane for lane %s", action.lane_id,
+                    )
+                    return False
+            else:
+                new_lane = {"lane_id": action.lane_id, "model": action.model_name}
+                if action.params:
+                    new_lane.update(action.params)
+                desired = self._build_desired_lane_set(
+                    action.provider_id, add_lane=new_lane,
+                )
+                try:
+                    result = await self._registry.send_command(
+                        action.provider_id, "apply_lanes",
+                        {"lanes": desired},
+                        timeout_seconds=int(timeout_seconds),
+                    )
+                    rolled_back = isinstance(result, dict) and result.get("rolled_back")
+                    if rolled_back:
+                        logger.warning(
+                            "apply_lanes rolled back for load of %s on provider %s",
+                            action.model_name, action.provider_id,
+                        )
+                        return False
+                    self._registry.update_desired_lanes(action.provider_id, desired)
+                except Exception:
+                    logger.exception(
+                        "Failed to send apply_lanes for load of %s", action.lane_id,
+                    )
+                    return False
+
+        elif action.action == "stop":
+            # Drain active requests before removing the lane
+            await self._drain_lane(action.provider_id, action.lane_id, timeout_seconds=30.0)
+
+            if self._use_additive_loads:
+                try:
+                    await self._registry.send_command(
+                        action.provider_id, "delete_lane",
+                        {"lane_id": action.lane_id},
+                        timeout_seconds=int(min(timeout_seconds, 30)),
+                    )
+                    self._registry.update_desired_lane_remove(
+                        action.provider_id, action.lane_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to send delete_lane for lane %s", action.lane_id,
+                    )
+                    return False
+            else:
+                desired = self._build_desired_lane_set(
+                    action.provider_id, remove_lane_id=action.lane_id,
+                )
+                try:
+                    result = await self._registry.send_command(
+                        action.provider_id, "apply_lanes",
+                        {"lanes": desired},
+                        timeout_seconds=int(min(timeout_seconds, 30)),
+                    )
+                    rolled_back = isinstance(result, dict) and result.get("rolled_back")
+                    if rolled_back:
+                        logger.warning(
+                            "apply_lanes rolled back for stop of %s on provider %s",
+                            action.lane_id, action.provider_id,
+                        )
+                        return False
+                    self._registry.update_desired_lanes(action.provider_id, desired)
+                except Exception:
+                    logger.exception(
+                        "Failed to send apply_lanes for stop of %s", action.lane_id,
+                    )
+                    return False
+        else:
             logger.warning("Unknown capacity action: %s", action.action)
-            return False
-
-        command_action, command_params = command_entry
-
-        # Slow-path actions need longer command timeouts since the worker blocks
-        # until vLLM finishes the operation.
-        cmd_timeout = (
-            int(timeout_seconds)
-            if action.action in {"load", "wake"}
-            else int(min(timeout_seconds, 30))
-        )
-        try:
-            await self._registry.send_command(
-                action.provider_id,
-                command_action,
-                command_params,
-                timeout_seconds=cmd_timeout,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to send %s command for lane %s",
-                action.action, action.lane_id,
-            )
             return False
 
         # Poll for confirmation
@@ -1635,6 +1769,15 @@ class CapacityPlanner:
                 "Confirmation timeout for %s on lane %s after %.0fs",
                 action.action, action.lane_id, timeout_seconds,
             )
+        elif action.action in ("load", "wake") and self._on_state_change is not None:
+            # Notify scheduler to reevaluate queued requests for this model
+            try:
+                self._on_state_change(action.model_name)
+            except Exception:
+                logger.debug(
+                    "on_state_change callback failed for model %s",
+                    action.model_name, exc_info=True,
+                )
         return confirmed
 
     async def _poll_confirmation(
@@ -1687,6 +1830,32 @@ class CapacityPlanner:
         if action.action == "reconfigure_kv_cache":
             return True  # Reconfiguration confirmed by command success
         return False
+
+    def would_require_eviction(self, provider_id: int, model_name: str) -> bool:
+        """Check if loading a model on a provider would require evicting another lane.
+
+        Returns True if estimated model VRAM exceeds available free VRAM (with safety margin).
+        Used by the ETTFT estimator to add eviction cost to cold-start scoring.
+        """
+        capacity = self._safe_get_capacity(provider_id)
+        if capacity is None:
+            return False  # Can't tell, assume no eviction needed
+
+        profile = self._safe_get_profiles(provider_id).get(model_name)
+        estimated_mb: float
+        if profile is not None:
+            estimated_mb = profile.estimate_vram_mb()
+        else:
+            from logos.sdi.models import (
+                _base_residency_from_bytes,
+                _estimated_disk_size_bytes_from_model_name,
+            )
+            disk = _estimated_disk_size_bytes_from_model_name(model_name)
+            base = _base_residency_from_bytes(disk)
+            estimated_mb = float(base) if base else 4096.0
+
+        available = float(capacity.available_vram_mb)
+        return available < estimated_mb * self.VRAM_SAFETY_MARGIN
 
     def get_stats(self) -> dict:
         """Return planner state for debugging."""

@@ -76,6 +76,15 @@ class VllmConfig(BaseModel):
     disable_nccl_p2p: bool = False
     enable_sleep_mode: bool = False
     server_dev_mode: bool = False
+    cuda_graph_sizes: str = Field(
+        default="",
+        description="Comma-separated batch sizes for CUDA graph capture (e.g. '1,2,4,8'). "
+        "Empty = vLLM default. Only effective when enforce_eager is False.",
+    )
+    swap_space_gb: float = Field(
+        default=0.0, ge=0.0,
+        description="CPU swap space for KV cache offloading (GB). 0 = disabled.",
+    )
     extra_args: list[str] = Field(default_factory=list)
 
     @field_validator("kv_cache_memory_bytes")
@@ -118,6 +127,10 @@ class WorkerConfig(BaseModel):
     lane_port_start: int = 11436
     lane_port_end: int = 11499
     name: str = "logos-workernode"
+    cpu_offload_budget_gb: float = Field(
+        default=0.0, ge=0.0,
+        description="Total CPU RAM budget (GB) for KV cache swap space, divided evenly across capable models.",
+    )
 
 
 class LogosConfig(BaseModel):

@@ -24,6 +24,7 @@ import logging
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
@@ -453,8 +454,40 @@ class VllmProcessHandle:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
             cmd.append("--enable-sleep-mode")
+        # CUDA graph sizes: opt-in, only when not in eager mode
+        if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
+            cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
+        # CPU swap space for KV cache offloading
+        if vc.swap_space_gb > 0:
+            cmd.extend(["--swap-space", str(int(vc.swap_space_gb))])
         cmd.extend(vc.extra_args)
         return cmd
+
+    _cached_cuda_arch: str | None = None
+
+    def _detect_cuda_arch(self) -> str | None:
+        """Auto-detect GPU compute capability via nvidia-smi. Cached per process."""
+        if VllmProcessHandle._cached_cuda_arch is not None:
+            return VllmProcessHandle._cached_cuda_arch or None
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                caps = set()
+                for line in result.stdout.strip().splitlines():
+                    cap = line.strip()
+                    if cap:
+                        caps.add(cap)
+                if caps:
+                    arch = ";".join(sorted(caps))
+                    VllmProcessHandle._cached_cuda_arch = arch
+                    return arch
+        except Exception:
+            pass
+        VllmProcessHandle._cached_cuda_arch = ""
+        return None
 
     def _resolve_vllm_binary(self, configured_binary: str) -> str:
         """Resolve the vLLM CLI executable with actionable fallback order.
@@ -580,6 +613,18 @@ class VllmProcessHandle:
         vc = lane_config.vllm_config
         if vc.server_dev_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
+
+        # Persistent torch.compile cache: avoids recompilation across restarts
+        if "TORCHINDUCTOR_CACHE_DIR" not in os.environ:
+            env["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(gc.models_path, ".torch_cache")
+        if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
+            env["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
+
+        # Auto-detect CUDA arch for faster compilation
+        if "TORCH_CUDA_ARCH_LIST" not in os.environ:
+            detected_arch = self._detect_cuda_arch()
+            if detected_arch:
+                env["TORCH_CUDA_ARCH_LIST"] = detected_arch
         if vc.disable_nccl_p2p:
             env["NCCL_P2P_DISABLE"] = "1"
 

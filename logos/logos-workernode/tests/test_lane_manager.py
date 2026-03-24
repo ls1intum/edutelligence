@@ -813,3 +813,56 @@ async def test_remove_lane_releases_bookkeeping_on_destroy_timeout() -> None:
     assert lane_id not in manager._active_requests  # noqa: SLF001
     assert lane_id not in manager._starting_deadlines  # noqa: SLF001
     assert handle.close_called is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: CPU offload budget injection
+# ---------------------------------------------------------------------------
+
+
+def test_inject_cpu_offload_budget_divides_among_capabilities():
+    """CPU offload budget should be divided by capabilities_model_count."""
+    manager = LaneManager(
+        OllamaConfig(),
+        cpu_offload_budget_gb=50.0,
+        capabilities_model_count=5,
+    )
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    result = manager._inject_cpu_offload_budget(lc)
+    assert result.vllm_config.swap_space_gb == 10.0
+
+
+def test_inject_cpu_offload_budget_no_override_when_explicit():
+    """Explicit swap_space_gb should not be overridden."""
+    manager = LaneManager(
+        OllamaConfig(),
+        cpu_offload_budget_gb=50.0,
+        capabilities_model_count=5,
+    )
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(swap_space_gb=20.0))
+    result = manager._inject_cpu_offload_budget(lc)
+    assert result.vllm_config.swap_space_gb == 20.0
+
+
+def test_inject_cpu_offload_budget_zero_budget():
+    """Zero budget should leave config unchanged."""
+    manager = LaneManager(
+        OllamaConfig(),
+        cpu_offload_budget_gb=0.0,
+        capabilities_model_count=5,
+    )
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    result = manager._inject_cpu_offload_budget(lc)
+    assert result.vllm_config.swap_space_gb == 0.0
+
+
+def test_inject_cpu_offload_budget_non_vllm_unchanged():
+    """Non-vLLM lanes should not get swap space."""
+    manager = LaneManager(
+        OllamaConfig(),
+        cpu_offload_budget_gb=50.0,
+        capabilities_model_count=5,
+    )
+    lc = LaneConfig(model="test-model", vllm=False)
+    result = manager._inject_cpu_offload_budget(lc)
+    assert result == lc

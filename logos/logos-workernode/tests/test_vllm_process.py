@@ -515,3 +515,79 @@ async def test_kill_process_does_not_wait_forever_after_sigkill(monkeypatch) -> 
 
     assert len(calls) == 2
     assert handle._process_group_id is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Cold start optimization
+# ---------------------------------------------------------------------------
+
+
+def test_build_cmd_includes_cuda_graph_sizes_when_set(monkeypatch):
+    """CUDA graph sizes should appear in cmd when set and not enforce_eager."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(cuda_graph_sizes="1,2,4,8"),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--cuda-graph-sizes" in cmd
+    idx = cmd.index("--cuda-graph-sizes")
+    assert cmd[idx + 1] == "1,2,4,8"
+
+
+def test_build_cmd_skips_cuda_graph_sizes_with_enforce_eager(monkeypatch):
+    """CUDA graph sizes should be skipped when enforce_eager is True."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(cuda_graph_sizes="1,2,4,8", enforce_eager=True),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--cuda-graph-sizes" not in cmd
+
+
+def test_build_cmd_includes_swap_space(monkeypatch):
+    """--swap-space should appear when swap_space_gb > 0."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(swap_space_gb=10.0),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--swap-space" in cmd
+    idx = cmd.index("--swap-space")
+    assert cmd[idx + 1] == "10"
+
+
+def test_build_cmd_no_swap_space_when_zero(monkeypatch):
+    """--swap-space should not appear when swap_space_gb == 0."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(swap_space_gb=0.0),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--swap-space" not in cmd
+
+
+def test_build_env_sets_torch_cache(monkeypatch):
+    """Torch compile cache and CUDA arch should be set in env."""
+    monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
+    monkeypatch.delenv("TORCHINDUCTOR_FX_GRAPH_CACHE", raising=False)
+    monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
+    gc = OllamaConfig(models_path="/data/models")
+    handle = VllmProcessHandle("lane-test", 19000, gc)
+    # Mock _detect_cuda_arch to avoid nvidia-smi call
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    env = handle._build_env(lc)
+    assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.torch_cache"
+    assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
+    assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"

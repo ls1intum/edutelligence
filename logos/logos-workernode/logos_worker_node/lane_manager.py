@@ -167,8 +167,12 @@ class LaneManager:
         gpu_device_count: Callable[[], int] | None = None,
         per_gpu_vram_mb: Callable[[], float] | None = None,
         gpu_snapshot: Callable[[], Awaitable[DeviceSummary]] | None = None,
+        cpu_offload_budget_gb: float = 0.0,
+        capabilities_model_count: int = 0,
     ) -> None:
         self._global_config = global_config
+        self._cpu_offload_budget_gb = cpu_offload_budget_gb
+        self._capabilities_model_count = max(capabilities_model_count, 1)
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
@@ -193,6 +197,33 @@ class LaneManager:
         self._stuck_polls: dict[str, int] = {}  # consecutive polls with no progress
         _STUCK_POLL_THRESHOLD = 6  # ~30s at 5s heartbeat
         self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
+
+    def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
+        """Check which capabilities_models are available locally.
+
+        For each model, checks if it exists in the HF cache or models path.
+        Returns a list of models that could NOT be found (warnings only,
+        doesn't block startup).
+        """
+        import os
+        missing = []
+        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf"))
+        models_path = self._global_config.models_path
+        for model_name in capabilities_models:
+            # Check HF cache (transformers style: models--org--name)
+            hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
+            # Check direct model path
+            direct_path = os.path.join(models_path, model_name)
+            if not os.path.isdir(hf_cache_dir) and not os.path.isdir(direct_path):
+                missing.append(model_name)
+                logger.warning(
+                    "Capability model '%s' not found locally (checked %s and %s). "
+                    "Ensure the model is downloaded before it can be loaded.",
+                    model_name, hf_cache_dir, direct_path,
+                )
+        if not missing:
+            logger.info("All %d capability models verified as available locally", len(capabilities_models))
+        return missing
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [
@@ -551,6 +582,28 @@ class LaneManager:
     # Internal
     # ------------------------------------------------------------------
 
+    def _inject_cpu_offload_budget(self, lane_config: LaneConfig) -> LaneConfig:
+        """Auto-divide CPU offload budget across capable models.
+
+        If the worker has cpu_offload_budget_gb > 0 and the lane is vLLM with
+        swap_space_gb == 0 (not explicitly set), inject per-lane swap space.
+        Budget is divided by total capabilities_model_count (not active lanes).
+        """
+        if self._cpu_offload_budget_gb <= 0:
+            return lane_config
+        if not lane_config.vllm or lane_config.vllm_config is None:
+            return lane_config
+        if lane_config.vllm_config.swap_space_gb > 0:
+            return lane_config  # Explicitly set, don't override
+
+        per_lane = self._cpu_offload_budget_gb / self._capabilities_model_count
+        if per_lane < 0.5:
+            return lane_config  # Too small to be useful
+
+        data = lane_config.model_dump()
+        data["vllm_config"]["swap_space_gb"] = per_lane
+        return LaneConfig(**data)
+
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
@@ -836,6 +889,7 @@ class LaneManager:
         return lane_config.model_copy(update={"gpu_devices": selector})
 
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
+        lane_config = self._inject_cpu_offload_budget(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)
