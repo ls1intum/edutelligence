@@ -227,17 +227,28 @@ export default function WhyGenericAISection(): React.JSX.Element {
         </table>
       </div>
 
-      {/* ── Research quote ── */}
-      <blockquote className={styles.endorseQuote}>
-        <p className={styles.endorseQuoteText}>
-          &ldquo;If you need to do something fast and efficiently, you would use
-          it. But if you do something just for learning, you would not.&rdquo;
-        </p>
-        <cite className={styles.endorseQuoteCite}>
-          &mdash; Participant P20, ChatGPT user, Koli Calling 2025 (Bassner,
-          Lottner &amp; Krusche)
-        </cite>
-      </blockquote>
+      {/* ── Research quotes ── */}
+      <div className={styles.endorseQuotes}>
+        <blockquote className={styles.endorseQuote}>
+          <p className={styles.endorseQuoteText}>
+            &ldquo;If you need to do something fast and efficiently, you would
+            use it. But if you do something just for learning, you would
+            not.&rdquo;
+          </p>
+          <cite className={styles.endorseQuoteCite}>
+            &mdash; P20, ChatGPT user
+          </cite>
+        </blockquote>
+        <blockquote className={styles.endorseQuote}>
+          <p className={styles.endorseQuoteText}>
+            &ldquo;I think it&rsquo;s very easy to learn using ChatGPT. But next
+            day I will forget because I just learned it from ChatGPT.&rdquo;
+          </p>
+          <cite className={styles.endorseQuoteCite}>
+            &mdash; P20, ChatGPT user
+          </cite>
+        </blockquote>
+      </div>
     </section>
   );
 }
