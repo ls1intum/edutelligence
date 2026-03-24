@@ -21,6 +21,7 @@ logger = logging.getLogger("logos_worker_node.ollama_process")
 
 _READY_TIMEOUT = 60
 _PRELOAD_TIMEOUT = 120
+_PULL_TIMEOUT = 3600  # Allow up to 1h for large model downloads (e.g. via Ceph)
 _STOP_TIMEOUT = 10
 _FORCE_KILL_WAIT_TIMEOUT = 5
 
@@ -103,7 +104,12 @@ class OllamaProcessHandle:
         if not ready:
             logger.warning("[%s] Process did not become ready within %ds", self.lane_id, _READY_TIMEOUT)
 
-        # Auto-preload the lane's model
+        # Ensure model is available locally before preloading into VRAM.
+        # On shared storage (e.g. Ceph volumes) the model may already exist
+        # from a previous node — this check avoids redundant downloads.
+        await self._ensure_model_available(lane_config.model)
+
+        # Auto-preload the lane's model into VRAM
         task = asyncio.create_task(
             self._preload_model(lane_config.model),
             name=f"preload-{self.lane_id}",
@@ -437,6 +443,48 @@ class OllamaProcessHandle:
             await asyncio.sleep(delay)
             delay = min(delay * 2, 2.0)
         return False
+
+    async def _ensure_model_available(self, model: str) -> None:
+        """Check if a model is downloaded; pull it if missing.
+
+        This is a blocking call that waits for the download to complete.
+        On shared storage (e.g. Ceph), the model may already be present
+        from another node, so the pull is skipped entirely.
+        """
+        available = await self.get_available_models()
+        available_names = {m.get("name", "").split(":")[0] for m in available}
+        # Also include full name:tag for exact matching
+        available_names |= {m.get("name", "") for m in available}
+
+        model_base = model.split(":")[0]
+        if model in available_names or model_base in available_names:
+            logger.info("[%s] Model '%s' already available on disk — skipping pull", self.lane_id, model)
+            return
+
+        logger.info(
+            "[%s] Model '%s' not found locally — pulling (timeout=%ds)",
+            self.lane_id, model, _PULL_TIMEOUT,
+        )
+        try:
+            resp = await self._http.post(
+                f"{self._ollama_url()}/api/pull",
+                json={"name": model, "stream": False},
+                timeout=_PULL_TIMEOUT,
+            )
+            if resp.status_code == 200:
+                logger.info("[%s] Model '%s' pulled successfully", self.lane_id, model)
+            else:
+                logger.error(
+                    "[%s] Model pull failed (status=%d): %s",
+                    self.lane_id, resp.status_code, resp.text[:500],
+                )
+        except httpx.TimeoutException:
+            logger.error(
+                "[%s] Model pull for '%s' timed out after %ds",
+                self.lane_id, model, _PULL_TIMEOUT,
+            )
+        except httpx.HTTPError as e:
+            logger.error("[%s] Model pull for '%s' failed: %s", self.lane_id, model, e)
 
     async def _preload_model(self, model: str) -> None:
         logger.info("[%s] Preloading model '%s'...", self.lane_id, model)

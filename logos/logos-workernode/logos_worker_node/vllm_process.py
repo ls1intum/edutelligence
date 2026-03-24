@@ -35,7 +35,8 @@ from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, Pro
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
-_READY_TIMEOUT = 300  # vLLM startup can be slow (model download + compilation)
+_READY_TIMEOUT = 600  # vLLM startup can be slow (model download + compilation)
+_READY_TIMEOUT_CACHED = 300  # Shorter timeout when model is already cached
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
@@ -118,9 +119,20 @@ class VllmProcessHandle:
 
         logger.info("[%s] vLLM process spawned (pid=%d)", self.lane_id, self._process.pid)
 
-        ready = await self._wait_for_ready(timeout=_READY_TIMEOUT)
+        cached = self._is_model_cached(lane_config.model, env.get("HF_HOME"))
+        if cached:
+            logger.info("[%s] Model '%s' found in HuggingFace cache — using shorter timeout", self.lane_id, lane_config.model)
+            timeout = _READY_TIMEOUT_CACHED
+        else:
+            logger.info(
+                "[%s] Model '%s' not found in cache — will download on first start (timeout=%ds)",
+                self.lane_id, lane_config.model, _READY_TIMEOUT,
+            )
+            timeout = _READY_TIMEOUT
+
+        ready = await self._wait_for_ready(timeout=timeout)
         if not ready:
-            failure = self._format_startup_failure(_READY_TIMEOUT)
+            failure = self._format_startup_failure(timeout)
             logger.error(failure)
             self._persist_failure_logs("startup_failed")
             await self._kill_process()
@@ -629,6 +641,30 @@ class VllmProcessHandle:
                 else f"{vllm_bin_dir}{os.pathsep}{current_path}"
             )
         return process_env
+
+    def _is_model_cached(self, model: str, hf_home: str | None = None) -> bool:
+        """Check if a HuggingFace model is already present in the local cache.
+
+        Looks for the model snapshot directory in the HuggingFace hub cache.
+        On shared storage (e.g. Ceph volumes), the model may already be present
+        from a previous node — this avoids a redundant download.
+        """
+        resolved_home = hf_home or os.environ.get("HF_HOME", "")
+        if not resolved_home:
+            resolved_home = str(Path.home() / ".cache" / "huggingface")
+
+        # HuggingFace stores models in <HF_HOME>/hub/models--<org>--<name>/snapshots/
+        safe_name = model.replace("/", "--")
+        model_dir = Path(resolved_home) / "hub" / f"models--{safe_name}"
+        snapshots_dir = model_dir / "snapshots"
+
+        if snapshots_dir.is_dir():
+            # Check that at least one snapshot exists with content
+            for snapshot in snapshots_dir.iterdir():
+                if snapshot.is_dir() and any(snapshot.iterdir()):
+                    return True
+
+        return False
 
     def _resolve_hf_home(self, models_path: str) -> str:
         """Pick a writable HuggingFace cache path for vLLM downloads.
