@@ -105,8 +105,8 @@ def test_idle_sleep_l1_after_threshold():
     lane = _make_signal(is_vllm=True, runtime_state="loaded", sleep_state="awake", active_requests=0)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
-    # Simulate: lane has been idle for 61 seconds
-    planner._lane_idle_since[(10, "lane-1")] = time.time() - 61
+    # Simulate: lane has been idle for 301 seconds
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 301
 
     actions = planner._compute_idle_actions(10, [lane])
     assert len(actions) == 1
@@ -119,7 +119,9 @@ def test_idle_sleep_l2_after_threshold():
     lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
-    planner._lane_idle_since[(10, "lane-1")] = time.time() - 301
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_level[(10, "lane-1")] = 1
 
     actions = planner._compute_idle_actions(10, [lane])
     assert len(actions) == 1
@@ -132,11 +134,13 @@ def test_idle_stop_requires_vram_pressure():
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
     planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
+    planner._lane_sleep_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_level[(10, "lane-1")] = 1
 
     actions = planner._compute_idle_actions(10, [lane])
     # No stop action — only sleep_l2 deepening (which is fine, lane stays alive)
     assert all(a.action != "stop" for a in actions)
-    # The sleeping lane gets deepened to L2 since 901 > IDLE_SLEEP_L2 (300)
+    # The sleeping lane gets deepened to L2 after 601s of observed L1 sleep.
     assert len(actions) == 1
     assert actions[0].action == "sleep_l2"
 
@@ -151,6 +155,8 @@ def test_idle_stop_with_vram_pressure():
     planner = _make_planner(facade=MockFacade(lanes=[lane]), demand=demand)
 
     planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
+    planner._lane_sleep_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_level[(10, "lane-1")] = 1
 
     actions = planner._compute_idle_actions(10, [lane])
     assert len(actions) == 1
@@ -169,6 +175,8 @@ def test_idle_stop_with_low_vram():
     planner = _make_planner(facade=facade, demand=demand)
 
     planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
+    planner._lane_sleep_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_level[(10, "lane-1")] = 1
 
     actions = planner._compute_idle_actions(10, [lane])
     assert len(actions) == 1
@@ -190,8 +198,8 @@ def test_no_sleep_for_ollama_lanes():
     lane = _make_signal(is_vllm=False, runtime_state="loaded", sleep_state="unsupported")
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
-    # Idle for 61s — sleep threshold, but Ollama → no action
-    planner._lane_idle_since[(10, "lane-1")] = time.time() - 61
+    # Idle for 301s — sleep threshold, but Ollama → no action
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 301
     actions = planner._compute_idle_actions(10, [lane])
     assert actions == []
 
@@ -805,6 +813,8 @@ async def test_confirmation_success():
 
     result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
     assert result is True
+    assert planner._lane_sleep_level[(10, "lane-1")] == 1
+    assert (10, "lane-1") in planner._lane_sleep_since
 
 
 @pytest.mark.asyncio
@@ -817,6 +827,9 @@ async def test_stop_confirmation_lane_gone():
         "runtime": {"lanes": []},  # Lane is gone
     }
     planner = _make_planner(registry=registry)
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 901
+    planner._lane_sleep_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_level[(10, "lane-1")] = 2
 
     action = CapacityPlanAction(
         action="stop", provider_id=10, lane_id="lane-1",
@@ -825,6 +838,44 @@ async def test_stop_confirmation_lane_gone():
 
     result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
     assert result is True
+    assert (10, "lane-1") not in planner._lane_idle_since
+    assert (10, "lane-1") not in planner._lane_sleep_since
+    assert (10, "lane-1") not in planner._lane_sleep_level
+
+
+@pytest.mark.asyncio
+async def test_wake_confirmation_resets_idle_timer_and_clears_sleep_tracking():
+    """Confirmed wake should reset idle age and suppress immediate re-sleep."""
+    from logos.sdi.models import CapacityPlanAction
+
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [
+                {"lane_id": "lane-1", "runtime_state": "loaded", "sleep_state": "awake"},
+            ],
+        },
+    }
+    planner = _make_planner(registry=registry)
+    key = (10, "lane-1")
+    planner._lane_idle_since[key] = time.time() - 5000
+    planner._lane_sleep_since[key] = time.time() - 1000
+    planner._lane_sleep_level[key] = 2
+
+    action = CapacityPlanAction(
+        action="wake", provider_id=10, lane_id="lane-1",
+        model_name="model-a", reason="test",
+    )
+
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
+    assert result is True
+    assert key not in planner._lane_sleep_since
+    assert key not in planner._lane_sleep_level
+
+    lane = _make_signal(runtime_state="loaded", sleep_state="awake", active_requests=0)
+    planner._update_idle_tracking(10, [lane])
+    actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
 
 
 # ---------------------------------------------------------------------------
@@ -837,8 +888,8 @@ def test_idle_sleep_skips_active_requests():
     lane = _make_signal(is_vllm=True, runtime_state="loaded", sleep_state="awake", active_requests=2)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
-    # Idle timer says 61s, but lane has active requests
-    planner._lane_idle_since[(10, "lane-1")] = time.time() - 61
+    # Idle timer says 301s, but lane has active requests
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 301
 
     actions = planner._compute_idle_actions(10, [lane])
     assert actions == []
@@ -860,7 +911,51 @@ def test_idle_sleep_l2_skips_active_requests():
     lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=1)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
-    planner._lane_idle_since[(10, "lane-1")] = time.time() - 301
+    planner._lane_idle_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_since[(10, "lane-1")] = time.time() - 601
+    planner._lane_sleep_level[(10, "lane-1")] = 1
+
+    actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
+
+
+def test_idle_sleep_l1_not_reissued_when_lane_already_sleeping_l1():
+    """Sleeping L1 lane should not receive repeated sleep_l1 actions on each cycle."""
+    lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+    key = (10, "lane-1")
+
+    planner._lane_idle_since[key] = time.time() - 1200
+    planner._lane_sleep_since[key] = time.time() - 120
+    planner._lane_sleep_level[key] = 1
+
+    actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
+
+
+def test_idle_sleep_l2_not_reissued_when_lane_already_sleeping_l2():
+    """Sleeping L2 lane should not receive repeated sleep_l2 actions on each cycle."""
+    lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+    key = (10, "lane-1")
+
+    planner._lane_idle_since[key] = time.time() - 1200
+    planner._lane_sleep_since[key] = time.time() - 1200
+    planner._lane_sleep_level[key] = 2
+
+    actions = planner._compute_idle_actions(10, [lane])
+    assert actions == []
+
+
+def test_idle_sleep_l2_uses_sleep_duration_not_total_idle_duration():
+    """L2 should use time spent sleeping, not the original idle timestamp."""
+    lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+    key = (10, "lane-1")
+
+    planner._lane_idle_since[key] = time.time() - 1200
+    planner._lane_sleep_since[key] = time.time() - 120
+    planner._lane_sleep_level[key] = 1
 
     actions = planner._compute_idle_actions(10, [lane])
     assert actions == []

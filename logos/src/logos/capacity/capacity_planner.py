@@ -49,8 +49,8 @@ class CapacityPlanner:
     """
 
     # Idle tier thresholds (seconds of no activity)
-    IDLE_SLEEP_L1 = 60       # vLLM lane idle 1min → sleep level 1
-    IDLE_SLEEP_L2 = 300      # vLLM lane sleeping L1 for 5min → sleep level 2
+    IDLE_SLEEP_L1 = 300      # vLLM lane idle 5min → sleep level 1
+    IDLE_SLEEP_L2 = 600      # vLLM lane sleeping L1 for 10min → sleep level 2
     IDLE_STOP = 900          # any lane idle 15min → stop/remove
 
     # Demand thresholds
@@ -84,6 +84,8 @@ class CapacityPlanner:
         self._cycle_seconds = cycle_seconds
         self._enabled = enabled
         self._lane_idle_since: dict[tuple[int, str], float] = {}
+        self._lane_sleep_since: dict[tuple[int, str], float] = {}
+        self._lane_sleep_level: dict[tuple[int, str], int] = {}
         self._task: Optional[asyncio.Task] = None
         self._cycle_count = 0
 
@@ -404,22 +406,79 @@ class CapacityPlanner:
     # Idle tracking
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _lane_key(provider_id: int, lane_id: str) -> tuple[int, str]:
+        return (provider_id, lane_id)
+
+    def _clear_lane_tracking(self, key: tuple[int, str]) -> None:
+        self._lane_idle_since.pop(key, None)
+        self._lane_sleep_since.pop(key, None)
+        self._lane_sleep_level.pop(key, None)
+
+    def _record_confirmed_action_state(
+        self, action: CapacityPlanAction, confirmed_at: float
+    ) -> None:
+        key = self._lane_key(action.provider_id, action.lane_id)
+
+        if action.action == "sleep_l1":
+            self._lane_sleep_since.setdefault(key, confirmed_at)
+            self._lane_sleep_level[key] = 1
+            self._lane_idle_since.setdefault(key, confirmed_at)
+            return
+
+        if action.action == "sleep_l2":
+            self._lane_sleep_since.setdefault(key, confirmed_at)
+            self._lane_sleep_level[key] = 2
+            self._lane_idle_since.setdefault(key, confirmed_at)
+            return
+
+        if action.action in {"wake", "load"}:
+            self._lane_sleep_since.pop(key, None)
+            self._lane_sleep_level.pop(key, None)
+            self._lane_idle_since[key] = confirmed_at
+            return
+
+        if action.action == "stop":
+            self._clear_lane_tracking(key)
+
     def _update_idle_tracking(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Track idle durations per lane."""
         now = time.time()
         active_keys = set()
         for lane in lanes:
-            key = (provider_id, lane.lane_id)
+            key = self._lane_key(provider_id, lane.lane_id)
             active_keys.add(key)
-            if lane.active_requests > 0 or lane.queue_waiting > 0:
-                self._lane_idle_since[key] = now  # Reset idle timer
+            is_active = lane.active_requests > 0 or lane.queue_waiting > 0
+            is_sleeping = lane.sleep_state == "sleeping"
+            was_sleeping = key in self._lane_sleep_since or self._lane_sleep_level.get(key, 0) > 0
+
+            if is_active:
+                self._lane_idle_since[key] = now
+            elif was_sleeping and not is_sleeping:
+                self._lane_idle_since[key] = now
             elif key not in self._lane_idle_since:
-                self._lane_idle_since[key] = now  # Start tracking idle
+                self._lane_idle_since[key] = now
+
+            if is_sleeping:
+                self._lane_sleep_since.setdefault(key, now)
+                self._lane_sleep_level[key] = max(self._lane_sleep_level.get(key, 0), 1)
+            else:
+                self._lane_sleep_since.pop(key, None)
+                self._lane_sleep_level.pop(key, None)
 
         # Clean up lanes that no longer exist
-        stale = [k for k in self._lane_idle_since if k[0] == provider_id and k not in active_keys]
+        tracked_keys = {
+            key
+            for key in (
+                set(self._lane_idle_since)
+                | set(self._lane_sleep_since)
+                | set(self._lane_sleep_level)
+            )
+            if key[0] == provider_id
+        }
+        stale = [k for k in tracked_keys if k not in active_keys]
         for k in stale:
-            del self._lane_idle_since[k]
+            self._clear_lane_tracking(k)
 
     def _compute_idle_actions(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
@@ -429,11 +488,12 @@ class CapacityPlanner:
         actions = []
 
         for lane in lanes:
-            key = (provider_id, lane.lane_id)
+            key = self._lane_key(provider_id, lane.lane_id)
             idle_start = self._lane_idle_since.get(key)
-            if idle_start is None:
-                continue
-            idle_seconds = now - idle_start
+            sleep_start = self._lane_sleep_since.get(key)
+            sleep_level = self._lane_sleep_level.get(key, 0)
+            idle_seconds = (now - idle_start) if idle_start is not None else None
+            sleep_seconds = (now - sleep_start) if sleep_start is not None else None
 
             # Skip lanes that are already stopped/error
             if lane.runtime_state in ("stopped", "error", "cold"):
@@ -441,7 +501,11 @@ class CapacityPlanner:
 
             # Stop after 15 minutes idle — but ONLY if other models need the VRAM.
             # Keeping idle lanes sleeping is cheap and avoids costly cold starts.
-            if idle_seconds >= self.IDLE_STOP and lane.active_requests == 0:
+            if (
+                idle_seconds is not None
+                and idle_seconds >= self.IDLE_STOP
+                and lane.active_requests == 0
+            ):
                 if self._has_vram_pressure(provider_id, lane.model_name):
                     actions.append(CapacityPlanAction(
                         action="stop",
@@ -456,11 +520,13 @@ class CapacityPlanner:
             if not lane.is_vllm:
                 continue
 
-            # Sleep L2 after 5 minutes of L1 sleep
+            # Sleep L2 after 10 minutes of observed L1 sleep
             if (
                 lane.sleep_state == "sleeping"
                 and lane.active_requests == 0
-                and idle_seconds >= self.IDLE_SLEEP_L2
+                and sleep_level < 2
+                and sleep_seconds is not None
+                and sleep_seconds >= self.IDLE_SLEEP_L2
             ):
                 actions.append(CapacityPlanAction(
                     action="sleep_l2",
@@ -468,15 +534,17 @@ class CapacityPlanner:
                     lane_id=lane.lane_id,
                     model_name=lane.model_name,
                     params={"level": 2},
-                    reason=f"Sleeping L1 for {idle_seconds:.0f}s, deepening to L2",
+                    reason=f"Sleeping L1 for {sleep_seconds:.0f}s, deepening to L2",
                 ))
                 continue
 
-            # Sleep L1 after 1 minute idle (awake or unknown state, no active requests)
+            # Sleep L1 after 5 minutes idle (awake or unknown state, no active requests)
             if (
                 lane.sleep_state in ("awake", "unknown")
                 and lane.runtime_state in ("loaded", "running")
                 and lane.active_requests == 0
+                and sleep_level < 1
+                and idle_seconds is not None
                 and idle_seconds >= self.IDLE_SLEEP_L1
             ):
                 actions.append(CapacityPlanAction(
@@ -1373,6 +1441,7 @@ class CapacityPlanner:
             )
 
             if self._check_expected_state(action, lane_dict):
+                self._record_confirmed_action_state(action, time.time())
                 logger.info(
                     "Confirmed %s on lane %s (model=%s)",
                     action.action, action.lane_id, action.model_name,
@@ -1407,6 +1476,13 @@ class CapacityPlanner:
             "idle_lanes": {
                 f"{pid}:{lid}": time.time() - since
                 for (pid, lid), since in self._lane_idle_since.items()
+            },
+            "sleeping_lanes": {
+                f"{pid}:{lid}": {
+                    "sleep_seconds": time.time() - since,
+                    "sleep_level": self._lane_sleep_level.get((pid, lid), 0),
+                }
+                for (pid, lid), since in self._lane_sleep_since.items()
             },
             "demand": self._demand.get_stats(),
         }
