@@ -537,10 +537,10 @@ class AutonomousTutorCallback(StatusCallback):
 class PromptUserStatusCallback(StatusCallback):
     """Status callback for prompt user pipelines."""
 
-    def __init__(self, run_id: str, base_url: str, **_kwargs):
-        url = (
-            f"{base_url}/{self.api_url}/prompt-user/runs/{run_id}/status"
-        )
+    def __init__(self, run_id: str, base_url: str, event: str | None = None, **_kwargs):
+        url = f"{base_url}/{self.api_url}/prompt-user/runs/{run_id}/status"
+        if event is not None:
+            url = f"{url}/{event}"
         super().__init__(
             url,
             run_id,

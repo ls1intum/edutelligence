@@ -356,6 +356,7 @@ def run_prompt_user_pipeline_worker(
         callback = PromptUserStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
+            event=event,
         )
     except Exception as e:
         logger.error("Error creating prompt user callback", exc_info=e)
