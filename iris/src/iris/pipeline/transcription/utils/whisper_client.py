@@ -153,7 +153,10 @@ class WhisperClient:
         Returns:
             Dict with:
             - "segments": list of transcript segments, each with "start", "end", and "text" keys.
-            - "language": detected language code (e.g. "en", "de") from the first chunk.
+            - "language": detected language code ("en" or "de"), chosen by weighted majority
+                vote across chunks. Each chunk's language is weighted by its surviving segment
+                count, so silence-heavy chunks cannot skew the result. Unsupported languages
+                fall back to "en".
 
         Raises:
             RuntimeError: If transcription fails after all retries.
@@ -173,7 +176,10 @@ class WhisperClient:
 
         total = len(chunk_paths)
         results: List[List[Dict[str, Any]]] = [None] * total  # type: ignore[list-item]
-        detected_language: Optional[str] = None
+        # Weighted language votes: language -> total surviving segments across chunks.
+        # Chunks with 0 surviving segments cast no vote, preventing silence/noise
+        # from skewing detection toward spurious languages (e.g. Welsh).
+        language_votes: Dict[str, int] = {}
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
@@ -186,8 +192,10 @@ class WhisperClient:
                 i = futures[future]
                 offset = offsets[i]
                 segments, language = future.result()
-                if detected_language is None and language is not None:
-                    detected_language = language
+                if language is not None and len(segments) > 0:
+                    language_votes[language] = language_votes.get(language, 0) + len(
+                        segments
+                    )
                 results[i] = [
                     {
                         "start": offset + seg["start"],
@@ -197,6 +205,26 @@ class WhisperClient:
                     for seg in segments
                 ]
 
+        language_map = {"english": "en", "german": "de"}
+        winner = (
+            max(language_votes, key=language_votes.__getitem__)
+            if language_votes
+            else None
+        )
+        detected_language = (
+            language_map.get(winner, "en") if winner is not None else "en"
+        )
+        if winner not in language_map:
+            prefix = (
+                f"[Lecture {lecture_unit_id}]"
+                if lecture_unit_id is not None
+                else "[Lecture ?]"
+            )
+            logger.warning(
+                "%s Detected language '%s' is not supported, falling back to english",
+                prefix,
+                winner,
+            )
         all_segments = [seg for chunk_segs in results for seg in chunk_segs]
         return {"segments": all_segments, "language": detected_language}
 
