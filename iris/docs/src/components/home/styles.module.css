@@ -566,27 +566,16 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  perspective: 800px;
 }
 
-.heroVisual .chatMockup {
-  transform: rotateY(-3deg) rotateX(2deg);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .heroVisual .chatMockup {
-    animation: chatFloat3d 6s ease-in-out infinite;
-  }
-
-  @keyframes chatFloat3d {
-    0%,
-    100% {
-      transform: rotateY(-3deg) rotateX(2deg) translateY(0);
-    }
-    50% {
-      transform: rotateY(-3deg) rotateX(2deg) translateY(-8px);
-    }
-  }
+.heroScreenshot {
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  border-radius: 12px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 @media (max-width: 996px) {
