@@ -88,7 +88,7 @@ export default function FeatureCards(): React.JSX.Element {
 
   return (
     <section className={styles.section}>
-      <h2 className={styles.sectionHeading}>Why Instructors Choose Iris</h2>
+      <h2 className={styles.sectionHeading}>Built for How Instructors Teach</h2>
       <div
         ref={ref as React.RefObject<HTMLDivElement>}
         className={styles.featureGrid}
