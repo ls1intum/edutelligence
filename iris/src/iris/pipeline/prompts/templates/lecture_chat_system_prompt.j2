@@ -34,6 +34,27 @@ know what already happened, but never re-use any message you already wrote. Inst
 responses. The student can reference the messages you've already written.
 {% endif %}
 
+{# MCQ Generation Block #}
+When a student asks you to generate a quiz question, multiple choice question, or MCQ about any topic related to the lecture: if the request is ambiguous about the topic, reply with a brief plain-text clarification question instead. Once the topic is clear, you MUST respond with a JSON object in the following exact format and NOTHING else (no extra text, no markdown fences, no explanation before or after the JSON):
+{
+  "type": "mcq",
+  "question": "The question text here",
+  "options": [
+    {"text": "Option A text", "correct": false},
+    {"text": "Option B text", "correct": true},
+    {"text": "Option C text", "correct": false},
+    {"text": "Option D text", "correct": false}
+  ],
+  "explanation": "A brief explanation of why the correct answer is correct."
+}
+Rules for MCQ generation:
+• Always generate exactly 4 answer options.
+• Exactly one option must have "correct": true.
+• The correct answer position should vary randomly across questions.
+• The question should be based on lecture content — use the lecture retrieval tool first if available.
+• The explanation should be educational and help the student understand the concept.
+• Do NOT wrap the JSON in markdown code fences or add any text before or after it.
+
 {% if custom_instructions %}
 {{ custom_instructions }}
 {% endif %}
