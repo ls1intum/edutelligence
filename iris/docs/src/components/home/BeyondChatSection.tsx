@@ -147,6 +147,7 @@ export default function BeyondChatSection(): React.JSX.Element {
         <div>
           <h3 className={styles.beyondSubheading}>
             Turn Any Lecture into a Quiz
+            <span className={styles.badgeAvailable}>Available</span>
           </h3>
           <p className={styles.beyondSubtext}>
             Iris generates practice questions from your course materials &mdash;
@@ -223,7 +224,10 @@ export default function BeyondChatSection(): React.JSX.Element {
 
         {/* ── Sub-section 2: IDE Integration ── */}
         <div>
-          <h3 className={styles.beyondSubheading}>Iris in Your IDE</h3>
+          <h3 className={styles.beyondSubheading}>
+            Iris in Your IDE
+            <span className={styles.badgeComingSoon}>Coming Soon</span>
+          </h3>
           <p className={styles.beyondSubtext}>
             Coming soon &mdash; Iris will integrate directly into VS Code via
             the Artemis Extension, reading uncommitted code, build output, and
@@ -332,7 +336,10 @@ export default function BeyondChatSection(): React.JSX.Element {
         className={`${styles.fadeIn} ${searchVisible ? styles.fadeInVisible : ""}`}
         style={{ marginTop: "3rem" }}
       >
-        <h3 className={styles.beyondSubheading}>Iris-Powered Global Search</h3>
+        <h3 className={styles.beyondSubheading}>
+          Iris-Powered Global Search
+          <span className={styles.badgeAvailable}>Available</span>
+        </h3>
         <p className={`${styles.beyondSubtext} ${styles.beyondSubtextNarrow}`}>
           Press <strong>Cmd+K</strong> to search across all course materials.
           Iris surfaces relevant lecture slides by content &mdash; with an
