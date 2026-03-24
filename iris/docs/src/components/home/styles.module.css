@@ -3511,3 +3511,37 @@
 [data-theme="dark"] .screenshotImg {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
+
+/* Beyond Chat grid layout */
+.beyondGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+  align-items: start;
+}
+
+@media (max-width: 996px) {
+  .beyondGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.beyondSubheading {
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  text-align: center;
+}
+
+.beyondSubtext {
+  text-align: center;
+  color: var(--iris-label-color);
+  line-height: 1.6;
+  margin-bottom: 1.25rem;
+}
+
+.beyondSubtextNarrow {
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+}

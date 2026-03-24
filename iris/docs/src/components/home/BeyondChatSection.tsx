@@ -142,34 +142,13 @@ export default function BeyondChatSection(): React.JSX.Element {
         activities and meet students where they code.
       </p>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "2.5rem",
-          alignItems: "start",
-        }}
-      >
+      <div className={styles.beyondGrid}>
         {/* ── Sub-section 1: Quiz Generation ── */}
         <div>
-          <h3
-            style={{
-              fontSize: "1.35rem",
-              fontWeight: 600,
-              marginBottom: "0.5rem",
-              textAlign: "center",
-            }}
-          >
+          <h3 className={styles.beyondSubheading}>
             Turn Any Lecture into a Quiz
           </h3>
-          <p
-            style={{
-              textAlign: "center",
-              color: "var(--iris-label-color)",
-              lineHeight: 1.6,
-              marginBottom: "1.25rem",
-            }}
-          >
+          <p className={styles.beyondSubtext}>
             Iris generates practice questions from your course materials &mdash;
             students can self-test with instant feedback and source citations.
           </p>
@@ -244,24 +223,8 @@ export default function BeyondChatSection(): React.JSX.Element {
 
         {/* ── Sub-section 2: IDE Integration ── */}
         <div>
-          <h3
-            style={{
-              fontSize: "1.35rem",
-              fontWeight: 600,
-              marginBottom: "0.5rem",
-              textAlign: "center",
-            }}
-          >
-            Iris in Your IDE
-          </h3>
-          <p
-            style={{
-              textAlign: "center",
-              color: "var(--iris-label-color)",
-              lineHeight: 1.6,
-              marginBottom: "1.25rem",
-            }}
-          >
+          <h3 className={styles.beyondSubheading}>Iris in Your IDE</h3>
+          <p className={styles.beyondSubtext}>
             Coming soon &mdash; Iris will integrate directly into VS Code via
             the Artemis Extension, reading uncommitted code, build output, and
             exercise context in the editor.
@@ -369,27 +332,8 @@ export default function BeyondChatSection(): React.JSX.Element {
         className={`${styles.fadeIn} ${searchVisible ? styles.fadeInVisible : ""}`}
         style={{ marginTop: "3rem" }}
       >
-        <h3
-          style={{
-            fontSize: "1.35rem",
-            fontWeight: 600,
-            marginBottom: "0.5rem",
-            textAlign: "center",
-          }}
-        >
-          Iris-Powered Global Search
-        </h3>
-        <p
-          style={{
-            textAlign: "center",
-            color: "var(--iris-label-color)",
-            lineHeight: 1.6,
-            marginBottom: "1.25rem",
-            maxWidth: "680px",
-            marginLeft: "auto",
-            marginRight: "auto",
-          }}
-        >
+        <h3 className={styles.beyondSubheading}>Iris-Powered Global Search</h3>
+        <p className={`${styles.beyondSubtext} ${styles.beyondSubtextNarrow}`}>
           Press <strong>Cmd+K</strong> to search across all course materials.
           Iris surfaces relevant lecture slides by content &mdash; with an
           AI-powered answer panel coming soon.
@@ -409,15 +353,6 @@ export default function BeyondChatSection(): React.JSX.Element {
           </figcaption>
         </figure>
       </div>
-
-      {/* Responsive override for mobile stacking */}
-      <style>{`
-        @media (max-width: 996px) {
-          .${styles.section} > div[style] {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
     </section>
   );
 }
