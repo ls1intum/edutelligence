@@ -18,9 +18,13 @@ jobs:
     uses: ./.github/workflows/atlas_docs-build.yml
     secrets: inherit
 
+  build-iris:
+    uses: ./.github/workflows/iris_docs-build.yml
+    secrets: inherit
+
   deploy:
     if: github.ref == 'refs/heads/main'
-    needs: [build-athena, build-atlas]
+    needs: [build-athena, build-atlas, build-iris]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -37,6 +41,12 @@ jobs:
         with:
           name: atlas-docs
           path: site/atlas
+
+      - name: Download Iris docs
+        uses: actions/download-artifact@v4
+        with:
+          name: iris-docs
+          path: site/iris
 
       - name: Create landing page
         run: |
@@ -168,6 +178,12 @@ jobs:
                       <a href="/edutelligence/atlas/" class="card">
                           <h2>Atlas</h2>
                           <p>Competency-based learning management system</p>
+                          <span class="btn">View Documentation →</span>
+                      </a>
+
+                      <a href="/edutelligence/iris/" class="card">
+                          <h2>Iris</h2>
+                          <p>AI-powered virtual tutor for context-aware, scaffolded learning support</p>
                           <span class="btn">View Documentation →</span>
                       </a>
                   </div>
