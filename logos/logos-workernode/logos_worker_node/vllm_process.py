@@ -449,6 +449,10 @@ class VllmProcessHandle:
         # compilation on Ampere+ GPUs where it actually helps.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
+        # FlashInfer JIT crashes GPU drivers on pre-Ampere (compute < 8.0).
+        # Force TRITON_ATTN via CLI flag (env var not recognized in vLLM v0.18+).
+        if self._should_override_attention_backend():
+            cmd.extend(["--override-attention-backend", "TRITON_ATTN"])
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
         if vc.disable_custom_all_reduce:
@@ -463,6 +467,24 @@ class VllmProcessHandle:
             cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
         cmd.extend(vc.extra_args)
         return cmd
+
+    def _should_override_attention_backend(self) -> bool:
+        """Return True if we need to force TRITON_ATTN for pre-Ampere GPUs."""
+        arch = self._detect_cuda_arch()
+        if not arch:
+            return False
+        try:
+            min_cap = min(float(c) for c in arch.split(";") if c.strip())
+            if min_cap < 8.0:
+                logger.info(
+                    "[%s] GPU compute %.1f < 8.0 — forcing TRITON_ATTN "
+                    "instead of FlashInfer to avoid driver crashes",
+                    self.lane_id, min_cap,
+                )
+                return True
+        except (ValueError, TypeError):
+            pass
+        return False
 
     _cached_cuda_arch: str | None = None
 
@@ -626,23 +648,6 @@ class VllmProcessHandle:
             detected_arch = self._detect_cuda_arch()
             if detected_arch:
                 env["TORCH_CUDA_ARCH_LIST"] = detected_arch
-
-        # FlashInfer JIT crashes GPU drivers on pre-Ampere (compute < 8.0).
-        # Force TRITON_ATTN which works reliably on all architectures.
-        if "VLLM_ATTENTION_BACKEND" not in os.environ:
-            detected_arch = self._detect_cuda_arch()
-            if detected_arch:
-                try:
-                    min_cap = min(float(c) for c in detected_arch.split(";") if c.strip())
-                    if min_cap < 8.0:
-                        env["VLLM_ATTENTION_BACKEND"] = "TRITON_ATTN"
-                        logger.info(
-                            "[%s] GPU compute %.1f < 8.0 — using TRITON_ATTN "
-                            "instead of FlashInfer to avoid driver crashes",
-                            self.lane_id, min_cap,
-                        )
-                except (ValueError, TypeError):
-                    pass
 
         if vc.disable_nccl_p2p:
             env["NCCL_P2P_DISABLE"] = "1"
