@@ -578,7 +578,7 @@ def test_enforce_eager_on_by_default(monkeypatch):
     """enforce_eager defaults to True — --enforce-eager should always be in cmd."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    monkeypatch.setattr(handle, "_should_override_attention_backend", lambda: False)
+    monkeypatch.setattr(handle, "_auto_attention_backend", lambda: "")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
     assert "--enforce-eager" in cmd
@@ -588,32 +588,44 @@ def test_enforce_eager_can_be_disabled(monkeypatch):
     """Setting enforce_eager=False should omit --enforce-eager."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    monkeypatch.setattr(handle, "_should_override_attention_backend", lambda: False)
+    monkeypatch.setattr(handle, "_auto_attention_backend", lambda: "")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=False))
     cmd = handle._build_cmd(lc)
     assert "--enforce-eager" not in cmd
 
 
-def test_triton_attn_override_on_turing(monkeypatch):
-    """Pre-Ampere GPUs should get --override-attention-backend TRITON_ATTN."""
+def test_triton_attn_auto_on_turing(monkeypatch):
+    """Pre-Ampere GPUs should auto-select TRITON_ATTN."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     monkeypatch.setattr(VllmProcessHandle, "_cached_cuda_arch", "7.5")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
-    assert "--override-attention-backend" in cmd
-    idx = cmd.index("--override-attention-backend")
+    assert "--attention-config.backend" in cmd
+    idx = cmd.index("--attention-config.backend")
     assert cmd[idx + 1] == "TRITON_ATTN"
 
 
-def test_no_triton_attn_override_on_ampere(monkeypatch):
+def test_no_attn_override_on_ampere(monkeypatch):
     """Ampere+ GPUs should not override attention backend."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     monkeypatch.setattr(VllmProcessHandle, "_cached_cuda_arch", "8.6")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
-    assert "--override-attention-backend" not in cmd
+    assert "--attention-config.backend" not in cmd
+
+
+def test_explicit_attention_backend_config(monkeypatch):
+    """Explicit attention_backend in config should override auto-detect."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    monkeypatch.setattr(VllmProcessHandle, "_cached_cuda_arch", "8.6")  # Ampere
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(attention_backend="TRITON_ATTN"))
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" in cmd
+    idx = cmd.index("--attention-config.backend")
+    assert cmd[idx + 1] == "TRITON_ATTN"
 
 
 def test_build_env_sets_torch_cache(monkeypatch):

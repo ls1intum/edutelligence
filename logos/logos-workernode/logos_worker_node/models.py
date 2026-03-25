@@ -71,6 +71,11 @@ class VllmConfig(BaseModel):
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
     enforce_eager: bool = True
+    attention_backend: str = Field(
+        default="",
+        description="Attention backend override (e.g. 'TRITON_ATTN', 'FLASHINFER'). "
+        "Empty = auto-detect (TRITON_ATTN on pre-Ampere, FlashInfer on Ampere+).",
+    )
     enable_prefix_caching: bool = True
     disable_custom_all_reduce: bool = False
     disable_nccl_p2p: bool = False

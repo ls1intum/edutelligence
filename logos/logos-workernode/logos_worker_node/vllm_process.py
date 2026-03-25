@@ -449,10 +449,11 @@ class VllmProcessHandle:
         # compilation on Ampere+ GPUs where it actually helps.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
-        # FlashInfer JIT crashes GPU drivers on pre-Ampere (compute < 8.0).
-        # Force TRITON_ATTN via CLI flag (env var not recognized in vLLM v0.18+).
-        if self._should_override_attention_backend():
-            cmd.extend(["--override-attention-backend", "TRITON_ATTN"])
+        # Attention backend: explicit config wins, otherwise auto-detect.
+        # FlashInfer JIT crashes drivers on pre-Ampere (compute < 8.0).
+        attn_backend = vc.attention_backend or self._auto_attention_backend()
+        if attn_backend:
+            cmd.extend(["--attention-config.backend", attn_backend])
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
         if vc.disable_custom_all_reduce:
@@ -468,23 +469,27 @@ class VllmProcessHandle:
         cmd.extend(vc.extra_args)
         return cmd
 
-    def _should_override_attention_backend(self) -> bool:
-        """Return True if we need to force TRITON_ATTN for pre-Ampere GPUs."""
+    def _auto_attention_backend(self) -> str:
+        """Auto-select attention backend based on GPU compute capability.
+
+        Returns 'TRITON_ATTN' for pre-Ampere (< 8.0) where FlashInfer JIT
+        crashes drivers, empty string otherwise (let vLLM decide).
+        """
         arch = self._detect_cuda_arch()
         if not arch:
-            return False
+            return ""
         try:
             min_cap = min(float(c) for c in arch.split(";") if c.strip())
             if min_cap < 8.0:
                 logger.info(
-                    "[%s] GPU compute %.1f < 8.0 — forcing TRITON_ATTN "
+                    "[%s] GPU compute %.1f < 8.0 — using TRITON_ATTN "
                     "instead of FlashInfer to avoid driver crashes",
                     self.lane_id, min_cap,
                 )
-                return True
+                return "TRITON_ATTN"
         except (ValueError, TypeError):
             pass
-        return False
+        return ""
 
     _cached_cuda_arch: str | None = None
 
