@@ -18,7 +18,7 @@ function ChatMockup(): React.JSX.Element {
         <div className={styles.chatBubbleUser}>
           <div className={styles.chatAvatar}>S</div>
           <div className={styles.chatBubbleContent}>
-            Can you explain what photosynthesis does?
+            My recursive method keeps returning null. Can you just fix it?
           </div>
         </div>
         <div className={styles.chatBubbleIris}>
@@ -30,9 +30,9 @@ function ChatMockup(): React.JSX.Element {
             />
           </div>
           <div className={styles.chatBubbleContentIris}>
-            Good question! Before I explain, what do you already know about how
-            plants get their energy? Your instructor covered this on{" "}
-            <strong>slide 7</strong> with a great diagram.{" "}
+            Let&apos;s figure this out together. What should your base case
+            return when the list is empty? Check{" "}
+            <strong>exercise 5, task 2</strong> for a hint.{" "}
             <span className={styles.chatCitation}>[1]</span>{" "}
             <span className={styles.chatTypingDots}>...</span>
           </div>
