@@ -11,14 +11,14 @@ interface Turn {
 const conversation: Turn[] = [
   {
     speaker: "student",
-    text: "I don\u2019t understand the difference between mitosis and meiosis. Can you just tell me?",
+    text: "I don&apos;t understand the difference between mitosis and meiosis. Can you just tell me?",
   },
   {
     speaker: "iris",
     text: (
       <>
         Great question! Before I explain, let me check: do you remember how many
-        times the cell divides in each process? That\u2019s a key difference.
+        times the cell divides in each process? That&apos;s a key difference.
         Take a look at <strong>slide 14</strong> from your Cell Biology lecture.{" "}
         <span className={styles.chatCitation}>[1]</span>
       </>
@@ -48,7 +48,7 @@ const conversation: Turn[] = [
     speaker: "iris",
     text: (
       <>
-        You got it! That\u2019s the fundamental difference \u2014 and it\u2019s
+        You got it! That&apos;s the fundamental difference &mdash; and it&apos;s
         why meiosis is essential for reproduction while mitosis handles growth
         and repair. Your instructor covered this on <strong>slide 19</strong>.{" "}
         <span className={styles.chatCitation}>[3]</span> Would you like to
