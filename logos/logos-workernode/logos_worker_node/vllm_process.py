@@ -632,6 +632,11 @@ class VllmProcessHandle:
         # so JIT artifacts survive container rebuilds.
         cache_root = os.path.join(gc.models_path, ".cache")
 
+        # vLLM cache root — controls where vLLM stores torch.compile cache,
+        # CUDA graph cache, and other artifacts (~/.cache/vllm by default).
+        if "VLLM_CACHE_ROOT" not in os.environ:
+            env["VLLM_CACHE_ROOT"] = os.path.join(cache_root, "vllm")
+
         # torch.compile / inductor cache
         if "TORCHINDUCTOR_CACHE_DIR" not in os.environ:
             env["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(cache_root, "torch_inductor")
@@ -641,10 +646,6 @@ class VllmProcessHandle:
         # FlashInfer JIT kernel cache (critical — first compile can take 60s+)
         if "FLASHINFER_JIT_DIR" not in os.environ:
             env["FLASHINFER_JIT_DIR"] = os.path.join(cache_root, "flashinfer")
-
-        # vLLM's own torch.compile cache
-        if "VLLM_TORCH_COMPILE_CACHE" not in os.environ:
-            env["VLLM_TORCH_COMPILE_CACHE"] = os.path.join(cache_root, "vllm_compile")
 
         # Auto-detect CUDA arch for faster compilation
         if "TORCH_CUDA_ARCH_LIST" not in os.environ:
@@ -669,10 +670,9 @@ class VllmProcessHandle:
             # environments without proper NUMA config. We use ipc:host + shm
             # instead, which is universally safe.
             env.setdefault("NCCL_CUMEM_ENABLE", "0")
-            # Extended timeouts: FlashInfer JIT can take minutes on first
+            # Extended timeout: FlashInfer JIT can take minutes on first
             # compile, default 10min NCCL timeout is sometimes not enough.
             env.setdefault("NCCL_TIMEOUT", "1800")               # 30 min
-            env.setdefault("VLLM_DISTRIBUTED_TIMEOUT_MINUTES", "30")
 
         return env
 

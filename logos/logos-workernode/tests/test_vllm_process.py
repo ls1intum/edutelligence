@@ -323,7 +323,6 @@ def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> Non
     assert env["TORCH_NCCL_ASYNC_ERROR_HANDLING"] == "1"
     assert env["NCCL_CUMEM_ENABLE"] == "0"
     assert env["NCCL_TIMEOUT"] == "1800"
-    assert env["VLLM_DISTRIBUTED_TIMEOUT_MINUTES"] == "30"
     # Transport knobs must NOT be set (NCCL auto-tunes based on topology)
     assert "NCCL_P2P_LEVEL" not in env
     assert "NCCL_BUFFSIZE" not in env
@@ -621,18 +620,18 @@ def test_explicit_attention_backend_config(monkeypatch):
 
 def test_build_env_sets_persistent_caches(monkeypatch):
     """All compilation caches should point to models_path for persistence."""
+    monkeypatch.delenv("VLLM_CACHE_ROOT", raising=False)
     monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
     monkeypatch.delenv("TORCHINDUCTOR_FX_GRAPH_CACHE", raising=False)
     monkeypatch.delenv("FLASHINFER_JIT_DIR", raising=False)
-    monkeypatch.delenv("VLLM_TORCH_COMPILE_CACHE", raising=False)
     monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
     gc = OllamaConfig(models_path="/data/models")
     handle = VllmProcessHandle("lane-test", 19000, gc)
     monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     env = handle._build_env(lc)
+    assert env["VLLM_CACHE_ROOT"] == "/data/models/.cache/vllm"
     assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.cache/torch_inductor"
     assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
     assert env["FLASHINFER_JIT_DIR"] == "/data/models/.cache/flashinfer"
-    assert env["VLLM_TORCH_COMPILE_CACHE"] == "/data/models/.cache/vllm_compile"
     assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"
