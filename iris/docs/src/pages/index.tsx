@@ -2,7 +2,6 @@ import React from "react";
 import Layout from "@theme/Layout";
 import HeroSection from "../components/home/HeroSection";
 import TrustBar from "../components/home/TrustBar";
-import FeatureCards from "../components/home/FeatureCards";
 import WhyGenericAISection from "../components/home/WhyGenericAISection";
 import HowIrisWorksSection from "../components/home/HowIrisWorksSection";
 import ShowcaseSection from "../components/home/ShowcaseSection";
@@ -29,10 +28,7 @@ export default function Home(): React.JSX.Element {
       {/* 2. Trust Bar */}
       <TrustBar />
 
-      {/* 3. Core Value Props */}
-      <FeatureCards />
-
-      {/* 4. Why Generic AI Falls Short */}
+      {/* 3. Why Generic AI Falls Short */}
       <WhyGenericAISection />
 
       {/* 5. How Iris Works (no sectionLazy — content-visibility clips the diagonal) */}

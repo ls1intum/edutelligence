@@ -57,7 +57,7 @@ export default function HeroSection(): React.JSX.Element {
           </h1>
           <p className={styles.heroSubtitle}>
             Grounded in your course materials. Built into Artemis. Backed by 3
-            peer-reviewed studies at TU Munich.
+            peer-reviewed studies.
           </p>
           <p className={styles.heroProof}>
             <span aria-hidden="true">🎓</span> 30,000+ conversations powered at

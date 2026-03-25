@@ -1203,6 +1203,17 @@
   flex-shrink: 0;
 }
 
+.trustLink {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--ifm-color-primary);
+  text-underline-offset: 2px;
+}
+
+.trustLink:hover {
+  color: var(--ifm-color-primary);
+}
+
 /* ─── Feature Cards ─── */
 
 .featureGrid {
