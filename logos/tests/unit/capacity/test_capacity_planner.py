@@ -1712,3 +1712,13 @@ async def test_load_triggers_on_state_change_callback():
     result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
     assert result is True
     assert "model-a" in callback_calls
+
+
+# -- _build_load_params tests ------------------------------------------------
+
+def test_build_load_params_does_not_set_enforce_eager():
+    """enforce_eager is handled worker-side based on GPU arch, not server-side."""
+    planner = _make_planner()
+    profile = ModelProfile(model_name="any-model", engine="vllm", disk_size_bytes=1_000_000_000)
+    params = planner._build_load_params("any-model", "lane-any", profile)
+    assert "enforce_eager" not in params["vllm_config"]

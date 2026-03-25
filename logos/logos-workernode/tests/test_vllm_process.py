@@ -528,7 +528,7 @@ def test_build_cmd_includes_cuda_graph_sizes_when_set(monkeypatch):
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(
         model="test-model", vllm=True,
-        vllm_config=VllmConfig(cuda_graph_sizes="1,2,4,8"),
+        vllm_config=VllmConfig(cuda_graph_sizes="1,2,4,8", enforce_eager=False),
     )
     cmd = handle._build_cmd(lc)
     assert "--cuda-graph-sizes" in cmd
@@ -572,6 +572,24 @@ def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
     )
     cmd = handle._build_cmd(lc)
     assert "--cpu-offload-gb" not in cmd
+
+
+def test_enforce_eager_on_by_default(monkeypatch):
+    """enforce_eager defaults to True — --enforce-eager should always be in cmd."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--enforce-eager" in cmd
+
+
+def test_enforce_eager_can_be_disabled(monkeypatch):
+    """Setting enforce_eager=False should omit --enforce-eager."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=False))
+    cmd = handle._build_cmd(lc)
+    assert "--enforce-eager" not in cmd
 
 
 def test_build_env_sets_torch_cache(monkeypatch):

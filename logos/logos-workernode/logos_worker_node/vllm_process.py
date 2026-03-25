@@ -444,8 +444,9 @@ class VllmProcessHandle:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
-        # ``--enforce-eager`` is both an explicit option and our fallback when
-        # flash attention is disabled for the lane.
+        # enforce_eager defaults to True (skips torch.compile + CUDA graph
+        # capture).  Set enforce_eager=False in vllm_config to opt in to
+        # compilation on Ampere+ GPUs where it actually helps.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
         if vc.enable_prefix_caching:
