@@ -2208,6 +2208,7 @@
 .comparisonTable {
   width: 100%;
   border-collapse: collapse;
+  margin-bottom: 0;
   font-size: 0.95rem;
   table-layout: fixed;
 }
