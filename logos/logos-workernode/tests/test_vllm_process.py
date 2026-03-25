@@ -319,9 +319,16 @@ def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> Non
     )
     monkeypatch.delenv("HF_HOME", raising=False)
     env = handle._build_env(lane)
-    assert env["NCCL_P2P_DISABLE"] == "1"
-    assert env["NCCL_ASYNC_ERROR_HANDLING"] == "1"
+    # Only universally safe vars — no transport tuning (NCCL auto-detects)
+    assert env["TORCH_NCCL_ASYNC_ERROR_HANDLING"] == "1"
     assert env["NCCL_CUMEM_ENABLE"] == "0"
+    assert env["NCCL_TIMEOUT"] == "1800"
+    assert env["VLLM_DISTRIBUTED_TIMEOUT_MINUTES"] == "30"
+    # Transport knobs must NOT be set (NCCL auto-tunes based on topology)
+    assert "NCCL_P2P_LEVEL" not in env
+    assert "NCCL_BUFFSIZE" not in env
+    assert "NCCL_SHM_USE_CUDA_MEMCPY" not in env
+    assert "NCCL_NET_GDR_LEVEL" not in env
 
 
 def test_build_env_no_nccl_safety_for_tp_1(monkeypatch) -> None:
@@ -574,53 +581,37 @@ def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
     assert "--cpu-offload-gb" not in cmd
 
 
-def test_enforce_eager_on_by_default(monkeypatch):
-    """enforce_eager defaults to True — --enforce-eager should always be in cmd."""
+def test_enforce_eager_off_by_default(monkeypatch):
+    """enforce_eager defaults to False — --enforce-eager should not be in cmd."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    monkeypatch.setattr(handle, "_auto_attention_backend", lambda: "")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
-    cmd = handle._build_cmd(lc)
-    assert "--enforce-eager" in cmd
-
-
-def test_enforce_eager_can_be_disabled(monkeypatch):
-    """Setting enforce_eager=False should omit --enforce-eager."""
-    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
-    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    monkeypatch.setattr(handle, "_auto_attention_backend", lambda: "")
-    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=False))
     cmd = handle._build_cmd(lc)
     assert "--enforce-eager" not in cmd
 
 
-def test_triton_attn_auto_on_turing(monkeypatch):
-    """Pre-Ampere GPUs should auto-select TRITON_ATTN."""
+def test_enforce_eager_can_be_enabled(monkeypatch):
+    """Setting enforce_eager=True should add --enforce-eager."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    monkeypatch.setattr(VllmProcessHandle, "_cached_cuda_arch", "7.5")
-    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=True))
     cmd = handle._build_cmd(lc)
-    assert "--attention-config.backend" in cmd
-    idx = cmd.index("--attention-config.backend")
-    assert cmd[idx + 1] == "TRITON_ATTN"
+    assert "--enforce-eager" in cmd
 
 
-def test_no_attn_override_on_ampere(monkeypatch):
-    """Ampere+ GPUs should not override attention backend."""
+def test_no_attn_override_by_default(monkeypatch):
+    """By default no attention backend override — let vLLM pick (FlashInfer)."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    monkeypatch.setattr(VllmProcessHandle, "_cached_cuda_arch", "8.6")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" not in cmd
 
 
 def test_explicit_attention_backend_config(monkeypatch):
-    """Explicit attention_backend in config should override auto-detect."""
+    """Explicit attention_backend in config should be passed to vLLM."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
-    monkeypatch.setattr(VllmProcessHandle, "_cached_cuda_arch", "8.6")  # Ampere
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(attention_backend="TRITON_ATTN"))
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
@@ -628,20 +619,20 @@ def test_explicit_attention_backend_config(monkeypatch):
     assert cmd[idx + 1] == "TRITON_ATTN"
 
 
-def test_build_env_sets_torch_cache(monkeypatch):
-    """Torch compile cache and CUDA arch should be set in env."""
+def test_build_env_sets_persistent_caches(monkeypatch):
+    """All compilation caches should point to models_path for persistence."""
     monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
     monkeypatch.delenv("TORCHINDUCTOR_FX_GRAPH_CACHE", raising=False)
+    monkeypatch.delenv("FLASHINFER_JIT_DIR", raising=False)
+    monkeypatch.delenv("VLLM_TORCH_COMPILE_CACHE", raising=False)
     monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
     gc = OllamaConfig(models_path="/data/models")
     handle = VllmProcessHandle("lane-test", 19000, gc)
-    # Mock _detect_cuda_arch to avoid nvidia-smi call
     monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
-    lc = LaneConfig(
-        model="test-model", vllm=True,
-        vllm_config=VllmConfig(),
-    )
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     env = handle._build_env(lc)
-    assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.torch_cache"
+    assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.cache/torch_inductor"
     assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
+    assert env["FLASHINFER_JIT_DIR"] == "/data/models/.cache/flashinfer"
+    assert env["VLLM_TORCH_COMPILE_CACHE"] == "/data/models/.cache/vllm_compile"
     assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"

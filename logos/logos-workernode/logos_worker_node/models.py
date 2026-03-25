@@ -70,7 +70,7 @@ class VllmConfig(BaseModel):
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
-    enforce_eager: bool = True
+    enforce_eager: bool = False
     attention_backend: str = Field(
         default="",
         description="Attention backend override (e.g. 'TRITON_ATTN', 'FLASHINFER'). "

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -38,6 +39,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
+
+    # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
+    # subsequent vLLM launches — including TP>1 — find cached .so files and
+    # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
+    try:
+        from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
+        cache_dir = os.path.join(cfg.engines.ollama.models_path, ".cache", "flashinfer")
+        flashinfer_warmup(cache_dir)
+    except Exception:
+        logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch", exc_info=True)
 
     model_profiles = ModelProfileRegistry(config_path=get_config_path())
 

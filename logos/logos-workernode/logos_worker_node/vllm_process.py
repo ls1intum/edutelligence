@@ -472,23 +472,9 @@ class VllmProcessHandle:
     def _auto_attention_backend(self) -> str:
         """Auto-select attention backend based on GPU compute capability.
 
-        Returns 'TRITON_ATTN' for pre-Ampere (< 8.0) where FlashInfer JIT
-        crashes drivers, empty string otherwise (let vLLM decide).
+        Returns empty string (let vLLM decide — typically FlashInfer).
+        Override via vllm_config.attention_backend if needed.
         """
-        arch = self._detect_cuda_arch()
-        if not arch:
-            return ""
-        try:
-            min_cap = min(float(c) for c in arch.split(";") if c.strip())
-            if min_cap < 8.0:
-                logger.info(
-                    "[%s] GPU compute %.1f < 8.0 — using TRITON_ATTN "
-                    "instead of FlashInfer to avoid driver crashes",
-                    self.lane_id, min_cap,
-                )
-                return "TRITON_ATTN"
-        except (ValueError, TypeError):
-            pass
         return ""
 
     _cached_cuda_arch: str | None = None
@@ -642,11 +628,23 @@ class VllmProcessHandle:
         if vc.server_dev_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
-        # Persistent torch.compile cache: avoids recompilation across restarts
+        # Persistent compilation caches: point to models_path (mounted volume)
+        # so JIT artifacts survive container rebuilds.
+        cache_root = os.path.join(gc.models_path, ".cache")
+
+        # torch.compile / inductor cache
         if "TORCHINDUCTOR_CACHE_DIR" not in os.environ:
-            env["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(gc.models_path, ".torch_cache")
+            env["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(cache_root, "torch_inductor")
         if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
             env["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
+
+        # FlashInfer JIT kernel cache (critical — first compile can take 60s+)
+        if "FLASHINFER_JIT_DIR" not in os.environ:
+            env["FLASHINFER_JIT_DIR"] = os.path.join(cache_root, "flashinfer")
+
+        # vLLM's own torch.compile cache
+        if "VLLM_TORCH_COMPILE_CACHE" not in os.environ:
+            env["VLLM_TORCH_COMPILE_CACHE"] = os.path.join(cache_root, "vllm_compile")
 
         # Auto-detect CUDA arch for faster compilation
         if "TORCH_CUDA_ARCH_LIST" not in os.environ:
@@ -657,13 +655,24 @@ class VllmProcessHandle:
         if vc.disable_nccl_p2p:
             env["NCCL_P2P_DISABLE"] = "1"
 
-        # NCCL safety defaults for tensor-parallel lanes (TP > 1).
-        # These prevent NCCL hangs from cascading into driver crashes.
-        # Each can be overridden by the host environment or disable_nccl_p2p config.
+        # NCCL defaults for tensor-parallel lanes (TP > 1).
+        # IMPORTANT: Do NOT set NCCL transport tuning vars (P2P_LEVEL,
+        # NET_GDR_LEVEL, BUFFSIZE, SHM_USE_CUDA_MEMCPY, etc.) — these are
+        # debugging knobs that override NCCL's auto-detection. NCCL reads the
+        # GPU/PCIe/NVLink topology and picks optimal transports automatically.
+        # Hardcoding them causes unpredictable behavior across different setups.
         if vc.tensor_parallel_size > 1:
-            env.setdefault("NCCL_P2P_DISABLE", "1")
-            env.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+            # Async error handling — detect NCCL failures instead of hanging.
+            # (NCCL_ASYNC_ERROR_HANDLING is deprecated; PyTorch reads this one.)
+            env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+            # Disable cuMem host allocations — unreliable in Docker/VM
+            # environments without proper NUMA config. We use ipc:host + shm
+            # instead, which is universally safe.
             env.setdefault("NCCL_CUMEM_ENABLE", "0")
+            # Extended timeouts: FlashInfer JIT can take minutes on first
+            # compile, default 10min NCCL timeout is sometimes not enough.
+            env.setdefault("NCCL_TIMEOUT", "1800")               # 30 min
+            env.setdefault("VLLM_DISTRIBUTED_TIMEOUT_MINUTES", "30")
 
         return env
 
