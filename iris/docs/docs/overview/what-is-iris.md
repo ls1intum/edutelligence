@@ -6,9 +6,7 @@ title: What is Iris?
 
 Iris is an AI-powered virtual tutor integrated directly into [Artemis](https://artemis.cit.tum.de), the open-source learning platform. It provides context-aware support for programming exercises, text exercises, and lecture content, helping students learn independently through guided hints and explanations rather than giving away solutions. Iris is also available as a course-wide assistant for general course-related questions.
 
-:::info Screenshot Needed
-About Iris modal in Artemis showing features and expectations
-:::
+![Meet Iris modal in Artemis](/img/screenshots/meet-iris-modal.png)
 
 ## Key Capabilities
 

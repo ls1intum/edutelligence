@@ -26,7 +26,7 @@ export default function TrustBar(): React.JSX.Element {
       </span>
       <span className={styles.trustItem}>
         <span className={styles.trustDot} aria-hidden="true" />
-        GDPR Compliant
+        Built at TU Munich
       </span>
     </div>
   );

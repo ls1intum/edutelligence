@@ -10,9 +10,7 @@ The Lecture Chat lets you ask questions about a specific lecture while you are v
 
 When viewing a lecture in Artemis, click the **floating Iris icon** in the bottom-right corner of the screen. The chat opens alongside the lecture content.
 
-:::info Screenshot Needed
-Lecture chat with transcript-based retrieval
-:::
+<!-- TODO: Screenshot needed — lecture chat with transcript-based retrieval -->
 
 ## What Iris Can Reference
 

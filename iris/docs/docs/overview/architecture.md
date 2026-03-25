@@ -15,9 +15,7 @@ Iris sits between Artemis and one or more Large Language Models (LLMs). The over
 3. The **LLM** generates a response, potentially calling tools to gather additional information.
 4. **Status callbacks** return results to Artemis incrementally, so students see a streaming response.
 
-:::info Screenshot Needed
-Architecture diagram — Artemis → Iris → LLM with tool calls and RAG
-:::
+<!-- TODO: Diagram needed — Artemis → Iris → LLM with tool calls and RAG -->
 
 ## Pipeline System
 
@@ -31,9 +29,7 @@ Iris uses a **pipeline architecture** where each type of interaction has its own
 
 Each pipeline defines which **LLM roles** it needs (e.g., a primary chat model, a tool-calling model, a reranking model) and can declare **dependencies** on other pipelines. This makes the system modular: you can swap models per role, and pipelines can reuse shared logic without tight coupling.
 
-:::info Screenshot Needed
-Pipeline execution flow diagram
-:::
+<!-- TODO: Diagram needed — Pipeline execution flow -->
 
 ## Agent Execution Flow
 

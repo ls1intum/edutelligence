@@ -56,8 +56,7 @@ export default function HeroSection(): React.JSX.Element {
             AI That <em>Teaches</em>, Not Just Answers
           </h1>
           <p className={styles.heroSubtitle}>
-            Grounded in your course materials. Built into Artemis. Backed by 3
-            peer-reviewed studies.
+            Grounded in your course materials. Built into Artemis. Always ready.
           </p>
           <p className={styles.heroProof}>
             <span aria-hidden="true">🎓</span> 30,000+ conversations powered at

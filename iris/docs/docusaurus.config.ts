@@ -164,6 +164,13 @@ const config: Config = {
             { label: "Citing Iris", to: "/docs/research/citing-iris" },
           ],
         },
+        {
+          title: "Legal",
+          items: [
+            { label: "Impressum", to: "/impressum" },
+            { label: "Privacy Policy", to: "/privacy" },
+          ],
+        },
       ],
       copyright: `Copyright © ${new Date().getFullYear()} Technical University of Munich. Built with Docusaurus.`,
     },

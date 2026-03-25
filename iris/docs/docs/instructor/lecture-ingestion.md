@@ -27,9 +27,7 @@ On the **lecture management page**, use the **"Send All Lectures to Iris"** butt
 
 On an individual lecture unit that has attachments, use the **"Send Unit to Iris"** button to ingest just that specific unit. This is useful when you add or update a single lecture.
 
-:::info Screenshot Needed
-Lecture management page with Iris ingestion buttons
-:::
+<!-- TODO: Screenshot needed — Lecture management page -->
 
 ## Prerequisites
 

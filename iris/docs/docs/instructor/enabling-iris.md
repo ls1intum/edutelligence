@@ -10,9 +10,7 @@ Iris is configured on a per-course basis. As an instructor, you control which Ir
 
 Iris settings are found on the **course overview page**, not in the general course settings. Look for the Iris configuration section in the course management area.
 
-:::info Screenshot Needed
-Iris course settings panel in Artemis showing feature toggles
-:::
+<!-- TODO: Screenshot needed — Iris course settings panel in Artemis showing feature toggles -->
 
 :::warning
 If you do not see Iris settings on your course overview page, your institution's administrator may not have enabled Iris at the system level. Contact your admin to request activation.

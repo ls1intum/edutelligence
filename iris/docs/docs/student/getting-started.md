@@ -10,9 +10,7 @@ Welcome to Iris, your AI-powered virtual tutor inside Artemis. This page walks y
 
 The first time you encounter Iris in a course, you will be asked to choose your preferred AI experience. You can change this at any time in your account settings.
 
-:::info Screenshot Needed
-AI experience selection screen in Artemis
-:::
+![AI experience selection screen in Artemis](/img/screenshots/ai-experience-selection.png)
 
 ### Cloud (Recommended)
 

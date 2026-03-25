@@ -10,9 +10,7 @@ The Course Chat is your general-purpose assistant for an entire course. Whether 
 
 Open the **course sidebar** in Artemis and click on the Course Chat entry. The chat opens as a panel where you can start typing questions right away.
 
-:::info Screenshot Needed
-Course chat conversation with citation markers
-:::
+![Course chat conversation with citation markers](/img/screenshots/course-chat.png)
 
 ## What Iris Knows
 

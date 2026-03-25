@@ -64,21 +64,21 @@ function LockIcon() {
 const cards = [
   {
     icon: <ShieldIcon />,
-    title: "GDPR Compliant",
+    title: "Privacy by Design",
     description:
-      "Iris is built and hosted within the European Union, fully compliant with GDPR and university data protection policies.",
+      "Iris minimizes data shared with LLM providers. Only the context needed for a response is sent \u2014 no bulk uploads, no training on your data.",
   },
   {
     icon: <ServerIcon />,
     title: "University-Hosted",
     description:
-      "Your data stays on your institution\u2019s infrastructure. No student conversations are sent to third-party servers.",
+      "Iris and Artemis run on your institution\u2019s infrastructure. External cloud processing is limited to LLM inference \u2014 or eliminated entirely with local models.",
   },
   {
     icon: <LockIcon />,
     title: "Instructor Control",
     description:
-      "Instructors decide what Iris knows. You control which materials are shared, and you can review every conversation.",
+      "Instructors decide what Iris knows. You control which materials are indexed, and students can opt out of AI features entirely.",
   },
 ];
 

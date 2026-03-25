@@ -147,7 +147,7 @@ export default function BeyondChatSection(): React.JSX.Element {
         <div>
           <h3 className={styles.beyondSubheading}>
             Turn Any Lecture into a Quiz
-            <span className={styles.badgeAvailable}>Available</span>
+            <span className={styles.badgeComingSoon}>Coming Soon</span>
           </h3>
           <p className={styles.beyondSubtext}>
             Iris generates practice questions from your course materials &mdash;
@@ -226,7 +226,7 @@ export default function BeyondChatSection(): React.JSX.Element {
         <div>
           <h3 className={styles.beyondSubheading}>
             Iris in Your IDE
-            <span className={styles.badgeComingSoon}>Coming Soon</span>
+            <span className={styles.badgeAvailable}>Available</span>
           </h3>
           <p className={styles.beyondSubtext}>
             Coming soon &mdash; Iris will integrate directly into VS Code via
@@ -313,20 +313,6 @@ export default function BeyondChatSection(): React.JSX.Element {
               <span>Artemis Extension (preview)</span>
             </div>
           </div>
-
-          <figure className={styles.screenshotBlock}>
-            <img
-              src={useBaseUrl("/img/screenshots/iris-exercise-chat.png")}
-              alt="Iris exercise chat widget helping a student with the Strategy Pattern exercise in Artemis"
-              className={styles.screenshotImg}
-              width={960}
-              height={540}
-              loading="lazy"
-            />
-            <figcaption className={styles.screenshotCaption}>
-              Iris helps a student with the Strategy Pattern exercise in Artemis
-            </figcaption>
-          </figure>
         </div>
       </div>
 
@@ -338,7 +324,7 @@ export default function BeyondChatSection(): React.JSX.Element {
       >
         <h3 className={styles.beyondSubheading}>
           Iris-Powered Global Search
-          <span className={styles.badgeAvailable}>Available</span>
+          <span className={styles.badgeComingSoon}>Coming Soon</span>
         </h3>
         <p className={`${styles.beyondSubtext} ${styles.beyondSubtextNarrow}`}>
           Press <strong>Cmd+K</strong> to search across all course materials.

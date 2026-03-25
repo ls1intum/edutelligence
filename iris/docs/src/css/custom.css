@@ -1,4 +1,65 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&display=swap");
+/* Self-hosted fonts (no external requests) */
+@font-face {
+  font-family: "DM Sans";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-sans-italic-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Serif Display";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-serif-display-normal-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-normal-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-normal-500.woff2") format("woff2");
+}
+
+html,
+body {
+  overflow-x: hidden;
+}
 
 :root {
   --ifm-color-primary: #2a73b4;
@@ -60,17 +121,22 @@
   --ifm-color-primary-lighter: #7cb5e0;
   --ifm-color-primary-lightest: #a0cbe9;
 
-  --ifm-background-color: #181818;
-  --ifm-background-surface-color: #1f1f1f;
-  --ifm-font-color-base: #f8f9fa;
+  --ifm-background-color: #0f1319;
+  --ifm-background-surface-color: #151b24;
+  --ifm-font-color-base: #e8ecf1;
 
-  --iris-border-color: #3a3a3a;
-  --iris-tertiary-bg: #262626;
-  --iris-accent-bg: #2d2d2d;
-  --iris-label-color: #919191;
+  --iris-border-color: #243044;
+  --iris-tertiary-bg: #1a2230;
+  --iris-accent-bg: #1e2838;
+  --iris-label-color: #8a9bb2;
   --iris-success: #00bc8c;
   --iris-btn-bg: #235f94;
   --iris-btn-bg-hover: #1b4d7a;
+
+  --iris-shadow-card: 0 4px 24px rgba(10, 20, 40, 0.4);
+  --iris-shadow-card-hover: 0 12px 48px rgba(10, 20, 40, 0.5);
+  --iris-shadow-panel: 0 8px 32px rgba(10, 20, 40, 0.4);
+  --iris-shadow-hero: 0 16px 64px rgba(10, 20, 40, 0.5);
 
   --docusaurus-highlighted-code-line-bg: rgba(90, 159, 214, 0.15);
 }

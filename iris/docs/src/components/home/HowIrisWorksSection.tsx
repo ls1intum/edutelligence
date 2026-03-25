@@ -140,7 +140,7 @@ export default function HowIrisWorksSection(): React.JSX.Element {
           Grounded in Your Course. Guided for Your Students.
         </h2>
         <p className={styles.sectionSubtitle}>
-          Iris ingests{" "}
+          Iris learns from{" "}
           {materialTypes.map((mat, i) => (
             <span key={mat}>
               {i > 0 && i < materialTypes.length - 1 && ", "}

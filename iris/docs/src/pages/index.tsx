@@ -2,12 +2,11 @@ import React from "react";
 import Layout from "@theme/Layout";
 import HeroSection from "../components/home/HeroSection";
 import TrustBar from "../components/home/TrustBar";
+import VideoCarousel from "../components/home/VideoCarousel";
 import WhyGenericAISection from "../components/home/WhyGenericAISection";
 import HowIrisWorksSection from "../components/home/HowIrisWorksSection";
-import ShowcaseSection from "../components/home/ShowcaseSection";
 import EvidenceSection from "../components/home/EvidenceSection";
 import PrivacySection from "../components/home/PrivacySection";
-import BeyondChatSection from "../components/home/BeyondChatSection";
 import StudentQuotes from "../components/home/StudentQuotes";
 import AudienceCards from "../components/home/AudienceCards";
 import FaqSection from "../components/home/FaqSection";
@@ -28,26 +27,19 @@ export default function Home(): React.JSX.Element {
       {/* 2. Trust Bar */}
       <TrustBar />
 
-      {/* 3. Why Generic AI Falls Short */}
+      {/* 3. Video Carousel */}
+      <VideoCarousel />
+
+      {/* 4. Why Generic AI Falls Short */}
       <WhyGenericAISection />
 
       {/* 5. How Iris Works (no sectionLazy — content-visibility clips the diagonal) */}
       <HowIrisWorksSection />
 
-      {/* 6. See Iris in Action */}
-      <div className={styles.sectionLazy}>
-        <ShowcaseSection />
-      </div>
-
-      {/* 7. Evidence & Scale (no sectionLazy — content-visibility clips the diagonal) */}
+      {/* 6. Evidence & Scale (no sectionLazy — content-visibility clips the diagonal) */}
       <EvidenceSection />
 
-      {/* 8. Beyond Chat */}
-      <div className={styles.sectionLazy}>
-        <BeyondChatSection />
-      </div>
-
-      {/* 9. Student Perspectives */}
+      {/* 7. Student Perspectives */}
       <div className={styles.sectionLazy}>
         <StudentQuotes />
       </div>
@@ -62,14 +54,14 @@ export default function Home(): React.JSX.Element {
         <AudienceCards />
       </div>
 
-      {/* 12. FAQ */}
-      <div className={styles.sectionLazy}>
-        <FaqSection />
-      </div>
-
-      {/* 13. Closing CTA */}
+      {/* 12. Closing CTA */}
       <div className={styles.sectionLazy}>
         <ClosingCta />
+      </div>
+
+      {/* 13. FAQ */}
+      <div className={styles.sectionLazy}>
+        <FaqSection />
       </div>
     </Layout>
   );

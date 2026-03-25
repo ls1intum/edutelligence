@@ -10,9 +10,7 @@ Tutor Suggestions provide AI-generated response guidance for tutors when they op
 
 When a tutor opens a discussion post, Iris analyzes the thread context — including the student's question, any prior replies, and related course content — and generates suggested response directions. These are not canned responses; they are tailored guidance that helps the tutor formulate a helpful reply.
 
-:::info Screenshot Needed
-Tutor suggestion in a discussion thread with Iris chat
-:::
+<!-- TODO: Screenshot needed — Tutor suggestion in a discussion thread -->
 
 ## What Tutors See
 

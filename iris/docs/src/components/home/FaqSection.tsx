@@ -20,7 +20,7 @@ const faqs: FaqEntry[] = [
   {
     question: "How long does setup take?",
     answer:
-      "Upload your lecture slides to Artemis, click ingest, and Iris is ready. Most instructors get started in minutes, not hours.",
+      "Upload your lecture slides to Artemis and Iris learns from them automatically. Most instructors get started in minutes, not hours.",
   },
   {
     question: "What if my university doesn't use Artemis yet?",
@@ -57,7 +57,7 @@ export default function FaqSection(): React.JSX.Element {
   return (
     <section id="faq" className={styles.sectionAlt}>
       <div className={styles.sectionAltInner}>
-        <h2 className={styles.sectionHeading}>Questions Academic Teams Ask</h2>
+        <h2 className={styles.sectionHeading}>Frequently Asked Questions</h2>
         <div className={styles.faqList}>
           {faqs.map((faq, i) => {
             const panelId = `faq-panel-${i}`;

@@ -37,7 +37,7 @@ const differentiators: DifferentiatorRow[] = [
   {
     feature: "Broad general knowledge beyond course scope",
     chatgpt: true,
-    iris: false,
+    iris: true,
   },
   {
     feature: "Knows your specific course content",

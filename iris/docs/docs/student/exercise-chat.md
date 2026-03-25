@@ -10,9 +10,16 @@ The Exercise Chat gives you context-aware help while you work on a programming e
 
 While working on a programming exercise in Artemis, click the **floating Iris icon** in the bottom-right corner of the screen. The chat opens as an overlay where you can ask questions without leaving the exercise.
 
-:::info Screenshot Needed
-Exercise chat showing context-aware response
-:::
+<div style={{display: 'flex', gap: '1rem', alignItems: 'flex-start'}}>
+<figure style={{flex: 1, margin: 0, textAlign: 'center'}}>
+<img src="/img/screenshots/exercise-iris-icon.png" alt="Floating Iris icon on an exercise page" style={{maxWidth: '100%', borderRadius: '8px'}} />
+<figcaption style={{fontSize: '0.85rem', color: 'var(--ifm-color-emphasis-600)', marginTop: '0.5rem'}}>Click the Iris icon in the bottom-right corner</figcaption>
+</figure>
+<figure style={{flex: 1, margin: 0, textAlign: 'center'}}>
+<img src="/img/screenshots/exercise-chat.png" alt="Exercise chat showing context-aware response" style={{maxWidth: '100%', borderRadius: '8px'}} />
+<figcaption style={{fontSize: '0.85rem', color: 'var(--ifm-color-emphasis-600)', marginTop: '0.5rem'}}>The chat opens as an overlay</figcaption>
+</figure>
+</div>
 
 ## What Iris Automatically Sees
 
