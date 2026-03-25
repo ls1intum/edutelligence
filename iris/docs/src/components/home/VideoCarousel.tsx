@@ -1,15 +1,14 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import useBaseUrl from "@docusaurus/useBaseUrl";
 import styles from "./styles.module.css";
 
 interface VideoSlide {
-  src: string;
   title: string;
   subtitle: string;
   status: "available" | "coming-soon";
 }
 
-const slides: Omit<VideoSlide, "src">[] = [
+const slides: VideoSlide[] = [
   {
     title: "Lecture Chat",
     subtitle:
@@ -38,37 +37,23 @@ const slides: Omit<VideoSlide, "src">[] = [
 
 export default function VideoCarousel(): React.JSX.Element {
   const [active, setActive] = useState(0);
-  const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
   const touchStartX = useRef(0);
 
-  const lectureSrc = useBaseUrl("/videos/lecture-chat.mp4");
-  const quizSrc = useBaseUrl("/videos/quiz.mp4");
-  const exerciseSrc = useBaseUrl("/videos/exercise-ide.mp4");
-  const searchSrc = useBaseUrl("/videos/global-search.mp4");
-
-  const srcs = [lectureSrc, quizSrc, exerciseSrc, searchSrc];
+  const srcs = [
+    useBaseUrl("/videos/lecture-chat.mp4"),
+    useBaseUrl("/videos/quiz.mp4"),
+    useBaseUrl("/videos/exercise-ide.mp4"),
+    useBaseUrl("/videos/global-search.mp4"),
+  ];
 
   const goTo = useCallback((idx: number) => {
     setActive(idx);
-    videoRefs.current.forEach((v, i) => {
-      if (!v) return;
-      if (i === idx) {
-        v.currentTime = 0;
-        v.play().catch(() => {});
-      } else {
-        v.pause();
-      }
-    });
   }, []);
 
-  const handleEnded = useCallback(
-    (idx: number) => {
-      goTo((idx + 1) % slides.length);
-    },
-    [goTo],
-  );
+  const handleEnded = useCallback(() => {
+    setActive((prev) => (prev + 1) % slides.length);
+  }, []);
 
-  // Swipe handling
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
   }, []);
@@ -86,13 +71,6 @@ export default function VideoCarousel(): React.JSX.Element {
     },
     [active, goTo],
   );
-
-  useEffect(() => {
-    const first = videoRefs.current[0];
-    if (first) {
-      first.play().catch(() => {});
-    }
-  }, []);
 
   const statusBadge = (status: "available" | "coming-soon") => (
     <span
@@ -146,27 +124,22 @@ export default function VideoCarousel(): React.JSX.Element {
           )}
         </div>
 
-        {/* Video + description */}
+        {/* Single video — key forces remount on tab change */}
         <div
           className={styles.videoCarouselStage}
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
         >
           <div className={styles.videoCarouselPlayer}>
-            {srcs.map((src, i) => (
-              <video
-                key={i}
-                ref={(el) => {
-                  videoRefs.current[i] = el;
-                }}
-                src={src}
-                muted
-                playsInline
-                preload={i === 0 ? "auto" : "metadata"}
-                className={`${styles.videoCarouselVideo} ${i === active ? styles.videoCarouselVideoActive : ""}`}
-                onEnded={() => handleEnded(i)}
-              />
-            ))}
+            <video
+              key={active}
+              src={srcs[active]}
+              autoPlay
+              muted
+              playsInline
+              className={styles.videoCarouselVideoSingle}
+              onEnded={handleEnded}
+            />
           </div>
           <p className={styles.videoCarouselCaption}>
             {slides[active].subtitle}
