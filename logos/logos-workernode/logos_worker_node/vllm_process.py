@@ -626,6 +626,24 @@ class VllmProcessHandle:
             detected_arch = self._detect_cuda_arch()
             if detected_arch:
                 env["TORCH_CUDA_ARCH_LIST"] = detected_arch
+
+        # FlashInfer JIT crashes GPU drivers on pre-Ampere (compute < 8.0).
+        # Force TRITON_ATTN which works reliably on all architectures.
+        if "VLLM_ATTENTION_BACKEND" not in os.environ:
+            detected_arch = self._detect_cuda_arch()
+            if detected_arch:
+                try:
+                    min_cap = min(float(c) for c in detected_arch.split(";") if c.strip())
+                    if min_cap < 8.0:
+                        env["VLLM_ATTENTION_BACKEND"] = "TRITON_ATTN"
+                        logger.info(
+                            "[%s] GPU compute %.1f < 8.0 — using TRITON_ATTN "
+                            "instead of FlashInfer to avoid driver crashes",
+                            self.lane_id, min_cap,
+                        )
+                except (ValueError, TypeError):
+                    pass
+
         if vc.disable_nccl_p2p:
             env["NCCL_P2P_DISABLE"] = "1"
 

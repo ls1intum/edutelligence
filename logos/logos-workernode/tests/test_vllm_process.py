@@ -609,3 +609,17 @@ def test_build_env_sets_torch_cache(monkeypatch):
     assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.torch_cache"
     assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
     assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"
+    # Pre-Ampere should force TRITON_ATTN to avoid FlashInfer driver crashes
+    assert env["VLLM_ATTENTION_BACKEND"] == "TRITON_ATTN"
+
+
+def test_build_env_no_triton_override_on_ampere(monkeypatch):
+    """Ampere+ GPUs should not override attention backend."""
+    monkeypatch.delenv("VLLM_ATTENTION_BACKEND", raising=False)
+    monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
+    gc = OllamaConfig(models_path="/data/models")
+    handle = VllmProcessHandle("lane-test", 19000, gc)
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "8.6")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    env = handle._build_env(lc)
+    assert "VLLM_ATTENTION_BACKEND" not in env
