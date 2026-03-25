@@ -593,7 +593,7 @@ class LaneManager:
             return lane_config
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
-        if lane_config.vllm_config.swap_space_gb > 0:
+        if lane_config.vllm_config.cpu_offload_gb > 0:
             return lane_config  # Explicitly set, don't override
 
         per_lane = self._cpu_offload_budget_gb / self._capabilities_model_count
@@ -601,7 +601,7 @@ class LaneManager:
             return lane_config  # Too small to be useful
 
         data = lane_config.model_dump()
-        data["vllm_config"]["swap_space_gb"] = per_lane
+        data["vllm_config"]["cpu_offload_gb"] = per_lane
         return LaneConfig(**data)
 
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:

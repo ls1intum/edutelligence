@@ -548,30 +548,30 @@ def test_build_cmd_skips_cuda_graph_sizes_with_enforce_eager(monkeypatch):
     assert "--cuda-graph-sizes" not in cmd
 
 
-def test_build_cmd_includes_swap_space(monkeypatch):
-    """--swap-space should appear when swap_space_gb > 0."""
+def test_build_cmd_includes_cpu_offload(monkeypatch):
+    """--cpu-offload-gb should appear when cpu_offload_gb > 0."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(
         model="test-model", vllm=True,
-        vllm_config=VllmConfig(swap_space_gb=10.0),
+        vllm_config=VllmConfig(cpu_offload_gb=10.0),
     )
     cmd = handle._build_cmd(lc)
-    assert "--swap-space" in cmd
-    idx = cmd.index("--swap-space")
-    assert cmd[idx + 1] == "10"
+    assert "--cpu-offload-gb" in cmd
+    idx = cmd.index("--cpu-offload-gb")
+    assert cmd[idx + 1] == "10.0"
 
 
-def test_build_cmd_no_swap_space_when_zero(monkeypatch):
-    """--swap-space should not appear when swap_space_gb == 0."""
+def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
+    """--cpu-offload-gb should not appear when cpu_offload_gb == 0."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(
         model="test-model", vllm=True,
-        vllm_config=VllmConfig(swap_space_gb=0.0),
+        vllm_config=VllmConfig(cpu_offload_gb=0.0),
     )
     cmd = handle._build_cmd(lc)
-    assert "--swap-space" not in cmd
+    assert "--cpu-offload-gb" not in cmd
 
 
 def test_build_env_sets_torch_cache(monkeypatch):

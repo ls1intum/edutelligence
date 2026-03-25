@@ -829,19 +829,19 @@ def test_inject_cpu_offload_budget_divides_among_capabilities():
     )
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     result = manager._inject_cpu_offload_budget(lc)
-    assert result.vllm_config.swap_space_gb == 10.0
+    assert result.vllm_config.cpu_offload_gb == 10.0
 
 
 def test_inject_cpu_offload_budget_no_override_when_explicit():
-    """Explicit swap_space_gb should not be overridden."""
+    """Explicit cpu_offload_gb should not be overridden."""
     manager = LaneManager(
         OllamaConfig(),
         cpu_offload_budget_gb=50.0,
         capabilities_model_count=5,
     )
-    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(swap_space_gb=20.0))
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(cpu_offload_gb=20.0))
     result = manager._inject_cpu_offload_budget(lc)
-    assert result.vllm_config.swap_space_gb == 20.0
+    assert result.vllm_config.cpu_offload_gb == 20.0
 
 
 def test_inject_cpu_offload_budget_zero_budget():
@@ -853,7 +853,7 @@ def test_inject_cpu_offload_budget_zero_budget():
     )
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     result = manager._inject_cpu_offload_budget(lc)
-    assert result.vllm_config.swap_space_gb == 0.0
+    assert result.vllm_config.cpu_offload_gb == 0.0
 
 
 def test_inject_cpu_offload_budget_non_vllm_unchanged():

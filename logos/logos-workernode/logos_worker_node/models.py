@@ -81,9 +81,9 @@ class VllmConfig(BaseModel):
         description="Comma-separated batch sizes for CUDA graph capture (e.g. '1,2,4,8'). "
         "Empty = vLLM default. Only effective when enforce_eager is False.",
     )
-    swap_space_gb: float = Field(
+    cpu_offload_gb: float = Field(
         default=0.0, ge=0.0,
-        description="CPU swap space for KV cache offloading (GB). 0 = disabled.",
+        description="CPU RAM for KV cache offloading (GB). Passed as --cpu-offload-gb to vLLM. 0 = disabled.",
     )
     extra_args: list[str] = Field(default_factory=list)
 

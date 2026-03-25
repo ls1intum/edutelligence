@@ -457,9 +457,9 @@ class VllmProcessHandle:
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
-        # CPU swap space for KV cache offloading
-        if vc.swap_space_gb > 0:
-            cmd.extend(["--swap-space", str(int(vc.swap_space_gb))])
+        # CPU RAM offloading for KV cache
+        if vc.cpu_offload_gb > 0:
+            cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
         cmd.extend(vc.extra_args)
         return cmd
 
