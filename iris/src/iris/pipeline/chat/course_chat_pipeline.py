@@ -712,9 +712,10 @@ class CourseChatPipeline(
                     )
                     state.result += "\n\nSorry, I was unable to generate the questions. Please try again."
 
-            for token in self.mcq_pipeline.tokens:
-                self._track_tokens(state, token)
-            self.mcq_pipeline.tokens.clear()
+            if not mcq_thread.is_alive():
+                for token in self.mcq_pipeline.tokens:
+                    self._track_tokens(state, token)
+                self.mcq_pipeline.tokens.clear()
 
         # Send the complete response (text + MCQ integrated)
         state.callback.done(
