@@ -127,10 +127,6 @@ class WorkerConfig(BaseModel):
     lane_port_start: int = 11436
     lane_port_end: int = 11499
     name: str = "logos-workernode"
-    cpu_offload_budget_gb: float = Field(
-        default=0.0, ge=0.0,
-        description="Total CPU RAM budget (GB) for KV cache swap space, divided evenly across capable models.",
-    )
 
 
 class LogosConfig(BaseModel):

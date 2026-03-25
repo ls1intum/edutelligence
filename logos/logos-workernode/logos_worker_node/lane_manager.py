@@ -167,12 +167,8 @@ class LaneManager:
         gpu_device_count: Callable[[], int] | None = None,
         per_gpu_vram_mb: Callable[[], float] | None = None,
         gpu_snapshot: Callable[[], Awaitable[DeviceSummary]] | None = None,
-        cpu_offload_budget_gb: float = 0.0,
-        capabilities_model_count: int = 0,
     ) -> None:
         self._global_config = global_config
-        self._cpu_offload_budget_gb = cpu_offload_budget_gb
-        self._capabilities_model_count = max(capabilities_model_count, 1)
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
@@ -582,27 +578,8 @@ class LaneManager:
     # Internal
     # ------------------------------------------------------------------
 
-    def _inject_cpu_offload_budget(self, lane_config: LaneConfig) -> LaneConfig:
-        """Auto-divide CPU offload budget across capable models.
-
-        If the worker has cpu_offload_budget_gb > 0 and the lane is vLLM with
-        swap_space_gb == 0 (not explicitly set), inject per-lane swap space.
-        Budget is divided by total capabilities_model_count (not active lanes).
-        """
-        if self._cpu_offload_budget_gb <= 0:
-            return lane_config
-        if not lane_config.vllm or lane_config.vllm_config is None:
-            return lane_config
-        if lane_config.vllm_config.cpu_offload_gb > 0:
-            return lane_config  # Explicitly set, don't override
-
-        per_lane = self._cpu_offload_budget_gb / self._capabilities_model_count
-        if per_lane < 0.5:
-            return lane_config  # Too small to be useful
-
-        data = lane_config.model_dump()
-        data["vllm_config"]["cpu_offload_gb"] = per_lane
-        return LaneConfig(**data)
+    # CPU offload is controlled per-lane via vllm_config.cpu_offload_gb.
+    # No auto-injection — only applied when explicitly set on a lane's config.
 
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
@@ -889,7 +866,6 @@ class LaneManager:
         return lane_config.model_copy(update={"gpu_devices": selector})
 
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
-        lane_config = self._inject_cpu_offload_budget(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)

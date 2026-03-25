@@ -563,7 +563,7 @@ def test_build_cmd_includes_cpu_offload(monkeypatch):
 
 
 def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
-    """--cpu-offload-gb should not appear when cpu_offload_gb == 0."""
+    """--cpu-offload-gb should not appear when cpu_offload_gb == 0 (explicitly disabled)."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(

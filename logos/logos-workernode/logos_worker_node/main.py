@@ -50,8 +50,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gpu_device_count=lambda: gpu_collector.device_count,
         per_gpu_vram_mb=lambda: gpu_collector.per_gpu_vram_mb,
         gpu_snapshot=gpu_collector.get_snapshot,
-        cpu_offload_budget_gb=cfg.worker.cpu_offload_budget_gb,
-        capabilities_model_count=len(cfg.logos.capabilities_models) if cfg.logos and cfg.logos.capabilities_models else 1,
     )
 
     # Validate capabilities models at startup (warnings only)
