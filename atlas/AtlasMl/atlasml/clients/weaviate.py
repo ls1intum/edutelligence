@@ -260,7 +260,7 @@ class WeaviateClient:
             logger.error(f"❌ Failed to check collection {collection_name}: {e}")
             raise WeaviateOperationError(
                 f"Failed to check collection {collection_name}: {e}"
-            )
+            ) from e
 
     def can_read_collection(self, collection_name: str) -> bool:
         """Verify a collection is readable with a lightweight bounded query."""
@@ -269,11 +269,13 @@ class WeaviateClient:
             collection = self.client.collections.get(collection_name)
             collection.query.fetch_objects(limit=1)
             return True
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"❌ Failed to read collection {collection_name}: {e}")
             raise WeaviateOperationError(
                 f"Failed to read collection {collection_name}: {e}"
-            )
+            ) from e
 
     def close(self):
         """Close the underlying Weaviate client connection."""

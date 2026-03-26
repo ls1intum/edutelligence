@@ -165,6 +165,9 @@ WEAVIATE_API_KEY=your-weaviate-api-key
 # Public AtlasML hostname used by Traefik routing
 APP_HOSTNAME=atlasml.example.com
 
+# ACME account email used for certificate issuance
+ACME_EMAIL=you@example.com
+
 # Optional Traefik IP allowlist
 ALLOWED_IPS=131.159.89.17/32
 
@@ -222,7 +225,7 @@ atlasml   ghcr.io/ls1intum/edutelligence/atlasml  healthy   0.0.0.0:80->8000/tcp
 
 ```bash
 # Check health endpoint
-curl -k https://your-atlasml-domain.com/api/v1/health/
+curl https://your-atlasml-domain.com/api/v1/health/
 
 # Should return JSON with api/weaviate status information
 
@@ -233,6 +236,9 @@ docker logs atlasml
 # INFO:     Started server process
 # INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
+
+Use `curl -k` only for debugging broken or not-yet-issued TLS certificates. The
+normal verification step should validate the certificate and hostname.
 
 ---
 

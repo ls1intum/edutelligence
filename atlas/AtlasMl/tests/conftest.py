@@ -158,6 +158,9 @@ class MockWeaviateQuery:
                 )
             ]
 
+        if limit is not None:
+            objects = objects[:limit]
+
         return MockWeaviateQueryResult(objects)
 
     def set_fail_fetch(self, should_fail: bool):
@@ -416,6 +419,8 @@ class MockWeaviateClient:
 
     def can_read_collection(self, collection_name: str) -> bool:
         """Mock lightweight readability check for a collection."""
+        if not self.collections.exists(collection_name):
+            raise Exception(f"Mock collection {collection_name} does not exist")
         collection = self.collections.get(collection_name)
         collection.query.fetch_objects(limit=1)
         return True
