@@ -117,12 +117,79 @@ class DBManager:
     def close(self):
         self.session.close()
 
+    @staticmethod
+    def _is_sequence_drift_integrity_error(
+        exc: sqlalchemy.exc.IntegrityError,
+        *,
+        table_name: str,
+        data: Dict[str, Any],
+        has_id_column: bool,
+    ) -> bool:
+        if "id" in data or not has_id_column:
+            return False
+
+        diag = getattr(getattr(exc, "orig", None), "diag", None)
+        constraint_name = getattr(diag, "constraint_name", None)
+        if constraint_name is not None:
+            return constraint_name == f"{table_name}_pkey"
+
+        message = str(getattr(exc, "orig", exc))
+        return (
+            "duplicate key value violates unique constraint" in message
+            and f'"{table_name}_pkey"' in message
+            and "Key (id)=" in message
+        )
+
+    def _reset_sequence_for_table(self, table_name: str, *, commit: bool = True) -> bool:
+        table = Base.metadata.tables.get(table_name)
+        if table is None or "id" not in table.c:
+            return False
+
+        sequence_name = self.session.execute(
+            text("SELECT pg_get_serial_sequence(:table_name, 'id')"),
+            {"table_name": table_name},
+        ).scalar()
+        if not sequence_name:
+            return False
+
+        max_id = self.session.execute(text(f'SELECT MAX(id) FROM "{table_name}"')).scalar()
+
+        if max_id is None:
+            self.session.execute(
+                text("SELECT setval(:sequence_name, 1, false)"),
+                {"sequence_name": sequence_name},
+            )
+        else:
+            # With is_called=true the next nextval() returns max_id + 1, which is
+            # exactly what we want after importing or manually inserting rows.
+            self.session.execute(
+                text("SELECT setval(:sequence_name, :new_value, true)"),
+                {"sequence_name": sequence_name, "new_value": int(max_id)},
+            )
+
+        if commit:
+            self.session.commit()
+        return True
+
     def insert(self, table: str, data: Dict[str, Any]) -> int:
-        table = Table(table, self.metadata, autoload_with=self.engine)
-        insert_stmt = table.insert().values(**data)
-        result = self.session.execute(insert_stmt)
-        self.session.commit()
-        return result.inserted_primary_key[0]
+        table_obj = Table(table, self.metadata, autoload_with=self.engine)
+        insert_stmt = table_obj.insert().values(**data)
+        try:
+            result = self.session.execute(insert_stmt)
+            self.session.commit()
+            return result.inserted_primary_key[0]
+        except sqlalchemy.exc.IntegrityError as exc:
+            self.session.rollback()
+            if self._is_sequence_drift_integrity_error(
+                exc,
+                table_name=table_obj.name,
+                data=data,
+                has_id_column="id" in table_obj.c,
+            ) and self._reset_sequence_for_table(table_obj.name):
+                result = self.session.execute(insert_stmt)
+                self.session.commit()
+                return result.inserted_primary_key[0]
+            raise
 
     def update_log_entry_metrics(
         self,
@@ -2727,32 +2794,7 @@ class DBManager:
             "token_prices",
             "jobs"
         ]:
-            # Check if table exists
-            table = Base.metadata.tables.get(table_name)
-            if table is None:
-                continue
-
-            # Check if column 'id' exists
-            if 'id' in table.c:
-                # Get name of related sequence (PostgreSQL-Name-convention)
-                sequence_name = f"{table_name}_id_seq"
-
-                # Max ID of Table
-                result = self.session.execute(text(f"SELECT MAX(id) FROM {table_name}"))
-                max_id = result.scalar()
-
-                if max_id is not None:
-                    # Data → next ID = max_id + 1
-                    self.session.execute(
-                        text("SELECT setval(:sequence_name, :new_value, true)"),
-                        {"sequence_name": sequence_name, "new_value": max_id + 1}
-                    )
-                else:
-                    # Empty Table
-                    self.session.execute(
-                        text("SELECT setval(:sequence_name, 1, false)"),
-                        {"sequence_name": sequence_name}
-                    )
+            self._reset_sequence_for_table(table_name, commit=False)
         self.session.commit()
 
     def import_from_json(self, logos_key: str, json_data: dict):
