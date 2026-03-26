@@ -3831,6 +3831,70 @@
   pointer-events: auto;
 }
 
+/* Mobile sliding track — hidden on desktop */
+.videoCarouselTrackWrapper {
+  display: none;
+  overflow: hidden;
+}
+
+.videoCarouselTrack {
+  display: flex;
+  transition: transform 0.35s ease;
+  will-change: transform;
+}
+
+.videoCarouselSlide {
+  flex: 0 0 100%;
+  min-width: 0;
+}
+
+.videoCarouselSlideHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.videoCarouselSlideVideoWrap {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 16 / 9;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.videoCarouselSlideVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.videoCarouselSlideCaption {
+  text-align: center;
+  color: var(--iris-label-color);
+  margin-top: 1rem;
+  margin-bottom: 0;
+  line-height: 1.5;
+  font-size: 0.9rem;
+  padding: 0 0.25rem;
+}
+
+@media (max-width: 768px) {
+  .videoCarouselPlayer,
+  .videoCarouselCaption {
+    display: none;
+  }
+  .videoCarouselMobileHeader {
+    display: none;
+  }
+  .videoCarouselTrackWrapper {
+    display: block;
+  }
+}
+
 .videoCarouselCaption {
   text-align: center;
   color: var(--iris-label-color);
@@ -3885,12 +3949,7 @@
   }
 
   .videoCarouselMobileHeader {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    margin-bottom: 1.25rem;
-    flex-wrap: wrap;
+    display: none;
   }
 
   .videoCarouselMobileTitle {

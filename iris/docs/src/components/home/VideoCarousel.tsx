@@ -39,7 +39,10 @@ const slides: Omit<VideoSlide, "src">[] = [
 export default function VideoCarousel(): React.JSX.Element {
   const [active, setActive] = useState(0);
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
+  const trackRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef(0);
+  const touchDx = useRef(0);
+  const isDragging = useRef(false);
 
   const lectureSrc = useBaseUrl("/videos/lecture-chat.mp4");
   const quizSrc = useBaseUrl("/videos/quiz.mp4");
@@ -68,24 +71,48 @@ export default function VideoCarousel(): React.JSX.Element {
     [goTo],
   );
 
-  // Swipe handling
+  // Swipe handling with live drag feedback
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
+    touchDx.current = 0;
+    isDragging.current = true;
+    if (trackRef.current) {
+      trackRef.current.style.transition = "none";
+    }
   }, []);
 
-  const handleTouchEnd = useCallback(
+  const handleTouchMove = useCallback(
     (e: React.TouchEvent) => {
-      const dx = e.changedTouches[0].clientX - touchStartX.current;
-      if (Math.abs(dx) > 50) {
-        if (dx < 0 && active < slides.length - 1) {
-          goTo(active + 1);
-        } else if (dx > 0 && active > 0) {
-          goTo(active - 1);
-        }
-      }
+      if (!isDragging.current || !trackRef.current) return;
+      touchDx.current = e.touches[0].clientX - touchStartX.current;
+      const offset =
+        -(active * 100) +
+        (touchDx.current / trackRef.current.parentElement!.clientWidth) * 100;
+      trackRef.current.style.transform = `translateX(${offset}%)`;
     },
-    [active, goTo],
+    [active],
   );
+
+  const handleTouchEnd = useCallback(() => {
+    isDragging.current = false;
+    if (trackRef.current) {
+      trackRef.current.style.transition = "";
+    }
+    const dx = touchDx.current;
+    if (Math.abs(dx) > 50) {
+      if (dx < 0 && active < slides.length - 1) {
+        goTo(active + 1);
+        return;
+      } else if (dx > 0 && active > 0) {
+        goTo(active - 1);
+        return;
+      }
+    }
+    // Snap back if no slide change
+    if (trackRef.current) {
+      trackRef.current.style.transform = `translateX(-${active * 100}%)`;
+    }
+  }, [active, goTo]);
 
   useEffect(() => {
     const first = videoRefs.current[0];
@@ -93,6 +120,14 @@ export default function VideoCarousel(): React.JSX.Element {
       first.play().catch(() => {});
     }
   }, []);
+
+  // Update track position when active changes (for tab clicks / auto-advance)
+  useEffect(() => {
+    if (trackRef.current) {
+      trackRef.current.style.transition = "";
+      trackRef.current.style.transform = `translateX(-${active * 100}%)`;
+    }
+  }, [active]);
 
   const statusBadge = (status: "available" | "coming-soon") => (
     <span
@@ -133,25 +168,16 @@ export default function VideoCarousel(): React.JSX.Element {
           ))}
         </div>
 
-        {/* Mobile: current slide label + swipe hint */}
+        {/* Mobile: current slide label (desktop hidden) */}
         <div className={styles.videoCarouselMobileHeader}>
           <span className={styles.videoCarouselMobileTitle}>
             {slides[active].title}
           </span>
           {statusBadge(slides[active].status)}
-          {active < slides.length - 1 && (
-            <span className={styles.videoCarouselSwipeHint}>
-              Swipe for next &rarr;
-            </span>
-          )}
         </div>
 
-        {/* Video + description */}
-        <div
-          className={styles.videoCarouselStage}
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
-        >
+        {/* Desktop: stacked videos with opacity */}
+        <div className={styles.videoCarouselStage}>
           <div className={styles.videoCarouselPlayer}>
             {srcs.map((src, i) => (
               <video
@@ -172,6 +198,50 @@ export default function VideoCarousel(): React.JSX.Element {
           <p className={styles.videoCarouselCaption}>
             {slides[active].subtitle}
           </p>
+        </div>
+
+        {/* Mobile: horizontal sliding track with title + video + caption per slide */}
+        <div
+          className={styles.videoCarouselTrackWrapper}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
+          <div
+            ref={trackRef}
+            className={styles.videoCarouselTrack}
+            style={{ transform: `translateX(-${active * 100}%)` }}
+          >
+            {srcs.map((src, i) => (
+              <div key={i} className={styles.videoCarouselSlide}>
+                <div className={styles.videoCarouselSlideHeader}>
+                  <span className={styles.videoCarouselMobileTitle}>
+                    {slides[i].title}
+                  </span>
+                  {statusBadge(slides[i].status)}
+                </div>
+                <div className={styles.videoCarouselSlideVideoWrap}>
+                  <video
+                    ref={(el) => {
+                      if (window.innerWidth < 768) {
+                        videoRefs.current[i] = el;
+                      }
+                    }}
+                    src={src}
+                    controls
+                    muted
+                    playsInline
+                    preload={i === 0 ? "auto" : "metadata"}
+                    className={styles.videoCarouselSlideVideo}
+                    onEnded={() => handleEnded(i)}
+                  />
+                </div>
+                <p className={styles.videoCarouselSlideCaption}>
+                  {slides[i].subtitle}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Dot indicators */}
