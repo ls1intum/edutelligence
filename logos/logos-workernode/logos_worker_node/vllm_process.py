@@ -485,9 +485,12 @@ class VllmProcessHandle:
     def _auto_attention_backend(self) -> str:
         """Auto-select attention backend based on GPU compute capability.
 
-        Returns empty string (let vLLM decide — typically FlashInfer).
-        Override via vllm_config.attention_backend if needed.
+        Returns an operator override when the worker has one, otherwise leaves
+        backend selection to vLLM.
         """
+        forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
+        if forced_backend:
+            return forced_backend
         return ""
 
     _cached_cuda_arch: str | None = None

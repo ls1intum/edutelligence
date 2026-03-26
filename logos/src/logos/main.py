@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Set, Optional, Tuple
 import grpc
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
@@ -2652,7 +2653,8 @@ async def delete_model(data: DeleteModelRequest):
 @app.post("/logosdb/get_model")
 async def get_model(data: GetModelRequest):
     with DBManager() as db:
-        return db.get_model(**data.dict()), 200
+        payload = db.get_model(data.id)
+    return JSONResponse(content=jsonable_encoder(payload), status_code=200)
 
 
 @app.post("/logosdb/add_policy")
@@ -2730,7 +2732,8 @@ async def get_general_model_stats(data: LogosKeyModel):
 @app.post("/logosdb/export")
 async def export(data: LogosKeyModel):
     with DBManager() as db:
-        return db.export(**data.dict())
+        payload, status = db.export(**data.dict())
+    return JSONResponse(content=jsonable_encoder(payload), status_code=status)
 
 
 @app.post("/logosdb/import")

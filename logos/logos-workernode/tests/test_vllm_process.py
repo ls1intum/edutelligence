@@ -633,6 +633,7 @@ def test_enforce_eager_can_be_enabled(monkeypatch):
 
 def test_no_attn_override_by_default(monkeypatch):
     """By default no attention backend override — let vLLM pick (FlashInfer)."""
+    monkeypatch.delenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", raising=False)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
@@ -645,6 +646,18 @@ def test_explicit_attention_backend_config(monkeypatch):
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(attention_backend="TRITON_ATTN"))
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" in cmd
+    idx = cmd.index("--attention-config.backend")
+    assert cmd[idx + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_env_override(monkeypatch):
+    """Worker-wide auto attention override should be passed through to vLLM."""
+    monkeypatch.setenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", "TRITON_ATTN")
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
     idx = cmd.index("--attention-config.backend")

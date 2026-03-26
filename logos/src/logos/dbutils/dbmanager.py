@@ -480,7 +480,23 @@ class DBManager:
     def add_model(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name})
+        pk = self.insert(
+            "models",
+            {
+                "name": name,
+                # Some deployed databases enforce non-null model weight columns even though the
+                # local ORM marks them optional. Seed a neutral baseline so admin model creation
+                # works before any explicit ranking/rebalancing happens.
+                "weight_privacy": "LOCAL",
+                "weight_latency": 0,
+                "weight_accuracy": 0,
+                "weight_cost": 0,
+                "weight_quality": 0,
+                "tags": "",
+                "parallel": 1,
+                "description": "",
+            },
+        )
         return {"result": f"Created Model", "model_id": pk}, 200
 
     def add_full_model(self, logos_key: str, name: str,
@@ -488,7 +504,22 @@ class DBManager:
                        description: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
+        pk = self.insert(
+            "models",
+            {
+                "name": name,
+                "weight_privacy": weight_privacy,
+                # Seed explicit numeric weights before the rebalance step so stricter live
+                # schemas do not reject the initial insert.
+                "weight_latency": 0,
+                "weight_accuracy": 0,
+                "weight_cost": 0,
+                "weight_quality": 0,
+                "tags": tags,
+                "parallel": parallel,
+                "description": description,
+            },
+        )
         return self.rebalance_added_model(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
 
     def update_model_weights(self, logos_key: str, id: int, category: str, value: int):

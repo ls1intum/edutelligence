@@ -21,6 +21,7 @@ logos:
     - Qwen/Qwen2.5-Coder-7B-Instruct
     - Qwen/Qwen2.5-3B-Instruct
     - Qwen/Qwen2.5-0.5B-Instruct
+    - openai/gpt-oss-20b
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 

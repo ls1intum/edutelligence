@@ -10,6 +10,7 @@ via LOGOS_CAPACITY_PLANNER_ENABLED=false.
 import asyncio
 import copy
 from datetime import datetime, timezone
+from itertools import combinations
 import logging
 import os
 import time
@@ -96,6 +97,7 @@ class CapacityPlanner:
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
         self._lane_loaded_at: dict[tuple[int, str], float] = {}
+        self._request_prepare_locks: dict[int, asyncio.Lock] = {}
         self._load_cooldown_seconds = float(
             os.environ.get("LOGOS_LOAD_COOLDOWN_SECONDS", "60")
         )
@@ -104,6 +106,13 @@ class CapacityPlanner:
         self._use_additive_loads = os.environ.get(
             "LOGOS_USE_ADDITIVE_LOADS", ""
         ).strip().lower() in ("1", "true", "yes")
+
+    def _request_prepare_lock(self, provider_id: int) -> asyncio.Lock:
+        lock = self._request_prepare_locks.get(int(provider_id))
+        if lock is None:
+            lock = asyncio.Lock()
+            self._request_prepare_locks[int(provider_id)] = lock
+        return lock
 
     async def start(self) -> None:
         """Start the planner background loop."""
@@ -395,16 +404,25 @@ class CapacityPlanner:
             return None
 
         target = self._pick_request_target_lane(provider_id, model_name)
-
-        if target is not None:
+        if target is not None and target.runtime_state not in {"sleeping", "cold"}:
             return await self._prepare_existing_lane(
                 provider_id, model_name, target, timeout_seconds,
             )
 
-        # No lane exists — attempt request-time cold load
-        return await self._cold_load_for_request(
-            provider_id, model_name, timeout_seconds,
-        )
+        async with self._request_prepare_lock(provider_id):
+            # Re-check state after waiting so concurrent cold loads/wakes do not
+            # build conflicting desired lane sets from a stale snapshot.
+            target = self._pick_request_target_lane(provider_id, model_name)
+
+            if target is not None:
+                return await self._prepare_existing_lane(
+                    provider_id, model_name, target, timeout_seconds,
+                )
+
+            # No lane exists — attempt request-time cold load
+            return await self._cold_load_for_request(
+                provider_id, model_name, timeout_seconds,
+            )
 
     async def _prepare_existing_lane(
         self,
@@ -1044,11 +1062,13 @@ class CapacityPlanner:
             if available >= needed:
                 return True
 
+            shortfall = max(needed - available, 0.0)
             reclaim = self._next_request_reclaim_action(
                 provider_id=provider_id,
                 target=target,
                 lanes=self._safe_get_lanes(provider_id),
                 profiles=self._safe_get_profiles(provider_id),
+                required_free_mb=shortfall,
             )
             if reclaim is None:
                 logger.info(
@@ -1074,6 +1094,7 @@ class CapacityPlanner:
         target: LaneSchedulerSignals,
         lanes: list[LaneSchedulerSignals],
         profiles: dict[str, ModelProfile],
+        required_free_mb: float = 0.0,
     ) -> Optional[CapacityPlanAction]:
         sleep_candidates: list[tuple[float, CapacityPlanAction]] = []
         stop_candidates: list[tuple[float, CapacityPlanAction]] = []
@@ -1146,12 +1167,72 @@ class CapacityPlanner:
                 )
 
         if sleep_candidates:
+            sleep_plan = self._best_reclaim_plan(
+                sleep_candidates,
+                required_free_mb=required_free_mb,
+            )
+            if sleep_plan:
+                return self._pick_next_reclaim_action_from_plan(sleep_plan)
             sleep_candidates.sort(key=lambda item: item[0], reverse=True)
             return sleep_candidates[0][1]
         if stop_candidates:
+            stop_plan = self._best_reclaim_plan(
+                stop_candidates,
+                required_free_mb=required_free_mb,
+            )
+            if stop_plan:
+                return self._pick_next_reclaim_action_from_plan(stop_plan)
             stop_candidates.sort(key=lambda item: item[0], reverse=True)
             return stop_candidates[0][1]
         return None
+
+    @staticmethod
+    def _best_reclaim_plan(
+        candidates: list[tuple[float, CapacityPlanAction]],
+        *,
+        required_free_mb: float,
+    ) -> list[tuple[float, CapacityPlanAction]]:
+        """Find the least-destructive reclaim set that satisfies the shortfall.
+
+        Preference order:
+        1. Lowest total freed VRAM that still satisfies the request
+        2. Lowest single-lane impact within that set
+        3. Fewer actions
+        4. Stable lane-id ordering
+
+        Request-time lane counts are small, so an exact subset search is fine.
+        """
+        if required_free_mb <= 0:
+            return []
+        if not candidates:
+            return []
+
+        best_combo: tuple[int, ...] | None = None
+        best_score: tuple[float, float, int, tuple[str, ...]] | None = None
+
+        for size in range(1, len(candidates) + 1):
+            for combo in combinations(range(len(candidates)), size):
+                total_freed = sum(candidates[i][0] for i in combo)
+                if total_freed + 1e-6 < required_free_mb:
+                    continue
+                max_single_freed = max(candidates[i][0] for i in combo)
+                lane_ids = tuple(sorted(candidates[i][1].lane_id for i in combo))
+                score = (total_freed, max_single_freed, size, lane_ids)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_combo = combo
+
+        if best_combo is None:
+            return []
+        return [candidates[i] for i in best_combo]
+
+    @staticmethod
+    def _pick_next_reclaim_action_from_plan(
+        plan: list[tuple[float, CapacityPlanAction]],
+    ) -> CapacityPlanAction:
+        """Execute the largest step inside the chosen low-damage reclaim plan first."""
+        plan = sorted(plan, key=lambda item: (-item[0], item[1].lane_id))
+        return plan[0][1]
 
     # ------------------------------------------------------------------
     # GPU utilization tuning (vLLM only)

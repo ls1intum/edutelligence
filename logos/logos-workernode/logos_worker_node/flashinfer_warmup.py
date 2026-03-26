@@ -112,7 +112,10 @@ def warmup(cache_dir: str | None = None) -> bool:
         logger.warning("FlashInfer warmup failed after %.1fs: %s", elapsed, exc)
         return False
     finally:
-        torch.cuda.empty_cache()
+        try:
+            torch.cuda.empty_cache()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("FlashInfer warmup cleanup failed: %s", exc)
 
 
 def main() -> None:

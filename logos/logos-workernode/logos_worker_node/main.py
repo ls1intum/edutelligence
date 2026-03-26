@@ -46,7 +46,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
         cache_dir = os.path.join(cfg.engines.ollama.models_path, ".cache", "flashinfer")
-        flashinfer_warmup(cache_dir)
+        warmup_ok = flashinfer_warmup(cache_dir)
+        if not warmup_ok:
+            forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
+            if not forced_backend:
+                os.environ["LOGOS_VLLM_AUTO_ATTENTION_BACKEND"] = "TRITON_ATTN"
+                logger.warning(
+                    "FlashInfer pre-warmup failed; forcing TRITON_ATTN for subsequent vLLM launches in this worker"
+                )
+            else:
+                logger.warning(
+                    "FlashInfer pre-warmup failed; keeping configured attention backend override %s",
+                    forced_backend,
+                )
     except Exception:
         logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch", exc_info=True)
 

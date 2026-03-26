@@ -745,6 +745,116 @@ async def test_prepare_lane_for_request_reclaims_idle_competitor_first():
     assert actions == ["sleep_l1", "wake"]
 
 
+def test_request_reclaim_prefers_small_sleep_combo_over_large_single_sleep():
+    target = _make_signal(
+        lane_id="lane-target",
+        model_name="target-model",
+        runtime_state="cold",
+        sleep_state="unsupported",
+        is_vllm=True,
+    )
+    big = _make_signal(
+        lane_id="lane-big",
+        model_name="big-model",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        effective_vram_mb=12000.0,
+    )
+    small_a = _make_signal(
+        lane_id="lane-small-a",
+        model_name="small-model-a",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        effective_vram_mb=6000.0,
+    )
+    small_b = _make_signal(
+        lane_id="lane-small-b",
+        model_name="small-model-b",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        effective_vram_mb=6000.0,
+    )
+    profiles = {
+        "big-model": ModelProfile(
+            model_name="big-model",
+            loaded_vram_mb=12000.0,
+            sleeping_residual_mb=2000.0,
+            engine="vllm",
+        ),
+        "small-model-a": ModelProfile(
+            model_name="small-model-a",
+            loaded_vram_mb=6000.0,
+            sleeping_residual_mb=1000.0,
+            engine="vllm",
+        ),
+        "small-model-b": ModelProfile(
+            model_name="small-model-b",
+            loaded_vram_mb=6000.0,
+            sleeping_residual_mb=1000.0,
+            engine="vllm",
+        ),
+    }
+    planner = _make_planner(
+        facade=MockFacade(lanes=[target, big, small_a, small_b], profiles=profiles),
+    )
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10,
+        target=target,
+        lanes=[target, big, small_a, small_b],
+        profiles=profiles,
+        required_free_mb=9000.0,
+    )
+
+    assert action is not None
+    assert action.action == "sleep_l1"
+    assert action.lane_id in {"lane-small-a", "lane-small-b"}
+
+
+def test_request_reclaim_prefers_smallest_sufficient_stop_candidate():
+    target = _make_signal(
+        lane_id="lane-target",
+        model_name="target-model",
+        runtime_state="cold",
+        sleep_state="unsupported",
+        is_vllm=True,
+    )
+    big = _make_signal(
+        lane_id="lane-big",
+        model_name="big-model",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        effective_vram_mb=12000.0,
+    )
+    small = _make_signal(
+        lane_id="lane-small",
+        model_name="small-model",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        effective_vram_mb=4000.0,
+    )
+    planner = _make_planner(
+        facade=MockFacade(lanes=[target, big, small], profiles={}),
+    )
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10,
+        target=target,
+        lanes=[target, big, small],
+        profiles={},
+        required_free_mb=3000.0,
+    )
+
+    assert action is not None
+    assert action.action == "stop"
+    assert action.lane_id == "lane-small"
+
+
 def test_vram_no_profile_uses_fallback():
     """No profile → conservative 4096 MB estimate."""
     from logos.sdi.models import CapacityPlanAction
@@ -1189,6 +1299,66 @@ async def test_prepare_lane_cold_load():
     assert selected is not None
     assert selected["model"] == "qwen-coder"
     assert "load" in actions
+
+
+@pytest.mark.asyncio
+async def test_prepare_lane_concurrent_cold_loads_serialize_desired_lane_mutations():
+    """Concurrent cold loads should merge desired lanes instead of stomping each other."""
+    facade = MockFacade(
+        lanes=[],
+        capacity=OllamaCapacity(available_vram_mb=24000, total_vram_mb=32768, loaded_models=[]),
+    )
+    registry = MockRegistry()
+    registry._snapshot = {"runtime": {"lanes": []}, "first_status_received": True}
+    planner = _make_planner(facade=facade, registry=registry)
+
+    first_load_started = asyncio.Event()
+    release_first_load = asyncio.Event()
+    desired_lane_sets: list[list[str]] = []
+
+    async def _select_from_desired(provider_id, model_name):  # noqa: ARG001
+        for lane in registry.get_desired_lane_set(provider_id):
+            if lane.get("model") == model_name:
+                return {
+                    "lane_id": lane["lane_id"],
+                    "model": model_name,
+                    "runtime_state": "starting",
+                    "sleep_state": "awake",
+                }
+        return None
+
+    async def _fake_execute(action, timeout_seconds=60.0):  # noqa: ARG001
+        new_lane = {"lane_id": action.lane_id, "model": action.model_name}
+        if action.params:
+            new_lane.update(action.params)
+        desired = planner._build_desired_lane_set(action.provider_id, add_lane=new_lane)
+        desired_lane_sets.append(sorted(str(lane.get("lane_id")) for lane in desired))
+
+        if action.model_name == "model-a":
+            first_load_started.set()
+            await release_first_load.wait()
+
+        registry.update_desired_lanes(action.provider_id, desired)
+        return True
+
+    registry.select_lane_for_model = _select_from_desired
+    planner._execute_action_with_confirmation = _fake_execute
+
+    task_a = asyncio.create_task(planner.prepare_lane_for_request(10, "model-a"))
+    await first_load_started.wait()
+    task_b = asyncio.create_task(planner.prepare_lane_for_request(10, "model-b"))
+    await asyncio.sleep(0)
+    release_first_load.set()
+
+    selected_a, selected_b = await asyncio.gather(task_a, task_b)
+
+    assert selected_a is not None
+    assert selected_b is not None
+    assert desired_lane_sets[0] == [planner._planner_lane_id("model-a")]
+    assert desired_lane_sets[1] == sorted([
+        planner._planner_lane_id("model-a"),
+        planner._planner_lane_id("model-b"),
+    ])
 
 
 @pytest.mark.asyncio
@@ -1671,6 +1841,7 @@ def test_anti_flip_blocks_request_reclaim_within_cooldown():
         target=target,
         lanes=[target, victim],
         profiles=profiles,
+        required_free_mb=1000.0,
     )
 
     assert action is None
