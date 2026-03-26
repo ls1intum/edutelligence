@@ -3826,7 +3826,7 @@
   pointer-events: none;
 }
 
-.videoCarouselVideoActive {
+.videoCarouselVideo.videoCarouselVideoActive {
   opacity: 1;
   pointer-events: auto;
 }
