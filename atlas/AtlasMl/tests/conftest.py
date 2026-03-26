@@ -373,6 +373,10 @@ class MockWeaviateClient:
             raise Exception("Mock connection error")
         return self._is_live and not self._closed
 
+    def is_alive(self) -> bool:
+        """Compatibility wrapper matching the AtlasML WeaviateClient interface."""
+        return self.is_live()
+
     def close(self):
         """Mock close operation."""
         self._closed = True

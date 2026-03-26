@@ -134,7 +134,7 @@ docker inspect atlasml | jq '.[0].State.Health'
 docker inspect atlasml | jq '.[0].State.Health.Log'
 
 # Test health endpoint manually
-curl http://localhost/api/v1/health
+curl -k https://your-atlasml-domain.com/api/v1/health/
 ```
 
 **Solutions**:

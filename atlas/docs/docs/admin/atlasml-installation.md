@@ -162,6 +162,12 @@ WEAVIATE_HOST=https://your-weaviate-domain.com
 WEAVIATE_PORT=443
 WEAVIATE_API_KEY=your-weaviate-api-key
 
+# Public AtlasML hostname used by Traefik routing
+APP_HOSTNAME=atlasml.example.com
+
+# Optional Traefik IP allowlist
+ALLOWED_IPS=131.159.89.17/32
+
 # OpenAI Configuration (Azure)
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_API_URL=https://your-resource.openai.azure.com
@@ -216,9 +222,9 @@ atlasml   ghcr.io/ls1intum/edutelligence/atlasml  healthy   0.0.0.0:80->8000/tcp
 
 ```bash
 # Check health endpoint
-curl http://localhost/api/v1/health
+curl -k https://your-atlasml-domain.com/api/v1/health/
 
-# Should return: []
+# Should return JSON with api/weaviate status information
 
 # Check logs
 docker logs atlasml
