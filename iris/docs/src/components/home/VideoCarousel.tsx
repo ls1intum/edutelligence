@@ -160,6 +160,7 @@ export default function VideoCarousel(): React.JSX.Element {
                   videoRefs.current[i] = el;
                 }}
                 src={src}
+                controls
                 muted
                 playsInline
                 preload={i === 0 ? "auto" : "metadata"}
