@@ -133,7 +133,7 @@ AtlasML requires the centralized Weaviate setup with Traefik and API key authent
 
 2. Follow the complete setup guide in the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md), which includes:
    - Docker and Traefik configuration
-   - SSL/TLS certificates via Let's Encrypt
+   - SSL/TLS certificates via ACME (HARICA by default in AtlasML)
    - API key authentication setup
    - Production-ready configuration
 
@@ -241,7 +241,7 @@ docker logs atlasml
 ### 1. Configure Firewall
 
 ```bash
-# Allow HTTP/HTTPS (required for Traefik and Let's Encrypt)
+# Allow HTTP/HTTPS (required for Traefik and ACME certificate issuance)
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 
@@ -251,12 +251,12 @@ sudo ufw allow from ARTEMIS_SERVER_IP to any port 443
 
 ### 2. Verify SSL/TLS Certificate
 
-The production setup uses **Traefik** as the reverse proxy with automatic Let's Encrypt SSL certificates. No additional reverse proxy (like Nginx) is needed.
+The production setup uses **Traefik** as the reverse proxy with automatic ACME-managed SSL certificates. No additional reverse proxy (like Nginx) is needed.
 
 **Verify certificate issuance:**
 
 ```bash
-# Wait a few minutes after first deployment for Let's Encrypt
+# Wait a few minutes after first deployment for certificate issuance
 # Then verify HTTPS is working
 curl -v https://your-atlasml-domain.com/api/v1/health
 
@@ -273,7 +273,7 @@ ls -la /opt/atlasml/traefik/acme.json
 # If certificate fails, check:
 # 1. Domain DNS points to server IP
 # 2. Ports 80/443 are open
-# 3. LETSENCRYPT_EMAIL is set correctly
+# 3. ACME_EMAIL is set correctly
 ```
 
 :::tip

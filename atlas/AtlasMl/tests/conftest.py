@@ -109,7 +109,7 @@ class MockWeaviateQuery:
         self.collection_name = collection_name
         self._should_fail_fetch = False
 
-    def fetch_objects(self, filters=None, include_vector=False):
+    def fetch_objects(self, filters=None, include_vector=False, limit=None):
         """Mock fetch objects operation."""
         if self._should_fail_fetch:
             raise Exception("Mock fetch error")
@@ -362,6 +362,7 @@ class MockWeaviateClient:
     """Simple mock Weaviate client."""
 
     def __init__(self):
+        self.client = self
         self.collections = MockWeaviateCollections()
         self._is_live = True
         self._closed = False
@@ -408,6 +409,16 @@ class MockWeaviateClient:
                 }
             )
         return results
+
+    def collection_exists(self, collection_name: str) -> bool:
+        """Mock collection_exists method to match WeaviateClient interface."""
+        return self.collections.exists(collection_name)
+
+    def can_read_collection(self, collection_name: str) -> bool:
+        """Mock lightweight readability check for a collection."""
+        collection = self.collections.get(collection_name)
+        collection.query.fetch_objects(limit=1)
+        return True
 
     def add_embeddings(self, collection_name: str, vector, properties):
         """Mock add_embeddings method."""

@@ -56,7 +56,18 @@ def health():
 
     missing_collections = []
     for collection_name in REQUIRED_COLLECTIONS:
-        exists = client.client.collections.exists(collection_name)
+        try:
+            exists = client.collection_exists(collection_name)
+        except Exception as exc:
+            health_status["status"] = "error"
+            health_status["components"]["weaviate"]["status"] = "error"
+            health_status["components"]["weaviate"]["message"] = (
+                f"Failed to check collection {collection_name}: {exc}"
+            )
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=health_status,
+            )
         health_status["components"]["weaviate"]["collections"][collection_name] = {
             "status": "ok" if exists else "missing"
         }
@@ -75,7 +86,7 @@ def health():
         )
 
     try:
-        client.get_all_embeddings(CollectionNames.COMPETENCY.value)
+        client.can_read_collection(CollectionNames.COMPETENCY.value)
     except Exception as exc:
         health_status["status"] = "error"
         health_status["components"]["weaviate"]["status"] = "error"
