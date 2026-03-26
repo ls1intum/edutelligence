@@ -49,7 +49,8 @@ Use HTTPS in production to protect API keys during transmission.
 
 ### `GET /health/`
 
-Check if the AtlasML service is running and healthy.
+Check if the AtlasML service is operational and ready to handle AtlasML
+requests.
 
 #### Authentication
 None required.
@@ -63,20 +64,62 @@ curl http://localhost:8000/api/v1/health/
 **Status**: 200 OK
 
 ```json
-[]
+{
+  "status": "ok",
+  "components": {
+    "api": {
+      "status": "ok"
+    },
+    "weaviate": {
+      "status": "ok",
+      "collections": {
+        "Exercise": {
+          "status": "ok"
+        },
+        "Competency": {
+          "status": "ok"
+        },
+        "SemanticCluster": {
+          "status": "ok"
+        }
+      }
+    }
+  }
+}
 ```
 
 #### Use Cases
 - Docker healthchecks
 - Load balancer health monitoring
 - Uptime monitoring tools
+- Operational dependency monitoring
 
 #### Internal Flow
 ```mermaid
 graph LR
     A[GET /health/] --> B[health.py router]
-    B --> C[Return empty list]
-    C --> D[200 OK]
+    B --> C[Check Weaviate liveness]
+    C --> D[Check required collections]
+    D --> E[Check competency read path]
+    E --> F[200 OK or 503]
+```
+
+#### Failure Response
+**Status**: 503 Service Unavailable
+
+```json
+{
+  "status": "error",
+  "components": {
+    "api": {
+      "status": "ok"
+    },
+    "weaviate": {
+      "status": "error",
+      "message": "Weaviate is unreachable"
+    }
+  }
+}
 ```
 
 **Implementation**: `atlasml/routers/health.py:7`

@@ -60,8 +60,8 @@ on:
 
 1. **Builds Docker image** using `/atlas/AtlasMl/Dockerfile`
 2. **Tags image** with:
-   - Branch name (e.g., `main`, `feature-branch`)
-   - PR number (e.g., `pr-123`)
+   - Branch name on normal AtlasML push builds (e.g., `main`, `atlas-health-check`)
+   - PR number only for workflows that actually build on `pull_request`
    - Release version (e.g., `v1.2.0`)
 3. **Pushes to GitHub Container Registry** (`ghcr.io`)
 
@@ -103,7 +103,7 @@ on:
     inputs:
       image-tag:
         type: string
-        description: 'Image tag to deploy (default: pr-<number> if PR exists, latest for default branch)'
+        description: 'Image tag to deploy. AtlasML build runs typically publish branch-based tags.'
       deploy-atlasml:
         type: boolean
         default: true
@@ -117,6 +117,8 @@ The workflow uses the organization's standard naming conventions for secrets and
 **Environment Variables** (in GitHub Environment `Atlas - Test 1`):
 - `VM_HOST` - Target server hostname/IP
 - `VM_USERNAME` - SSH username
+- `APP_HOSTNAME` - Public AtlasML hostname used in Traefik router rules
+- `ALLOWED_IPS` - Optional comma-separated CIDR allowlist for the HTTPS router
 
 **Environment Secrets** (in GitHub Environment `Atlas - Test 1`):
 - `VM_SSH_PRIVATE_KEY` - SSH private key for server access
@@ -175,12 +177,16 @@ Uses the organization's reusable workflow to deploy:
 
 3. **Run Workflow**
    - Click "Run workflow" button
-   - Select branch (usually `main`)
+   - Select the branch whose `docker-compose.prod.yml` you want to deploy
    - Enter image tag:
-     - Branch name: `main`
-     - PR number: `pr-123`
+     - Branch tag: `atlas-health-check`
+     - Default branch: `main`
      - Version: `v1.2.0`
    - Click "Run workflow"
+
+:::warning
+The workflow copies `atlas/docker-compose.prod.yml` from the selected branch. If you deploy an image tag from one branch while running the deployment workflow from another branch, the VM can end up with a mismatched image and compose file.
+:::
 
 4. **Monitor Progress**
    - Watch workflow execution in real-time
