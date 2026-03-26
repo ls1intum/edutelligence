@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig
+from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 
@@ -184,6 +184,25 @@ def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
     assert env["NCCL_P2P_DISABLE"] == "1"
 
 
+def test_build_env_sets_flashinfer_logging(monkeypatch) -> None:
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(gpu_devices="all"),
+        VllmEngineConfig(flashinfer_loglevel=3, flashinfer_logdest="stderr"),
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    assert env["FLASHINFER_LOGLEVEL"] == "3"
+    assert env["FLASHINFER_LOGDEST"] == "stderr"
+
+
 def test_require_c_compiler_honors_cc_absolute_path(monkeypatch, tmp_path: Path) -> None:
     custom_cc = tmp_path / "custom-cc"
     _make_executable(custom_cc)
@@ -311,7 +330,12 @@ vllm:time_to_first_token_seconds_bucket{model_name=\"Qwen\",le=\"+Inf\"} 10
 
 
 def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> None:
-    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(gpu_devices="all"),
+        VllmEngineConfig(nccl_debug="INFO", nccl_debug_subsys="INIT,COLL,GRAPH"),
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -323,6 +347,8 @@ def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> Non
     assert env["TORCH_NCCL_ASYNC_ERROR_HANDLING"] == "1"
     assert env["NCCL_CUMEM_ENABLE"] == "0"
     assert env["NCCL_TIMEOUT"] == "1800"
+    assert env["NCCL_DEBUG"] == "INFO"
+    assert env["NCCL_DEBUG_SUBSYS"] == "INIT,COLL,GRAPH"
     # Transport knobs must NOT be set (NCCL auto-tunes based on topology)
     assert "NCCL_P2P_LEVEL" not in env
     assert "NCCL_BUFFSIZE" not in env
@@ -331,7 +357,12 @@ def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> Non
 
 
 def test_build_env_no_nccl_safety_for_tp_1(monkeypatch) -> None:
-    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(gpu_devices="all"),
+        VllmEngineConfig(nccl_debug="INFO", nccl_debug_subsys="INIT,COLL,GRAPH"),
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -342,6 +373,8 @@ def test_build_env_no_nccl_safety_for_tp_1(monkeypatch) -> None:
     # NCCL safety vars should NOT be injected for TP=1
     assert "NCCL_ASYNC_ERROR_HANDLING" not in env
     assert "NCCL_CUMEM_ENABLE" not in env
+    assert "NCCL_DEBUG" not in env
+    assert "NCCL_DEBUG_SUBSYS" not in env
 
 
 def test_build_env_nccl_safety_respects_explicit_disable_nccl_p2p(monkeypatch) -> None:

@@ -84,11 +84,12 @@ When `LOGOS_CAPACITY_PLANNER_ENABLED=true` (default) on the Logos server, sleep 
 
 | Idle duration | Action | Scope |
 |--------------|--------|-------|
-| 60s | Sleep level 1 | vLLM lanes with sleep mode enabled |
-| 5min | Sleep level 2 | vLLM lanes already at level 1 |
-| 15min | Stop | Any lane (Ollama or vLLM) |
+| 5min | Sleep level 1 | vLLM lanes with sleep mode enabled |
+| 10min in L1 sleep | Sleep level 2 | vLLM lanes already at level 1 |
 
 Lanes are woken automatically when demand is detected (exponential-decay demand score >= 1.0). New lanes can also be loaded preemptively when demand score >= 2.0, subject to VRAM budget validation.
+
+The background planner does not automatically stop/remove idle lanes. Lane removal happens only as reclaim when another request or load actually needs the VRAM.
 
 For vLLM lanes, the planner also auto-tunes `gpu_memory_utilization`:
 - Increases by 0.05 when KV cache usage > 85%

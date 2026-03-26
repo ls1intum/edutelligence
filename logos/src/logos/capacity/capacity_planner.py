@@ -47,7 +47,7 @@ class CapacityPlanner:
     1. Decay demand scores
     2. Read current lane states from all connected providers
     3. Track idle durations per lane
-    4. Compute idle tier actions (sleep/stop)
+    4. Compute idle tier actions (sleep only)
     5. Compute demand-based actions (wake/load)
     6. Compute GPU utilization tuning actions (for vLLM lanes)
     7. Validate VRAM budget for all actions
@@ -57,8 +57,6 @@ class CapacityPlanner:
     # Idle tier thresholds (seconds of no activity)
     IDLE_SLEEP_L1 = 300      # vLLM lane idle 5min → sleep level 1
     IDLE_SLEEP_L2 = 600      # vLLM lane sleeping L1 for 10min → sleep level 2
-    IDLE_STOP = 900          # any lane idle 15min → stop/remove
-
     # Demand thresholds
     DEMAND_WAKE_THRESHOLD = 1.0
     DEMAND_LOAD_THRESHOLD = 2.0
@@ -571,13 +569,28 @@ class CapacityPlanner:
             self._lane_sleep_since.pop(key, None)
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
-            if action.action == "load":
-                self._lane_loaded_at[key] = confirmed_at
+            self._lane_loaded_at[key] = confirmed_at
             return
 
         if action.action == "stop":
             self._clear_lane_tracking(key)
             self._lane_loaded_at.pop(key, None)
+
+    def _lane_is_in_load_cooldown(
+        self,
+        provider_id: int,
+        lane_id: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        if self._load_cooldown_seconds <= 0:
+            return False
+        key = self._lane_key(provider_id, lane_id)
+        loaded_at = self._lane_loaded_at.get(key)
+        if loaded_at is None:
+            return False
+        check_time = time.time() if now is None else now
+        return (check_time - loaded_at) < self._load_cooldown_seconds
 
     def _update_idle_tracking(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Track idle durations per lane."""
@@ -621,7 +634,12 @@ class CapacityPlanner:
     def _compute_idle_actions(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
     ) -> List[CapacityPlanAction]:
-        """Compute sleep/stop actions for idle lanes."""
+        """Compute background sleep actions for idle lanes.
+
+        The background planner never stops lanes just because they have been idle.
+        Lane removal is only done by explicit reclaim when another request/load
+        actually needs the VRAM.
+        """
         now = time.time()
         actions = []
 
@@ -636,31 +654,6 @@ class CapacityPlanner:
             # Skip lanes that are already stopped/error
             if lane.runtime_state in ("stopped", "error", "cold"):
                 continue
-
-            # Stop after 15 minutes idle — but ONLY if other models need the VRAM.
-            # Keeping idle lanes sleeping is cheap and avoids costly cold starts.
-            if (
-                idle_seconds is not None
-                and idle_seconds >= self.IDLE_STOP
-                and lane.active_requests == 0
-            ):
-                # Anti-flip cooldown: don't stop lanes loaded within cooldown period
-                loaded_at = self._lane_loaded_at.get(key)
-                if loaded_at is not None and (now - loaded_at) < self._load_cooldown_seconds:
-                    logger.debug(
-                        "Skipping stop for lane %s: loaded %.0fs ago (cooldown=%.0fs)",
-                        lane.lane_id, now - loaded_at, self._load_cooldown_seconds,
-                    )
-                    continue
-                if self._has_vram_pressure(provider_id, lane.model_name):
-                    actions.append(CapacityPlanAction(
-                        action="stop",
-                        provider_id=provider_id,
-                        lane_id=lane.lane_id,
-                        model_name=lane.model_name,
-                        reason=f"Idle for {idle_seconds:.0f}s with VRAM pressure from other models",
-                    ))
-                    continue
 
             # Only vLLM lanes support sleep
             if not lane.is_vllm:
@@ -740,9 +733,7 @@ class CapacityPlanner:
                 continue
             if lane.active_requests > 0:
                 continue
-            key = self._lane_key(provider_id, lane.lane_id)
-            loaded_at = self._lane_loaded_at.get(key)
-            if loaded_at is not None and (now - loaded_at) < self._load_cooldown_seconds:
+            if self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
                 return True
         return False
 
@@ -1086,6 +1077,7 @@ class CapacityPlanner:
     ) -> Optional[CapacityPlanAction]:
         sleep_candidates: list[tuple[float, CapacityPlanAction]] = []
         stop_candidates: list[tuple[float, CapacityPlanAction]] = []
+        now = time.time()
 
         for lane in lanes:
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
@@ -1093,6 +1085,14 @@ class CapacityPlanner:
             if lane.active_requests > 0 or lane.queue_waiting > 0:
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+            if self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
+                logger.debug(
+                    "Skipping request-time reclaim of lane %s: loaded %.0fs ago (cooldown=%.0fs)",
+                    lane.lane_id,
+                    now - float(self._lane_loaded_at.get(self._lane_key(provider_id, lane.lane_id), now)),
+                    self._load_cooldown_seconds,
+                )
                 continue
 
             profile = profiles.get(lane.model_name)

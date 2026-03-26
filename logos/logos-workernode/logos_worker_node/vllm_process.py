@@ -32,7 +32,13 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
+from logos_worker_node.models import (
+    LaneConfig,
+    OllamaConfig,
+    ProcessState,
+    ProcessStatus,
+    VllmEngineConfig,
+)
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
@@ -54,10 +60,17 @@ _SCRUBBED_ENV_VARS = (
 class VllmProcessHandle:
     """Manages a single vLLM server process on a specific port."""
 
-    def __init__(self, lane_id: str, port: int, global_config: OllamaConfig) -> None:
+    def __init__(
+        self,
+        lane_id: str,
+        port: int,
+        global_config: OllamaConfig,
+        vllm_engine_config: VllmEngineConfig | None = None,
+    ) -> None:
         self.lane_id = lane_id
         self.port = port
         self._global_config = global_config
+        self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
         self._lane_config: LaneConfig | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._http: httpx.AsyncClient | None = None
@@ -628,6 +641,11 @@ class VllmProcessHandle:
         if vc.server_dev_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
+        if self._vllm_engine_config.flashinfer_loglevel > 0:
+            env["FLASHINFER_LOGLEVEL"] = str(self._vllm_engine_config.flashinfer_loglevel)
+        if self._vllm_engine_config.flashinfer_logdest.strip():
+            env["FLASHINFER_LOGDEST"] = self._vllm_engine_config.flashinfer_logdest.strip()
+
         # Persistent compilation caches: point to models_path (mounted volume)
         # so JIT artifacts survive container rebuilds.
         cache_root = os.path.join(gc.models_path, ".cache")
@@ -673,6 +691,10 @@ class VllmProcessHandle:
             # Extended timeout: FlashInfer JIT can take minutes on first
             # compile, default 10min NCCL timeout is sometimes not enough.
             env.setdefault("NCCL_TIMEOUT", "1800")               # 30 min
+            if self._vllm_engine_config.nccl_debug:
+                env["NCCL_DEBUG"] = self._vllm_engine_config.nccl_debug
+            if self._vllm_engine_config.nccl_debug_subsys:
+                env["NCCL_DEBUG_SUBSYS"] = self._vllm_engine_config.nccl_debug_subsys
 
         return env
 

@@ -19,6 +19,7 @@ from logos_worker_node.models import (
     LoadedModel,
     OllamaConfig,
     ProcessState,
+    VllmEngineConfig,
 )
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.ollama_process import OllamaProcessHandle
@@ -142,10 +143,16 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
     )
 
 
-def _create_handle(lane_id: str, port: int, global_config: OllamaConfig, lane_config: LaneConfig) -> ProcessHandle:
+def _create_handle(
+    lane_id: str,
+    port: int,
+    global_config: OllamaConfig,
+    vllm_engine_config: VllmEngineConfig,
+    lane_config: LaneConfig,
+) -> ProcessHandle:
     """Factory: create the correct process handle based on backend type."""
     if lane_config.vllm:
-        return VllmProcessHandle(lane_id, port, global_config)
+        return VllmProcessHandle(lane_id, port, global_config, vllm_engine_config)
     return OllamaProcessHandle(lane_id, port, global_config)
 
 
@@ -159,6 +166,7 @@ class LaneManager:
     def __init__(
         self,
         global_config: OllamaConfig,
+        vllm_engine_config: VllmEngineConfig | None = None,
         lane_port_start: int = _DEFAULT_PORT_START,
         lane_port_end: int = _DEFAULT_PORT_END,
         reserved_ports: Iterable[int] | None = None,
@@ -169,6 +177,7 @@ class LaneManager:
         gpu_snapshot: Callable[[], Awaitable[DeviceSummary]] | None = None,
     ) -> None:
         self._global_config = global_config
+        self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
@@ -869,7 +878,13 @@ class LaneManager:
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)
-        handle = _create_handle(lane_id, port, self._global_config, lane_config)
+        handle = _create_handle(
+            lane_id,
+            port,
+            self._global_config,
+            self._vllm_engine_config,
+            lane_config,
+        )
         try:
             await handle.init()
             status = await handle.spawn(lane_config)
@@ -964,7 +979,13 @@ class LaneManager:
             lane_id, "vllm" if new_config.vllm else "ollama", temp_port, old_port,
         )
 
-        new_handle = _create_handle(lane_id, temp_port, self._global_config, new_config)
+        new_handle = _create_handle(
+            lane_id,
+            temp_port,
+            self._global_config,
+            self._vllm_engine_config,
+            new_config,
+        )
         await new_handle.init()
 
         try:
@@ -1106,7 +1127,13 @@ class LaneManager:
                 _, orig_lc, orig_port = orig
                 if orig_lc is not None and orig_port is not None:
                     try:
-                        restored = _create_handle(lid, orig_port, self._global_config, orig_lc)
+                        restored = _create_handle(
+                            lid,
+                            orig_port,
+                            self._global_config,
+                            self._vllm_engine_config,
+                            orig_lc,
+                        )
                         await restored.init()
                         await restored.spawn(orig_lc)
                         self._handles[lid] = restored
@@ -1123,7 +1150,13 @@ class LaneManager:
         for lid, (handle, lc, port) in removed_snapshots.items():
             if lid not in self._handles and lc is not None:
                 try:
-                    restored = _create_handle(lid, port, self._global_config, lc)
+                    restored = _create_handle(
+                        lid,
+                        port,
+                        self._global_config,
+                        self._vllm_engine_config,
+                        lc,
+                    )
                     await restored.init()
                     await restored.spawn(lc)
                     self._handles[lid] = restored

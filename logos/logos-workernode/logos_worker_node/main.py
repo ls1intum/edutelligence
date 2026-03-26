@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
+        vllm_engine_config=cfg.engines.vllm,
         lane_port_start=cfg.worker.lane_port_start,
         lane_port_end=cfg.worker.lane_port_end,
         nvidia_smi_available=lambda: gpu_collector.available,

@@ -156,8 +156,8 @@ def test_idle_sleep_l2_after_threshold():
     assert actions[0].action == "sleep_l2"
 
 
-def test_idle_stop_requires_vram_pressure():
-    """Lane idle for > IDLE_STOP without VRAM pressure → no stop, stays sleeping."""
+def test_idle_lane_stays_sleeping_without_background_stop():
+    """Background idle handling should deepen sleep, not stop the lane."""
     lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
@@ -173,8 +173,8 @@ def test_idle_stop_requires_vram_pressure():
     assert actions[0].action == "sleep_l2"
 
 
-def test_idle_stop_with_vram_pressure():
-    """Lane idle for > IDLE_STOP WITH VRAM pressure from another model → stop action."""
+def test_idle_lane_is_not_stopped_even_with_vram_pressure():
+    """Background idle handling should not stop lanes even when another model has demand."""
     lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
     demand = DemandTracker()
     # Another model has high demand but no lane → needs VRAM
@@ -188,11 +188,11 @@ def test_idle_stop_with_vram_pressure():
 
     actions = planner._compute_idle_actions(10, [lane])
     assert len(actions) == 1
-    assert actions[0].action == "stop"
+    assert actions[0].action == "sleep_l2"
 
 
-def test_idle_stop_with_low_vram():
-    """Lane idle for > IDLE_STOP with low available VRAM and any other demand → stop."""
+def test_idle_lane_is_not_stopped_just_because_vram_is_low():
+    """Background idle handling should not stop lanes just because free VRAM is tight."""
     lane = _make_signal(is_vllm=True, runtime_state="sleeping", sleep_state="sleeping", active_requests=0)
     demand = DemandTracker()
     demand.record_request("other-model")  # Any demand (score=1, below DEMAND_LOAD_THRESHOLD)
@@ -208,7 +208,7 @@ def test_idle_stop_with_low_vram():
 
     actions = planner._compute_idle_actions(10, [lane])
     assert len(actions) == 1
-    assert actions[0].action == "stop"
+    assert actions[0].action == "sleep_l2"
 
 
 def test_no_idle_action_when_active():
@@ -222,7 +222,7 @@ def test_no_idle_action_when_active():
 
 
 def test_no_sleep_for_ollama_lanes():
-    """Ollama lanes don't support sleep. Stop only happens with VRAM pressure."""
+    """Ollama lanes don't support background sleep or background stop."""
     lane = _make_signal(is_vllm=False, runtime_state="loaded", sleep_state="unsupported")
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
@@ -236,15 +236,14 @@ def test_no_sleep_for_ollama_lanes():
     actions = planner._compute_idle_actions(10, [lane])
     assert actions == []
 
-    # Idle for 901s WITH VRAM pressure → stop action
+    # Idle for 901s WITH VRAM pressure → still no background stop
     demand = DemandTracker()
     for _ in range(3):
         demand.record_request("other-model")
     planner_with_demand = _make_planner(facade=MockFacade(lanes=[lane]), demand=demand)
     planner_with_demand._lane_idle_since[(10, "lane-1")] = time.time() - 901
     actions = planner_with_demand._compute_idle_actions(10, [lane])
-    assert len(actions) == 1
-    assert actions[0].action == "stop"
+    assert actions == []
 
 
 # ---------------------------------------------------------------------------
@@ -937,6 +936,7 @@ async def test_wake_confirmation_resets_idle_timer_and_clears_sleep_tracking():
     assert result is True
     assert key not in planner._lane_sleep_since
     assert key not in planner._lane_sleep_level
+    assert key in planner._lane_loaded_at
 
     lane = _make_signal(runtime_state="loaded", sleep_state="awake", active_requests=0)
     planner._update_idle_tracking(10, [lane])
@@ -1072,7 +1072,7 @@ def test_idle_sleep_skips_active_requests():
 
 
 def test_idle_stop_skips_active_requests():
-    """Lane with active_requests > 0 should NOT be stopped even if idle timer expired."""
+    """Lane with active_requests > 0 should not produce any idle action."""
     lane = _make_signal(is_vllm=True, runtime_state="loaded", sleep_state="awake", active_requests=1)
     planner = _make_planner(facade=MockFacade(lanes=[lane]))
 
@@ -1580,8 +1580,8 @@ async def test_prepare_lane_proceeds_with_first_status():
 # ---------------------------------------------------------------------------
 
 
-def test_anti_flip_blocks_stop_within_cooldown():
-    """Lane loaded within cooldown period should not be stopped."""
+def test_background_idle_never_stops_lane_within_cooldown():
+    """No background idle stop should be emitted, including within cooldown."""
     lane = _make_signal(lane_id="lane-1", model_name="model-a", runtime_state="loaded", active_requests=0)
     demand = DemandTracker()
     # Create demand for another model to trigger VRAM pressure
@@ -1601,8 +1601,8 @@ def test_anti_flip_blocks_stop_within_cooldown():
     assert len(stop_actions) == 0
 
 
-def test_anti_flip_allows_stop_after_cooldown():
-    """Lane loaded beyond cooldown period can be stopped."""
+def test_background_idle_never_stops_lane_after_cooldown_either():
+    """No background idle stop should be emitted even after cooldown expires."""
     lane = _make_signal(lane_id="lane-1", model_name="model-a", runtime_state="loaded", active_requests=0)
     demand = DemandTracker()
     for _ in range(10):
@@ -1617,7 +1617,7 @@ def test_anti_flip_allows_stop_after_cooldown():
 
     actions = planner._compute_idle_actions(10, [lane])
     stop_actions = [a for a in actions if a.action == "stop"]
-    assert len(stop_actions) == 1
+    assert len(stop_actions) == 0
 
 
 def test_anti_flip_does_not_block_sleep():
@@ -1636,6 +1636,44 @@ def test_anti_flip_does_not_block_sleep():
     actions = planner._compute_idle_actions(10, [lane])
     sleep_actions = [a for a in actions if a.action == "sleep_l1"]
     assert len(sleep_actions) == 1
+
+
+def test_anti_flip_blocks_request_reclaim_within_cooldown():
+    """Request-time reclaim must not immediately reuse a lane that was just prepared."""
+    target = _make_signal(
+        lane_id="lane-target",
+        model_name="model-b",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        effective_vram_mb=2000.0,
+    )
+    victim = _make_signal(
+        lane_id="lane-victim",
+        model_name="model-a",
+        runtime_state="loaded",
+        sleep_state="awake",
+        effective_vram_mb=12000.0,
+    )
+    profiles = {
+        "model-a": ModelProfile(
+            model_name="model-a",
+            loaded_vram_mb=12000.0,
+            sleeping_residual_mb=1000.0,
+            engine="vllm",
+        )
+    }
+    planner = _make_planner(facade=MockFacade(lanes=[target, victim], profiles=profiles))
+
+    planner._lane_loaded_at[(10, "lane-victim")] = time.time() - 10
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10,
+        target=target,
+        lanes=[target, victim],
+        profiles=profiles,
+    )
+
+    assert action is None
 
 
 # ---------------------------------------------------------------------------

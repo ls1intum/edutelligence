@@ -111,6 +111,29 @@ class VllmEngineConfig(BaseModel):
 
     metrics_path: str = "/metrics"
     metrics_timeout_seconds: int = Field(default=5, ge=1)
+    flashinfer_loglevel: int = Field(
+        default=0,
+        ge=0,
+        le=10,
+        description="FlashInfer logging level (0, 1, 3, 5, 10). 0 disables logging.",
+    )
+    flashinfer_logdest: str = Field(
+        default="",
+        description="FlashInfer log destination: stdout, stderr, or a file path. Empty = FlashInfer default.",
+    )
+    nccl_debug: str = Field(
+        default="",
+        description="NCCL debug log level (e.g. INFO, WARN, VERSION). Empty = disabled.",
+    )
+    nccl_debug_subsys: str = Field(
+        default="",
+        description="Comma-separated NCCL debug subsystems (e.g. INIT,COLL,GRAPH). Empty = NCCL default.",
+    )
+
+    @field_validator("nccl_debug", "nccl_debug_subsys")
+    @classmethod
+    def _normalize_nccl_debug_fields(cls, value: str) -> str:
+        return (value or "").strip().upper()
 
 
 class EnginesConfig(BaseModel):

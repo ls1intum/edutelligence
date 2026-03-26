@@ -64,9 +64,9 @@ Once the worker is connected, Logos automatically uses two subsystems:
 **ETTFT Scheduler** — re-ranks candidate models using estimated time-to-first-token. A loaded model with slightly lower classification weight beats a cold model that would take 30-90s to load. Disable with `LOGOS_SCHEDULER_ETTFT_ENABLED=false` on the Logos server.
 
 **Capacity Planner** — background loop (30s cycles) that:
-- Sleeps idle vLLM lanes after 60s of inactivity (level 1), then after 5min (level 2)
-- Stops any lane idle for 15min
+- Sleeps idle vLLM lanes after 5min of inactivity (level 1), then after 10min already in L1 sleep (level 2)
 - Wakes sleeping lanes when demand is detected
+- Reclaims lanes only when another request/load actually needs the VRAM
 - Tunes vLLM `gpu_memory_utilization` based on KV cache pressure
 - Validates VRAM budgets before loading/waking (uses auto-calibrated model profiles from the worker)
 

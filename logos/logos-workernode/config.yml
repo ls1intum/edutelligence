@@ -1,4 +1,4 @@
-# hochbruegge-node — Qwen/Qwen2.5-Coder-7B-Instruct on 2× Quadro RTX 5000
+# hochbruegge-node — Qwen/Qwen2.5-Coder-7B-Instruct + small Qwen instruct fallbacks on 2× Quadro RTX 5000
 # Lanes are commanded by the Logos server (capacity planner).
 # Temporary config for testing and development. Not for production use.
 
@@ -19,6 +19,8 @@ logos:
   shared_key: P-XX0rCqNDt8q0n48JdDtBz2NOs7THPFdoQHIrnQGoZU6IX5uicLqpcOj63e4YfF
   capabilities_models:
     - Qwen/Qwen2.5-Coder-7B-Instruct
+    - Qwen/Qwen2.5-3B-Instruct
+    - Qwen/Qwen2.5-0.5B-Instruct
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 
@@ -26,3 +28,7 @@ engines:
   vllm:
     metrics_path: /metrics
     metrics_timeout_seconds: 5
+    flashinfer_loglevel: 3
+    flashinfer_logdest: stderr
+    nccl_debug: INFO
+    nccl_debug_subsys: INIT,COLL,GRAPH
