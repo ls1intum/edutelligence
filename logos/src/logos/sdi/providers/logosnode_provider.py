@@ -625,6 +625,7 @@ class LogosNodeDataProvider:
                 max_context_length=data.get("max_context_length"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
                 last_measured_epoch=float(data.get("last_measured_epoch", 0.0) or 0.0),
+                residency_source=data.get("residency_source"),
             )
 
         if isinstance(raw_lanes, list):

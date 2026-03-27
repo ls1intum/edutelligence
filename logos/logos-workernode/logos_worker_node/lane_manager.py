@@ -1328,12 +1328,23 @@ class LaneManager:
             tensor_parallel_size = int(lane_config.vllm_config.tensor_parallel_size)
         previous_state = self._last_profile_state.get(status.lane_id)
         if status.runtime_state in ("loaded", "running"):
+            kv_cache_sent_mb = 0.0
+            if (
+                status.vllm
+                and lane_config is not None
+                and lane_config.vllm_config is not None
+                and lane_config.vllm_config.kv_cache_memory_bytes
+            ):
+                kv_cache_sent_mb = ModelProfileRegistry._parse_kv_cache_to_mb(
+                    lane_config.vllm_config.kv_cache_memory_bytes,
+                )
             self._model_profiles.record_loaded_vram(
                 model,
                 vram,
                 engine=engine,
                 observed_gpu_memory_utilization=observed_gpu_memory_utilization,
                 tensor_parallel_size=tensor_parallel_size,
+                kv_cache_sent_mb=kv_cache_sent_mb,
             )
             if (
                 status.vllm

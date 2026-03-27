@@ -99,18 +99,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             caps or "(none)",
         )
         if caps:
+            # Merge inline overrides from capabilities_models entries before seeding
+            if cfg.logos and cfg.logos.capabilities_overrides:
+                model_profiles.add_overrides(cfg.logos.capabilities_overrides)
             model_profiles.seed_capabilities(caps, engine="vllm")
             for cap_model in caps:
                 p = model_profiles.get_profile(cap_model)
                 if p:
+                    src = p.residency_source or "unknown"
+                    src_icon = {
+                        "measured": "\033[32m●\033[0m",   # green  — observed
+                        "cached": "\033[33m●\033[0m",     # yellow — from config
+                        "override": "\033[36m●\033[0m",   # cyan   — manual
+                    }.get(src, "\033[31m●\033[0m")         # red    — estimated
                     logger.info(
-                        "  \033[32m✓\033[0m %s: engine=%s base_residency=%.0fMB "
-                        "kv_per_token=%s max_ctx=%s disk=%.1fGB",
-                        cap_model, p.engine,
+                        "  %s %s [%s]: base_residency=%.0f MB | "
+                        "disk=%.1f GB | kv_per_token=%s B | max_ctx=%s | engine=%s",
+                        src_icon, cap_model, src.upper(),
                         p.base_residency_mb or 0,
+                        (p.disk_size_bytes or 0) / (1024**3),
                         p.kv_per_token_bytes,
                         p.max_context_length,
-                        (p.disk_size_bytes or 0) / (1024**3),
+                        p.engine,
                     )
 
     app.state.config = cfg

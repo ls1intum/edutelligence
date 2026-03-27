@@ -70,6 +70,8 @@ class CapacityPlanner:
 
     # VRAM safety margin
     VRAM_SAFETY_MARGIN = 1.1  # 10% margin
+    # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
+    TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
 
     # Preemptive load-then-sleep
     PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO = 0.20
@@ -531,15 +533,16 @@ class CapacityPlanner:
         estimated = self._estimate_action_vram(load_action, profile, capacity)
         available = float(capacity.available_vram_mb)
 
+        residency_src = getattr(profile, "residency_source", None) if profile else None
         logger.info(
-            "Cold-load VRAM check for %s on provider %s: estimated=%.0fMB, available=%.0fMB, "
-            "profile=%s, engine=%s, total_vram=%s, base_residency=%s, loaded_vram=%s",
+            "Cold-load VRAM check for %s on provider %s: "
+            "estimated=%.0f MB, available=%.0f MB, "
+            "base_residency=%s MB (%s), engine=%s, total_vram=%s",
             model_name, provider_id, estimated, available,
-            profile is not None,
+            getattr(profile, "base_residency_mb", None) if profile else None,
+            residency_src or "no-profile",
             getattr(profile, "engine", None),
             getattr(capacity, "total_vram_mb", None),
-            getattr(profile, "base_residency_mb", None) if profile else None,
-            getattr(profile, "loaded_vram_mb", None) if profile else None,
         )
 
         if available < estimated * self.VRAM_SAFETY_MARGIN:
@@ -1611,6 +1614,10 @@ class CapacityPlanner:
         Uses HF API data from profile (fetched by worker), or name heuristic.
         Returns True if load seems feasible, False if it would definitely OOM.
         Returns True (allow) when we cannot estimate — don't block unknowns.
+
+        For TP > 1 models, also checks per-GPU feasibility from the runtime
+        snapshot's per-device free memory, since total free VRAM across all GPUs
+        can be misleading (e.g. 20GB free total but unevenly split: 18GB + 2GB).
         """
         if capacity is None:
             return False
@@ -1646,15 +1653,102 @@ class CapacityPlanner:
             kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
 
         minimum_needed = base_mb + kv_mb
+
+        # Determine TP size for this model
+        tp = 1
+        if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+            tp = int(profile.tensor_parallel_size)
+        elif provider_id is not None and base_mb is not None:
+            inferred = self._infer_tensor_parallel(profile, capacity, provider_id) if profile else None
+            if inferred and inferred > 1:
+                tp = inferred
+
+        if tp > 1:
+            # Add TP overhead: NCCL buffers, duplicated embedding/output layers
+            minimum_needed *= (1.0 + self.TP_OVERHEAD_RATIO)
+
+        # Total VRAM check
         feasible = available_mb >= minimum_needed * self.VRAM_SAFETY_MARGIN
         if not feasible:
             logger.info(
-                "Feasibility FAILED for %s: need %.0fMB (base=%.0fMB + kv=%.0fMB) "
+                "Feasibility FAILED for %s: need %.0fMB (base=%.0fMB + kv=%.0fMB%s) "
                 "× %.1f margin, have %.0fMB",
                 model_name, minimum_needed, base_mb, kv_mb,
+                f" + {self.TP_OVERHEAD_RATIO:.0%} TP overhead" if tp > 1 else "",
                 self.VRAM_SAFETY_MARGIN, available_mb,
             )
-        return feasible
+            return False
+
+        # Per-GPU feasibility check for TP models
+        if tp > 1 and provider_id is not None:
+            per_gpu_ok = self._check_per_gpu_feasibility(
+                provider_id, minimum_needed, tp, model_name,
+            )
+            if not per_gpu_ok:
+                return False
+
+        return True
+
+    def _check_per_gpu_feasibility(
+        self,
+        provider_id: int,
+        total_needed_mb: float,
+        tp: int,
+        model_name: str,
+    ) -> bool:
+        """Check if a TP model fits on tp individual GPUs given per-GPU free VRAM.
+
+        Total free VRAM can be misleading for multi-GPU systems. A 2×16GB system
+        with 18GB+2GB free shows 20GB total free, but a TP=2 model needing
+        10GB/GPU would fail on GPU1.
+
+        Uses DeviceInfo from the worker runtime snapshot (serialized as dicts
+        with fields: device_id, memory_free_mb, memory_total_mb, memory_used_mb).
+        """
+        if self._registry is None:
+            return True  # can't check, allow
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return True
+
+        devices_info = (snap.get("runtime") or {}).get("devices") or {}
+        device_list = devices_info.get("devices") or []
+        if not isinstance(device_list, list) or len(device_list) < tp:
+            return True  # can't check, allow
+
+        # Gather per-GPU free memory from DeviceInfo dicts
+        per_gpu_free: list[tuple[str, float]] = []
+        for dev in device_list:
+            if not isinstance(dev, dict):
+                continue
+            dev_id = str(dev.get("device_id", "?"))
+            free_mb = float(dev.get("memory_free_mb", 0) or 0)
+            if free_mb <= 0:
+                total_mb = float(dev.get("memory_total_mb", 0) or 0)
+                used_mb = float(dev.get("memory_used_mb", 0) or 0)
+                if total_mb > 0 and used_mb >= 0:
+                    free_mb = max(total_mb - used_mb, 0.0)
+            per_gpu_free.append((dev_id, free_mb))
+
+        if len(per_gpu_free) < tp:
+            return True  # can't determine per-GPU, allow
+
+        # Sort by most free first; check if the tp-th GPU has enough
+        per_gpu_free.sort(key=lambda x: x[1], reverse=True)
+        per_gpu_needed = (total_needed_mb / tp) * self.VRAM_SAFETY_MARGIN
+        best_tp_gpus = per_gpu_free[:tp]
+        weakest_gpu = best_tp_gpus[-1]
+
+        if weakest_gpu[1] < per_gpu_needed:
+            logger.info(
+                "Per-GPU feasibility FAILED for %s (TP=%d): need %.0fMB/GPU, "
+                "best %d GPUs have %s free",
+                model_name, tp, per_gpu_needed,
+                tp,
+                ", ".join(f"GPU{did}={free:.0f}MB" for did, free in best_tp_gpus),
+            )
+            return False
+        return True
 
     def _validate_vram_budget(
         self, actions: List[CapacityPlanAction]
@@ -1890,6 +1984,9 @@ class CapacityPlanner:
         For vLLM: base_residency + kv_cache_mb (parsed from action params).
         KV cache is now controlled directly via --kv-cache-memory-bytes,
         so we no longer derive cost from total_vram × gpu_memory_utilization.
+
+        For TP > 1: adds TP_OVERHEAD_RATIO per GPU for NCCL buffers,
+        duplicated embedding/output layers, and all-reduce scratch.
         """
         if profile is not None and profile.engine == "vllm":
             base_residency = float(profile.estimate_base_residency_mb() or 0.0)
@@ -1911,6 +2008,14 @@ class CapacityPlanner:
                     kv_mb = base_residency * self.KV_CACHE_HEADROOM_RATIO
 
             loaded_vram = base_residency + kv_mb
+
+            # TP overhead: NCCL buffers, duplicated layers, all-reduce scratch
+            tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
+            if tp <= 0 and profile.tensor_parallel_size:
+                tp = int(profile.tensor_parallel_size)
+            if tp > 1:
+                loaded_vram *= (1.0 + self.TP_OVERHEAD_RATIO)
+
             sleeping_residual = float(profile.sleeping_residual_mb or 0.0)
 
             if action.action == "wake":
@@ -2425,6 +2530,7 @@ class CapacityPlanner:
 
         Returns True if estimated model VRAM exceeds available free VRAM (with safety margin).
         Used by the ETTFT estimator to add eviction cost to cold-start scoring.
+        Accounts for TP overhead when the model requires tensor parallelism.
         """
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
@@ -2442,6 +2548,15 @@ class CapacityPlanner:
             disk = _estimated_disk_size_bytes_from_model_name(model_name)
             base = _base_residency_from_bytes(disk)
             estimated_mb = float(base) if base else 4096.0
+
+        # Add TP overhead if model uses tensor parallelism
+        tp = int(profile.tensor_parallel_size or 0) if profile else 0
+        if tp <= 1 and profile is not None:
+            inferred = self._infer_tensor_parallel(profile, capacity, provider_id)
+            if inferred and inferred > 1:
+                tp = inferred
+        if tp > 1:
+            estimated_mb *= (1.0 + self.TP_OVERHEAD_RATIO)
 
         available = float(capacity.available_vram_mb)
         return available < estimated_mb * self.VRAM_SAFETY_MARGIN

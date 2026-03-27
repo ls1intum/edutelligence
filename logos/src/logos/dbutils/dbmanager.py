@@ -1636,6 +1636,90 @@ class DBManager:
         self.session.commit()
         return int(result[0]) if result is not None else 0
 
+    def upsert_model_profiles(
+        self,
+        provider_id: int,
+        profiles: Dict[str, Dict[str, Any]],
+    ) -> int:
+        """Upsert model profiles from worker runtime into the model_profiles table.
+
+        Args:
+            provider_id: Provider ID (FK to providers.id)
+            profiles: Dict of model_name -> profile dict (from runtime_payload.model_profiles)
+
+        Returns:
+            Number of profiles upserted.
+        """
+        if not profiles:
+            return 0
+
+        sql = text("""
+            INSERT INTO model_profiles (
+                provider_id, model_name,
+                base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
+                kv_budget_mb, disk_size_bytes, engine,
+                tensor_parallel_size, kv_per_token_bytes, max_context_length,
+                residency_source, measurement_count, last_measured_at,
+                observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
+                updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
+                :kv_budget_mb, :disk_size_bytes, :engine,
+                :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
+                :residency_source, :measurement_count, :last_measured_at,
+                :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
+                CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                base_residency_mb = EXCLUDED.base_residency_mb,
+                loaded_vram_mb = EXCLUDED.loaded_vram_mb,
+                sleeping_residual_mb = EXCLUDED.sleeping_residual_mb,
+                kv_budget_mb = EXCLUDED.kv_budget_mb,
+                disk_size_bytes = EXCLUDED.disk_size_bytes,
+                engine = EXCLUDED.engine,
+                tensor_parallel_size = EXCLUDED.tensor_parallel_size,
+                kv_per_token_bytes = EXCLUDED.kv_per_token_bytes,
+                max_context_length = EXCLUDED.max_context_length,
+                residency_source = EXCLUDED.residency_source,
+                measurement_count = EXCLUDED.measurement_count,
+                last_measured_at = EXCLUDED.last_measured_at,
+                observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
+                min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
+                updated_at = CURRENT_TIMESTAMP
+        """)
+
+        count = 0
+        for model_name, data in profiles.items():
+            if not isinstance(data, dict):
+                continue
+            epoch = data.get("last_measured_epoch")
+            last_measured_at = (
+                datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+                if epoch and float(epoch) > 0 else None
+            )
+            self.session.execute(sql, {
+                "provider_id": provider_id,
+                "model_name": str(model_name),
+                "base_residency_mb": data.get("base_residency_mb"),
+                "loaded_vram_mb": data.get("loaded_vram_mb"),
+                "sleeping_residual_mb": data.get("sleeping_residual_mb"),
+                "kv_budget_mb": data.get("kv_budget_mb"),
+                "disk_size_bytes": data.get("disk_size_bytes"),
+                "engine": data.get("engine"),
+                "tensor_parallel_size": data.get("tensor_parallel_size"),
+                "kv_per_token_bytes": data.get("kv_per_token_bytes"),
+                "max_context_length": data.get("max_context_length"),
+                "residency_source": data.get("residency_source"),
+                "measurement_count": int(data.get("measurement_count", 0) or 0),
+                "last_measured_at": last_measured_at,
+                "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
+                "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
+            })
+            count += 1
+        self.session.commit()
+        return count
+
     def get_ollama_vram_stats(
         self,
         logos_key: str,

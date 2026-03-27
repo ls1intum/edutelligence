@@ -158,7 +158,16 @@ class WorkerConfig(BaseModel):
 
 
 class LogosConfig(BaseModel):
-    """Outbound control-plane connection to Logos."""
+    """Outbound control-plane connection to Logos.
+
+    capabilities_models accepts both plain strings and dicts with inline overrides:
+        capabilities_models:
+          - "org/model-a"
+          - model: "org/model-b"
+            base_residency_mb: 5800
+    Dict entries are normalized to plain model name strings; the overrides are
+    extracted into capabilities_overrides for the profile registry.
+    """
 
     enabled: bool = False
     logos_url: str = ""
@@ -167,8 +176,32 @@ class LogosConfig(BaseModel):
     shared_key: str = ""
     worker_id: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
+    capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
     reconnect_backoff_seconds: int = Field(default=3, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_capabilities(cls, values):
+        """Normalize capabilities_models: extract inline overrides from dict entries."""
+        raw = values.get("capabilities_models")
+        if not isinstance(raw, list):
+            return values
+        names = []
+        overrides = dict(values.get("capabilities_overrides") or {})
+        for entry in raw:
+            if isinstance(entry, str):
+                names.append(entry)
+            elif isinstance(entry, dict) and "model" in entry:
+                model_name = str(entry["model"])
+                names.append(model_name)
+                # Extract everything except "model" as profile overrides
+                ov = {k: v for k, v in entry.items() if k != "model"}
+                if ov:
+                    overrides[model_name] = ov
+        values["capabilities_models"] = names
+        values["capabilities_overrides"] = overrides
+        return values
 
 
 class LaneConfig(BaseModel):

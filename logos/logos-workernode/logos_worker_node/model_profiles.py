@@ -108,14 +108,47 @@ def _fetch_hf_model_size_bytes(model_name: str) -> int | None:
         bpp = _DTYPE_BYTES.get(dtype_name.upper(), 2.0)
         total_bytes += int(param_count) * bpp
 
-    if total_bytes > 0:
-        logger.info(
-            "HF API: %s weight size = %.0f MB (%s)",
-            model_name, total_bytes / (1024 * 1024),
-            ", ".join(f"{k}={v}" for k, v in params_by_dtype.items()),
-        )
-        return int(total_bytes)
-    return None
+    if total_bytes <= 0:
+        return None
+
+    # Detect quantized models where HF safetensors metadata reports container
+    # dtypes (e.g. I32) rather than the actual quantized weight size.
+    # AWQ/GPTQ pack int4 weights into I32 containers → HF reports 4 bytes/param
+    # but actual weight data is ~0.6 bytes/param (4-bit + scales/zeros overhead).
+    lowered = (model_name or "").lower()
+    if _is_quantized_model(lowered):
+        # For quantized models, the name-based heuristic is more accurate than
+        # HF safetensors metadata (which reports container dtype sizes, not
+        # actual quantized weight sizes). Prefer the name estimate.
+        name_estimate = _estimated_disk_size_bytes_from_model_name(model_name)
+        if name_estimate is not None and name_estimate > 0:
+            logger.info(
+                "HF API: %s quantized model — using name estimate %.0f MB "
+                "instead of HF-reported %.0f MB (%s)",
+                model_name,
+                name_estimate / (1024 * 1024),
+                total_bytes / (1024 * 1024),
+                ", ".join(f"{k}={v}" for k, v in params_by_dtype.items()),
+            )
+            return name_estimate
+
+    logger.info(
+        "HF API: %s weight size = %.0f MB (%s)",
+        model_name, total_bytes / (1024 * 1024),
+        ", ".join(f"{k}={v}" for k, v in params_by_dtype.items()),
+    )
+    return int(total_bytes)
+
+
+_QUANT_NAME_TOKENS = ("awq", "gptq", "q2", "q3", "q4", "q5", "q6", "q8",
+                      "2bit", "3bit", "4bit", "5bit", "6bit", "8bit",
+                      "int4", "int8")
+
+
+def _is_quantized_model(lowered_name: str) -> bool:
+    """Check if model name indicates quantization."""
+    return any(tok in lowered_name for tok in _QUANT_NAME_TOKENS)
+
 
 
 def _fetch_hf_kv_params(model_name: str) -> dict[str, int] | None:
@@ -198,6 +231,13 @@ class ModelProfileRecord:
     max_context_length: int | None = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
+    # Tracks where base_residency_mb came from:
+    #   "measured"  — derived from observed VRAM minus known KV budget (most accurate)
+    #   "hf"        — estimated from HuggingFace safetensors metadata
+    #   "name"      — estimated from model name heuristic (param count × bytes_per_param)
+    #   "override"  — operator-provided manual override in config
+    #   "cached"    — loaded from persisted config.yml on restart
+    residency_source: str | None = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -240,6 +280,7 @@ class ModelProfileRecord:
             "max_context_length": self.max_context_length,
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
+            "residency_source": self.residency_source,
         }
 
 
@@ -271,6 +312,26 @@ class ModelProfileRegistry:
         if tensor_parallel_size is not None and tensor_parallel_size > 0:
             profile.tensor_parallel_size = tensor_parallel_size
 
+    def add_overrides(self, overrides: dict[str, dict[str, Any]]) -> None:
+        """Merge additional manual overrides (e.g. from capabilities_overrides).
+
+        These are combined with any existing model_profile_overrides from config.yml.
+        Per-model keys from the new overrides take precedence.
+        """
+        for model_name, ov in overrides.items():
+            if not isinstance(ov, dict) or not ov:
+                continue
+            existing = self._manual_overrides.get(model_name)
+            if existing is not None:
+                existing.update(ov)
+            else:
+                self._manual_overrides[model_name] = dict(ov)
+        if overrides:
+            logger.info(
+                "Added inline profile overrides for %d model(s): %s",
+                len(overrides), ", ".join(sorted(overrides)),
+            )
+
     def seed_capabilities(self, model_names: list[str], engine: str = "vllm") -> None:
         """Pre-create profiles for capabilities models before any lane is loaded.
 
@@ -287,14 +348,17 @@ class ModelProfileRegistry:
                 profile = ModelProfileRecord(engine=engine)
                 self._profiles[model_name] = profile
             self._ensure_disk_size(model_name, profile)
+            src = profile.residency_source or "unknown"
             logger.info(
-                "Seeded capability profile: %s engine=%s disk_size=%s "
-                "base_residency=%.0fMB kv_per_token=%s max_ctx=%s",
-                model_name, engine,
-                profile.disk_size_bytes,
-                profile.base_residency_mb or 0,
+                "Seeded capability [%s] %s — "
+                "base_residency=%.0f MB (%s) | disk=%.1f GB | "
+                "kv_per_token=%s B | max_ctx=%s | engine=%s",
+                src.upper(), model_name,
+                profile.base_residency_mb or 0, src,
+                (profile.disk_size_bytes or 0) / (1024 ** 3),
                 profile.kv_per_token_bytes,
                 profile.max_context_length,
+                engine,
             )
         self._persist()
 
@@ -311,9 +375,11 @@ class ModelProfileRegistry:
         if "disk_size_bytes" in overrides:
             profile.disk_size_bytes = int(overrides["disk_size_bytes"])
             profile.base_residency_mb = _base_residency_from_bytes(profile.disk_size_bytes)
+            profile.residency_source = "override"
             applied.append(f"disk_size={profile.disk_size_bytes}")
         if "base_residency_mb" in overrides:
             profile.base_residency_mb = float(overrides["base_residency_mb"])
+            profile.residency_source = "override"
             applied.append(f"base_residency={profile.base_residency_mb:.0f}MB")
         if "kv_per_token_bytes" in overrides:
             profile.kv_per_token_bytes = int(overrides["kv_per_token_bytes"])
@@ -363,11 +429,28 @@ class ModelProfileRegistry:
             if hf_bytes is not None and hf_bytes > 0:
                 profile.disk_size_bytes = hf_bytes
                 profile.base_residency_mb = _base_residency_from_bytes(hf_bytes)
+                # _fetch_hf_model_size_bytes returns name estimate for quantized models
+                lowered = (model_name or "").lower()
+                profile.residency_source = "name" if _is_quantized_model(lowered) else "hf"
         if needs_kv:
             kv_params = _fetch_hf_kv_params(model_name)
             if kv_params is not None:
                 profile.kv_per_token_bytes = _compute_kv_per_token_bytes(kv_params)
                 profile.max_context_length = kv_params["max_context"]
+
+    @staticmethod
+    def _parse_kv_cache_to_mb(value: str) -> float:
+        """Parse kv_cache_memory_bytes string to MB. E.g. '4G' → 4096.0."""
+        if not value:
+            return 0.0
+        v = value.strip().upper()
+        if v.endswith("G"):
+            return float(v[:-1]) * 1024
+        if v.endswith("M"):
+            return float(v[:-1])
+        if v.endswith("K"):
+            return float(v[:-1]) / 1024
+        return float(v) / (1024 * 1024)
 
     def record_loaded_vram(
         self,
@@ -377,8 +460,15 @@ class ModelProfileRegistry:
         engine: str | None = None,
         observed_gpu_memory_utilization: float | None = None,
         tensor_parallel_size: int | None = None,
+        kv_cache_sent_mb: float = 0.0,
     ) -> None:
         """Called after lane reaches loaded/running with measured effective_vram_mb > 0.
+
+        For vLLM lanes where kv_cache_sent_mb > 0 (we explicitly set
+        --kv-cache-memory-bytes), derive base_residency from observation:
+            measured_base = effective_vram - kv_cache_sent
+        This is strictly more accurate than any HF/name estimate because
+        we know the exact KV budget and observe the total.
 
         First measurement sets value. Subsequent measurements update via EMA.
         """
@@ -397,28 +487,51 @@ class ModelProfileRegistry:
                 observed_gpu_memory_utilization=observed_gpu_memory_utilization,
                 tensor_parallel_size=tensor_parallel_size,
             )
-            base_estimate = profile.estimate_base_residency_mb(model_name)
-            if base_estimate is not None:
-                profile.base_residency_mb = _ema(profile.base_residency_mb, base_estimate)
-                if engine == "vllm":
-                    profile.kv_budget_mb = _ema(
-                        profile.kv_budget_mb,
-                        max(effective_vram_mb - profile.base_residency_mb, 0.0),
+
+            if engine == "vllm" and kv_cache_sent_mb > 0:
+                # Derive base_residency from observation: we know the KV budget
+                # we sent, so the remainder is the true model footprint.
+                measured_base = max(effective_vram_mb - kv_cache_sent_mb, 0.0)
+                if measured_base > 0:
+                    profile.base_residency_mb = _ema(
+                        profile.base_residency_mb, measured_base,
                     )
+                    profile.residency_source = "measured"
+                profile.kv_budget_mb = _ema(
+                    profile.kv_budget_mb, kv_cache_sent_mb,
+                )
+            else:
+                # Fallback for non-vLLM or when KV budget is unknown:
+                # use HF/name estimate for base, derive KV from remainder.
+                base_estimate = profile.estimate_base_residency_mb(model_name)
+                if base_estimate is not None:
+                    profile.base_residency_mb = _ema(
+                        profile.base_residency_mb, base_estimate,
+                    )
+                    if engine == "vllm":
+                        profile.kv_budget_mb = _ema(
+                            profile.kv_budget_mb,
+                            max(effective_vram_mb - profile.base_residency_mb, 0.0),
+                        )
+
             if profile.loaded_vram_mb is None:
                 profile.loaded_vram_mb = effective_vram_mb
             else:
                 profile.loaded_vram_mb = _ema(profile.loaded_vram_mb, effective_vram_mb)
             profile.measurement_count += 1
             profile.last_measured_epoch = time.time()
+            src = profile.residency_source or "unknown"
             logger.info(
-                "Model profile updated: %s base_residency=%.0fMB kv_budget=%.0fMB "
-                "loaded_vram=%.0fMB disk_size=%s (count=%d)",
-                model_name,
-                profile.base_residency_mb or 0,
+                "Model profile [%s] %s — "
+                "base_residency=%.0f MB (%s) | kv_budget=%.0f MB | "
+                "total_vram=%.0f MB | kv_sent=%.0f MB | "
+                "disk=%.1f GB | observations=%d",
+                src.upper(), model_name,
+                profile.base_residency_mb or 0, src,
                 profile.kv_budget_mb or 0,
                 profile.loaded_vram_mb or 0,
-                profile.disk_size_bytes,
+                kv_cache_sent_mb,
+                (profile.disk_size_bytes or 0) / (1024 ** 3),
                 profile.measurement_count,
             )
         self._persist()
@@ -553,6 +666,9 @@ class ModelProfileRegistry:
             for model_name, profile_data in profiles.items():
                 if not isinstance(profile_data, dict):
                     continue
+                # If loading from persisted config, mark source as "cached"
+                # (preserves original source if present, otherwise "cached")
+                persisted_source = profile_data.get("residency_source")
                 self._profiles[str(model_name)] = ModelProfileRecord(
                     loaded_vram_mb=profile_data.get("loaded_vram_mb"),
                     sleeping_residual_mb=profile_data.get("sleeping_residual_mb"),
@@ -567,7 +683,21 @@ class ModelProfileRegistry:
                     max_context_length=profile_data.get("max_context_length"),
                     measurement_count=int(profile_data.get("measurement_count", 0) or 0),
                     last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
+                    residency_source=persisted_source or "cached",
                 )
-            logger.info("Loaded %d model profiles from %s", len(self._profiles), self._config_path)
+            logger.info(
+                "Loaded %d model profile(s) from %s", len(self._profiles), self._config_path,
+            )
+            for name, prof in self._profiles.items():
+                src = prof.residency_source or "unknown"
+                logger.info(
+                    "  Cached profile [%s] %s — base_residency=%.0f MB | "
+                    "kv_budget=%.0f MB | disk=%.1f GB | observations=%d",
+                    src.upper(), name,
+                    prof.base_residency_mb or 0,
+                    prof.kv_budget_mb or 0,
+                    (prof.disk_size_bytes or 0) / (1024 ** 3),
+                    prof.measurement_count,
+                )
         except Exception:  # noqa: BLE001
             logger.debug("Failed to load persisted model profiles", exc_info=True)

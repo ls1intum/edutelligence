@@ -636,6 +636,15 @@ def _capture_logosnode_provider_snapshot(
             scheduler_signals=sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {},
             poll_success=True,
         )
+        # Persist calibrated model profiles into the dedicated table
+        runtime_payload = sample.get("runtime_payload")
+        if isinstance(runtime_payload, dict):
+            model_profiles = runtime_payload.get("model_profiles")
+            if isinstance(model_profiles, dict) and model_profiles:
+                try:
+                    db.upsert_model_profiles(provider_id, model_profiles)
+                except Exception:
+                    logger.debug("Failed to upsert model profiles for provider %s", provider_id, exc_info=True)
 
     sample["snapshot_id"] = snapshot_id
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))

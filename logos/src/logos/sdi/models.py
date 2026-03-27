@@ -314,6 +314,7 @@ class ModelProfile:
     max_context_length: Optional[int] = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
+    residency_source: Optional[str] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -357,6 +358,7 @@ class ModelProfile:
             'max_context_length': self.max_context_length,
             'measurement_count': self.measurement_count,
             'last_measured_epoch': self.last_measured_epoch,
+            'residency_source': self.residency_source,
         }
 
 

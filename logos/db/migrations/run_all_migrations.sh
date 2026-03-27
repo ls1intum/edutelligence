@@ -59,6 +59,7 @@ MIGRATIONS=(
     "022_drop_request_events_table.sql"
     "023_extend_provider_snapshots_for_worker_runtime.sql"
     "024_store_logosnode_runtime_payload.sql"
+    "025_create_model_profiles_table.sql"
 )
 
 FAILED=0
