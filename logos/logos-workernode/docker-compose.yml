@@ -14,6 +14,7 @@ services:
     stop_grace_period: 2m
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
+      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

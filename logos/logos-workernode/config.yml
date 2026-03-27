@@ -1,4 +1,4 @@
-# hochbruegge-node — Qwen/Qwen2.5-Coder-7B-Instruct + small Qwen instruct fallbacks on 2× Quadro RTX 5000
+# hochbruegge-node — requested AWQ capability set on 2× Quadro RTX 5000
 # Lanes are commanded by the Logos server (capacity planner).
 # Temporary config for testing and development. Not for production use.
 
@@ -18,10 +18,11 @@ logos:
   provider_id: 13
   shared_key: P-XX0rCqNDt8q0n48JdDtBz2NOs7THPFdoQHIrnQGoZU6IX5uicLqpcOj63e4YfF
   capabilities_models:
-    - Qwen/Qwen2.5-Coder-7B-Instruct
-    - Qwen/Qwen2.5-3B-Instruct
-    - Qwen/Qwen2.5-0.5B-Instruct
-    - openai/gpt-oss-20b
+    - cyankiwi/Qwen3-Coder-30B-A3B-Instruct-AWQ-4bit
+    - cyankiwi/Qwen3.5-9B-AWQ-4bit
+    - cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit
+    - casperhansen/deepseek-r1-distill-llama-8b-awq
+    - MidnightPhreaker/Qwen3-Embedding-4B-AWQ-4Bit
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 
