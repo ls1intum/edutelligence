@@ -270,6 +270,9 @@ class LogosNodeRuntimeRegistry:
         self._recent_sample_window = timedelta(hours=1)
         self._recent_sample_max = 5000
         self._diag_log_cooldowns: dict[tuple[str, int], datetime] = {}
+        # Lanes pre-marked as cold by the capacity planner — excluded from
+        # scheduling so new requests don't route to lanes about to be stopped.
+        self._cold_marked_lanes: set[tuple[int, str]] = set()
 
     def _session_diagnostic_lines(
         self,
@@ -905,11 +908,31 @@ class LogosNodeRuntimeRegistry:
                 continue
             if lane.get("runtime_state") not in {"loaded", "running", "cold", "starting"}:
                 continue
+            # Exclude lanes pre-marked as cold by the capacity planner
+            lid = str(lane.get("lane_id") or "")
+            if lid and self.is_lane_cold_marked(provider_id, lid):
+                continue
             candidates.append(lane)
         if not candidates:
             return None
         candidates.sort(key=_lane_sort_key)
         return candidates[0]
+
+    # ------------------------------------------------------------------
+    # Cold lane marking (for capacity planner pre-removal exclusion)
+    # ------------------------------------------------------------------
+
+    def mark_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        """Pre-mark a lane as cold so it's excluded from scheduling."""
+        self._cold_marked_lanes.add((int(provider_id), lane_id))
+
+    def unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        """Restore a lane to normal scheduling after aborted stop."""
+        self._cold_marked_lanes.discard((int(provider_id), lane_id))
+
+    def is_lane_cold_marked(self, provider_id: int, lane_id: str) -> bool:
+        """Check if a lane is pre-marked as cold."""
+        return (int(provider_id), lane_id) in self._cold_marked_lanes
 
     async def _get_session(self, provider_id: int) -> ProviderSession | None:
         async with self._lock:

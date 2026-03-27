@@ -181,6 +181,7 @@ class LaneSchedulerSignals:
     num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
     tensor_parallel_size: Optional[int] = None  # vLLM topology hint
+    gpu_devices: Optional[str] = None  # GPU device indices e.g. "0,1"
 
     def to_dict(self) -> dict:
         return {
@@ -198,6 +199,7 @@ class LaneSchedulerSignals:
             'num_parallel': self.num_parallel,
             'gpu_memory_utilization': self.gpu_memory_utilization,
             'tensor_parallel_size': self.tensor_parallel_size,
+            'gpu_devices': self.gpu_devices,
         }
 
 

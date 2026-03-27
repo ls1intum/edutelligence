@@ -251,6 +251,9 @@ class ModelProfileRegistry:
         self._config_path = config_path
         self._lock = threading.Lock()
         self._hf_fetch_attempted: set[str] = set()  # models we already tried HF API for
+        # Manual overrides from config.yml — operator-provided values that
+        # take priority over HF API fetch and name-based estimation.
+        self._manual_overrides: dict[str, dict[str, Any]] = {}
         self._load_persisted()
 
     def _update_metadata(
@@ -295,8 +298,59 @@ class ModelProfileRegistry:
             )
         self._persist()
 
+    def _apply_manual_overrides(self, model_name: str, profile: ModelProfileRecord) -> bool:
+        """Apply manual overrides from config.yml if available.
+
+        Returns True if overrides were applied (may skip HF fetch).
+        """
+        overrides = self._manual_overrides.get(model_name)
+        if overrides is None:
+            return False
+
+        applied = []
+        if "disk_size_bytes" in overrides:
+            profile.disk_size_bytes = int(overrides["disk_size_bytes"])
+            profile.base_residency_mb = _base_residency_from_bytes(profile.disk_size_bytes)
+            applied.append(f"disk_size={profile.disk_size_bytes}")
+        if "base_residency_mb" in overrides:
+            profile.base_residency_mb = float(overrides["base_residency_mb"])
+            applied.append(f"base_residency={profile.base_residency_mb:.0f}MB")
+        if "kv_per_token_bytes" in overrides:
+            profile.kv_per_token_bytes = int(overrides["kv_per_token_bytes"])
+            applied.append(f"kv_per_token={profile.kv_per_token_bytes}")
+        if "max_context_length" in overrides:
+            profile.max_context_length = int(overrides["max_context_length"])
+            applied.append(f"max_ctx={profile.max_context_length}")
+        if "engine" in overrides:
+            profile.engine = str(overrides["engine"])
+            applied.append(f"engine={profile.engine}")
+        if "tensor_parallel_size" in overrides:
+            profile.tensor_parallel_size = int(overrides["tensor_parallel_size"])
+            applied.append(f"tp={profile.tensor_parallel_size}")
+        if "loaded_vram_mb" in overrides:
+            profile.loaded_vram_mb = float(overrides["loaded_vram_mb"])
+            applied.append(f"loaded_vram={profile.loaded_vram_mb:.0f}MB")
+        if "kv_budget_mb" in overrides:
+            profile.kv_budget_mb = float(overrides["kv_budget_mb"])
+            applied.append(f"kv_budget={profile.kv_budget_mb:.0f}MB")
+
+        if applied:
+            logger.info(
+                "Applied manual overrides for %s: %s",
+                model_name, ", ".join(applied),
+            )
+        return bool(applied)
+
     def _ensure_disk_size(self, model_name: str, profile: ModelProfileRecord) -> None:
-        """Fetch model metadata from HF API if not already known. Called outside lock."""
+        """Fetch model metadata from HF API if not already known. Called outside lock.
+
+        Manual overrides from config.yml take priority — if they provide the
+        needed values, HF fetch is skipped entirely.
+        """
+        # Apply manual overrides first — these are operator-provided values
+        # for models with incorrect or unavailable HF metadata.
+        self._apply_manual_overrides(model_name, profile)
+
         if model_name in self._hf_fetch_attempted:
             return
         needs_size = profile.disk_size_bytes is None or profile.disk_size_bytes <= 0
@@ -471,7 +525,7 @@ class ModelProfileRegistry:
             logger.debug("Failed to persist model profiles", exc_info=True)
 
     def _load_persisted(self) -> None:
-        """Read model_profiles from config.yml on startup."""
+        """Read model_profiles and model_profile_overrides from config.yml on startup."""
         if self._config_path is None or yaml is None:
             return
         if not self._config_path.exists():
@@ -479,6 +533,20 @@ class ModelProfileRegistry:
         try:
             with self._config_path.open() as f:
                 data = yaml.safe_load(f) or {}
+
+            # Load manual overrides (operator-provided values for niche models)
+            overrides = data.get("model_profile_overrides")
+            if isinstance(overrides, dict):
+                for model_name, ov in overrides.items():
+                    if isinstance(ov, dict):
+                        self._manual_overrides[str(model_name)] = dict(ov)
+                if self._manual_overrides:
+                    logger.info(
+                        "Loaded manual profile overrides for %d model(s): %s",
+                        len(self._manual_overrides),
+                        ", ".join(sorted(self._manual_overrides)),
+                    )
+
             profiles = data.get("model_profiles")
             if not isinstance(profiles, dict):
                 return
@@ -495,6 +563,8 @@ class ModelProfileRegistry:
                     observed_gpu_memory_utilization=profile_data.get("observed_gpu_memory_utilization"),
                     min_gpu_memory_utilization_to_load=profile_data.get("min_gpu_memory_utilization_to_load"),
                     tensor_parallel_size=profile_data.get("tensor_parallel_size"),
+                    kv_per_token_bytes=profile_data.get("kv_per_token_bytes"),
+                    max_context_length=profile_data.get("max_context_length"),
                     measurement_count=int(profile_data.get("measurement_count", 0) or 0),
                     last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
                 )

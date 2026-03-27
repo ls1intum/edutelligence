@@ -485,6 +485,12 @@ class LogosNodeDataProvider:
                 if is_vllm and vllm_config.get("tensor_parallel_size") is not None
                 else None
             ),
+            gpu_devices=str(
+                lane_config.get("gpu_devices")
+                or lane.get("gpu_devices")
+                or lane.get("effective_gpu_devices")
+                or ""
+            ) or None,
         )
 
     def get_model_scheduler_view(self, model_id: int) -> Optional[ModelSchedulerView]:

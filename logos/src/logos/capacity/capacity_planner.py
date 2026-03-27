@@ -107,6 +107,31 @@ class CapacityPlanner:
             "LOGOS_USE_ADDITIVE_LOADS", ""
         ).strip().lower() in ("1", "true", "yes")
 
+        # Phase 1a: Track inflight desired-state mutations so rapid sequential
+        # apply_lanes calls don't build from stale registry data.
+        # Key: provider_id -> {lane_id -> lane_config_dict}
+        self._inflight_desired: dict[int, dict[str, dict[str, Any]]] = {}
+        # Track inflight removals separately: provider_id -> set of lane_ids
+        self._inflight_removals: dict[int, set[str]] = {}
+
+        # Phase 1b: Per-lane action locks to serialize operations on the same
+        # lane without blocking unrelated lanes.
+        self._lane_action_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+        # Phase 3a: Lanes pre-marked as cold — excluded from scheduling before
+        # physical removal so new requests don't route to dying lanes.
+        self._marked_cold_lanes: set[tuple[int, str]] = set()
+
+        # Phase 4b: Track VRAM committed by in-flight load operations to
+        # prevent double-booking when two loads happen near-simultaneously.
+        self._pending_vram_mb: dict[int, float] = {}
+
+        # Phase 2: KV cache pressure history and rebalance timing
+        self._kv_cache_pressure_history: dict[tuple[int, str], list[tuple[float, float]]] = {}
+        self._last_kv_rebalance_time: float = 0.0
+        # Deferred KV reconfigurations waiting for lane to go idle
+        self._deferred_kv_reconfigs: dict[tuple[int, str], CapacityPlanAction] = {}
+
     def _request_prepare_lock(self, provider_id: int) -> asyncio.Lock:
         lock = self._request_prepare_locks.get(int(provider_id))
         if lock is None:
@@ -176,10 +201,13 @@ class CapacityPlanner:
                 continue
 
             self._update_idle_tracking(provider_id, lanes)
+            self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
             all_actions.extend(self._compute_demand_actions(provider_id, lanes))
-            all_actions.extend(self._compute_kv_cache_tuning_actions(provider_id, lanes))
+            all_actions.extend(self._compute_fleet_kv_allocation(provider_id, lanes))
             all_actions.extend(self._compute_preemptive_sleep_actions(provider_id, lanes))
+            # Execute any deferred KV reconfigs for lanes that have gone idle
+            all_actions.extend(self._flush_deferred_kv_reconfigs(provider_id, lanes))
 
         if all_actions:
             self._log_action_plan(all_actions)
@@ -188,7 +216,10 @@ class CapacityPlanner:
 
         for action in validated:
             try:
-                await self._execute_action_with_confirmation(action)
+                # Acquire per-lane lock so concurrent operations on the same
+                # lane are serialized, but unrelated lanes remain unblocked.
+                async with self._lane_lock(action.provider_id, action.lane_id):
+                    await self._execute_action_with_confirmation(action)
                 prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action=action.action).inc()
             except Exception:
                 logger.exception(
@@ -347,9 +378,12 @@ class CapacityPlanner:
             f"{indent}  state={format_state(runtime_state, sleep_state)} "
             f"mem={effective_vram_mb:.0f}MB gpus={gpu_devices}"
         )
+        demand_score = self._demand.get_score(model)
+        demand_text = f"{demand_score:.2f}" if demand_score > 0 else "0"
         lines.append(
             f"{indent}  active={active_requests} run={running_text} "
-            f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
+            f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} "
+            f"prefix_hit={prefix_text} demand={demand_text}"
         )
         return lines
 
@@ -481,7 +515,7 @@ class CapacityPlanner:
             logger.debug("No capacity info for provider %s, cannot cold-load %s", provider_id, model_name)
             return None
 
-        if not self._passes_minimum_load_feasibility(model_name, profile, capacity):
+        if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
             return None
 
         lane_id = self._planner_lane_id(model_name)
@@ -490,7 +524,7 @@ class CapacityPlanner:
             provider_id=provider_id,
             lane_id=lane_id,
             model_name=model_name,
-            params=self._build_load_params(model_name, lane_id, profile, capacity),
+            params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
             reason="Request-time cold load",
         )
 
@@ -860,7 +894,7 @@ class CapacityPlanner:
                     )
                     continue
                 profile = profiles.get(model_name)
-                if not self._passes_minimum_load_feasibility(model_name, profile, capacity):
+                if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
                 lane_id = self._planner_lane_id(model_name)
                 actions.append(CapacityPlanAction(
@@ -868,7 +902,7 @@ class CapacityPlanner:
                     provider_id=provider_id,
                     lane_id=lane_id,
                     model_name=model_name,
-                    params=self._build_load_params(model_name, lane_id, profile, capacity),
+                    params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                     reason=f"Demand score={score:.2f} >= {self.DEMAND_LOAD_THRESHOLD}, preemptive load",
                 ))
                 planned_models.add(model_name)
@@ -883,7 +917,7 @@ class CapacityPlanner:
                 if score <= 0:
                     continue
                 profile = profiles.get(model_name)
-                if not self._passes_minimum_load_feasibility(model_name, profile, capacity):
+                if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
                 lane_id = self._planner_lane_id(model_name)
                 actions.append(CapacityPlanAction(
@@ -891,7 +925,7 @@ class CapacityPlanner:
                     provider_id=provider_id,
                     lane_id=lane_id,
                     model_name=model_name,
-                    params=self._build_load_params(model_name, lane_id, profile, capacity),
+                    params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                     reason=f"Capability seeding: worker declares {model_name}, demand={score:.2f}",
                 ))
 
@@ -965,7 +999,7 @@ class CapacityPlanner:
                 provider_id=provider_id,
                 lane_id=lane_id,
                 model_name=model_name,
-                params=self._build_load_params(model_name, lane_id, profile, capacity),
+                params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                 reason=f"Preemptive load-then-sleep (residual={residual:.0f}MB)",
             ))
             actions.append(CapacityPlanAction(
@@ -1048,7 +1082,7 @@ class CapacityPlanner:
             provider_id=provider_id,
             lane_id=target.lane_id,
             model_name=target.model_name,
-            params=self._build_load_params(target.model_name, target.lane_id, profile, capacity),
+            params=self._build_load_params(target.model_name, target.lane_id, profile, capacity, provider_id),
             reason="Request-time lane preparation",
         )
 
@@ -1086,6 +1120,18 @@ class CapacityPlanner:
             )
             if not ok:
                 return False
+
+    @staticmethod
+    def _gpu_overlap(gpu_a: Optional[str], gpu_b: Optional[str]) -> int:
+        """Count overlapping GPU device indices between two lanes."""
+        if not gpu_a or not gpu_b:
+            return 0
+        try:
+            set_a = {int(x.strip()) for x in gpu_a.split(",") if x.strip()}
+            set_b = {int(x.strip()) for x in gpu_b.split(",") if x.strip()}
+            return len(set_a & set_b)
+        except (ValueError, AttributeError):
+            return 0
 
     def _next_request_reclaim_action(
         self,
@@ -1166,24 +1212,43 @@ class CapacityPlanner:
                     )
                 )
 
+        # Phase 3d: Build GPU overlap map for correlated freeing.
+        # When target has known GPU placement, prefer freeing lanes on the same GPUs.
+        target_gpus = target.gpu_devices
+        gpu_overlap_by_lane: dict[str, int] = {}
+        if target_gpus:
+            for lane in lanes:
+                if lane.lane_id != target.lane_id:
+                    gpu_overlap_by_lane[lane.lane_id] = self._gpu_overlap(target_gpus, lane.gpu_devices)
+
+        # Phase 3c: Try sleep-only first, then combined sleep+stop if insufficient.
         if sleep_candidates:
             sleep_plan = self._best_reclaim_plan(
                 sleep_candidates,
                 required_free_mb=required_free_mb,
             )
             if sleep_plan:
-                return self._pick_next_reclaim_action_from_plan(sleep_plan)
-            sleep_candidates.sort(key=lambda item: item[0], reverse=True)
-            return sleep_candidates[0][1]
-        if stop_candidates:
-            stop_plan = self._best_reclaim_plan(
-                stop_candidates,
+                return self._pick_next_reclaim_action_from_plan(sleep_plan, gpu_overlap_by_lane)
+
+        # Combined: merge sleep and stop candidates into a unified list.
+        # For lanes that appear in both, the planner will naturally prefer sleep
+        # because _best_reclaim_plan_combined penalizes stop actions.
+        combined = list(sleep_candidates) + list(stop_candidates)
+        if combined:
+            combined_plan = self._best_reclaim_plan_combined(
+                combined,
                 required_free_mb=required_free_mb,
             )
-            if stop_plan:
-                return self._pick_next_reclaim_action_from_plan(stop_plan)
-            stop_candidates.sort(key=lambda item: item[0], reverse=True)
-            return stop_candidates[0][1]
+            if combined_plan:
+                return self._pick_next_reclaim_action_from_plan(combined_plan, gpu_overlap_by_lane)
+            # Fallback: pick the single largest action (prefer sleep over stop, prefer GPU overlap)
+            combined.sort(key=lambda item: (
+                item[1].action != "sleep_l1",
+                -gpu_overlap_by_lane.get(item[1].lane_id, 0),
+                -item[0],
+                item[1].lane_id,
+            ))
+            return combined[0][1]
         return None
 
     @staticmethod
@@ -1227,115 +1292,305 @@ class CapacityPlanner:
         return [candidates[i] for i in best_combo]
 
     @staticmethod
+    def _best_reclaim_plan_combined(
+        candidates: list[tuple[float, CapacityPlanAction]],
+        *,
+        required_free_mb: float,
+    ) -> list[tuple[float, CapacityPlanAction]]:
+        """Find the least-destructive reclaim set from mixed sleep+stop candidates.
+
+        Unlike _best_reclaim_plan, this handles candidates where the same lane
+        may appear as both sleep and stop. Deduplicates per lane (picks sleep
+        over stop when both are in the combo). Scoring penalizes stop actions
+        to prefer sleep-heavy plans.
+        """
+        if required_free_mb <= 0 or not candidates:
+            return []
+
+        # Deduplicate: for each lane, only consider the combo entry that actually
+        # appears. We filter combos that pick both sleep and stop for the same lane.
+        best_combo: tuple[int, ...] | None = None
+        best_score: tuple[int, float, float, int, tuple[str, ...]] | None = None
+
+        for size in range(1, min(len(candidates) + 1, 6)):  # cap at 5 to avoid explosion
+            for combo in combinations(range(len(candidates)), size):
+                # Check for duplicate lanes (same lane as both sleep and stop)
+                lane_ids_in_combo = [candidates[i][1].lane_id for i in combo]
+                if len(lane_ids_in_combo) != len(set(lane_ids_in_combo)):
+                    continue
+
+                total_freed = sum(candidates[i][0] for i in combo)
+                if total_freed + 1e-6 < required_free_mb:
+                    continue
+
+                num_stops = sum(1 for i in combo if candidates[i][1].action == "stop")
+                max_single_freed = max(candidates[i][0] for i in combo)
+                lane_ids = tuple(sorted(candidates[i][1].lane_id for i in combo))
+                # Penalize stops: (num_stops, total_freed, max_single, action_count, lane_ids)
+                score = (num_stops, total_freed, max_single_freed, size, lane_ids)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_combo = combo
+
+        if best_combo is None:
+            return []
+        return [candidates[i] for i in best_combo]
+
+    @staticmethod
     def _pick_next_reclaim_action_from_plan(
         plan: list[tuple[float, CapacityPlanAction]],
+        gpu_overlap_by_lane: Optional[dict[str, int]] = None,
     ) -> CapacityPlanAction:
-        """Execute the largest step inside the chosen low-damage reclaim plan first."""
-        plan = sorted(plan, key=lambda item: (-item[0], item[1].lane_id))
+        """Execute the best step inside the chosen low-damage reclaim plan first.
+
+        Prefers actions with GPU overlap (frees memory where it's needed),
+        then largest freed VRAM, then stable lane ordering.
+        """
+        overlap = gpu_overlap_by_lane or {}
+        plan = sorted(plan, key=lambda item: (
+            -overlap.get(item[1].lane_id, 0),
+            -item[0],
+            item[1].lane_id,
+        ))
         return plan[0][1]
 
     # ------------------------------------------------------------------
     # GPU utilization tuning (vLLM only)
     # ------------------------------------------------------------------
 
-    # KV cache tuning step: 20% of current KV budget
-    KV_CACHE_TUNE_STEP = 0.20
     # Minimum KV cache: 512 MB (below this, model can barely serve requests)
     KV_CACHE_MIN_MB = 512.0
+    # Fleet KV rebalance interval (seconds)
+    KV_CACHE_REBALANCE_INTERVAL_SECONDS = 1800  # 30 minutes
+    # Dampening: only reconfigure if delta > 20% of current KV budget
+    KV_CACHE_REBALANCE_DAMPENING = 0.20
+    # Emergency threshold: bypass interval if sustained pressure this high
+    KV_CACHE_EMERGENCY_THRESHOLD = 95.0
+    KV_CACHE_EMERGENCY_MIN_READINGS = 5
+    # Pressure history window (number of readings to keep)
+    KV_PRESSURE_HISTORY_SIZE = 60  # ~30 min at 30s cycles
 
-    def _compute_kv_cache_tuning_actions(
-        self, provider_id: int, lanes: List[LaneSchedulerSignals]
-    ) -> List[CapacityPlanAction]:
-        """Tune kv_cache_memory_bytes based on KV cache pressure.
-
-        gpu_memory_utilization stays at 0.95 (ceiling). Only KV cache size
-        is adjusted up/down based on observed cache usage percentage.
-        """
-        actions = []
-        try:
-            profiles = self._facade.get_model_profiles(provider_id)
-        except Exception:
-            profiles = {}
-
+    def _record_kv_pressure_history(
+        self, provider_id: int, lanes: List[LaneSchedulerSignals],
+    ) -> None:
+        """Record per-lane KV cache pressure every cycle (cheap, no actions)."""
+        now = time.time()
         for lane in lanes:
-            if not lane.is_vllm:
-                continue
-            if lane.gpu_cache_usage_percent is None:
+            if not lane.is_vllm or lane.gpu_cache_usage_percent is None:
                 continue
             if lane.runtime_state not in ("loaded", "running"):
                 continue
+            key = self._lane_key(provider_id, lane.lane_id)
+            history = self._kv_cache_pressure_history.setdefault(key, [])
+            history.append((now, lane.gpu_cache_usage_percent))
+            # Trim old entries
+            if len(history) > self.KV_PRESSURE_HISTORY_SIZE:
+                self._kv_cache_pressure_history[key] = history[-self.KV_PRESSURE_HISTORY_SIZE:]
 
-            cache_pct = lane.gpu_cache_usage_percent
+    def _avg_kv_pressure(self, provider_id: int, lane_id: str) -> float:
+        """Return average KV cache pressure from history (0.0 if no history)."""
+        key = self._lane_key(provider_id, lane_id)
+        history = self._kv_cache_pressure_history.get(key, [])
+        if not history:
+            return 0.0
+        return sum(pct for _, pct in history) / len(history)
+
+    def _is_kv_emergency(self, provider_id: int, lane_id: str) -> bool:
+        """Check if lane has sustained emergency-level KV pressure."""
+        key = self._lane_key(provider_id, lane_id)
+        history = self._kv_cache_pressure_history.get(key, [])
+        if len(history) < self.KV_CACHE_EMERGENCY_MIN_READINGS:
+            return False
+        recent = history[-self.KV_CACHE_EMERGENCY_MIN_READINGS:]
+        return all(pct >= self.KV_CACHE_EMERGENCY_THRESHOLD for _, pct in recent)
+
+    def _compute_fleet_kv_allocation(
+        self, provider_id: int, lanes: List[LaneSchedulerSignals]
+    ) -> List[CapacityPlanAction]:
+        """Fleet-level KV budget allocation across all vLLM lanes on a provider.
+
+        Replaces per-lane reactive tuning. Runs every KV_CACHE_REBALANCE_INTERVAL_SECONDS
+        (30 min) unless an emergency is detected. Distributes KV cache proportionally
+        by a weight that combines demand, cache pressure, and per-model KV efficiency.
+        """
+        now = time.time()
+
+        # Check if any lane has an emergency (bypasses interval)
+        has_emergency = any(
+            self._is_kv_emergency(provider_id, lane.lane_id)
+            for lane in lanes if lane.is_vllm
+        )
+        if not has_emergency and (now - self._last_kv_rebalance_time) < self.KV_CACHE_REBALANCE_INTERVAL_SECONDS:
+            return []
+
+        try:
+            profiles = self._facade.get_model_profiles(provider_id)
+        except Exception:
+            return []
+
+        capacity = self._safe_get_capacity(provider_id)
+        if capacity is None:
+            return []
+
+        # Collect vLLM lanes with their profiles
+        vllm_lanes: list[tuple[LaneSchedulerSignals, ModelProfile]] = []
+        total_base_residency = 0.0
+        for lane in lanes:
+            if not lane.is_vllm:
+                continue
+            if lane.runtime_state not in ("loaded", "running", "sleeping"):
+                continue
             profile = profiles.get(lane.model_name)
             if profile is None:
                 continue
+            base = float(profile.estimate_base_residency_mb() or 0.0)
+            if base <= 0:
+                continue
+            total_base_residency += base
+            vllm_lanes.append((lane, profile))
+
+        if not vllm_lanes:
+            return []
+
+        total_vram = float(capacity.total_vram_mb)
+        safety_margin_mb = total_vram * (1 - self.GPU_UTIL_MAX)
+        total_kv_pool = max(0.0, total_vram - total_base_residency - safety_margin_mb)
+
+        if total_kv_pool < self.KV_CACHE_MIN_MB * len(vllm_lanes):
+            # Not enough VRAM for minimum KV per lane — skip rebalancing
+            return []
+
+        # Compute per-lane weight for KV allocation
+        weights: list[float] = []
+        for lane, profile in vllm_lanes:
+            demand_score = max(self._demand.get_score(lane.model_name), 0.1)
+            avg_pressure = max(self._avg_kv_pressure(provider_id, lane.lane_id), 1.0)
+
+            # Per-model KV efficiency: lower kv_per_token_bytes = more tokens per MB
+            kv_per_token = float(profile.kv_per_token_bytes or 0)
+            if kv_per_token > 0:
+                # Normalize: invert so lower cost = higher efficiency weight
+                efficiency = 1.0 / (kv_per_token / 1024.0)  # tokens per KB
+            else:
+                efficiency = 1.0  # neutral if unknown
+
+            weight = demand_score * (avg_pressure / 100.0) * efficiency
+            weights.append(max(weight, 0.01))
+
+        total_weight = sum(weights)
+        actions: list[CapacityPlanAction] = []
+
+        for i, (lane, profile) in enumerate(vllm_lanes):
+            # Proportional allocation with minimum floor
+            kv_share = total_kv_pool * (weights[i] / total_weight)
+            kv_share = max(kv_share, self.KV_CACHE_MIN_MB)
 
             # Determine current KV budget
-            current_kv_mb = float(profile.kv_budget_mb or 0.0)
-            if current_kv_mb <= 0 and profile.kv_per_token_bytes and profile.kv_per_token_bytes > 0:
-                ctx = min(profile.max_context_length or self.DEFAULT_CONTEXT_CAP, self.DEFAULT_CONTEXT_CAP)
-                current_kv_mb = (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+            current_kv_mb = self._current_lane_kv_mb(profile)
             if current_kv_mb <= 0:
-                base = profile.estimate_base_residency_mb()
-                if base and base > 0:
-                    current_kv_mb = base * self.KV_CACHE_HEADROOM_RATIO
-                else:
-                    continue  # can't tune without knowing current KV size
+                continue
 
-            step_mb = current_kv_mb * self.KV_CACHE_TUNE_STEP
+            delta_pct = abs(kv_share - current_kv_mb) / current_kv_mb if current_kv_mb > 0 else 1.0
 
-            if cache_pct > self.GPU_CACHE_HIGH:
-                new_kv_mb = current_kv_mb + step_mb
-                new_kv_str = self._format_bytes_human(int(new_kv_mb * 1024 * 1024))
-                actions.append(CapacityPlanAction(
-                    action="reconfigure_kv_cache",
-                    provider_id=provider_id,
-                    lane_id=lane.lane_id,
-                    model_name=lane.model_name,
-                    params={
-                        "updates": {
-                            "vllm_config": {
-                                "kv_cache_memory_bytes": new_kv_str,
-                            }
+            # Dampening: skip if change is < 20% (avoid thrashing)
+            if delta_pct < self.KV_CACHE_REBALANCE_DAMPENING:
+                continue
+
+            # Don't reconfigure lanes that are running fine
+            ttft = lane.ttft_p95_seconds or 0.0
+            cache_pct = lane.gpu_cache_usage_percent or 0.0
+            if (
+                self.GPU_CACHE_LOW <= cache_pct <= self.GPU_CACHE_HIGH
+                and ttft < 2.0
+                and not self._is_kv_emergency(provider_id, lane.lane_id)
+            ):
+                continue
+
+            new_kv_str = self._format_bytes_human(int(kv_share * 1024 * 1024))
+            demand_score = self._demand.get_score(lane.model_name)
+            avg_pressure = self._avg_kv_pressure(provider_id, lane.lane_id)
+
+            action = CapacityPlanAction(
+                action="reconfigure_kv_cache",
+                provider_id=provider_id,
+                lane_id=lane.lane_id,
+                model_name=lane.model_name,
+                params={
+                    "updates": {
+                        "vllm_config": {
+                            "kv_cache_memory_bytes": new_kv_str,
                         }
-                    },
-                    reason=(
-                        f"KV cache pressure high ({cache_pct:.1f}% > {self.GPU_CACHE_HIGH}%), "
-                        f"increasing kv_cache from {current_kv_mb:.0f}MB to {new_kv_mb:.0f}MB"
-                    ),
-                ))
-            elif cache_pct < self.GPU_CACHE_LOW:
-                # Only shrink if lane has low throughput AND other models need VRAM.
-                # Lanes with high throughput keep their KV cache even if usage is
-                # momentarily low — prevents thrashing during bursty workloads.
-                lane_throughput = (lane.requests_running or 0.0) + (lane.queue_waiting or 0.0)
-                other_demand = any(
-                    score > 0
-                    for model_name, score in self._demand.get_ranked_models()
-                    if model_name != lane.model_name
+                    }
+                },
+                reason=(
+                    f"Fleet KV rebalance: {current_kv_mb:.0f}MB → {kv_share:.0f}MB "
+                    f"(demand={demand_score:.2f}, avg_pressure={avg_pressure:.1f}%, "
+                    f"delta={delta_pct:.0%})"
+                ),
+            )
+
+            # Never reconfigure a lane with active requests — defer instead
+            if lane.active_requests > 0 or lane.queue_waiting > 0:
+                key = self._lane_key(provider_id, lane.lane_id)
+                self._deferred_kv_reconfigs[key] = action
+                logger.info(
+                    "Deferring KV reconfig for busy lane %s (active=%d, queue=%.1f)",
+                    lane.lane_id, lane.active_requests, lane.queue_waiting,
                 )
-                if other_demand and lane_throughput < 2.0:
-                    new_kv_mb = max(self.KV_CACHE_MIN_MB, current_kv_mb - step_mb)
-                    if abs(new_kv_mb - current_kv_mb) < 64:  # <64MB change not worth it
-                        continue
-                    new_kv_str = self._format_bytes_human(int(new_kv_mb * 1024 * 1024))
-                    actions.append(CapacityPlanAction(
-                        action="reconfigure_kv_cache",
-                        provider_id=provider_id,
-                        lane_id=lane.lane_id,
-                        model_name=lane.model_name,
-                        params={
-                            "updates": {
-                                "vllm_config": {
-                                    "kv_cache_memory_bytes": new_kv_str,
-                                }
-                            }
-                        },
-                        reason=(
-                            f"KV cache low ({cache_pct:.1f}% < {self.GPU_CACHE_LOW}%), "
-                            f"other models need VRAM, reducing kv_cache from {current_kv_mb:.0f}MB to {new_kv_mb:.0f}MB"
-                        ),
-                    ))
+                continue
+
+            # Skip sleeping lanes — leave them as-is
+            if lane.runtime_state == "sleeping":
+                continue
+
+            actions.append(action)
+
+        if actions or has_emergency:
+            self._last_kv_rebalance_time = now
+
+        return actions
+
+    def _current_lane_kv_mb(self, profile: ModelProfile) -> float:
+        """Get current KV budget in MB from profile, with fallback chain."""
+        kv_mb = float(profile.kv_budget_mb or 0.0)
+        if kv_mb <= 0 and profile.kv_per_token_bytes and profile.kv_per_token_bytes > 0:
+            ctx = min(profile.max_context_length or self.DEFAULT_CONTEXT_CAP, self.DEFAULT_CONTEXT_CAP)
+            kv_mb = (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+        if kv_mb <= 0:
+            base = profile.estimate_base_residency_mb()
+            if base and base > 0:
+                kv_mb = base * self.KV_CACHE_HEADROOM_RATIO
+        return kv_mb
+
+    def _flush_deferred_kv_reconfigs(
+        self, provider_id: int, lanes: List[LaneSchedulerSignals]
+    ) -> List[CapacityPlanAction]:
+        """Execute deferred KV reconfigs for lanes that have gone idle."""
+        actions = []
+        active_lanes = {lane.lane_id: lane for lane in lanes}
+
+        keys_to_flush = [
+            key for key in list(self._deferred_kv_reconfigs)
+            if key[0] == provider_id
+        ]
+        for key in keys_to_flush:
+            lane = active_lanes.get(key[1])
+            if lane is None:
+                # Lane no longer exists — discard deferred action
+                del self._deferred_kv_reconfigs[key]
+                continue
+            if lane.active_requests > 0 or lane.queue_waiting > 0:
+                continue  # Still busy, keep deferred
+            if lane.runtime_state == "sleeping":
+                del self._deferred_kv_reconfigs[key]
+                continue  # Don't reconfigure sleeping lanes
+
+            action = self._deferred_kv_reconfigs.pop(key)
+            actions.append(action)
+            logger.info(
+                "Flushing deferred KV reconfig for now-idle lane %s",
+                lane.lane_id,
+            )
 
         return actions
 
@@ -1349,6 +1604,7 @@ class CapacityPlanner:
         profile: Optional[ModelProfile],
         capacity,
         kv_cache_bytes_str: Optional[str] = None,
+        provider_id: Optional[int] = None,
     ) -> bool:
         """Quick feasibility check: base_model_size + kv_cache <= available_vram.
 
@@ -1359,6 +1615,9 @@ class CapacityPlanner:
         if capacity is None:
             return False
         available_mb = float(getattr(capacity, "available_vram_mb", 0) or 0)
+        # Subtract VRAM reserved by in-flight operations
+        if provider_id is not None:
+            available_mb -= self.get_pending_vram_mb(provider_id)
         if available_mb <= 0:
             return False
 
@@ -1403,7 +1662,9 @@ class CapacityPlanner:
         """Filter out actions that would exceed available VRAM.
 
         For load/wake actions, checks estimated VRAM against available capacity
-        with a safety margin. Tracks cumulative consumption per provider.
+        with a safety margin. Tracks cumulative consumption per provider,
+        including VRAM freed by sleep/stop actions in the same batch and
+        VRAM reserved by in-flight operations.
         """
         validated = []
         cumulative_vram: dict[int, float] = {}
@@ -1417,13 +1678,30 @@ class CapacityPlanner:
         validated.extend(free_actions)
         validated.extend(other_actions)
 
+        # Credit freed VRAM from sleep/stop actions to cumulative tracking
+        for action in free_actions:
+            try:
+                profiles = self._facade.get_model_profiles(action.provider_id)
+            except Exception:
+                profiles = {}
+            profile = profiles.get(action.model_name)
+            freed = self._estimate_freed_vram(action, profile)
+            if freed > 0:
+                cumulative_vram[action.provider_id] = (
+                    cumulative_vram.get(action.provider_id, 0.0) - freed
+                )
+
         # For consuming actions, check VRAM budget
         for action in consume_actions:
             provider_id = action.provider_id
 
             try:
                 capacity = self._facade.get_capacity_info(provider_id)
-                available = float(capacity.available_vram_mb) - cumulative_vram.get(provider_id, 0.0)
+                available = (
+                    float(capacity.available_vram_mb)
+                    - cumulative_vram.get(provider_id, 0.0)
+                    - self.get_pending_vram_mb(provider_id)
+                )
             except Exception:
                 logger.debug("Cannot check VRAM for provider %s, rejecting %s", provider_id, action.action)
                 continue
@@ -1460,6 +1738,7 @@ class CapacityPlanner:
         lane_id: str,
         profile: Optional[ModelProfile],
         capacity=None,
+        provider_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "lane_id": lane_id,
@@ -1472,10 +1751,13 @@ class CapacityPlanner:
             "enable_sleep_mode": True,
             "server_dev_mode": True,
         }
-        # Only send TP if the profile has an observed value from a previous load.
-        # Otherwise, let the worker auto-detect based on its GPU count.
+        # Send TP if profile has an observed value, or infer from model size vs GPU VRAM.
         if profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
             vllm_config["tensor_parallel_size"] = int(profile.tensor_parallel_size)
+        elif capacity is not None and provider_id is not None:
+            inferred_tp = self._infer_tensor_parallel(profile, capacity, provider_id)
+            if inferred_tp and inferred_tp > 1:
+                vllm_config["tensor_parallel_size"] = inferred_tp
         kv = self._compute_kv_cache_bytes(profile, capacity)
         if kv:
             # When we have an explicit KV budget, send only the KV cache size.
@@ -1484,6 +1766,46 @@ class CapacityPlanner:
             vllm_config["kv_cache_memory_bytes"] = kv
         params["vllm_config"] = vllm_config
         return params
+
+    def _infer_tensor_parallel(
+        self, profile: ModelProfile, capacity, provider_id: int,
+    ) -> Optional[int]:
+        """Infer tensor_parallel_size from model size vs per-GPU VRAM.
+
+        Only infers TP > 1 when the model clearly won't fit on a single GPU.
+        Returns None if inference is not possible or TP=1 is sufficient.
+        """
+        import math
+
+        base_mb = profile.estimate_base_residency_mb()
+        if base_mb is None or base_mb <= 0:
+            return None
+
+        total_vram = float(getattr(capacity, "total_vram_mb", 0))
+        if total_vram <= 0:
+            return None
+
+        # Get device count from runtime snapshot
+        snap = self._registry.peek_runtime_snapshot(provider_id) if self._registry else None
+        if snap is None:
+            return None
+        devices_info = (snap.get("runtime") or {}).get("devices") or {}
+        device_list = devices_info.get("devices") or []
+        gpu_count = len(device_list) if isinstance(device_list, list) else 0
+        if gpu_count <= 1:
+            return None
+
+        per_gpu_vram = total_vram / gpu_count
+        # Model needs TP if base residency exceeds 85% of single GPU
+        if base_mb <= per_gpu_vram * 0.85:
+            return None
+
+        tp = math.ceil(base_mb / (per_gpu_vram * 0.85))
+        # Clamp to available GPU count and round to power of 2
+        tp = min(tp, gpu_count)
+        # Round up to nearest power of 2 (vLLM requirement)
+        tp = 1 << (tp - 1).bit_length()
+        return min(tp, gpu_count)
 
     # KV cache estimation
     KV_CACHE_HEADROOM_RATIO = 0.35  # last-resort fallback for models without HF config
@@ -1611,6 +1933,24 @@ class CapacityPlanner:
 
         return 0.0
 
+    def _estimate_freed_vram(
+        self,
+        action: CapacityPlanAction,
+        profile: Optional[ModelProfile],
+    ) -> float:
+        """Estimate VRAM freed by a sleep or stop action."""
+        if profile is None:
+            return 0.0
+
+        loaded_vram = profile.estimate_vram_mb()
+        sleeping_residual = float(profile.sleeping_residual_mb or 0.0)
+
+        if action.action == "stop":
+            return loaded_vram
+        if action.action in ("sleep_l1", "sleep_l2"):
+            return max(0.0, loaded_vram - sleeping_residual)
+        return 0.0
+
     # ------------------------------------------------------------------
     # Execution with confirmation
     # ------------------------------------------------------------------
@@ -1659,7 +1999,9 @@ class CapacityPlanner:
         """Build the full desired lane set by merging current state with a change.
 
         Reads current lanes from the registry's desired_lanes (seeded from
-        the worker's first status report), then applies the requested mutation.
+        the worker's first status report), then overlays any inflight mutations
+        (adds/removes that have been sent but not yet confirmed) to prevent
+        rapid sequential applies from overwriting each other.
         """
         current = self._registry.get_desired_lane_set(provider_id)
         desired: dict[str, dict[str, Any]] = {}
@@ -1668,6 +2010,17 @@ class CapacityPlanner:
             if lid:
                 desired[lid] = copy.deepcopy(lc)
 
+        # Overlay inflight additions (sent but not yet confirmed/committed)
+        inflight_adds = self._inflight_desired.get(provider_id, {})
+        for lid, lc_dict in inflight_adds.items():
+            desired[lid] = copy.deepcopy(lc_dict)
+
+        # Apply inflight removals
+        inflight_removes = self._inflight_removals.get(provider_id, set())
+        for lid in inflight_removes:
+            desired.pop(lid, None)
+
+        # Apply the current mutation on top
         if remove_lane_id:
             desired.pop(remove_lane_id, None)
 
@@ -1677,6 +2030,99 @@ class CapacityPlanner:
                 desired[lid] = copy.deepcopy(add_lane)
 
         return list(desired.values())
+
+    # ------------------------------------------------------------------
+    # Inflight desired-state tracking helpers
+    # ------------------------------------------------------------------
+
+    def _record_inflight_add(
+        self, provider_id: int, lane_id: str, lane_config: dict[str, Any],
+    ) -> None:
+        """Record an inflight lane addition so subsequent builds include it."""
+        if provider_id not in self._inflight_desired:
+            self._inflight_desired[provider_id] = {}
+        self._inflight_desired[provider_id][lane_id] = copy.deepcopy(lane_config)
+        # If this lane was previously marked for removal, cancel that
+        inflight_rm = self._inflight_removals.get(provider_id)
+        if inflight_rm:
+            inflight_rm.discard(lane_id)
+
+    def _clear_inflight_add(self, provider_id: int, lane_id: str) -> None:
+        """Clear inflight addition after registry commit or failure."""
+        inflight = self._inflight_desired.get(provider_id)
+        if inflight:
+            inflight.pop(lane_id, None)
+
+    def _record_inflight_removal(self, provider_id: int, lane_id: str) -> None:
+        """Record an inflight lane removal so subsequent builds exclude it."""
+        if provider_id not in self._inflight_removals:
+            self._inflight_removals[provider_id] = set()
+        self._inflight_removals[provider_id].add(lane_id)
+        # If this lane was previously marked for addition, cancel that
+        inflight_add = self._inflight_desired.get(provider_id)
+        if inflight_add:
+            inflight_add.pop(lane_id, None)
+
+    def _clear_inflight_removal(self, provider_id: int, lane_id: str) -> None:
+        """Clear inflight removal after registry commit or failure."""
+        inflight = self._inflight_removals.get(provider_id)
+        if inflight:
+            inflight.discard(lane_id)
+
+    # ------------------------------------------------------------------
+    # Per-lane action lock helpers
+    # ------------------------------------------------------------------
+
+    def _lane_lock(self, provider_id: int, lane_id: str) -> asyncio.Lock:
+        """Get or create a per-lane lock for serializing operations."""
+        key = (provider_id, lane_id)
+        lock = self._lane_action_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._lane_action_locks[key] = lock
+        return lock
+
+    # ------------------------------------------------------------------
+    # Cold lane marking helpers
+    # ------------------------------------------------------------------
+
+    def _mark_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        """Pre-mark lane as cold so scheduler stops routing new requests."""
+        self._marked_cold_lanes.add((provider_id, lane_id))
+        self._registry.mark_lane_cold(provider_id, lane_id)
+        logger.info(
+            "Marked lane %s on provider %s as cold (scheduler will exclude)",
+            lane_id, provider_id,
+        )
+
+    def _unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        """Restore lane to normal scheduling after aborted stop."""
+        self._marked_cold_lanes.discard((provider_id, lane_id))
+        self._registry.unmark_lane_cold(provider_id, lane_id)
+
+    def is_lane_marked_cold(self, provider_id: int, lane_id: str) -> bool:
+        """Check if a lane is pre-marked as cold (for scheduler exclusion)."""
+        return (provider_id, lane_id) in self._marked_cold_lanes
+
+    # ------------------------------------------------------------------
+    # Pending VRAM tracking helpers
+    # ------------------------------------------------------------------
+
+    def _reserve_pending_vram(self, provider_id: int, vram_mb: float) -> None:
+        """Reserve VRAM for an in-flight load operation."""
+        self._pending_vram_mb[provider_id] = (
+            self._pending_vram_mb.get(provider_id, 0.0) + vram_mb
+        )
+
+    def _release_pending_vram(self, provider_id: int, vram_mb: float) -> None:
+        """Release VRAM reservation after confirmation or failure."""
+        self._pending_vram_mb[provider_id] = max(
+            0.0, self._pending_vram_mb.get(provider_id, 0.0) - vram_mb
+        )
+
+    def get_pending_vram_mb(self, provider_id: int) -> float:
+        """Get total VRAM reserved by in-flight operations on a provider."""
+        return self._pending_vram_mb.get(provider_id, 0.0)
 
     async def _execute_action_with_confirmation(
         self, action: CapacityPlanAction, timeout_seconds: float = 60.0
@@ -1756,6 +2202,23 @@ class CapacityPlanner:
                 return False
 
         elif action.action == "load":
+            # Estimate VRAM for pending reservation tracking
+            _load_profile = self._safe_get_profiles(action.provider_id).get(action.model_name)
+            _load_capacity = self._safe_get_capacity(action.provider_id)
+            _estimated_load_vram = self._estimate_action_vram(action, _load_profile, _load_capacity) if _load_capacity else 0.0
+            self._reserve_pending_vram(action.provider_id, _estimated_load_vram)
+
+            # Re-verify VRAM is actually available (Phase 4d)
+            if _load_capacity is not None:
+                current_available = float(_load_capacity.available_vram_mb)
+                if current_available < _estimated_load_vram * self.VRAM_SAFETY_MARGIN:
+                    logger.warning(
+                        "VRAM re-verification failed for load of %s: available=%.0fMB, need=%.0fMB",
+                        action.model_name, current_available, _estimated_load_vram * self.VRAM_SAFETY_MARGIN,
+                    )
+                    self._release_pending_vram(action.provider_id, _estimated_load_vram)
+                    return False
+
             if self._use_additive_loads:
                 try:
                     await self._registry.send_command(
@@ -1769,11 +2232,16 @@ class CapacityPlanner:
                     logger.exception(
                         "Failed to send add_lane for lane %s", action.lane_id,
                     )
+                    self._release_pending_vram(action.provider_id, _estimated_load_vram)
                     return False
             else:
                 new_lane = {"lane_id": action.lane_id, "model": action.model_name}
                 if action.params:
                     new_lane.update(action.params)
+
+                # Record inflight addition before building desired set
+                self._record_inflight_add(action.provider_id, action.lane_id, new_lane)
+
                 desired = self._build_desired_lane_set(
                     action.provider_id, add_lane=new_lane,
                 )
@@ -1789,17 +2257,43 @@ class CapacityPlanner:
                             "apply_lanes rolled back for load of %s on provider %s",
                             action.model_name, action.provider_id,
                         )
+                        self._clear_inflight_add(action.provider_id, action.lane_id)
+                        self._release_pending_vram(action.provider_id, _estimated_load_vram)
                         return False
                     self._registry.update_desired_lanes(action.provider_id, desired)
+                    # Inflight entry now committed to registry — clear it
+                    self._clear_inflight_add(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
                         "Failed to send apply_lanes for load of %s", action.lane_id,
                     )
+                    self._clear_inflight_add(action.provider_id, action.lane_id)
+                    self._release_pending_vram(action.provider_id, _estimated_load_vram)
                     return False
 
         elif action.action == "stop":
-            # Drain active requests before removing the lane
-            await self._drain_lane(action.provider_id, action.lane_id, timeout_seconds=30.0)
+            # Phase 1c: Reject stop if lane is within load cooldown
+            if self._lane_is_in_load_cooldown(action.provider_id, action.lane_id):
+                logger.info(
+                    "Skipping stop of lane %s on provider %s: within %.0fs load cooldown",
+                    action.lane_id, action.provider_id, self._load_cooldown_seconds,
+                )
+                return False
+
+            # Phase 3a: Pre-mark lane as cold so scheduler stops routing to it
+            self._mark_lane_cold(action.provider_id, action.lane_id)
+
+            # Phase 3b: Drain active requests — abort if drain fails
+            drained = await self._drain_lane(
+                action.provider_id, action.lane_id, timeout_seconds=60.0,
+            )
+            if not drained:
+                logger.warning(
+                    "Cannot stop lane %s: active requests did not drain within timeout",
+                    action.lane_id,
+                )
+                self._unmark_lane_cold(action.provider_id, action.lane_id)
+                return False
 
             if self._use_additive_loads:
                 try:
@@ -1815,8 +2309,12 @@ class CapacityPlanner:
                     logger.exception(
                         "Failed to send delete_lane for lane %s", action.lane_id,
                     )
+                    self._unmark_lane_cold(action.provider_id, action.lane_id)
                     return False
             else:
+                # Record inflight removal before building desired set
+                self._record_inflight_removal(action.provider_id, action.lane_id)
+
                 desired = self._build_desired_lane_set(
                     action.provider_id, remove_lane_id=action.lane_id,
                 )
@@ -1832,12 +2330,17 @@ class CapacityPlanner:
                             "apply_lanes rolled back for stop of %s on provider %s",
                             action.lane_id, action.provider_id,
                         )
+                        self._clear_inflight_removal(action.provider_id, action.lane_id)
+                        self._unmark_lane_cold(action.provider_id, action.lane_id)
                         return False
                     self._registry.update_desired_lanes(action.provider_id, desired)
+                    self._clear_inflight_removal(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
                         "Failed to send apply_lanes for stop of %s", action.lane_id,
                     )
+                    self._clear_inflight_removal(action.provider_id, action.lane_id)
+                    self._unmark_lane_cold(action.provider_id, action.lane_id)
                     return False
         else:
             logger.warning("Unknown capacity action: %s", action.action)
@@ -1845,6 +2348,11 @@ class CapacityPlanner:
 
         # Poll for confirmation
         confirmed = await self._poll_confirmation(action, timeout_seconds)
+
+        # Phase 4b: Release pending VRAM reservation after confirmation resolves
+        if action.action == "load" and _estimated_load_vram > 0:
+            self._release_pending_vram(action.provider_id, _estimated_load_vram)
+
         if not confirmed:
             logger.warning(
                 "Confirmation timeout for %s on lane %s after %.0fs",
