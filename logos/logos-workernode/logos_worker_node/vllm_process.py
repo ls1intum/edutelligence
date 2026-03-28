@@ -140,6 +140,14 @@ class VllmProcessHandle:
             await self._kill_process()
             raise RuntimeError(failure)
 
+        # Discover TP worker child PIDs so _verify_vram_released can track them
+        self._known_child_pids = await self._discover_child_pids(self._process.pid)
+        if self._known_child_pids:
+            logger.info(
+                "[%s] Discovered %d child PIDs for TP workers: %s",
+                self.lane_id, len(self._known_child_pids), self._known_child_pids,
+            )
+
         return self.status()
 
     async def stop(self) -> ProcessStatus:
@@ -828,13 +836,8 @@ class VllmProcessHandle:
         # Phase 4: Sweep for any orphaned descendants still holding GPU memory
         await self._kill_descendant_processes(pid)
 
-    async def _kill_descendant_processes(self, root_pid: int) -> None:
-        """Kill any remaining child processes that survived process-group kill.
-
-        With TP>1 vLLM spawns worker subprocesses. If the process-group kill
-        missed any (e.g. they re-parented to init), walk /proc to find and
-        kill them.  This is a best-effort safety net.
-        """
+    async def _discover_child_pids(self, root_pid: int) -> set[int]:
+        """Discover child PIDs of the root vLLM process (TP worker subprocesses)."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 "pgrep", "-P", str(root_pid),
@@ -843,16 +846,41 @@ class VllmProcessHandle:
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
         except (FileNotFoundError, asyncio.TimeoutError, OSError):
-            return
+            return set()
 
         if not stdout:
-            return
+            return set()
 
-        child_pids = []
+        pids: set[int] = set()
         for line in stdout.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if line.isdigit():
-                child_pids.append(int(line))
+                pids.add(int(line))
+        return pids
+
+    async def _kill_descendant_processes(self, root_pid: int) -> None:
+        """Kill any remaining child processes that survived process-group kill.
+
+        With TP>1 vLLM spawns worker subprocesses. If the process-group kill
+        missed any (e.g. they re-parented to init), walk /proc to find and
+        kill them.  This is a best-effort safety net.
+        """
+        # Use known child PIDs (discovered at spawn) + fresh pgrep scan
+        child_pids = set(self._known_child_pids)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pgrep", "-P", str(root_pid),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            if stdout:
+                for line in stdout.decode("utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if line.isdigit():
+                        child_pids.add(int(line))
+        except (FileNotFoundError, asyncio.TimeoutError, OSError):
+            pass
 
         for cpid in child_pids:
             try:
@@ -863,6 +891,8 @@ class VllmProcessHandle:
                 )
             except (ProcessLookupError, OSError):
                 pass
+
+        self._known_child_pids.clear()
 
     async def _verify_vram_released(
         self, pid: int, timeout: float = 10.0, poll_interval: float = 1.0,

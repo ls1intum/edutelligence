@@ -208,10 +208,13 @@ class CapacityPlanner:
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
             all_actions.extend(self._compute_demand_actions(provider_id, lanes))
-            all_actions.extend(self._compute_fleet_kv_allocation(provider_id, lanes))
+            # TODO: KV fleet rebalancing disabled — was computing budgets from total
+            # worker VRAM instead of per-lane GPU VRAM, causing OOM on reconfigure.
+            # Re-enable after the per-GPU fix is verified in production.
+            # all_actions.extend(self._compute_fleet_kv_allocation(provider_id, lanes))
             all_actions.extend(self._compute_preemptive_sleep_actions(provider_id, lanes))
             # Execute any deferred KV reconfigs for lanes that have gone idle
-            all_actions.extend(self._flush_deferred_kv_reconfigs(provider_id, lanes))
+            # all_actions.extend(self._flush_deferred_kv_reconfigs(provider_id, lanes))
 
         if all_actions:
             self._log_action_plan(all_actions)
@@ -1418,8 +1421,8 @@ class CapacityPlanner:
         """Fleet-level KV budget allocation across all vLLM lanes on a provider.
 
         Replaces per-lane reactive tuning. Runs every KV_CACHE_REBALANCE_INTERVAL_SECONDS
-        (30 min) unless an emergency is detected. Distributes KV cache proportionally
-        by a weight that combines demand, cache pressure, and per-model KV efficiency.
+        (30 min) unless an emergency is detected. Each lane's KV budget is computed from
+        the VRAM of the GPUs it actually occupies (TP size), not the whole worker's total.
         """
         now = time.time()
 
@@ -1440,9 +1443,16 @@ class CapacityPlanner:
         if capacity is None:
             return []
 
-        # Collect vLLM lanes with their profiles
-        vllm_lanes: list[tuple[LaneSchedulerSignals, ModelProfile]] = []
-        total_base_residency = 0.0
+        # Determine per-GPU VRAM from runtime snapshot
+        total_vram = float(capacity.total_vram_mb)
+        snap = self._registry.peek_runtime_snapshot(provider_id) if self._registry else None
+        devices_info = ((snap.get("runtime") or {}).get("devices") or {}) if snap else {}
+        device_list = devices_info.get("devices") or []
+        gpu_count = len(device_list) if isinstance(device_list, list) else 1
+        per_gpu_vram = total_vram / max(gpu_count, 1)
+
+        # Collect vLLM lanes with their profiles and per-lane GPU count
+        vllm_lanes: list[tuple[LaneSchedulerSignals, ModelProfile, int]] = []
         for lane in lanes:
             if not lane.is_vllm:
                 continue
@@ -1454,43 +1464,34 @@ class CapacityPlanner:
             base = float(profile.estimate_base_residency_mb() or 0.0)
             if base <= 0:
                 continue
-            total_base_residency += base
-            vllm_lanes.append((lane, profile))
+            # Determine how many GPUs this lane occupies
+            lane_gpu_count = 1
+            if lane.tensor_parallel_size and int(lane.tensor_parallel_size) > 1:
+                lane_gpu_count = int(lane.tensor_parallel_size)
+            elif lane.gpu_devices:
+                devs = [d.strip() for d in lane.gpu_devices.split(",") if d.strip().isdigit()]
+                if devs:
+                    lane_gpu_count = len(devs)
+            vllm_lanes.append((lane, profile, lane_gpu_count))
 
         if not vllm_lanes:
             return []
 
-        total_vram = float(capacity.total_vram_mb)
-        safety_margin_mb = total_vram * (1 - self.GPU_UTIL_MAX)
-        total_kv_pool = max(0.0, total_vram - total_base_residency - safety_margin_mb)
+        # Compute per-lane KV pool based on the GPUs each lane uses
+        # Each lane's KV budget is: (lane_gpu_count * per_gpu_vram) - base_residency - safety_margin
+        lane_kv_pools: list[float] = []
+        for lane, profile, lane_gpu_count in vllm_lanes:
+            lane_vram = per_gpu_vram * lane_gpu_count
+            base = float(profile.estimate_base_residency_mb() or 0.0)
+            safety_margin_mb = lane_vram * (1 - self.GPU_UTIL_MAX)
+            lane_kv_pool = max(0.0, lane_vram - base - safety_margin_mb)
+            lane_kv_pools.append(lane_kv_pool)
 
-        if total_kv_pool < self.KV_CACHE_MIN_MB * len(vllm_lanes):
-            # Not enough VRAM for minimum KV per lane — skip rebalancing
-            return []
-
-        # Compute per-lane weight for KV allocation
-        weights: list[float] = []
-        for lane, profile in vllm_lanes:
-            demand_score = max(self._demand.get_score(lane.model_name), 0.1)
-            avg_pressure = max(self._avg_kv_pressure(provider_id, lane.lane_id), 1.0)
-
-            # Per-model KV efficiency: lower kv_per_token_bytes = more tokens per MB
-            kv_per_token = float(profile.kv_per_token_bytes or 0)
-            if kv_per_token > 0:
-                # Normalize: invert so lower cost = higher efficiency weight
-                efficiency = 1.0 / (kv_per_token / 1024.0)  # tokens per KB
-            else:
-                efficiency = 1.0  # neutral if unknown
-
-            weight = demand_score * (avg_pressure / 100.0) * efficiency
-            weights.append(max(weight, 0.01))
-
-        total_weight = sum(weights)
         actions: list[CapacityPlanAction] = []
 
-        for i, (lane, profile) in enumerate(vllm_lanes):
-            # Proportional allocation with minimum floor
-            kv_share = total_kv_pool * (weights[i] / total_weight)
+        for i, (lane, profile, lane_gpu_count) in enumerate(vllm_lanes):
+            # Each lane's KV share is bounded by its own GPU VRAM, not the whole worker
+            kv_share = lane_kv_pools[i]
             kv_share = max(kv_share, self.KV_CACHE_MIN_MB)
 
             # Determine current KV budget
@@ -1504,15 +1505,16 @@ class CapacityPlanner:
             if delta_pct < self.KV_CACHE_REBALANCE_DAMPENING:
                 continue
 
-            # Don't reconfigure lanes that are running fine
+            # Don't reconfigure lanes that don't need it:
+            # - Low cache usage (< HIGH) means the lane has enough KV cache
+            # - Healthy band (LOW..HIGH) with good TTFT means it's working fine
+            # Only reconfigure when cache is consistently saturated (> HIGH)
+            # or there's a KV emergency
             ttft = lane.ttft_p95_seconds or 0.0
             cache_pct = lane.gpu_cache_usage_percent or 0.0
-            if (
-                self.GPU_CACHE_LOW <= cache_pct <= self.GPU_CACHE_HIGH
-                and ttft < 2.0
-                and not self._is_kv_emergency(provider_id, lane.lane_id)
-            ):
-                continue
+            if not self._is_kv_emergency(provider_id, lane.lane_id):
+                if cache_pct <= self.GPU_CACHE_HIGH and ttft < 2.0:
+                    continue
 
             new_kv_str = self._format_bytes_human(int(kv_share * 1024 * 1024))
             demand_score = self._demand.get_score(lane.model_name)
@@ -1857,12 +1859,20 @@ class CapacityPlanner:
             "server_dev_mode": True,
         }
         # Send TP if profile has an observed value, or infer from model size vs GPU VRAM.
+        tp = 1
         if profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
-            vllm_config["tensor_parallel_size"] = int(profile.tensor_parallel_size)
+            tp = int(profile.tensor_parallel_size)
+            vllm_config["tensor_parallel_size"] = tp
         elif capacity is not None and provider_id is not None:
             inferred_tp = self._infer_tensor_parallel(profile, capacity, provider_id)
             if inferred_tp and inferred_tp > 1:
-                vllm_config["tensor_parallel_size"] = inferred_tp
+                tp = inferred_tp
+                vllm_config["tensor_parallel_size"] = tp
+        # TP>1: force enforce_eager=True — CUDA graph capture crashes the
+        # Marlin MoE kernel on Turing GPUs (cudaErrorLaunchFailure in
+        # fused_marlin_moe during compile_or_warm_up_model).
+        if tp > 1:
+            vllm_config["enforce_eager"] = True
         kv = self._compute_kv_cache_bytes(profile, capacity)
         if kv:
             # When we have an explicit KV budget, send only the KV cache size.
