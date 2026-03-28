@@ -56,26 +56,40 @@ def warmup(cache_dir: str | None = None) -> bool:
         os.environ.get("FLASHINFER_JIT_DIR", "<default>"),
     )
 
-    # Kernel configs that match real model architectures.
+    # Kernel configs for officially supported models.
     # FlashInfer JIT-compiles separate kernels per (num_qo_heads, num_kv_heads, head_dim, dtype).
+    # Only full-attention layers need FlashInfer warmup — Qwen3.5 linear/GDN layers
+    # use Triton/FLA on non-SM90 GPUs, not FlashInfer.
     # Each entry: (num_qo_heads, num_kv_heads, head_dim)
     _KERNEL_CONFIGS: list[tuple[int, int, int]] = [
-        # Qwen2.5-0.5B-Instruct: 14 attention heads, 2 KV heads (GQA), head_dim=64
-        (14, 2, 64),
-        # Qwen2.5-7B / Qwen2.5-Coder-7B: 28 attention heads, 4 KV heads (GQA), head_dim=128
-        (28, 4, 128),
-        # Qwen3-8B: 32 attention heads, 8 KV heads (GQA), head_dim=128
+        # deepseek-r1-distill-llama-8b-awq + Qwen3-Embedding-4B-AWQ: 32 qo, 8 kv, head_dim=128
         (32, 8, 128),
-        # Generic fallbacks for other models
-        (32, 32, 128),  # non-GQA 7-8B class (e.g. Llama-7B)
-        (8, 8, 128),    # smaller models with MHA
+        # Qwen3-Coder-30B-A3B-AWQ (TP=1): 32 qo, 4 kv, head_dim=128
+        (32, 4, 128),
+        # Qwen3-Coder-30B-A3B-AWQ (TP=2): heads split across 2 GPUs
+        (16, 2, 128),
+        # Qwen3.5-9B-AWQ full-attention layers (TP=1): 16 qo, 4 kv, head_dim=256
+        (16, 4, 256),
+        # Qwen3.5-35B-A3B-AWQ full-attention layers (TP=1): 16 qo, 2 kv, head_dim=256
+        (16, 2, 256),
+        # Qwen3.5-35B-A3B-AWQ full-attention layers (TP=2): heads split across 2 GPUs
+        (8, 1, 256),
     ]
+
+    # BFloat16 requires Ampere+ (compute >= 8.0).  On Turing (7.x) and
+    # older, FlashInfer BF16 kernels trigger cudaErrorLaunchFailure which
+    # fatally corrupts the CUDA context and poisons subsequent GPU work.
+    dtypes = [torch.float16]
+    if cap[0] >= 8:
+        dtypes.append(torch.bfloat16)
+    else:
+        logger.info("Skipping bfloat16 warmup — compute %d.%d < 8.0 (Ampere required)", cap[0], cap[1])
 
     t0 = time.monotonic()
     compiled = 0
     try:
         for num_qo_heads, num_kv_heads, head_dim in _KERNEL_CONFIGS:
-            for dtype in (torch.float16, torch.bfloat16):
+            for dtype in dtypes:
                 logger.info(
                     "  warming qo=%d kv=%d hdim=%d %s",
                     num_qo_heads, num_kv_heads, head_dim, dtype,
@@ -104,8 +118,9 @@ def warmup(cache_dir: str | None = None) -> bool:
 
         torch.cuda.synchronize()
         elapsed = time.monotonic() - t0
+        total_expected = len(_KERNEL_CONFIGS) * len(dtypes)
         logger.info("FlashInfer warmup completed in %.1fs (%d/%d kernels compiled)",
-                     elapsed, compiled, len(_KERNEL_CONFIGS) * 2)
+                     elapsed, compiled, total_expected)
         return True
     except Exception as exc:
         elapsed = time.monotonic() - t0
