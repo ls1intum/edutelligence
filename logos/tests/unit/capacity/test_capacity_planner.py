@@ -1,5 +1,6 @@
 """Tests for CapacityPlanner decision logic."""
 
+import asyncio
 import time
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -69,6 +70,7 @@ class MockRegistry:
         self.commands_sent = []
         self._snapshot = {"runtime": {"lanes": []}, "first_status_received": True}
         self._desired_lanes: dict[str, dict] = {}
+        self._cold_marked: set[tuple[int, str]] = set()
 
     async def send_command(self, provider_id, action, params=None, timeout_seconds=20):
         self.commands_sent.append(
@@ -111,6 +113,12 @@ class MockRegistry:
 
     def update_desired_lane_remove(self, provider_id, lane_id):
         self._desired_lanes.pop(lane_id, None)
+
+    def mark_lane_cold(self, provider_id, lane_id):
+        self._cold_marked.add((provider_id, lane_id))
+
+    def unmark_lane_cold(self, provider_id, lane_id):
+        self._cold_marked.discard((provider_id, lane_id))
 
 
 def _make_planner(facade=None, registry=None, demand=None, cycle_seconds=30.0):
@@ -916,6 +924,47 @@ def test_sleep_stop_always_allowed():
     assert len(validated) == 2
 
 
+def test_vram_budget_preserves_original_order_for_preemptive_load_then_sleep():
+    """Validation must not reorder a paired preemptive load ahead/behind its sleep."""
+    from logos.sdi.models import CapacityPlanAction
+
+    facade = MockFacade(
+        capacity=OllamaCapacity(available_vram_mb=24000, total_vram_mb=48000, loaded_models=[]),
+        profiles={
+            "model-a": ModelProfile(
+                model_name="model-a",
+                base_residency_mb=8000.0,
+                kv_budget_mb=4000.0,
+                sleeping_residual_mb=1000.0,
+                engine="vllm",
+            ),
+        },
+    )
+    planner = _make_planner(facade=facade)
+
+    actions = [
+        CapacityPlanAction(
+            action="load",
+            provider_id=10,
+            lane_id="lane-1",
+            model_name="model-a",
+            params={"vllm_config": {"kv_cache_memory_bytes": str(4 * 1024 * 1024 * 1024)}},
+            reason=f"{planner.PREEMPTIVE_LOAD_REASON} (residual=1000MB)",
+        ),
+        CapacityPlanAction(
+            action="sleep_l1",
+            provider_id=10,
+            lane_id="lane-1",
+            model_name="model-a",
+            params={"level": 1},
+            reason=f"{planner.PREEMPTIVE_SLEEP_REASON} (residual=1000MB)",
+        ),
+    ]
+
+    validated = planner._validate_vram_budget(actions)
+    assert [action.action for action in validated] == ["load", "sleep_l1"]
+
+
 # ---------------------------------------------------------------------------
 # Worker offline handling
 # ---------------------------------------------------------------------------
@@ -990,6 +1039,94 @@ async def test_confirmation_success():
     assert result is True
     assert planner._lane_sleep_level[(10, "lane-1")] == 1
     assert (10, "lane-1") in planner._lane_sleep_since
+
+
+@pytest.mark.asyncio
+async def test_stale_preemptive_sleep_is_skipped_without_worker_command():
+    """A preemptive sleep must be ignored if its paired preemptive load never confirmed."""
+    from logos.sdi.models import CapacityPlanAction
+
+    registry = MockRegistry()
+    registry._snapshot = {"runtime": {"lanes": []}}
+    planner = _make_planner(registry=registry)
+
+    action = CapacityPlanAction(
+        action="sleep_l1",
+        provider_id=10,
+        lane_id="lane-1",
+        model_name="model-a",
+        reason=f"{planner.PREEMPTIVE_SLEEP_REASON} (residual=1000MB)",
+    )
+
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
+    assert result is False
+    assert registry.commands_sent == []
+
+
+@pytest.mark.asyncio
+async def test_stale_preemptive_load_is_skipped_when_lane_already_exists():
+    """A preemptive load should no-op if request-time work already created the lane."""
+    from logos.sdi.models import CapacityPlanAction
+
+    registry = MockRegistry()
+    registry._snapshot = {
+        "runtime": {
+            "lanes": [
+                {
+                    "lane_id": "lane-1",
+                    "model": "model-a",
+                    "runtime_state": "loaded",
+                    "sleep_state": "awake",
+                },
+            ],
+        },
+    }
+    planner = _make_planner(registry=registry)
+
+    action = CapacityPlanAction(
+        action="load",
+        provider_id=10,
+        lane_id="lane-1",
+        model_name="model-a",
+        params={"lane_id": "lane-1", "model": "model-a", "vllm": True},
+        reason=f"{planner.PREEMPTIVE_LOAD_REASON} (residual=1000MB)",
+    )
+
+    result = await planner._execute_action_with_confirmation(action, timeout_seconds=5.0)
+    assert result is False
+    assert registry.commands_sent == []
+
+
+def test_confirmed_preemptive_load_marks_lane_ready_for_immediate_sleep():
+    """Only a confirmed planner-issued preemptive load should arm the follow-up sleep."""
+    from logos.sdi.models import CapacityPlanAction
+
+    planner = _make_planner()
+    key = (10, "lane-1")
+
+    planner._record_confirmed_action_state(
+        CapacityPlanAction(
+            action="load",
+            provider_id=10,
+            lane_id="lane-1",
+            model_name="model-a",
+            reason=f"{planner.PREEMPTIVE_LOAD_REASON} (residual=1000MB)",
+        ),
+        time.time(),
+    )
+    assert key in planner._preemptive_sleep_ready
+
+    planner._record_confirmed_action_state(
+        CapacityPlanAction(
+            action="sleep_l1",
+            provider_id=10,
+            lane_id="lane-1",
+            model_name="model-a",
+            reason=f"{planner.PREEMPTIVE_SLEEP_REASON} (residual=1000MB)",
+        ),
+        time.time(),
+    )
+    assert key not in planner._preemptive_sleep_ready
 
 
 @pytest.mark.asyncio

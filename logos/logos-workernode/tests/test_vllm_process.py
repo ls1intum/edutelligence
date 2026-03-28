@@ -100,6 +100,33 @@ def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
     assert "--chat-template-kwargs" not in cmd
 
 
+def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.5-9B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--compilation-config")
+    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm"}'
+
+
+def test_build_cmd_respects_explicit_compilation_config(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.5-9B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(extra_args=["-cc", '{"mode": 3}']),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--compilation-config" not in cmd
+
+
 def test_build_cmd_injects_low_gpu_memory_utilization_with_kv_cache(monkeypatch) -> None:
     """When kv_cache_memory_bytes is set but gpu_memory_utilization is not,
     a low fallback value (0.1) must be injected to satisfy vLLM's startup

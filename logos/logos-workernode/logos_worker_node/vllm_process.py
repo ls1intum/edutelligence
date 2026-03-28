@@ -487,11 +487,28 @@ class VllmProcessHandle:
         # CPU RAM offloading for KV cache
         if vc.cpu_offload_gb > 0:
             cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
+        # Persist vLLM compilation artifacts on the shared models volume so
+        # restarts can reuse them instead of recompiling from scratch.
+        if not self._has_compilation_config_override(vc.extra_args):
+            import json as _json
+            cache_root = os.path.join(self._global_config.models_path, ".cache", "vllm")
+            cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
         if vc.chat_template_kwargs:
             import json as _json
             cmd.extend(["--default-chat-template-kwargs", _json.dumps(vc.chat_template_kwargs)])
         cmd.extend(vc.extra_args)
         return cmd
+
+    @staticmethod
+    def _has_compilation_config_override(extra_args: list[str]) -> bool:
+        """True when the user already supplied a vLLM compilation config flag."""
+        return any(
+            arg == "--compilation-config"
+            or arg.startswith("--compilation-config=")
+            or arg == "-cc"
+            or arg.startswith("-cc")
+            for arg in extra_args
+        )
 
     def _auto_attention_backend(self) -> str:
         """Auto-select attention backend based on GPU compute capability.

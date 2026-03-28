@@ -77,6 +77,8 @@ class CapacityPlanner:
     # Preemptive load-then-sleep
     PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO = 0.20
     PREEMPTIVE_SLEEP_MAX_MODELS = 3
+    PREEMPTIVE_LOAD_REASON = "Preemptive load-then-sleep"
+    PREEMPTIVE_SLEEP_REASON = "Preemptive sleep after load"
 
     # Slow-path request preparation
     REQUEST_WAKE_TIMEOUT_SECONDS = 120.0
@@ -100,6 +102,7 @@ class CapacityPlanner:
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
         self._lane_loaded_at: dict[tuple[int, str], float] = {}
+        self._preemptive_sleep_ready: set[tuple[int, str]] = set()
         # Per-(provider, model) locks for cold-load deduplication.
         # Two requests for different models on the same provider can proceed
         # concurrently; two requests for the same model are serialized so only
@@ -625,6 +628,7 @@ class CapacityPlanner:
         self._lane_idle_since.pop(key, None)
         self._lane_sleep_since.pop(key, None)
         self._lane_sleep_level.pop(key, None)
+        self._preemptive_sleep_ready.discard(key)
 
     def _record_confirmed_action_state(
         self, action: CapacityPlanAction, confirmed_at: float
@@ -632,12 +636,14 @@ class CapacityPlanner:
         key = self._lane_key(action.provider_id, action.lane_id)
 
         if action.action == "sleep_l1":
+            self._preemptive_sleep_ready.discard(key)
             self._lane_sleep_since.setdefault(key, confirmed_at)
             self._lane_sleep_level[key] = 1
             self._lane_idle_since.setdefault(key, confirmed_at)
             return
 
         if action.action == "sleep_l2":
+            self._preemptive_sleep_ready.discard(key)
             self._lane_sleep_since.setdefault(key, confirmed_at)
             self._lane_sleep_level[key] = 2
             self._lane_idle_since.setdefault(key, confirmed_at)
@@ -648,11 +654,23 @@ class CapacityPlanner:
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
             self._lane_loaded_at[key] = confirmed_at
+            if action.action == "load" and self._is_preemptive_load_action(action):
+                self._preemptive_sleep_ready.add(key)
+            else:
+                self._preemptive_sleep_ready.discard(key)
             return
 
         if action.action == "stop":
             self._clear_lane_tracking(key)
             self._lane_loaded_at.pop(key, None)
+
+    @classmethod
+    def _is_preemptive_load_action(cls, action: CapacityPlanAction) -> bool:
+        return action.action == "load" and action.reason.startswith(cls.PREEMPTIVE_LOAD_REASON)
+
+    @classmethod
+    def _is_preemptive_sleep_action(cls, action: CapacityPlanAction) -> bool:
+        return action.action == "sleep_l1" and action.reason.startswith(cls.PREEMPTIVE_SLEEP_REASON)
 
     def _lane_is_in_load_cooldown(
         self,
@@ -669,6 +687,16 @@ class CapacityPlanner:
             return False
         check_time = time.time() if now is None else now
         return (check_time - loaded_at) < self._load_cooldown_seconds
+
+    def _lane_exists_in_runtime(self, provider_id: int, lane_id: str) -> bool:
+        if self._registry is not None:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+            lanes = ((snap or {}).get("runtime") or {}).get("lanes") or []
+            if isinstance(lanes, list):
+                for lane in lanes:
+                    if isinstance(lane, dict) and str(lane.get("lane_id") or "") == lane_id:
+                        return True
+        return any(lane.lane_id == lane_id for lane in self._safe_get_lanes(provider_id))
 
     def _update_idle_tracking(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Track idle durations per lane."""
@@ -1026,7 +1054,7 @@ class CapacityPlanner:
                 lane_id=lane_id,
                 model_name=model_name,
                 params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                reason=f"Preemptive load-then-sleep (residual={residual:.0f}MB)",
+                reason=f"{self.PREEMPTIVE_LOAD_REASON} (residual={residual:.0f}MB)",
             ))
             actions.append(CapacityPlanAction(
                 action="sleep_l1",
@@ -1034,7 +1062,7 @@ class CapacityPlanner:
                 lane_id=lane_id,
                 model_name=model_name,
                 params={"level": 1},
-                reason=f"Preemptive sleep after load (residual={residual:.0f}MB)",
+                reason=f"{self.PREEMPTIVE_SLEEP_REASON} (residual={residual:.0f}MB)",
             ))
             remaining_vram -= residual
 
@@ -1805,7 +1833,7 @@ class CapacityPlanner:
         including VRAM freed by sleep/stop actions in the same batch and
         VRAM reserved by in-flight operations.
         """
-        validated = []
+        validated_ids: set[int] = set()
         cumulative_vram: dict[int, float] = {}
 
         # Process sleep/stop first (they free VRAM)
@@ -1814,8 +1842,8 @@ class CapacityPlanner:
         other_actions = [a for a in actions if a.action not in ("sleep_l1", "sleep_l2", "stop", "wake", "load")]
 
         # Always allow sleep/stop and reconfigure actions
-        validated.extend(free_actions)
-        validated.extend(other_actions)
+        validated_ids.update(id(action) for action in free_actions)
+        validated_ids.update(id(action) for action in other_actions)
 
         # Credit freed VRAM from sleep/stop actions to cumulative tracking
         for action in free_actions:
@@ -1863,9 +1891,9 @@ class CapacityPlanner:
                 continue
 
             cumulative_vram[provider_id] = cumulative_vram.get(provider_id, 0.0) + estimated_vram
-            validated.append(action)
+            validated_ids.add(id(action))
 
-        return validated
+        return [action for action in actions if id(action) in validated_ids]
 
     def _planner_lane_id(self, model_name: str) -> str:
         sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
@@ -2442,6 +2470,15 @@ class CapacityPlanner:
         # Sleep/wake are lightweight individual commands.
         # Load/stop use declarative apply_lanes (unless additive loads enabled).
         if action.action in ("sleep_l1", "sleep_l2"):
+            if self._is_preemptive_sleep_action(action):
+                key = self._lane_key(action.provider_id, action.lane_id)
+                if key not in self._preemptive_sleep_ready:
+                    logger.info(
+                        "Skipping stale preemptive sleep for lane %s on provider %s: "
+                        "paired preemptive load was not confirmed",
+                        action.lane_id, action.provider_id,
+                    )
+                    return False
             # Sleeping frees VRAM: record a negative reservation so concurrent
             # load checks see the freed space immediately.
             if _reservation_id is None and _profile is not None:
@@ -2511,6 +2548,14 @@ class CapacityPlanner:
                 return False
 
         elif action.action == "load":
+            if self._is_preemptive_load_action(action) and self._lane_exists_in_runtime(
+                action.provider_id, action.lane_id,
+            ):
+                logger.info(
+                    "Skipping stale preemptive load for lane %s on provider %s: lane already exists",
+                    action.lane_id, action.provider_id,
+                )
+                return False
             # Estimate VRAM and atomically reserve
             _estimated_load_vram = (
                 self._estimate_action_vram(action, _profile, _capacity)
