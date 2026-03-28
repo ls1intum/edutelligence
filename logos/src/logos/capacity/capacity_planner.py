@@ -130,7 +130,9 @@ class CapacityPlanner:
 
         # Phase 2: KV cache pressure history and rebalance timing
         self._kv_cache_pressure_history: dict[tuple[int, str], list[tuple[float, float]]] = {}
-        self._last_kv_rebalance_time: float = 0.0
+        # Initialize to now so the first rebalance waits the full interval
+        # (prevents immediate sleep of freshly loaded lanes for KV resizing)
+        self._last_kv_rebalance_time: float = time.time()
         # Deferred KV reconfigurations waiting for lane to go idle
         self._deferred_kv_reconfigs: dict[tuple[int, str], CapacityPlanAction] = {}
 
@@ -517,8 +519,11 @@ class CapacityPlanner:
             logger.debug("No capacity info for provider %s, cannot cold-load %s", provider_id, model_name)
             return None
 
-        if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
-            return None
+        # No early feasibility bail-out here — the reclaim loop below will
+        # sleep/stop idle lanes to free VRAM.  The feasibility check against
+        # current available VRAM would reject loads that are perfectly viable
+        # after reclaiming.  If the model truly can't fit (misconfiguration),
+        # the reclaim loop will exhaust candidates and return None.
 
         lane_id = self._planner_lane_id(model_name)
         load_action = CapacityPlanAction(
@@ -1532,9 +1537,15 @@ class CapacityPlanner:
                 ),
             )
 
+            # Skip lanes that already have a deferred reconfig pending (avoid duplicates)
+            key = self._lane_key(provider_id, lane.lane_id)
+            if key in self._deferred_kv_reconfigs:
+                # Update the deferred action with the latest allocation
+                self._deferred_kv_reconfigs[key] = action
+                continue
+
             # Never reconfigure a lane with active requests — defer instead
             if lane.active_requests > 0 or lane.queue_waiting > 0:
-                key = self._lane_key(provider_id, lane.lane_id)
                 self._deferred_kv_reconfigs[key] = action
                 logger.info(
                     "Deferring KV reconfig for busy lane %s (active=%d, queue=%.1f)",
@@ -2242,8 +2253,12 @@ class CapacityPlanner:
             action.provider_id, action.reason,
         )
 
-        # KV cache reconfiguration: sleep first for warm restart, then reconfigure
+        # KV cache reconfiguration: mark cold (stop routing), sleep, reconfigure, unmark
         if action.action == "reconfigure_kv_cache":
+            # Mark lane cold BEFORE sleeping so the scheduler immediately stops
+            # routing new requests (prevents TOCTOU where requests land on a
+            # lane that's about to sleep for KV reconfiguration).
+            self._mark_lane_cold(action.provider_id, action.lane_id)
             try:
                 logger.info(
                     "Sleeping lane %s before KV cache reconfigure (warm restart)",
@@ -2271,9 +2286,12 @@ class CapacityPlanner:
                 logger.exception(
                     "Failed to send reconfigure_lane for lane %s", action.lane_id,
                 )
+                self._unmark_lane_cold(action.provider_id, action.lane_id)
                 return False
 
             confirmed = await self._poll_confirmation(action, timeout_seconds)
+            # Unmark cold after reconfigure completes (lane will be loaded/running again)
+            self._unmark_lane_cold(action.provider_id, action.lane_id)
             if not confirmed:
                 logger.warning(
                     "Confirmation timeout for reconfigure_kv_cache on lane %s after %.0fs",
