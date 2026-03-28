@@ -90,6 +90,11 @@ class VllmConfig(BaseModel):
         default=0.0, ge=0.0,
         description="CPU RAM for KV cache offloading (GB). Passed as --cpu-offload-gb to vLLM. 0 = disabled.",
     )
+    chat_template_kwargs: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Default chat_template_kwargs passed to vLLM via --chat-template-kwargs. "
+        "e.g. {\"enable_thinking\": false} to disable Qwen3/3.5 thinking mode.",
+    )
     extra_args: list[str] = Field(default_factory=list)
 
     @field_validator("kv_cache_memory_bytes")
@@ -129,7 +134,6 @@ class VllmEngineConfig(BaseModel):
         default="",
         description="Comma-separated NCCL debug subsystems (e.g. INIT,COLL,GRAPH). Empty = NCCL default.",
     )
-
     @field_validator("nccl_debug", "nccl_debug_subsys")
     @classmethod
     def _normalize_nccl_debug_fields(cls, value: str) -> str:

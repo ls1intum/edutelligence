@@ -284,6 +284,7 @@ class CapacityPlanAction:
     model_name: str
     params: Dict[str, Any] = field(default_factory=dict)
     reason: str = ""
+    vram_reservation_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {

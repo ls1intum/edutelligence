@@ -35,6 +35,7 @@ from logos.terminal_logging import (
 )
 
 from .demand_tracker import DemandTracker
+from .vram_ledger import VRAMLedger
 from logos.monitoring import prometheus_metrics as prom
 
 logger = logging.getLogger(__name__)
@@ -99,15 +100,19 @@ class CapacityPlanner:
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
         self._lane_loaded_at: dict[tuple[int, str], float] = {}
-        self._request_prepare_locks: dict[int, asyncio.Lock] = {}
+        # Per-(provider, model) locks for cold-load deduplication.
+        # Two requests for different models on the same provider can proceed
+        # concurrently; two requests for the same model are serialized so only
+        # one triggers the cold load.
+        self._model_prepare_locks: dict[tuple[int, str], asyncio.Lock] = {}
         self._load_cooldown_seconds = float(
             os.environ.get("LOGOS_LOAD_COOLDOWN_SECONDS", "60")
         )
         self._task: Optional[asyncio.Task] = None
         self._cycle_count = 0
         self._use_additive_loads = os.environ.get(
-            "LOGOS_USE_ADDITIVE_LOADS", ""
-        ).strip().lower() in ("1", "true", "yes")
+            "LOGOS_USE_ADDITIVE_LOADS", "true"
+        ).strip().lower() not in ("0", "false", "no")
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
@@ -124,9 +129,9 @@ class CapacityPlanner:
         # physical removal so new requests don't route to dying lanes.
         self._marked_cold_lanes: set[tuple[int, str]] = set()
 
-        # Phase 4b: Track VRAM committed by in-flight load operations to
-        # prevent double-booking when two loads happen near-simultaneously.
-        self._pending_vram_mb: dict[int, float] = {}
+        # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
+        # when concurrent load/wake/sleep/stop operations overlap.
+        self._vram_ledger = VRAMLedger()
 
         # Phase 2: KV cache pressure history and rebalance timing
         self._kv_cache_pressure_history: dict[tuple[int, str], list[tuple[float, float]]] = {}
@@ -136,11 +141,13 @@ class CapacityPlanner:
         # Deferred KV reconfigurations waiting for lane to go idle
         self._deferred_kv_reconfigs: dict[tuple[int, str], CapacityPlanAction] = {}
 
-    def _request_prepare_lock(self, provider_id: int) -> asyncio.Lock:
-        lock = self._request_prepare_locks.get(int(provider_id))
+    def _model_prepare_lock(self, provider_id: int, model_name: str) -> asyncio.Lock:
+        """Get or create a per-(provider, model) lock for cold-load serialization."""
+        key = (int(provider_id), model_name)
+        lock = self._model_prepare_locks.get(key)
         if lock is None:
             lock = asyncio.Lock()
-            self._request_prepare_locks[int(provider_id)] = lock
+            self._model_prepare_locks[key] = lock
         return lock
 
     async def start(self) -> None:
@@ -174,6 +181,12 @@ class CapacityPlanner:
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
         cycle_start = time.time()
+
+        # Safety net: clean up any VRAM reservations leaked by crashed operations
+        stale_count = self._vram_ledger.cleanup_stale(max_age_seconds=600.0)
+        if stale_count > 0:
+            logger.warning("Cleaned %d stale VRAM reservations", stale_count)
+
         self._demand.decay_all()
 
         # Update demand gauges
@@ -450,9 +463,9 @@ class CapacityPlanner:
                 provider_id, model_name, target, timeout_seconds,
             )
 
-        async with self._request_prepare_lock(provider_id):
-            # Re-check state after waiting so concurrent cold loads/wakes do not
-            # build conflicting desired lane sets from a stale snapshot.
+        async with self._model_prepare_lock(provider_id, model_name):
+            # Re-check after acquiring lock — another request for the same model
+            # may have completed the cold load while we were waiting.
             target = self._pick_request_target_lane(provider_id, model_name)
 
             if target is not None:
@@ -485,16 +498,17 @@ class CapacityPlanner:
                 return None
 
         if target.runtime_state == "sleeping":
-            woke = await self._execute_action_with_confirmation(
-                CapacityPlanAction(
-                    action="wake",
-                    provider_id=provider_id,
-                    lane_id=target.lane_id,
-                    model_name=model_name,
-                    reason="Request-time wake for selected sleeping lane",
-                ),
-                timeout_seconds=max(timeout_seconds, self.REQUEST_WAKE_TIMEOUT_SECONDS),
-            )
+            async with self._lane_lock(provider_id, target.lane_id):
+                woke = await self._execute_action_with_confirmation(
+                    CapacityPlanAction(
+                        action="wake",
+                        provider_id=provider_id,
+                        lane_id=target.lane_id,
+                        model_name=model_name,
+                        reason="Request-time wake for selected sleeping lane",
+                    ),
+                    timeout_seconds=max(timeout_seconds, self.REQUEST_WAKE_TIMEOUT_SECONDS),
+                )
             if not woke:
                 return None
 
@@ -583,9 +597,10 @@ class CapacityPlanner:
                 return None
 
         logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, provider_id, lane_id)
-        loaded = await self._execute_action_with_confirmation(
-            load_action, timeout_seconds=max(timeout_seconds, 180.0),
-        )
+        async with self._lane_lock(provider_id, lane_id):
+            loaded = await self._execute_action_with_confirmation(
+                load_action, timeout_seconds=max(timeout_seconds, 180.0),
+            )
         if not loaded:
             return None
 
@@ -1103,7 +1118,11 @@ class CapacityPlanner:
                 return False
 
             needed = self._estimate_action_vram(target_action, profile, capacity) * self.VRAM_SAFETY_MARGIN
-            available = float(capacity.available_vram_mb)
+            # Use ledger-aware available VRAM (subtracts in-flight reservations)
+            raw_available = float(capacity.available_vram_mb)
+            available = self._vram_ledger.get_effective_available_mb(
+                provider_id, raw_available,
+            )
             if available >= needed:
                 return True
 
@@ -1117,18 +1136,21 @@ class CapacityPlanner:
             )
             if reclaim is None:
                 logger.info(
-                    "No idle reclaim action available for provider=%s model=%s (need=%.0fMB available=%.0fMB)",
+                    "No idle reclaim action available for provider=%s model=%s "
+                    "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
                     provider_id,
                     target.model_name,
                     needed,
                     available,
+                    self.get_pending_vram_mb(provider_id),
                 )
                 return False
 
-            ok = await self._execute_action_with_confirmation(
-                reclaim,
-                timeout_seconds=min(timeout_seconds, 45.0),
-            )
+            async with self._lane_lock(reclaim.provider_id, reclaim.lane_id):
+                ok = await self._execute_action_with_confirmation(
+                    reclaim,
+                    timeout_seconds=min(timeout_seconds, 45.0),
+                )
             if not ok:
                 return False
 
@@ -1729,7 +1751,8 @@ class CapacityPlanner:
         if not isinstance(device_list, list) or len(device_list) < tp:
             return True  # can't check, allow
 
-        # Gather per-GPU free memory from DeviceInfo dicts
+        # Gather per-GPU free memory from DeviceInfo dicts, subtracting
+        # VRAM committed by in-flight ledger reservations on each GPU.
         per_gpu_free: list[tuple[str, float]] = []
         for dev in device_list:
             if not isinstance(dev, dict):
@@ -1741,6 +1764,15 @@ class CapacityPlanner:
                 used_mb = float(dev.get("memory_used_mb", 0) or 0)
                 if total_mb > 0 and used_mb >= 0:
                     free_mb = max(total_mb - used_mb, 0.0)
+            # Subtract VRAM already committed by in-flight operations on this GPU
+            try:
+                dev_id_int = int(dev_id) if dev_id.isdigit() else -1
+            except (ValueError, AttributeError):
+                dev_id_int = -1
+            if dev_id_int >= 0:
+                free_mb = self._vram_ledger.get_gpu_effective_available_mb(
+                    provider_id, dev_id_int, free_mb,
+                )
             per_gpu_free.append((dev_id, free_mb))
 
         if len(per_gpu_free) < tp:
@@ -1755,7 +1787,7 @@ class CapacityPlanner:
         if weakest_gpu[1] < per_gpu_needed:
             logger.info(
                 "Per-GPU feasibility FAILED for %s (TP=%d): need %.0fMB/GPU, "
-                "best %d GPUs have %s free",
+                "best %d GPUs have %s free (after ledger commitments)",
                 model_name, tp, per_gpu_needed,
                 tp,
                 ", ".join(f"GPU{did}={free:.0f}MB" for did, free in best_tp_gpus),
@@ -1879,8 +1911,24 @@ class CapacityPlanner:
             # Do not also force gpu_memory_utilization: vLLM still treats that
             # as a startup guard, which can block an otherwise valid load.
             vllm_config["kv_cache_memory_bytes"] = kv
+        # Qwen3/3.5 chat models default to thinking mode which puts tokens in
+        # reasoning_content instead of content — invisible to most clients.
+        # Disable by default; users can override per-request.
+        if self._model_defaults_to_thinking(model_name):
+            vllm_config["chat_template_kwargs"] = {"enable_thinking": False}
         params["vllm_config"] = vllm_config
         return params
+
+    @staticmethod
+    def _model_defaults_to_thinking(model_name: str) -> bool:
+        """Check if a model uses thinking mode by default (Qwen3/3.5 chat models)."""
+        low = model_name.lower()
+        if "qwen3" not in low:
+            return False
+        # Coder models benefit from thinking; embedding models don't chat
+        if any(s in low for s in ("coder", "embedding", "embed")):
+            return False
+        return True
 
     def _infer_tensor_parallel(
         self, profile: ModelProfile, capacity, provider_id: int,
@@ -2231,24 +2279,91 @@ class CapacityPlanner:
         return (provider_id, lane_id) in self._marked_cold_lanes
 
     # ------------------------------------------------------------------
-    # Pending VRAM tracking helpers
+    # VRAM ledger helpers
     # ------------------------------------------------------------------
 
-    def _reserve_pending_vram(self, provider_id: int, vram_mb: float) -> None:
-        """Reserve VRAM for an in-flight load operation."""
-        self._pending_vram_mb[provider_id] = (
-            self._pending_vram_mb.get(provider_id, 0.0) + vram_mb
+    def _reserve_vram(
+        self,
+        provider_id: int,
+        lane_id: str,
+        operation: str,
+        vram_mb: float,
+        gpu_devices: str | None = None,
+    ) -> str:
+        """Create a VRAM reservation in the ledger.  Returns reservation_id."""
+        return self._vram_ledger.reserve(
+            provider_id, lane_id, operation, vram_mb, gpu_devices,
         )
 
-    def _release_pending_vram(self, provider_id: int, vram_mb: float) -> None:
-        """Release VRAM reservation after confirmation or failure."""
-        self._pending_vram_mb[provider_id] = max(
-            0.0, self._pending_vram_mb.get(provider_id, 0.0) - vram_mb
+    def _try_reserve_vram_atomic(
+        self,
+        provider_id: int,
+        lane_id: str,
+        operation: str,
+        vram_mb: float,
+        raw_available_mb: float,
+        gpu_devices: str | None = None,
+        per_gpu_free: dict[int, float] | None = None,
+    ) -> str | None:
+        """Atomic check-and-reserve.  Returns reservation_id or None."""
+        return self._vram_ledger.try_reserve_atomic(
+            provider_id, lane_id, operation, vram_mb,
+            raw_available_mb, safety_margin=self.VRAM_SAFETY_MARGIN,
+            gpu_devices=gpu_devices, per_gpu_free=per_gpu_free,
         )
+
+    def _release_vram(self, reservation_id: str | None) -> None:
+        """Release a VRAM reservation by ID (no-op if None)."""
+        if reservation_id:
+            self._vram_ledger.release(reservation_id)
 
     def get_pending_vram_mb(self, provider_id: int) -> float:
-        """Get total VRAM reserved by in-flight operations on a provider."""
-        return self._pending_vram_mb.get(provider_id, 0.0)
+        """Get total VRAM committed by in-flight operations on a provider."""
+        return self._vram_ledger.get_committed_mb(provider_id)
+
+    def _get_per_gpu_free(self, provider_id: int) -> dict[int, float] | None:
+        """Read per-GPU free memory from the runtime snapshot.
+
+        Returns a dict mapping device_id (int) → free_mb, or None if the
+        snapshot is unavailable.
+        """
+        if self._registry is None:
+            return None
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return None
+        devices_info = (snap.get("runtime") or {}).get("devices") or {}
+        device_list = devices_info.get("devices") or []
+        if not isinstance(device_list, list) or not device_list:
+            return None
+        result: dict[int, float] = {}
+        for dev in device_list:
+            if not isinstance(dev, dict):
+                continue
+            try:
+                dev_id = int(dev.get("device_id", -1))
+            except (ValueError, TypeError):
+                continue
+            if dev_id < 0:
+                continue
+            free_mb = float(dev.get("memory_free_mb", 0) or 0)
+            if free_mb <= 0:
+                total_mb = float(dev.get("memory_total_mb", 0) or 0)
+                used_mb = float(dev.get("memory_used_mb", 0) or 0)
+                if total_mb > 0 and used_mb >= 0:
+                    free_mb = max(total_mb - used_mb, 0.0)
+            result[dev_id] = free_mb
+        return result if result else None
+
+    def _lane_gpu_devices_str(
+        self, provider_id: int, lane_id: str,
+    ) -> str | None:
+        """Get the gpu_devices string for an existing lane from the runtime snapshot."""
+        lanes = self._safe_get_lanes(provider_id)
+        for lane in lanes:
+            if lane.lane_id == lane_id:
+                return lane.gpu_devices
+        return None
 
     async def _execute_action_with_confirmation(
         self, action: CapacityPlanAction, timeout_seconds: float = 60.0
@@ -2309,48 +2424,122 @@ class CapacityPlanner:
                 )
             return confirmed
 
+        # ----------------------------------------------------------
+        # Track the VRAM reservation for this action.  load/wake
+        # consume VRAM; sleep/stop free it (negative reservation).
+        # ----------------------------------------------------------
+        _reservation_id: str | None = action.vram_reservation_id
+        _profiles = self._safe_get_profiles(action.provider_id)
+        _profile = _profiles.get(action.model_name)
+        _capacity = self._safe_get_capacity(action.provider_id)
+        # Resolve GPU device placement for per-GPU reservation tracking
+        _lane_gpus = self._lane_gpu_devices_str(action.provider_id, action.lane_id)
+        # For loads, gpu_devices may come from the action params
+        if _lane_gpus is None and action.params:
+            _lane_gpus = action.params.get("gpu_devices")
+        _per_gpu_free = self._get_per_gpu_free(action.provider_id)
+
         # Sleep/wake are lightweight individual commands.
-        # Load/stop use declarative apply_lanes (unless additive fallback is enabled).
-        if action.action in ("sleep_l1", "sleep_l2", "wake"):
+        # Load/stop use declarative apply_lanes (unless additive loads enabled).
+        if action.action in ("sleep_l1", "sleep_l2"):
+            # Sleeping frees VRAM: record a negative reservation so concurrent
+            # load checks see the freed space immediately.
+            if _reservation_id is None and _profile is not None:
+                current_vram = float(_profile.estimate_vram_mb())
+                residual = float(_profile.sleeping_residual_mb or 0.0)
+                freed = max(current_vram - residual, 0.0)
+                if freed > 0:
+                    _reservation_id = self._reserve_vram(
+                        action.provider_id, action.lane_id,
+                        f"reclaim_{action.action}", -freed,
+                        gpu_devices=_lane_gpus,
+                    )
+
             command_map = {
                 "sleep_l1": ("sleep_lane", {"lane_id": action.lane_id, "level": 1}),
                 "sleep_l2": ("sleep_lane", {"lane_id": action.lane_id, "level": 2}),
-                "wake": ("wake_lane", {"lane_id": action.lane_id}),
             }
             command_action, command_params = command_map[action.action]
-            cmd_timeout = (
-                int(timeout_seconds) if action.action == "wake"
-                else int(min(timeout_seconds, 30))
-            )
             try:
                 await self._registry.send_command(
                     action.provider_id, command_action, command_params,
-                    timeout_seconds=cmd_timeout,
+                    timeout_seconds=int(min(timeout_seconds, 30)),
                 )
             except Exception:
                 logger.exception(
                     "Failed to send %s command for lane %s",
                     action.action, action.lane_id,
                 )
+                self._release_vram(_reservation_id)
+                return False
+
+        elif action.action == "wake":
+            # Wake consumes VRAM: reserve the delta above sleeping residual.
+            if _reservation_id is None and _profile is not None and _capacity is not None:
+                current_vram = float(_profile.estimate_vram_mb())
+                residual = float(_profile.sleeping_residual_mb or 0.0)
+                wake_delta = max(current_vram - residual, 0.0)
+                if wake_delta > 0:
+                    raw_avail = float(_capacity.available_vram_mb)
+                    _reservation_id = self._try_reserve_vram_atomic(
+                        action.provider_id, action.lane_id,
+                        "wake", wake_delta, raw_avail,
+                        gpu_devices=_lane_gpus,
+                        per_gpu_free=_per_gpu_free,
+                    )
+                    if _reservation_id is None:
+                        logger.warning(
+                            "VRAM reservation denied for wake of %s on lane %s "
+                            "(need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s)",
+                            action.model_name, action.lane_id, wake_delta,
+                            raw_avail, self.get_pending_vram_mb(action.provider_id),
+                            _lane_gpus or "unknown",
+                        )
+                        return False
+
+            try:
+                await self._registry.send_command(
+                    action.provider_id, "wake_lane",
+                    {"lane_id": action.lane_id},
+                    timeout_seconds=int(timeout_seconds),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send wake command for lane %s", action.lane_id,
+                )
+                self._release_vram(_reservation_id)
                 return False
 
         elif action.action == "load":
-            # Estimate VRAM for pending reservation tracking
-            _load_profile = self._safe_get_profiles(action.provider_id).get(action.model_name)
-            _load_capacity = self._safe_get_capacity(action.provider_id)
-            _estimated_load_vram = self._estimate_action_vram(action, _load_profile, _load_capacity) if _load_capacity else 0.0
-            self._reserve_pending_vram(action.provider_id, _estimated_load_vram)
-
-            # Re-verify VRAM is actually available (Phase 4d)
-            if _load_capacity is not None:
-                current_available = float(_load_capacity.available_vram_mb)
-                if current_available < _estimated_load_vram * self.VRAM_SAFETY_MARGIN:
+            # Estimate VRAM and atomically reserve
+            _estimated_load_vram = (
+                self._estimate_action_vram(action, _profile, _capacity)
+                if _capacity else 0.0
+            )
+            if _reservation_id is None and _estimated_load_vram > 0 and _capacity is not None:
+                raw_avail = float(_capacity.available_vram_mb)
+                _reservation_id = self._try_reserve_vram_atomic(
+                    action.provider_id, action.lane_id,
+                    "load", _estimated_load_vram, raw_avail,
+                    gpu_devices=_lane_gpus,
+                    per_gpu_free=_per_gpu_free,
+                )
+                if _reservation_id is None:
                     logger.warning(
-                        "VRAM re-verification failed for load of %s: available=%.0fMB, need=%.0fMB",
-                        action.model_name, current_available, _estimated_load_vram * self.VRAM_SAFETY_MARGIN,
+                        "VRAM reservation denied for load of %s: "
+                        "need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s",
+                        action.model_name, _estimated_load_vram,
+                        raw_avail, self.get_pending_vram_mb(action.provider_id),
+                        _lane_gpus or "unknown",
                     )
-                    self._release_pending_vram(action.provider_id, _estimated_load_vram)
                     return False
+            elif _reservation_id is None and _estimated_load_vram > 0:
+                # No capacity info — unconditional reservation as fallback
+                _reservation_id = self._reserve_vram(
+                    action.provider_id, action.lane_id,
+                    "load", _estimated_load_vram,
+                    gpu_devices=_lane_gpus,
+                )
 
             if self._use_additive_loads:
                 try:
@@ -2365,7 +2554,7 @@ class CapacityPlanner:
                     logger.exception(
                         "Failed to send add_lane for lane %s", action.lane_id,
                     )
-                    self._release_pending_vram(action.provider_id, _estimated_load_vram)
+                    self._release_vram(_reservation_id)
                     return False
             else:
                 new_lane = {"lane_id": action.lane_id, "model": action.model_name}
@@ -2391,7 +2580,7 @@ class CapacityPlanner:
                             action.model_name, action.provider_id,
                         )
                         self._clear_inflight_add(action.provider_id, action.lane_id)
-                        self._release_pending_vram(action.provider_id, _estimated_load_vram)
+                        self._release_vram(_reservation_id)
                         return False
                     self._registry.update_desired_lanes(action.provider_id, desired)
                     # Inflight entry now committed to registry — clear it
@@ -2401,7 +2590,7 @@ class CapacityPlanner:
                         "Failed to send apply_lanes for load of %s", action.lane_id,
                     )
                     self._clear_inflight_add(action.provider_id, action.lane_id)
-                    self._release_pending_vram(action.provider_id, _estimated_load_vram)
+                    self._release_vram(_reservation_id)
                     return False
 
         elif action.action == "stop":
@@ -2412,6 +2601,17 @@ class CapacityPlanner:
                     action.lane_id, action.provider_id, self._load_cooldown_seconds,
                 )
                 return False
+
+            # Stop frees VRAM: record a negative reservation so concurrent
+            # load checks see the freed space immediately.
+            if _reservation_id is None and _profile is not None:
+                freed = float(_profile.estimate_vram_mb())
+                if freed > 0:
+                    _reservation_id = self._reserve_vram(
+                        action.provider_id, action.lane_id,
+                        "reclaim_stop", -freed,
+                        gpu_devices=_lane_gpus,
+                    )
 
             # Phase 3a: Pre-mark lane as cold so scheduler stops routing to it
             self._mark_lane_cold(action.provider_id, action.lane_id)
@@ -2426,6 +2626,7 @@ class CapacityPlanner:
                     action.lane_id,
                 )
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
+                self._release_vram(_reservation_id)
                 return False
 
             if self._use_additive_loads:
@@ -2443,6 +2644,7 @@ class CapacityPlanner:
                         "Failed to send delete_lane for lane %s", action.lane_id,
                     )
                     self._unmark_lane_cold(action.provider_id, action.lane_id)
+                    self._release_vram(_reservation_id)
                     return False
             else:
                 # Record inflight removal before building desired set
@@ -2465,6 +2667,7 @@ class CapacityPlanner:
                         )
                         self._clear_inflight_removal(action.provider_id, action.lane_id)
                         self._unmark_lane_cold(action.provider_id, action.lane_id)
+                        self._release_vram(_reservation_id)
                         return False
                     self._registry.update_desired_lanes(action.provider_id, desired)
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
@@ -2474,6 +2677,7 @@ class CapacityPlanner:
                     )
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
                     self._unmark_lane_cold(action.provider_id, action.lane_id)
+                    self._release_vram(_reservation_id)
                     return False
         else:
             logger.warning("Unknown capacity action: %s", action.action)
@@ -2482,9 +2686,9 @@ class CapacityPlanner:
         # Poll for confirmation
         confirmed = await self._poll_confirmation(action, timeout_seconds)
 
-        # Phase 4b: Release pending VRAM reservation after confirmation resolves
-        if action.action == "load" and _estimated_load_vram > 0:
-            self._release_pending_vram(action.provider_id, _estimated_load_vram)
+        # Release VRAM reservation after confirmation resolves — the worker's
+        # actual VRAM usage is now reflected in the next capacity snapshot.
+        self._release_vram(_reservation_id)
 
         if not confirmed:
             logger.warning(

@@ -129,17 +129,47 @@ def _routing_inference_endpoint(vllm: bool) -> str:
 
 
 def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
-    """Check if the lane config change requires a process restart."""
+    """Check if the lane config change requires a process restart.
+
+    Only compares fields that cannot be changed at runtime and truly require
+    stopping and re-spawning the vLLM/Ollama process.  Fields like
+    kv_cache_memory_bytes and enable_sleep_mode are set at spawn time but
+    changing them should NOT trigger a restart of an already-loaded lane —
+    the planner should use sleep/reconfigure for KV tuning instead.
+    """
+    if current.model != desired.model:
+        return True
     if current.vllm != desired.vllm:
         return True
+    # Ollama-specific fields
+    if not current.vllm:
+        return (
+            current.num_parallel != desired.num_parallel
+            or current.context_length != desired.context_length
+            or current.kv_cache_type != desired.kv_cache_type
+            or current.flash_attention != desired.flash_attention
+            or current.gpu_devices != desired.gpu_devices
+            or current.keep_alive != desired.keep_alive
+        )
+    # vLLM: only compare fields that require a process restart
+    cv = current.vllm_config
+    dv = desired.vllm_config
+    if cv is None and dv is None:
+        return False
+    if cv is None or dv is None:
+        return True
     return (
-        current.num_parallel != desired.num_parallel
-        or current.context_length != desired.context_length
-        or current.kv_cache_type != desired.kv_cache_type
-        or current.flash_attention != desired.flash_attention
+        cv.tensor_parallel_size != dv.tensor_parallel_size
+        or cv.max_model_len != dv.max_model_len
+        or cv.dtype != dv.dtype
+        or cv.quantization != dv.quantization
+        or cv.enforce_eager != dv.enforce_eager
+        or cv.attention_backend != dv.attention_backend
+        or cv.disable_custom_all_reduce != dv.disable_custom_all_reduce
+        or cv.disable_nccl_p2p != dv.disable_nccl_p2p
+        or cv.cpu_offload_gb != dv.cpu_offload_gb
+        or cv.extra_args != dv.extra_args
         or current.gpu_devices != desired.gpu_devices
-        or current.keep_alive != desired.keep_alive
-        or current.vllm_config != desired.vllm_config
     )
 
 
