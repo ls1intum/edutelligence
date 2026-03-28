@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -152,6 +154,117 @@ async def test_execute_infer_command_passthrough(monkeypatch):
     assert result["body"] == {"ok": True}
     lane_manager.increment_active_requests.assert_awaited_once_with("lane-a")
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_handle_message_runs_stream_command_in_background():
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    app.state.gpu_collector = object()
+
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def _fake_execute_stream_command(ws, cmd_id, params):  # noqa: ARG001
+        assert cmd_id == "cmd-stream"
+        assert params == {"lane_id": "lane-a"}
+        started.set()
+        await release.wait()
+        finished.set()
+
+    client._execute_stream_command = _fake_execute_stream_command  # type: ignore[method-assign]  # noqa: SLF001
+
+    handle_task = asyncio.create_task(
+        client._handle_message(  # noqa: SLF001
+            object(),
+            json.dumps(
+                {
+                    "type": "command",
+                    "cmd_id": "cmd-stream",
+                    "action": "infer_stream",
+                    "params": {"lane_id": "lane-a"},
+                }
+            ),
+        )
+    )
+
+    await started.wait()
+    await asyncio.sleep(0)
+
+    assert handle_task.done()
+    assert len(client._command_tasks) == 1  # noqa: SLF001
+    assert not finished.is_set()
+
+    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    release.set()
+    await asyncio.gather(*background_tasks)
+
+    assert finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_runs_infer_command_in_background():
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    app.state.gpu_collector = object()
+
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    sent_payloads: list[dict] = []
+
+    async def _fake_execute_command(action, params):
+        assert action == "infer"
+        assert params == {"lane_id": "lane-a"}
+        started.set()
+        await release.wait()
+        return {"ok": True}
+
+    async def _fake_send_json(_ws, payload):
+        sent_payloads.append(payload)
+
+    client._execute_command = _fake_execute_command  # type: ignore[method-assign]  # noqa: SLF001
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    handle_task = asyncio.create_task(
+        client._handle_message(  # noqa: SLF001
+            object(),
+            json.dumps(
+                {
+                    "type": "command",
+                    "cmd_id": "cmd-infer",
+                    "action": "infer",
+                    "params": {"lane_id": "lane-a"},
+                }
+            ),
+        )
+    )
+
+    await started.wait()
+    await asyncio.sleep(0)
+
+    assert handle_task.done()
+    assert len(client._command_tasks) == 1  # noqa: SLF001
+    assert sent_payloads == []
+
+    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    release.set()
+    await asyncio.gather(*background_tasks)
+
+    assert sent_payloads == [
+        {
+            "type": "command_result",
+            "cmd_id": "cmd-infer",
+            "success": True,
+            "result": {"ok": True},
+        }
+    ]
 
 
 @pytest.mark.asyncio

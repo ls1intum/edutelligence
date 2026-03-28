@@ -92,7 +92,7 @@ class VllmConfig(BaseModel):
     )
     chat_template_kwargs: dict[str, Any] = Field(
         default_factory=dict,
-        description="Default chat_template_kwargs passed to vLLM via --chat-template-kwargs. "
+        description="Default chat_template_kwargs passed to vLLM via --default-chat-template-kwargs. "
         "e.g. {\"enable_thinking\": false} to disable Qwen3/3.5 thinking mode.",
     )
     extra_args: list[str] = Field(default_factory=list)

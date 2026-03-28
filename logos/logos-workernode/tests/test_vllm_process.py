@@ -85,6 +85,21 @@ def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
     assert cmd[idx + 1] == "4G"
 
 
+def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.5-9B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template_kwargs={"enable_thinking": False}),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--default-chat-template-kwargs")
+    assert cmd[idx + 1] == '{"enable_thinking": false}'
+    assert "--chat-template-kwargs" not in cmd
+
+
 def test_build_cmd_injects_low_gpu_memory_utilization_with_kv_cache(monkeypatch) -> None:
     """When kv_cache_memory_bytes is set but gpu_memory_utilization is not,
     a low fallback value (0.1) must be injected to satisfy vLLM's startup
@@ -468,6 +483,7 @@ async def test_spawn_uses_new_process_session(monkeypatch) -> None:
     monkeypatch.setattr(handle, "_build_env", lambda _lane: {})
     monkeypatch.setattr(handle, "_require_c_compiler", lambda: None)
     monkeypatch.setattr(handle, "_require_nvcc", lambda _lane: None)
+    monkeypatch.setattr(handle, "_discover_child_pids", lambda _pid: asyncio.sleep(0, result=set()))
     
     async def _fake_wait_for_ready(timeout):  # noqa: ANN001
         return True
@@ -613,13 +629,13 @@ def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
     assert "--cpu-offload-gb" not in cmd
 
 
-def test_enforce_eager_off_by_default(monkeypatch):
-    """enforce_eager defaults to False — --enforce-eager should not be in cmd."""
+def test_enforce_eager_on_by_default(monkeypatch):
+    """enforce_eager defaults to True so vLLM starts with --enforce-eager."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
-    assert "--enforce-eager" not in cmd
+    assert "--enforce-eager" in cmd
 
 
 def test_enforce_eager_can_be_enabled(monkeypatch):

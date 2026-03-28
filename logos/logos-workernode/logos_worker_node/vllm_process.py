@@ -489,7 +489,7 @@ class VllmProcessHandle:
             cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
         if vc.chat_template_kwargs:
             import json as _json
-            cmd.extend(["--chat-template-kwargs", _json.dumps(vc.chat_template_kwargs)])
+            cmd.extend(["--default-chat-template-kwargs", _json.dumps(vc.chat_template_kwargs)])
         cmd.extend(vc.extra_args)
         return cmd
 
