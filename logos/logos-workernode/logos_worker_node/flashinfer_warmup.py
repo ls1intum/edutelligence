@@ -19,11 +19,52 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Iterable
 
 logger = logging.getLogger("logos_worker_node.flashinfer_warmup")
 
+_DEFAULT_KERNEL_CONFIGS: tuple[tuple[int, int, int], ...] = (
+    # Mistral / Llama 8B / Qwen3-Embedding-4B style attention
+    (32, 8, 128),
+    # Qwen2.5 7B / 7B Coder
+    (28, 4, 128),
+    # Qwen2.5 14B / 14B Coder
+    (40, 8, 128),
+)
 
-def warmup(cache_dir: str | None = None) -> bool:
+
+def kernel_configs_for_models(model_names: Iterable[str] | None) -> list[tuple[int, int, int]]:
+    """Return the FlashInfer kernel shapes needed for the configured capability set."""
+    configs: list[tuple[int, int, int]] = []
+
+    def add(config: tuple[int, int, int]) -> None:
+        if config not in configs:
+            configs.append(config)
+
+    for raw_name in model_names or ():
+        name = (raw_name or "").strip().lower()
+        if not name:
+            continue
+        if "qwen2.5" in name and "14b" in name:
+            add((40, 8, 128))
+            continue
+        if "qwen2.5" in name and "7b" in name:
+            add((28, 4, 128))
+            continue
+        if any(token in name for token in (
+            "mistral-7b",
+            "llama-8b",
+            "deepseek-r1-distill-llama-8b",
+            "qwen3-embedding-4b",
+        )):
+            add((32, 8, 128))
+
+    if not configs:
+        return list(_DEFAULT_KERNEL_CONFIGS)
+    return configs
+
+
+def warmup(cache_dir: str | None = None, model_names: Iterable[str] | None = None) -> bool:
     """Trigger FlashInfer JIT compilation for common kernel configurations.
 
     Returns True if warmup succeeded (or FlashInfer not installed), False on error.
@@ -56,25 +97,10 @@ def warmup(cache_dir: str | None = None) -> bool:
         os.environ.get("FLASHINFER_JIT_DIR", "<default>"),
     )
 
-    # Kernel configs for officially supported models.
+    # Only warm the kernel shapes used by the configured capability set.
     # FlashInfer JIT-compiles separate kernels per (num_qo_heads, num_kv_heads, head_dim, dtype).
-    # Only full-attention layers need FlashInfer warmup — Qwen3.5 linear/GDN layers
-    # use Triton/FLA on non-SM90 GPUs, not FlashInfer.
     # Each entry: (num_qo_heads, num_kv_heads, head_dim)
-    _KERNEL_CONFIGS: list[tuple[int, int, int]] = [
-        # deepseek-r1-distill-llama-8b-awq + Qwen3-Embedding-4B-AWQ: 32 qo, 8 kv, head_dim=128
-        (32, 8, 128),
-        # Qwen3-Coder-30B-A3B-AWQ (TP=1): 32 qo, 4 kv, head_dim=128
-        (32, 4, 128),
-        # Qwen3-Coder-30B-A3B-AWQ (TP=2): heads split across 2 GPUs
-        (16, 2, 128),
-        # Qwen3.5-9B-AWQ full-attention layers (TP=1): 16 qo, 4 kv, head_dim=256
-        (16, 4, 256),
-        # Qwen3.5-35B-A3B-AWQ full-attention layers (TP=1): 16 qo, 2 kv, head_dim=256
-        (16, 2, 256),
-        # Qwen3.5-35B-A3B-AWQ full-attention layers (TP=2): heads split across 2 GPUs
-        (8, 1, 256),
-    ]
+    kernel_configs = kernel_configs_for_models(model_names)
 
     # BFloat16 requires Ampere+ (compute >= 8.0).  On Turing (7.x) and
     # older, FlashInfer BF16 kernels trigger cudaErrorLaunchFailure which
@@ -88,7 +114,7 @@ def warmup(cache_dir: str | None = None) -> bool:
     t0 = time.monotonic()
     compiled = 0
     try:
-        for num_qo_heads, num_kv_heads, head_dim in _KERNEL_CONFIGS:
+        for num_qo_heads, num_kv_heads, head_dim in kernel_configs:
             for dtype in dtypes:
                 logger.info(
                     "  warming qo=%d kv=%d hdim=%d %s",
@@ -118,7 +144,7 @@ def warmup(cache_dir: str | None = None) -> bool:
 
         torch.cuda.synchronize()
         elapsed = time.monotonic() - t0
-        total_expected = len(_KERNEL_CONFIGS) * len(dtypes)
+        total_expected = len(kernel_configs) * len(dtypes)
         logger.info("FlashInfer warmup completed in %.1fs (%d/%d kernels compiled)",
                      elapsed, compiled, total_expected)
         return True

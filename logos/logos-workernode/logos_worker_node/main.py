@@ -46,7 +46,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
         cache_dir = os.path.join(cfg.engines.ollama.models_path, ".cache", "flashinfer")
-        warmup_ok = flashinfer_warmup(cache_dir)
+        capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
+        warmup_ok = flashinfer_warmup(cache_dir, model_names=capability_models)
         if not warmup_ok:
             forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
             if not forced_backend:

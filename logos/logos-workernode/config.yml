@@ -1,4 +1,4 @@
-# hochbruegge-node — requested AWQ capability set on 2× Quadro RTX 5000
+# hochbruegge-node — Turing-friendly AWQ capability set on 2× Quadro RTX 5000
 # Lanes are commanded by the Logos server (capacity planner).
 # Temporary config for testing and development. Not for production use.
 
@@ -18,11 +18,34 @@ logos:
   provider_id: 13
   shared_key: P-XX0rCqNDt8q0n48JdDtBz2NOs7THPFdoQHIrnQGoZU6IX5uicLqpcOj63e4YfF
   capabilities_models:
-    - cyankiwi/Qwen3-Coder-30B-A3B-Instruct-AWQ-4bit
-    - cyankiwi/Qwen3.5-9B-AWQ-4bit
-    - cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit
-    - casperhansen/deepseek-r1-distill-llama-8b-awq
-    - MidnightPhreaker/Qwen3-Embedding-4B-AWQ-4Bit
+    - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+      tensor_parallel_size: 1
+      kv_budget_mb: 2048
+      max_context_length: 4096
+    - model: Qwen/Qwen2.5-7B-Instruct-AWQ
+      tensor_parallel_size: 1
+      kv_budget_mb: 2048
+      max_context_length: 4096
+    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
+      tensor_parallel_size: 1
+      kv_budget_mb: 1024
+      max_context_length: 4096
+    - model: Qwen/Qwen2.5-14B-Instruct-AWQ
+      tensor_parallel_size: 1
+      kv_budget_mb: 1024
+      max_context_length: 4096
+    - model: solidrust/Mistral-7B-Instruct-v0.3-AWQ
+      tensor_parallel_size: 1
+      kv_budget_mb: 2048
+      max_context_length: 4096
+    - model: casperhansen/deepseek-r1-distill-llama-8b-awq
+      tensor_parallel_size: 1
+      kv_budget_mb: 4096
+      max_context_length: 4096
+    - model: MidnightPhreaker/Qwen3-Embedding-4B-AWQ-4Bit
+      tensor_parallel_size: 1
+      kv_budget_mb: 1024
+      max_context_length: 4096
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 
