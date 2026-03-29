@@ -18,10 +18,10 @@ err() { printf "[\033[1;31mFAIL\033[0m] %s\n" "$*"; }
 
 # Default values
 LOGOS_KEY=""
-WORKLOAD="tests/performance/workloads/sample_workload_mixed.csv"
+WORKLOAD="tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv"
 API_BASE="http://localhost:8080"
 LATENCY_SLO_MS="10000"
-OUTPUT="tests/performance/results/benchmark_$(date +%Y%m%d_%H%M%S).csv"
+OUTPUT=""
 
 is_local_api_base() {
   case "$1" in
@@ -128,20 +128,21 @@ log "Running performance tests..."
 echo ""
 
 test_exit_code=0
+RUNNER_CMD=(
+    poetry run python tests/performance/run_api_workload.py
+    --logos-key "$LOGOS_KEY"
+    --workload "$WORKLOAD"
+    --api-base "$API_BASE"
+    --latency-slo-ms "$LATENCY_SLO_MS"
+)
+if [ -n "$OUTPUT" ]; then
+    RUNNER_CMD+=(--output "$OUTPUT")
+fi
+
 if is_local_api_base "$API_BASE"; then
-    docker compose exec "$CONTAINER_NAME" poetry run python tests/performance/run_api_workload.py \
-        --logos-key "$LOGOS_KEY" \
-        --workload "$WORKLOAD" \
-        --api-base "$API_BASE" \
-        --output "$OUTPUT" \
-        --latency-slo-ms "$LATENCY_SLO_MS" || test_exit_code=$?
+    docker compose exec "$CONTAINER_NAME" "${RUNNER_CMD[@]}" || test_exit_code=$?
 else
-    poetry run python tests/performance/run_api_workload.py \
-        --logos-key "$LOGOS_KEY" \
-        --workload "$WORKLOAD" \
-        --api-base "$API_BASE" \
-        --output "$OUTPUT" \
-        --latency-slo-ms "$LATENCY_SLO_MS" || test_exit_code=$?
+    "${RUNNER_CMD[@]}" || test_exit_code=$?
 fi
 
 echo ""
@@ -151,9 +152,13 @@ if [ $test_exit_code -eq 0 ]; then
     printf "\n\033[1;32m✅ Success!\033[0m Performance benchmark completed.\n\n"
     log "Test results:"
     log "  - Detailed metrics: tests/performance/results/"
-    log "  - Latency charts: tests/performance/results/*.png"
-    log "  - Summary CSV: tests/performance/results/*_summary.csv"
-    log "  - Detailed CSV: tests/performance/results/*_detailed.csv"
+    log "  - Summary CSV: *_summary.csv"
+    log "  - Detailed CSV: *_detailed.csv"
+    log "  - Runtime snapshots: *_runtime_samples.jsonl"
+    log "  - VRAM snapshots: *_provider_vram.json"
+    log "  - Aggregated request stats: *_request_log_stats.json"
+    log "  - Run metadata: *_run_meta.json"
+    log "  - Charts: *.png"
     printf "\n"
 else
     printf "\n\033[1;31m❌ Failed!\033[0m Performance test failed with exit code: %s\n\n" "$test_exit_code"

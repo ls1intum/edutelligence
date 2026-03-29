@@ -300,6 +300,53 @@ async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15031, lane_port_end=15040)
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15031
+            self.lane_config = lane
+            self.persisted_reason: str | None = None
+            self.destroy_called = False
+            self.close_called = False
+
+        async def wake_up(self) -> dict[str, Any]:
+            raise RuntimeError(
+                "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:139"
+            )
+
+        def persist_recent_logs(self, reason: str) -> None:
+            self.persisted_reason = reason
+
+        async def destroy(self) -> None:
+            self.destroy_called = True
+
+        async def close(self) -> None:
+            self.close_called = True
+
+    fake = FakeVllmHandle()
+    manager._handles[lane_id] = fake  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15031  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="wake failed with CUDA OOM"):
+        await manager.wake_lane(lane_id)
+
+    assert lane_id not in manager._handles  # noqa: SLF001
+    assert manager._port_alloc.get_port(lane_id) is None
+    assert fake.persisted_reason == "wake_oom"
+    assert fake.destroy_called is True
+    assert fake.close_called is True
+
+
+@pytest.mark.asyncio
 async def test_sleep_lane_rejects_non_vllm_lane() -> None:
     manager = LaneManager(OllamaConfig(), lane_port_start=15040, lane_port_end=15050)
     lane = LaneConfig(model="qwen2.5-coder:32b")

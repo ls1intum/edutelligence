@@ -6,7 +6,7 @@ RECOMMENDED USAGE (shell script wrapper):
 
     ./tests/performance/test_scheduling_performance.sh \
         --logos-key YourLogosApiKey \
-        --workload tests/performance/workloads/sample_workload_mixed.csv \
+        --workload tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv \
         --latency-slo-ms 10000
 
     This script handles Docker container startup, waits for API readiness,
@@ -16,10 +16,10 @@ DIRECT PYTHON USAGE (advanced - requires manual Docker setup):
 
     docker compose exec logos-server poetry run python tests/performance/run_api_workload.py \
         --logos-key YourLogosApiKey \
-        --workload tests/performance/workloads/sample_workload_mixed.csv \
+        --workload tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv \
         --api-base http://localhost:8080 \
         --latency-slo-ms 10000 \
-        --output tests/performance/results/api_benchmark.csv
+        --output tests/performance/results/explicit/10m/api_benchmark.csv
 
 For full documentation, see tests/performance/README.md
 """
@@ -77,6 +77,13 @@ DEFAULT_OUTPUT_DIR = Path("tests/performance/results")
 
 
 @dataclass(slots=True)
+class RuntimeArtifacts:
+    runtime_samples: list[dict]
+    provider_vram: Optional[dict]
+    request_log_stats: Optional[dict]
+
+
+@dataclass(slots=True)
 class LogRecord:
     log_id: Optional[int]
     request_id: Optional[str]
@@ -97,6 +104,14 @@ class LogRecord:
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    queue_depth_at_arrival: Optional[int] = None
+    utilization_at_arrival: Optional[float] = None
+    queue_depth_at_schedule: Optional[int] = None
+    priority_when_scheduled: Optional[str] = None
+    load_duration_ms: Optional[float] = None
+    available_vram_mb: Optional[int] = None
+    azure_rate_remaining_requests: Optional[int] = None
+    azure_rate_remaining_tokens: Optional[int] = None
 
     @property
     def ttft_ms(self) -> Optional[float]:
@@ -186,6 +201,179 @@ def parse_streaming_response(raw_text: str) -> dict:
     if usage is not None:
         reconstructed["usage"] = usage
     return reconstructed
+
+
+def default_output_path_for_workload(workload_path: Path) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        relative = workload_path.relative_to(Path("tests/performance/workloads"))
+        output_dir = DEFAULT_OUTPUT_DIR / relative.parent
+    except ValueError:
+        output_dir = DEFAULT_OUTPUT_DIR
+    return output_dir / f"{workload_path.stem}_{timestamp}.csv"
+
+
+def isoformat_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _json_headers(logos_key: str) -> dict[str, str]:
+    return {
+        "logos_key": logos_key,
+        "Content-Type": "application/json",
+    }
+
+
+async def _request_json(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    json_body: Optional[dict[str, object]] = None,
+) -> dict:
+    response = await client.request(method, url, headers=headers, json=json_body)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError(f"{url} returned a non-object JSON payload")
+    return payload
+
+
+async def collect_runtime_samples(
+    client: httpx.AsyncClient,
+    base_url: str,
+    logos_key: str,
+    stop_event: asyncio.Event,
+    interval_s: float,
+) -> list[dict]:
+    samples: list[dict] = []
+    headers = _json_headers(logos_key)
+
+    async def capture_once() -> None:
+        sample: dict[str, object] = {"captured_at": isoformat_utc(datetime.now(timezone.utc))}
+        try:
+            scheduler_payload = await _request_json(
+                client,
+                "GET",
+                f"{base_url.rstrip('/')}/logosdb/scheduler_state",
+                headers=headers,
+            )
+            sample["scheduler_state"] = scheduler_payload
+            provider_ids: list[int] = []
+            logosnode = scheduler_payload.get("logosnode")
+            if isinstance(logosnode, dict):
+                providers = logosnode.get("providers")
+                if isinstance(providers, dict):
+                    provider_ids = [
+                        int(provider_id)
+                        for provider_id in providers.keys()
+                        if str(provider_id).isdigit()
+                    ]
+
+            provider_status: dict[str, object] = {}
+            for provider_id in provider_ids:
+                try:
+                    provider_status[str(provider_id)] = await _request_json(
+                        client,
+                        "POST",
+                        f"{base_url.rstrip('/')}/logosdb/providers/logosnode/status",
+                        headers=headers,
+                        json_body={"logos_key": logos_key, "provider_id": provider_id},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    provider_status[str(provider_id)] = {"error": str(exc)}
+            sample["provider_status"] = provider_status
+        except Exception as exc:  # noqa: BLE001
+            sample["error"] = str(exc)
+        samples.append(sample)
+
+    await capture_once()
+    while True:
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_s)
+            break
+        except asyncio.TimeoutError:
+            await capture_once()
+
+    await capture_once()
+    return samples
+
+
+def _request_json_sync(
+    method: str,
+    url: str,
+    *,
+    logos_key: str,
+    json_body: Optional[dict[str, object]] = None,
+    timeout_s: float = 30.0,
+) -> Optional[dict]:
+    try:
+        response = httpx.request(
+            method,
+            url,
+            headers=_json_headers(logos_key),
+            json=json_body,
+            timeout=timeout_s,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def fetch_runtime_artifacts(
+    base_url: str,
+    logos_key: str,
+    *,
+    start_ts: datetime,
+    end_ts: datetime,
+    runtime_samples: list[dict],
+) -> RuntimeArtifacts:
+    vram_day = start_ts.astimezone(timezone.utc).date().isoformat()
+    provider_vram = _request_json_sync(
+        "POST",
+        f"{base_url.rstrip('/')}/logosdb/get_ollama_vram_stats",
+        logos_key=logos_key,
+        json_body={"day": vram_day},
+    )
+    request_log_stats = _request_json_sync(
+        "POST",
+        f"{base_url.rstrip('/')}/logosdb/request_log_stats",
+        logos_key=logos_key,
+        json_body={
+            "start_date": isoformat_utc(start_ts),
+            "end_date": isoformat_utc(end_ts),
+            "target_buckets": 120,
+        },
+    )
+    return RuntimeArtifacts(
+        runtime_samples=runtime_samples,
+        provider_vram=provider_vram,
+        request_log_stats=request_log_stats,
+    )
+
+
+def extract_load_duration_ms(payload: Optional[dict]) -> Optional[float]:
+    if payload is None or not isinstance(payload, dict):
+        return None
+
+    usage = payload.get("usage")
+    raw = usage.get("load_duration") if isinstance(usage, dict) else None
+    if raw is None:
+        raw = payload.get("load_duration")
+    if raw is None:
+        return None
+
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        return None
+
+    if numeric > 1_000_000:
+        return numeric / 1_000_000.0
+    return numeric
 
 
 async def dispatch_request(
@@ -350,7 +538,15 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                     models.name AS model_name,
                     le.response_payload,
                     le.was_cold_start,
-                    le.result_status
+                    le.result_status,
+                    le.queue_depth_at_arrival,
+                    le.utilization_at_arrival,
+                    le.queue_depth_at_schedule,
+                    le.priority_when_scheduled,
+                    le.load_duration_ms,
+                    le.available_vram_mb,
+                    le.azure_rate_remaining_requests,
+                    le.azure_rate_remaining_tokens
                 FROM log_entry le
                 LEFT JOIN providers ON le.provider_id = providers.id
                 LEFT JOIN models ON le.model_id = models.id
@@ -387,6 +583,14 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 complete_ts=row.timestamp_response,
                 cold_start=row.was_cold_start,
                 result_status=row.result_status,
+                queue_depth_at_arrival=row.queue_depth_at_arrival,
+                utilization_at_arrival=float(row.utilization_at_arrival) if row.utilization_at_arrival is not None else None,
+                queue_depth_at_schedule=row.queue_depth_at_schedule,
+                priority_when_scheduled=row.priority_when_scheduled,
+                load_duration_ms=float(row.load_duration_ms) if row.load_duration_ms is not None else None,
+                available_vram_mb=row.available_vram_mb,
+                azure_rate_remaining_requests=row.azure_rate_remaining_requests,
+                azure_rate_remaining_tokens=row.azure_rate_remaining_tokens,
             )
         )
     return records
@@ -523,6 +727,16 @@ def fetch_request_logs_via_api(
             prompt_tokens=item.get("prompt_tokens"),
             completion_tokens=item.get("completion_tokens"),
             total_tokens=item.get("total_tokens"),
+            queue_depth_at_arrival=item.get("queue_depth_at_arrival"),
+            utilization_at_arrival=float(item["utilization_at_arrival"])
+            if item.get("utilization_at_arrival") is not None
+            else None,
+            queue_depth_at_schedule=item.get("queue_depth_at_schedule"),
+            priority_when_scheduled=item.get("priority_when_scheduled"),
+            load_duration_ms=float(item["load_duration_ms"]) if item.get("load_duration_ms") is not None else None,
+            available_vram_mb=item.get("available_vram_mb"),
+            azure_rate_remaining_requests=item.get("azure_rate_remaining_requests"),
+            azure_rate_remaining_tokens=item.get("azure_rate_remaining_tokens"),
         )
     return records
 
@@ -609,6 +823,16 @@ def build_rows(
         prompt_tokens: Optional[int] = None
         completion_tokens: Optional[int] = None
         total_tokens: Optional[int] = None
+        queue_depth_at_arrival: Optional[int] = None
+        utilization_at_arrival: Optional[float] = None
+        queue_depth_at_schedule: Optional[int] = None
+        priority_when_scheduled: Optional[str] = None
+        load_duration_ms: Optional[float] = None
+        available_vram_mb: Optional[int] = None
+        azure_rate_remaining_requests: Optional[int] = None
+        azure_rate_remaining_tokens: Optional[int] = None
+        total_tokens_per_second: Optional[float] = None
+        completion_tokens_per_second: Optional[float] = None
 
         if log is not None:
             ttft = log.ttft_ms
@@ -631,15 +855,34 @@ def build_rows(
             prompt_tokens = log.prompt_tokens
             completion_tokens = log.completion_tokens
             total_tokens = log.total_tokens
+            queue_depth_at_arrival = log.queue_depth_at_arrival
+            utilization_at_arrival = log.utilization_at_arrival
+            queue_depth_at_schedule = log.queue_depth_at_schedule
+            priority_when_scheduled = log.priority_when_scheduled
+            load_duration_ms = log.load_duration_ms
+            available_vram_mb = log.available_vram_mb
+            azure_rate_remaining_requests = log.azure_rate_remaining_requests
+            azure_rate_remaining_tokens = log.azure_rate_remaining_tokens
             if prompt_tokens is None or completion_tokens is None or total_tokens is None:
                 payload_prompt_tokens, payload_completion_tokens, payload_total_tokens = extract_usage_counts(log.response_payload)
                 prompt_tokens = prompt_tokens if prompt_tokens is not None else payload_prompt_tokens
                 completion_tokens = completion_tokens if completion_tokens is not None else payload_completion_tokens
                 total_tokens = total_tokens if total_tokens is not None else payload_total_tokens
+            if load_duration_ms is None:
+                load_duration_ms = extract_load_duration_ms(log.response_payload)
 
             # Calculate TPOT (Time Per Output Token)
             if ttft is not None and total_latency is not None and tokens is not None and tokens > 1:
                 tpot = (total_latency - ttft) / (tokens - 1)
+            if total_latency is not None and total_latency > 0 and total_tokens is not None:
+                total_tokens_per_second = total_tokens / (total_latency / 1000.0)
+            if (
+                ttft is not None
+                and total_latency is not None
+                and total_latency > ttft
+                and completion_tokens is not None
+            ):
+                completion_tokens_per_second = completion_tokens / ((total_latency - ttft) / 1000.0)
 
             if ttft is not None:
                 ttft_values.append(ttft)
@@ -662,6 +905,8 @@ def build_rows(
             response_body_json = json.dumps(result.response_body, ensure_ascii=False)[:2000]
         if response_text is None and result.response_body is not None:
             response_text = extract_response_text(result.response_body)
+        if load_duration_ms is None and result.response_body is not None:
+            load_duration_ms = extract_load_duration_ms(result.response_body)
         if log is None:
             note = "log entry missing"
             error_text = f"{result.error} | {note}" if result.error else note
@@ -672,6 +917,7 @@ def build_rows(
             "server_request_id": result.server_request_id,
             "mode": result.entry.mode,
             "priority": result.entry.priority,
+            "priority_when_scheduled": priority_when_scheduled,
             "http_status": result.status_code,
             "client_duration_ms": result.duration_ms,
             "request_body_json": result.entry.body_json,
@@ -680,17 +926,26 @@ def build_rows(
             "model_id": model_id,
             "model_name": model_name,
             "cold_start": cold_start,
+            "load_duration_ms": load_duration_ms,
             "result_status": result_status,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "total_tokens_per_second": total_tokens_per_second,
+            "completion_tokens_per_second": completion_tokens_per_second,
             "ttft_ms": ttft,
             "tpot_ms": tpot,
             "tokens": tokens,
             "total_latency_ms": total_latency,
+            "queue_depth_at_arrival": queue_depth_at_arrival,
+            "utilization_at_arrival": utilization_at_arrival,
+            "queue_depth_at_schedule": queue_depth_at_schedule,
             "queue_wait_ms": queue_wait,
             "processing_ms": processing_ms,
             "scheduler_total_ms": scheduler_total,
+            "available_vram_mb": available_vram_mb,
+            "azure_rate_remaining_requests": azure_rate_remaining_requests,
+            "azure_rate_remaining_tokens": azure_rate_remaining_tokens,
             "_request_ts": log.request_ts if log is not None else None,
             "_response_ts": log.response_ts if log is not None else None,
             "response_body_json": response_body_json,
@@ -847,23 +1102,33 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
         "server_request_id",
         "mode",
         "priority",
+        "priority_when_scheduled",
         "http_status",
         "client_duration_ms",
         "request_body_json",
         "provider_name",
         "model_name",
         "cold_start",
+        "load_duration_ms",
         "result_status",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
+        "total_tokens_per_second",
+        "completion_tokens_per_second",
         "ttft_ms",
         "tpot_ms",
         "tokens",
         "total_latency_ms",
+        "queue_depth_at_arrival",
+        "utilization_at_arrival",
+        "queue_depth_at_schedule",
         "queue_wait_ms",
         "processing_ms",
         "scheduler_total_ms",
+        "available_vram_mb",
+        "azure_rate_remaining_requests",
+        "azure_rate_remaining_tokens",
         "response_body_json",
         "response_text",
         "error",
@@ -886,31 +1151,52 @@ def write_detailed_csv(path: Path, detail_records: List[Dict[str, object]]) -> N
                 rec.get("server_request_id", ""),
                 rec.get("mode", ""),
                 rec.get("priority", ""),
+                rec.get("priority_when_scheduled", ""),
                 fmt(rec.get("http_status")),
                 fmt(rec.get("client_duration_ms")),
                 rec.get("request_body_json", ""),
                 rec.get("provider_name", ""),
                 rec.get("model_name", ""),
                 fmt(rec.get("cold_start")),
+                fmt(rec.get("load_duration_ms")),
                 rec.get("result_status", ""),
                 fmt(rec.get("prompt_tokens")),
                 fmt(rec.get("completion_tokens")),
                 fmt(rec.get("total_tokens")),
+                fmt(rec.get("total_tokens_per_second")),
+                fmt(rec.get("completion_tokens_per_second")),
                 fmt(rec.get("ttft_ms")),
                 fmt(rec.get("tpot_ms")),
                 fmt(rec.get("tokens")),
                 fmt(rec.get("total_latency_ms")),
+                fmt(rec.get("queue_depth_at_arrival")),
+                fmt(rec.get("utilization_at_arrival")),
+                fmt(rec.get("queue_depth_at_schedule")),
                 fmt(rec.get("queue_wait_ms")),
                 fmt(rec.get("processing_ms")),
                 fmt(rec.get("scheduler_total_ms")),
+                fmt(rec.get("available_vram_mb")),
+                fmt(rec.get("azure_rate_remaining_requests")),
+                fmt(rec.get("azure_rate_remaining_tokens")),
                 rec.get("response_body_json", ""),
                 rec.get("response_text", ""),
                 rec.get("error", ""),
             ])
 
 
-def default_output_path() -> Path:
-    return DEFAULT_OUTPUT_DIR / f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+def write_json(path: Path, payload: Optional[dict]) -> None:
+    if payload is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_jsonl(path: Path, rows: Sequence[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False))
+            handle.write("\n")
 
 
 def generate_visualizations(path: Path, detail_records: Sequence[Dict[str, object]]) -> None:
@@ -1022,14 +1308,29 @@ async def run_workload(
     logos_key: str,
     base_url: str,
     request_timeout_s: float,
-) -> List[RequestResult]:
+) -> tuple[List[RequestResult], list[dict]]:
     async with httpx.AsyncClient(timeout=request_timeout_s) as client:
         start_monotonic = asyncio.get_event_loop().time()
+        stop_event = asyncio.Event()
+        runtime_task = asyncio.create_task(
+            collect_runtime_samples(
+                client,
+                base_url,
+                logos_key,
+                stop_event,
+                interval_s=1.0,
+            )
+        )
         tasks = [
             asyncio.create_task(dispatch_request(client, base_url, logos_key, entry, start_monotonic))
             for entry in workload
         ]
-        return await asyncio.gather(*tasks)
+        try:
+            results = await asyncio.gather(*tasks)
+        finally:
+            stop_event.set()
+        runtime_samples = await runtime_task
+        return results, runtime_samples
 
 
 def wait_for_log_records(
@@ -1053,7 +1354,7 @@ def main() -> None:
     parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
     parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
     parser.add_argument("--api-base", default="http://localhost:8080", help="Base URL for the Logos API.")
-    parser.add_argument("--output", type=Path, default=default_output_path(), help="Destination CSV file.")
+    parser.add_argument("--output", type=Path, help="Destination CSV file.")
     parser.add_argument("--latency-slo-ms", type=float, default=10_000.0, help="Latency SLO threshold in milliseconds.")
     parser.add_argument(
         "--request-timeout-s",
@@ -1076,9 +1377,11 @@ def main() -> None:
             set_log_level(process_id, "FULL")
         start_log_id = current_log_max(process_id)
 
+    output_path = args.output or default_output_path_for_workload(args.workload)
+    run_started_at = datetime.now(timezone.utc)
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
-        results = asyncio.run(run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s))
+        results, runtime_samples = asyncio.run(run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s))
         if local_mode:
             logs = wait_for_log_records(
                 process_id,
@@ -1096,18 +1399,49 @@ def main() -> None:
                 timeout=30.0,
                 poll_interval=1.0,
             )
+        run_finished_at = datetime.now(timezone.utc)
+        runtime_artifacts = fetch_runtime_artifacts(
+            args.api_base,
+            args.logos_key,
+            start_ts=run_started_at,
+            end_ts=run_finished_at,
+            runtime_samples=runtime_samples,
+        )
         summary_stats, detail_records, missing_logs = build_rows(results, logs, args.latency_slo_ms)
 
         # Generate output file paths
-        output_base = args.output.stem
-        output_dir = args.output.parent
+        output_base = output_path.stem
+        output_dir = output_path.parent
         summary_path = output_dir / f"{output_base}_summary.csv"
         detailed_path = output_dir / f"{output_base}_detailed.csv"
+        runtime_samples_path = output_dir / f"{output_base}_runtime_samples.jsonl"
+        provider_vram_path = output_dir / f"{output_base}_provider_vram.json"
+        request_log_stats_path = output_dir / f"{output_base}_request_log_stats.json"
+        run_meta_path = output_dir / f"{output_base}_run_meta.json"
 
         # Write both CSV files
         write_summary_csv(summary_path, summary_stats)
         write_detailed_csv(detailed_path, detail_records)
         generate_visualizations(detailed_path, detail_records)
+        write_jsonl(runtime_samples_path, runtime_artifacts.runtime_samples)
+        write_json(provider_vram_path, runtime_artifacts.provider_vram)
+        write_json(request_log_stats_path, runtime_artifacts.request_log_stats)
+        write_json(
+            run_meta_path,
+            {
+                "workload": str(args.workload),
+                "api_base": args.api_base,
+                "request_timeout_s": args.request_timeout_s,
+                "request_count": len(results),
+                "run_started_at": isoformat_utc(run_started_at),
+                "run_finished_at": isoformat_utc(run_finished_at),
+                "output_summary_csv": str(summary_path),
+                "output_detailed_csv": str(detailed_path),
+                "output_runtime_samples_jsonl": str(runtime_samples_path),
+                "output_provider_vram_json": str(provider_vram_path),
+                "output_request_log_stats_json": str(request_log_stats_path),
+            },
+        )
 
         if missing_logs:
             print(
@@ -1117,6 +1451,10 @@ def main() -> None:
         print(f"Completed run. Summary: {len(results)} requests")
         print(f"  Summary metrics: {summary_path}")
         print(f"  Detailed results: {detailed_path}")
+        print(f"  Runtime samples: {runtime_samples_path}")
+        print(f"  Provider VRAM: {provider_vram_path}")
+        print(f"  Request log stats: {request_log_stats_path}")
+        print(f"  Run metadata: {run_meta_path}")
     finally:
         if local_mode and original_log != "FULL":
             set_log_level(process_id, restore_log)

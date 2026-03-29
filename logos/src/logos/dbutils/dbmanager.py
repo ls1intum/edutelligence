@@ -1242,6 +1242,14 @@ class DBManager:
                      ELSE NULL
                 END AS scheduler_total_ms,
                 le.was_cold_start AS cold_start,
+                le.queue_depth_at_arrival,
+                le.utilization_at_arrival,
+                le.queue_depth_at_schedule,
+                le.priority_when_scheduled,
+                le.load_duration_ms,
+                le.available_vram_mb,
+                le.azure_rate_remaining_requests,
+                le.azure_rate_remaining_tokens,
                 le.error_message,
                 MAX(CASE WHEN tt.name = 'prompt_tokens' THEN ut.token_count END) AS prompt_tokens,
                 MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completion_tokens,
@@ -1256,7 +1264,10 @@ class DBManager:
             GROUP BY
                 le.request_id, m.name, le.model_id, p.name, le.provider_id, le.result_status,
                 le.timestamp_request, le.timestamp_forwarding, le.timestamp_response,
-                le.time_at_first_token, le.was_cold_start, le.error_message
+                le.time_at_first_token, le.was_cold_start, le.queue_depth_at_arrival,
+                le.utilization_at_arrival, le.queue_depth_at_schedule, le.priority_when_scheduled,
+                le.load_duration_ms, le.available_vram_mb, le.azure_rate_remaining_requests,
+                le.azure_rate_remaining_tokens, le.error_message
             ORDER BY le.timestamp_request ASC NULLS LAST
         """)
 
@@ -1284,6 +1295,14 @@ class DBManager:
                 "processing_ms": float(row["processing_ms"]) if row["processing_ms"] is not None else None,
                 "scheduler_total_ms": float(row["scheduler_total_ms"]) if row["scheduler_total_ms"] is not None else None,
                 "cold_start": row["cold_start"],
+                "queue_depth_at_arrival": int(row["queue_depth_at_arrival"]) if row["queue_depth_at_arrival"] is not None else None,
+                "utilization_at_arrival": float(row["utilization_at_arrival"]) if row["utilization_at_arrival"] is not None else None,
+                "queue_depth_at_schedule": int(row["queue_depth_at_schedule"]) if row["queue_depth_at_schedule"] is not None else None,
+                "priority_when_scheduled": row["priority_when_scheduled"],
+                "load_duration_ms": float(row["load_duration_ms"]) if row["load_duration_ms"] is not None else None,
+                "available_vram_mb": int(row["available_vram_mb"]) if row["available_vram_mb"] is not None else None,
+                "azure_rate_remaining_requests": int(row["azure_rate_remaining_requests"]) if row["azure_rate_remaining_requests"] is not None else None,
+                "azure_rate_remaining_tokens": int(row["azure_rate_remaining_tokens"]) if row["azure_rate_remaining_tokens"] is not None else None,
                 "error_message": row["error_message"],
                 "prompt_tokens": int(row["prompt_tokens"]) if row["prompt_tokens"] is not None else None,
                 "completion_tokens": int(row["completion_tokens"]) if row["completion_tokens"] is not None else None,

@@ -22,6 +22,7 @@ def _make_signal(
     gpu_cache_usage_percent=None,
     gpu_memory_utilization=None,
     effective_vram_mb=8000.0,
+    gpu_devices=None,
 ):
     return LaneSchedulerSignals(
         lane_id=lane_id,
@@ -37,6 +38,7 @@ def _make_signal(
         effective_vram_mb=effective_vram_mb,
         num_parallel=4,
         gpu_memory_utilization=gpu_memory_utilization,
+        gpu_devices=gpu_devices,
     )
 
 
@@ -863,6 +865,140 @@ def test_request_reclaim_prefers_smallest_sufficient_stop_candidate():
     assert action.lane_id == "lane-small"
 
 
+def test_request_reclaim_prefers_stopping_sleeping_overlap_before_sleeping_other_gpu():
+    target = _make_signal(
+        lane_id="lane-target",
+        model_name="target-model",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        gpu_devices="1",
+    )
+    sleeping_blocker = _make_signal(
+        lane_id="lane-blocker",
+        model_name="blocker-model",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        effective_vram_mb=1400.0,
+        gpu_devices="1",
+    )
+    other_gpu_lane = _make_signal(
+        lane_id="lane-other",
+        model_name="other-model",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        effective_vram_mb=8000.0,
+        gpu_devices="0",
+    )
+    profiles = {
+        "other-model": ModelProfile(
+            model_name="other-model",
+            loaded_vram_mb=8000.0,
+            sleeping_residual_mb=1000.0,
+            engine="vllm",
+        ),
+    }
+    planner = _make_planner(
+        facade=MockFacade(lanes=[target, sleeping_blocker, other_gpu_lane], profiles=profiles),
+    )
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10,
+        target=target,
+        lanes=[target, sleeping_blocker, other_gpu_lane],
+        profiles=profiles,
+        required_free_mb=1000.0,
+    )
+
+    assert action is not None
+    assert action.action == "stop"
+    assert action.lane_id == "lane-blocker"
+
+
+@pytest.mark.asyncio
+async def test_request_capacity_reclaims_for_target_gpu_shortfall_even_when_provider_free_is_high():
+    target = _make_signal(
+        lane_id="lane-target",
+        model_name="target-model",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        effective_vram_mb=500.0,
+        gpu_devices="1",
+    )
+    sleeping_blocker = _make_signal(
+        lane_id="lane-blocker",
+        model_name="blocker-model",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        effective_vram_mb=1400.0,
+        gpu_devices="1",
+    )
+    other_gpu_lane = _make_signal(
+        lane_id="lane-other",
+        model_name="other-model",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        effective_vram_mb=8000.0,
+        gpu_devices="0",
+    )
+    profiles = {
+        "target-model": ModelProfile(
+            model_name="target-model",
+            base_residency_mb=1500.0,
+            sleeping_residual_mb=500.0,
+            engine="vllm",
+        ),
+        "other-model": ModelProfile(
+            model_name="other-model",
+            loaded_vram_mb=8000.0,
+            sleeping_residual_mb=1000.0,
+            engine="vllm",
+        ),
+    }
+    facade = MockFacade(
+        lanes=[target, sleeping_blocker, other_gpu_lane],
+        capacity=OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[]),
+        profiles=profiles,
+    )
+    registry = MockRegistry()
+    registry._snapshot = {
+        "first_status_received": True,
+        "runtime": {
+            "lanes": [],
+            "devices": {
+                "devices": [
+                    {"device_id": 0, "memory_free_mb": 15000},
+                    {"device_id": 1, "memory_free_mb": 1000},
+                ],
+            },
+        },
+    }
+    planner = _make_planner(facade=facade, registry=registry)
+    actions: list[tuple[str, str]] = []
+
+    async def _fake_execute(action, timeout_seconds=60.0):  # noqa: ARG001
+        actions.append((action.action, action.lane_id))
+        registry._snapshot["runtime"]["devices"]["devices"][1]["memory_free_mb"] = 2500
+        return True
+
+    planner._execute_action_with_confirmation = _fake_execute
+
+    ok = await planner._ensure_request_capacity(
+        provider_id=10,
+        target=target,
+        profile=profiles["target-model"],
+        timeout_seconds=30.0,
+    )
+
+    assert ok is True
+    assert actions == [("stop", "lane-blocker")]
+
+
 def test_vram_no_profile_uses_fallback():
     """No profile → conservative 4096 MB estimate."""
     from logos.sdi.models import CapacityPlanAction
@@ -1215,6 +1351,35 @@ async def test_wake_command_uses_full_timeout_budget():
     assert result is True
     assert registry.commands_sent[-1]["action"] == "wake_lane"
     assert registry.commands_sent[-1]["timeout_seconds"] == 120
+
+
+@pytest.mark.asyncio
+async def test_prepare_existing_lane_skips_recent_wake_failure():
+    registry = MockRegistry()
+    planner = _make_planner(registry=registry)
+    target = _make_signal(
+        lane_id="lane-1",
+        model_name="model-a",
+        runtime_state="sleeping",
+        sleep_state="sleeping",
+        is_vllm=True,
+        gpu_devices="0",
+    )
+
+    planner._mark_wake_failure(10, "lane-1", details="cuda oom")
+    planner._ensure_request_capacity = AsyncMock(return_value=True)
+    planner._execute_action_with_confirmation = AsyncMock(return_value=True)
+
+    result = await planner._prepare_existing_lane(
+        10,
+        "model-a",
+        target,
+        30.0,
+    )
+
+    assert result is None
+    planner._ensure_request_capacity.assert_not_called()
+    planner._execute_action_with_confirmation.assert_not_called()
 
 
 @pytest.mark.asyncio

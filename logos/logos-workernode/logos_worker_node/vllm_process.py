@@ -1012,6 +1012,10 @@ class VllmProcessHandle:
         except OSError:
             logger.debug("[%s] Could not persist failure logs", self.lane_id, exc_info=True)
 
+    def persist_recent_logs(self, reason: str) -> None:
+        """Public wrapper for persisting recent vLLM logs after runtime failures."""
+        self._persist_failure_logs(reason)
+
     def _format_startup_failure(self, timeout_s: int) -> str:
         status = self.status()
         if status.state == ProcessState.STOPPED and status.return_code is not None:

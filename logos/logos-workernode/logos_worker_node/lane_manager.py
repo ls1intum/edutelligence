@@ -495,6 +495,7 @@ class LaneManager:
 
     async def wake_lane(self, lane_id: str) -> LaneStatus:
         """Wake a sleeping vLLM lane."""
+        cleanup: tuple[ProcessHandle, int | None, str] | None = None
         async with self._lock:
             handle = self._handles.get(lane_id)
             if handle is None:
@@ -502,15 +503,54 @@ class LaneManager:
             lc = handle.lane_config
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
-            await handle.wake_up()
-            prom.LANE_TRANSITIONS_TOTAL.labels(action="wake").inc()
-            self._record_event(
-                lane_id,
-                "wake",
-                model=lc.model,
-                port=handle.port,
-            )
-            return await self._get_status_unlocked(lane_id)
+            try:
+                await handle.wake_up()
+            except Exception as exc:
+                if not self._is_probable_cuda_oom(exc):
+                    raise
+                logger.error(
+                    "Wake of lane '%s' failed with CUDA OOM; detaching lane for cleanup",
+                    lane_id,
+                    exc_info=True,
+                )
+                persist_recent_logs = getattr(handle, "persist_recent_logs", None)
+                if callable(persist_recent_logs):
+                    try:
+                        persist_recent_logs("wake_oom")
+                    except Exception:
+                        logger.debug(
+                            "Could not persist recent logs for lane '%s' after wake OOM",
+                            lane_id,
+                            exc_info=True,
+                        )
+                self._record_event(
+                    lane_id,
+                    "wake_oom",
+                    model=lc.model,
+                    details=str(exc),
+                    port=handle.port,
+                )
+                detached_handle, port = self._detach_lane_unlocked(lane_id)
+                if detached_handle is not None:
+                    cleanup = (detached_handle, port, str(exc))
+                else:
+                    cleanup = (handle, handle.port, str(exc))
+            else:
+                prom.LANE_TRANSITIONS_TOTAL.labels(action="wake").inc()
+                self._record_event(
+                    lane_id,
+                    "wake",
+                    model=lc.model,
+                    port=handle.port,
+                )
+                return await self._get_status_unlocked(lane_id)
+
+        assert cleanup is not None
+        detached_handle, port, details = cleanup
+        await self._finalize_detached_lane(lane_id, detached_handle, port)
+        raise RuntimeError(
+            f"Lane '{lane_id}' wake failed with CUDA OOM and was removed for cleanup: {details}"
+        )
 
     # ------------------------------------------------------------------
     # Status / queries
@@ -1222,6 +1262,18 @@ class LaneManager:
         # Check for stuck vLLM lanes (no token generation progress while requests active)
         await self._check_stuck_lanes(statuses)
         return statuses
+
+    @staticmethod
+    def _is_probable_cuda_oom(exc: BaseException) -> bool:
+        text = str(exc).lower()
+        return (
+            "out of memory" in text
+            and (
+                "cuda" in text
+                or "cuda error" in text
+                or "cumem_allocator" in text
+            )
+        )
 
     async def _check_stuck_lanes(self, statuses: list[LaneStatus]) -> None:
         """Detect vLLM lanes that have stopped generating tokens while requests are active.

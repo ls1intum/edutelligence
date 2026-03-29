@@ -82,6 +82,7 @@ class CapacityPlanner:
 
     # Slow-path request preparation
     REQUEST_WAKE_TIMEOUT_SECONDS = 120.0
+    WAKE_FAILURE_COOLDOWN_SECONDS = 15.0
 
     def __init__(
         self,
@@ -102,6 +103,7 @@ class CapacityPlanner:
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
         self._lane_loaded_at: dict[tuple[int, str], float] = {}
+        self._lane_wake_failure_until: dict[tuple[int, str], float] = {}
         self._preemptive_sleep_ready: set[tuple[int, str]] = set()
         # Per-(provider, model) locks for cold-load deduplication.
         # Two requests for different models on the same provider can proceed
@@ -490,6 +492,16 @@ class CapacityPlanner:
     ) -> dict[str, Any] | None:
         """Wake or prepare an existing lane for a request."""
         profile = self._safe_get_profiles(provider_id).get(model_name)
+        if (
+            target.runtime_state == "sleeping"
+            and self._lane_is_in_wake_failure_cooldown(provider_id, target.lane_id)
+        ):
+            logger.info(
+                "Skipping wake retry for lane %s on provider %s: recent wake failure cooldown active",
+                target.lane_id,
+                provider_id,
+            )
+            return None
         if target.runtime_state in {"sleeping", "cold"}:
             ok = await self._ensure_request_capacity(
                 provider_id=provider_id,
@@ -628,7 +640,49 @@ class CapacityPlanner:
         self._lane_idle_since.pop(key, None)
         self._lane_sleep_since.pop(key, None)
         self._lane_sleep_level.pop(key, None)
+        self._lane_wake_failure_until.pop(key, None)
         self._preemptive_sleep_ready.discard(key)
+
+    def _mark_wake_failure(
+        self,
+        provider_id: int,
+        lane_id: str,
+        *,
+        details: str | None = None,
+        now: float | None = None,
+    ) -> None:
+        key = self._lane_key(provider_id, lane_id)
+        current_time = time.time() if now is None else now
+        self._lane_wake_failure_until[key] = (
+            current_time + self.WAKE_FAILURE_COOLDOWN_SECONDS
+        )
+        logger.warning(
+            "Marked lane %s on provider %s as wake-failed for %.0fs%s",
+            lane_id,
+            provider_id,
+            self.WAKE_FAILURE_COOLDOWN_SECONDS,
+            f": {details}" if details else "",
+        )
+
+    def _clear_wake_failure(self, provider_id: int, lane_id: str) -> None:
+        self._lane_wake_failure_until.pop(self._lane_key(provider_id, lane_id), None)
+
+    def _lane_is_in_wake_failure_cooldown(
+        self,
+        provider_id: int,
+        lane_id: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        key = self._lane_key(provider_id, lane_id)
+        retry_at = self._lane_wake_failure_until.get(key)
+        if retry_at is None:
+            return False
+        current_time = time.time() if now is None else now
+        if current_time >= retry_at:
+            self._lane_wake_failure_until.pop(key, None)
+            return False
+        return True
 
     def _record_confirmed_action_state(
         self, action: CapacityPlanAction, confirmed_at: float
@@ -650,6 +704,7 @@ class CapacityPlanner:
             return
 
         if action.action in {"wake", "load"}:
+            self._clear_wake_failure(action.provider_id, action.lane_id)
             self._lane_sleep_since.pop(key, None)
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
@@ -697,6 +752,17 @@ class CapacityPlanner:
                     if isinstance(lane, dict) and str(lane.get("lane_id") or "") == lane_id:
                         return True
         return any(lane.lane_id == lane_id for lane in self._safe_get_lanes(provider_id))
+
+    @staticmethod
+    def _parse_gpu_device_ids(gpu_devices: str | None) -> tuple[int, ...]:
+        if not gpu_devices:
+            return ()
+        result: set[int] = set()
+        for part in str(gpu_devices).split(","):
+            part = part.strip()
+            if part.isdigit():
+                result.add(int(part))
+        return tuple(sorted(result))
 
     def _update_idle_tracking(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Track idle durations per lane."""
@@ -925,6 +991,7 @@ class CapacityPlanner:
                 sleeping_lanes = [
                     l for l in model_lanes
                     if l.sleep_state == "sleeping"
+                    and not self._lane_is_in_wake_failure_cooldown(provider_id, l.lane_id)
                 ]
                 if sleeping_lanes:
                     target = sleeping_lanes[0]
@@ -1151,10 +1218,39 @@ class CapacityPlanner:
             available = self._vram_ledger.get_effective_available_mb(
                 provider_id, raw_available,
             )
-            if available >= needed:
+            provider_ready = available >= needed
+            shortfall = max(needed - available, 0.0)
+
+            target_gpu_devices = target.gpu_devices
+            if not target_gpu_devices and target_action.params:
+                target_gpu_devices = target_action.params.get("gpu_devices")
+            target_gpu_ids = self._parse_gpu_device_ids(target_gpu_devices)
+            per_gpu_free = self._get_per_gpu_free(provider_id)
+            if (
+                target_gpu_ids
+                and per_gpu_free is not None
+                and all(dev in per_gpu_free for dev in target_gpu_ids)
+            ):
+                per_gpu_needed = needed / len(target_gpu_ids)
+                gpu_effective = [
+                    self._vram_ledger.get_gpu_effective_available_mb(
+                        provider_id,
+                        dev,
+                        float(per_gpu_free[dev]),
+                    )
+                    for dev in target_gpu_ids
+                ]
+                per_gpu_ready = all(free_mb >= per_gpu_needed for free_mb in gpu_effective)
+                if provider_ready and per_gpu_ready:
+                    return True
+                gpu_shortfall = max(
+                    per_gpu_needed - min(gpu_effective),
+                    0.0,
+                ) * len(target_gpu_ids)
+                shortfall = max(shortfall, gpu_shortfall)
+            elif provider_ready:
                 return True
 
-            shortfall = max(needed - available, 0.0)
             reclaim = self._next_request_reclaim_action(
                 provider_id=provider_id,
                 target=target,
@@ -1185,14 +1281,9 @@ class CapacityPlanner:
     @staticmethod
     def _gpu_overlap(gpu_a: Optional[str], gpu_b: Optional[str]) -> int:
         """Count overlapping GPU device indices between two lanes."""
-        if not gpu_a or not gpu_b:
-            return 0
-        try:
-            set_a = {int(x.strip()) for x in gpu_a.split(",") if x.strip()}
-            set_b = {int(x.strip()) for x in gpu_b.split(",") if x.strip()}
-            return len(set_a & set_b)
-        except (ValueError, AttributeError):
-            return 0
+        set_a = set(CapacityPlanner._parse_gpu_device_ids(gpu_a))
+        set_b = set(CapacityPlanner._parse_gpu_device_ids(gpu_b))
+        return len(set_a & set_b)
 
     def _next_request_reclaim_action(
         self,
@@ -1253,6 +1344,7 @@ class CapacityPlanner:
                                 provider_id=provider_id,
                                 lane_id=lane.lane_id,
                                 model_name=lane.model_name,
+                                params={"_stop_penalty": 1},
                                 reason=f"Request-time reclaim for {target.model_name}",
                             ),
                         )
@@ -1268,6 +1360,9 @@ class CapacityPlanner:
                             provider_id=provider_id,
                             lane_id=lane.lane_id,
                             model_name=lane.model_name,
+                            params={
+                                "_stop_penalty": 0 if lane.runtime_state == "sleeping" else 1,
+                            },
                             reason=f"Request-time reclaim for {target.model_name}",
                         ),
                     )
@@ -1282,7 +1377,24 @@ class CapacityPlanner:
                 if lane.lane_id != target.lane_id:
                     gpu_overlap_by_lane[lane.lane_id] = self._gpu_overlap(target_gpus, lane.gpu_devices)
 
-        # Phase 3c: Try sleep-only first, then combined sleep+stop if insufficient.
+        has_low_penalty_stop = any(
+            (candidate[1].params or {}).get("_stop_penalty", 1) <= 0
+            for candidate in stop_candidates
+        )
+
+        # Combined: merge sleep and stop candidates into a unified list.
+        # For lanes that appear in both, the planner will naturally prefer sleep
+        # unless the stop is an already-sleeping lane with zero stop penalty.
+        combined = list(sleep_candidates) + list(stop_candidates)
+        if combined and has_low_penalty_stop:
+            combined_plan = self._best_reclaim_plan_combined(
+                combined,
+                required_free_mb=required_free_mb,
+            )
+            if combined_plan:
+                return self._pick_next_reclaim_action_from_plan(combined_plan, gpu_overlap_by_lane)
+
+        # Phase 3c: Try sleep-only first when there is no cheap sleeping-lane stop.
         if sleep_candidates:
             sleep_plan = self._best_reclaim_plan(
                 sleep_candidates,
@@ -1291,10 +1403,6 @@ class CapacityPlanner:
             if sleep_plan:
                 return self._pick_next_reclaim_action_from_plan(sleep_plan, gpu_overlap_by_lane)
 
-        # Combined: merge sleep and stop candidates into a unified list.
-        # For lanes that appear in both, the planner will naturally prefer sleep
-        # because _best_reclaim_plan_combined penalizes stop actions.
-        combined = list(sleep_candidates) + list(stop_candidates)
         if combined:
             combined_plan = self._best_reclaim_plan_combined(
                 combined,
@@ -1304,7 +1412,10 @@ class CapacityPlanner:
                 return self._pick_next_reclaim_action_from_plan(combined_plan, gpu_overlap_by_lane)
             # Fallback: pick the single largest action (prefer sleep over stop, prefer GPU overlap)
             combined.sort(key=lambda item: (
-                item[1].action != "sleep_l1",
+                (item[1].params or {}).get(
+                    "_stop_penalty",
+                    0 if item[1].action != "stop" else 1,
+                ),
                 -gpu_overlap_by_lane.get(item[1].lane_id, 0),
                 -item[0],
                 item[1].lane_id,
@@ -1384,11 +1495,14 @@ class CapacityPlanner:
                 if total_freed + 1e-6 < required_free_mb:
                     continue
 
-                num_stops = sum(1 for i in combo if candidates[i][1].action == "stop")
+                stop_penalty = sum(
+                    int((candidates[i][1].params or {}).get("_stop_penalty", 1))
+                    for i in combo
+                    if candidates[i][1].action == "stop"
+                )
                 max_single_freed = max(candidates[i][0] for i in combo)
                 lane_ids = tuple(sorted(candidates[i][1].lane_id for i in combo))
-                # Penalize stops: (num_stops, total_freed, max_single, action_count, lane_ids)
-                score = (num_stops, total_freed, max_single_freed, size, lane_ids)
+                score = (stop_penalty, total_freed, max_single_freed, size, lane_ids)
                 if best_score is None or score < best_score:
                     best_score = score
                     best_combo = combo
@@ -2540,7 +2654,12 @@ class CapacityPlanner:
                     {"lane_id": action.lane_id},
                     timeout_seconds=int(timeout_seconds),
                 )
-            except Exception:
+            except Exception as exc:
+                self._mark_wake_failure(
+                    action.provider_id,
+                    action.lane_id,
+                    details=str(exc),
+                )
                 logger.exception(
                     "Failed to send wake command for lane %s", action.lane_id,
                 )
@@ -2736,6 +2855,12 @@ class CapacityPlanner:
         self._release_vram(_reservation_id)
 
         if not confirmed:
+            if action.action == "wake":
+                self._mark_wake_failure(
+                    action.provider_id,
+                    action.lane_id,
+                    details="confirmation timeout",
+                )
             logger.warning(
                 "Confirmation timeout for %s on lane %s after %.0fs",
                 action.action, action.lane_id, timeout_seconds,
