@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import datetime
 from typing import Any, Callable, List, Optional
@@ -10,14 +9,12 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
-from iris.common.mastery_utils import get_mastery
 from iris.common.memiris_setup import get_tenant_for_user
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from iris.domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from iris.domain.variant.chat_variant import ChatVariant
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
@@ -199,12 +196,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 final_result=result,
                 tokens=state.tokens,
                 session_title=session_title,
-                accessed_memories=(
-                    state.accessed_memory_storage
-                    if self.context in [ChatContext.COURSE, ChatContext.LECTURE]
-                    else None
-                ),
-            )  # TODO: Memiris: Exercise? Text Exercise?
+                accessed_memories=(state.accessed_memory_storage),
+            )
 
             # Generate and send suggestions separately (async from user's perspective)
             if self.context in [
@@ -228,7 +221,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Create and return tools for the agent.
 
         Iterates over all registered tool providers and collects the ones
-        that are applicable for the current context and state.
+        whose required data is present in the current state.
 
         Args:
             state: The current pipeline execution state.
@@ -240,7 +233,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
         tools: list[Callable] = []
         for provider in CHAT_TOOL_PROVIDERS:
-            tool = provider(state, self.context)
+            tool = provider(state)
             if tool is not None:
                 tools.append(tool)
         return tools
@@ -279,109 +272,60 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         # Custom instructions
         custom_instructions = format_custom_instructions(dto.custom_instructions or "")
 
+        course_name = ""
+        if dto.course and dto.course.name:
+            course_name = dto.course.name
+        elif dto.exercise and dto.exercise.course:
+            course_name = dto.exercise.course.name
+
+        metrics_enabled = bool(
+            dto.metrics
+            and dto.course
+            and dto.course.competencies
+            and dto.course.student_analytics_dashboard_enabled
+        )
+
+        query = self.get_latest_user_message(state)
+
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
-            "context": self.context.value,
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "user_language": user_language,
             "custom_instructions": custom_instructions,
-            "has_chat_history": bool(state.message_history),
-            "event": self.event,
-            "course_name": (dto.course.name if dto.course and dto.course.name else ""),
+            "course_name": course_name,
             "allow_lecture_tool": allow_lecture_tool,
             "allow_faq_tool": allow_faq_tool,
             "allow_memiris_tool": allow_memiris_tool,
+            "metrics_enabled": metrics_enabled,
+            "has_chat_history": bool(state.message_history),
+            "has_competencies": bool(dto.course and dto.course.competencies),
+            "has_exercises": bool(dto.course and dto.course.exercises),
+            "has_query": query is not None,
+            "lecture_name": dto.lecture.title if dto.lecture else None,
+            "exercise_title": (dto.exercise.name if dto.exercise else ""),
+            "problem_statement": (
+                dto.exercise.problem_statement if dto.exercise else ""
+            ),
+            "programming_language": (
+                dto.exercise.programming_language.lower()
+                if dto.exercise
+                and hasattr(dto.exercise, "programming_language")
+                and dto.exercise.programming_language
+                else ""
+            ),
+            "exercise_id": (dto.exercise.id if dto.exercise else ""),
+            "start_date": (
+                str(dto.exercise.start_date)
+                if dto.exercise and dto.exercise.start_date
+                else ""
+            ),
+            "end_date": (
+                str(dto.exercise.end_date)
+                if dto.exercise and dto.exercise.end_date
+                else ""
+            ),
+            "text_exercise_submission": dto.text_exercise_submission,
         }
-
-        # Context-specific variables
-        if self.context == ChatContext.COURSE:
-            metrics_enabled = bool(
-                dto.metrics
-                and dto.course
-                and dto.course.competencies
-                and dto.course.student_analytics_dashboard_enabled
-            )
-            template_context.update(
-                {
-                    "has_competencies": bool(dto.course and dto.course.competencies),
-                    "has_exercises": bool(dto.course and dto.course.exercises),
-                    "metrics_enabled": metrics_enabled,
-                }
-            )
-            # JoL event data
-            if self.event == "jol" and dto.event_payload:
-                event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
-                comp = next(
-                    (
-                        c
-                        for c in dto.course.competencies
-                        if c.id == event_payload.competency_id
-                    ),
-                    None,
-                )
-                competency_progress = event_payload.competency_progress or 0.0
-                competency_confidence = event_payload.competency_confidence or 0.0
-                template_context["jol"] = json.dumps(
-                    {
-                        "value": event_payload.jol_value,
-                        "competency_mastery": get_mastery(
-                            competency_progress,
-                            competency_confidence,
-                        ),
-                    }
-                )
-                template_context["competency"] = (
-                    comp.model_dump_json() if comp else "{}"
-                )
-
-        elif self.context == ChatContext.LECTURE:
-            template_context["lecture_name"] = (
-                dto.lecture.title if dto.lecture else None
-            )
-
-        elif self.context == ChatContext.EXERCISE:
-            query = self.get_latest_user_message(state)
-            template_context.update(
-                {
-                    "exercise_title": (dto.exercise.name if dto.exercise else ""),
-                    "problem_statement": (
-                        dto.exercise.problem_statement if dto.exercise else ""
-                    ),
-                    "programming_language": (
-                        dto.exercise.programming_language.lower()
-                        if dto.exercise and dto.exercise.programming_language
-                        else ""
-                    ),
-                    "has_query": query is not None,
-                }
-            )
-
-        elif self.context == ChatContext.TEXT_EXERCISE:
-            template_context.update(
-                {
-                    "exercise_id": (dto.exercise.id if dto.exercise else ""),
-                    "exercise_title": (dto.exercise.title if dto.exercise else ""),
-                    "course_name": (
-                        dto.exercise.course.name
-                        if dto.exercise and dto.exercise.course
-                        else ""
-                    ),
-                    "problem_statement": (
-                        dto.exercise.problem_statement if dto.exercise else ""
-                    ),
-                    "start_date": (
-                        str(dto.exercise.start_date)
-                        if dto.exercise and dto.exercise.start_date
-                        else ""
-                    ),
-                    "end_date": (
-                        str(dto.exercise.end_date)
-                        if dto.exercise and dto.exercise.end_date
-                        else ""
-                    ),
-                    "current_submission": dto.text_exercise_submission,
-                }
-            )
 
         return self.system_prompt_template.render(template_context)
 

@@ -1,10 +1,10 @@
 """
 Tool providers for ChatPipeline.
 
-Each provider function takes (state, context) and returns an Optional[Callable].
-It checks context applicability, preconditions, resolves parameters from the DTO,
-and calls the existing create_tool_* factory. Returns None if the tool is not
-available for the given context/state.
+Each provider function takes the pipeline state and returns an Optional[Callable].
+It checks data-availability preconditions, resolves parameters from the DTO,
+and calls the existing create_tool_* factory. Returns None if the required data
+is not present in the state.
 """
 
 from typing import Callable, Optional
@@ -13,7 +13,6 @@ from iris.common.logging_config import get_logger
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.variant.chat_variant import ChatVariant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
-from iris.pipeline.chat.chat_context import ChatContext
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -43,32 +42,17 @@ State = AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant]
 # ---------------------------------------------------------------------------
 
 
-def provide_course_details(state: State, context: ChatContext) -> Optional[Callable]:
-    """Available: COURSE, LECTURE, TEXT_EXERCISE"""
-    if context not in {
-        ChatContext.COURSE,
-        ChatContext.LECTURE,
-        ChatContext.TEXT_EXERCISE,
-    }:
-        return None
+def provide_course_details(state: State) -> Optional[Callable]:
     return create_tool_get_course_details(state.dto.course, state.callback)
 
 
-def provide_exercise_list(state: State, context: ChatContext) -> Optional[Callable]:
-    """Available: COURSE"""
-    if context not in {ChatContext.COURSE}:
-        return None
+def provide_exercise_list(state: State) -> Optional[Callable]:
     if not state.dto.course:
         return None
     return create_tool_get_exercise_list(state.dto.course.exercises, state.callback)
 
 
-def provide_exercise_problem_statement(
-    state: State, context: ChatContext
-) -> Optional[Callable]:
-    """Available: COURSE"""
-    if context not in {ChatContext.COURSE}:
-        return None
+def provide_exercise_problem_statement(state: State) -> Optional[Callable]:
     if not state.dto.course:
         return None
     return create_tool_get_exercise_problem_statement(
@@ -76,19 +60,11 @@ def provide_exercise_problem_statement(
     )
 
 
-def provide_student_exercise_metrics(
-    state: State, context: ChatContext
-) -> Optional[Callable]:
-    """Available: COURSE"""
-    if context not in {ChatContext.COURSE}:
-        return None
+def provide_student_exercise_metrics(state: State) -> Optional[Callable]:
     return create_tool_get_student_exercise_metrics(state.dto.metrics, state.callback)
 
 
-def provide_competency_list(state: State, context: ChatContext) -> Optional[Callable]:
-    """Available: COURSE"""
-    if context not in {ChatContext.COURSE}:
-        return None
+def provide_competency_list(state: State) -> Optional[Callable]:
     if not state.dto.course:
         return None
     return create_tool_get_competency_list(
@@ -101,23 +77,13 @@ def provide_competency_list(state: State, context: ChatContext) -> Optional[Call
 # ---------------------------------------------------------------------------
 
 
-def provide_submission_details(
-    state: State, context: ChatContext
-) -> Callable[[], dict] | None:
-    """Available: EXERCISE"""
-    if context not in {ChatContext.EXERCISE}:
-        return None
+def provide_submission_details(state: State) -> Callable[[], dict] | None:
     return create_tool_get_submission_details(
         state.dto.programming_exercise_submission, state.callback
     )
 
 
-def provide_additional_exercise_details(
-    state: State, context: ChatContext
-) -> Callable[[], dict] | None:
-    """Available: EXERCISE"""
-    if context not in {ChatContext.EXERCISE}:
-        return None
+def provide_additional_exercise_details(state: State) -> Callable[[], dict] | None:
     if not state.dto.exercise:
         return None
     return create_tool_get_additional_exercise_details(
@@ -125,32 +91,19 @@ def provide_additional_exercise_details(
     )
 
 
-def provide_build_logs_analysis(
-    state: State, context: ChatContext
-) -> Callable[[], str] | None:
-    """Available: EXERCISE"""
-    if context not in {ChatContext.EXERCISE}:
-        return None
+def provide_build_logs_analysis(state: State) -> Callable[[], str] | None:
     return create_tool_get_build_logs_analysis(
         state.dto.programming_exercise_submission, state.callback
     )
 
 
-def provide_feedbacks(state: State, context: ChatContext) -> Callable[[], str] | None:
-    """Available: EXERCISE"""
-    if context not in {ChatContext.EXERCISE}:
-        return None
+def provide_feedbacks(state: State) -> Callable[[], str] | None:
     return create_tool_get_feedbacks(
         state.dto.programming_exercise_submission, state.callback
     )
 
 
-def provide_repository_files(
-    state: State, context: ChatContext
-) -> Callable[[], str] | None:
-    """Available: EXERCISE"""
-    if context not in {ChatContext.EXERCISE}:
-        return None
+def provide_repository_files(state: State) -> Callable[[], str] | None:
     if not state.dto.programming_exercise_submission:
         return None
     return create_tool_repository_files(
@@ -158,12 +111,7 @@ def provide_repository_files(
     )
 
 
-def provide_file_lookup(
-    state: State, context: ChatContext
-) -> Callable[[str], str] | None:
-    """Available: EXERCISE"""
-    if context not in {ChatContext.EXERCISE}:
-        return None
+def provide_file_lookup(state: State) -> Callable[[str], str] | None:
     if not state.dto.programming_exercise_submission:
         return None
     return create_tool_file_lookup(
@@ -176,15 +124,7 @@ def provide_file_lookup(
 # ---------------------------------------------------------------------------
 
 
-def provide_lecture_retrieval(state: State, context: ChatContext) -> Optional[Callable]:
-    """Available: COURSE, LECTURE, EXERCISE, TEXT_EXERCISE"""
-    if context not in {
-        ChatContext.COURSE,
-        ChatContext.LECTURE,
-        ChatContext.EXERCISE,
-        ChatContext.TEXT_EXERCISE,
-    }:
-        return None
+def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     if not state.dto.course:
         return None
 
@@ -209,15 +149,7 @@ def provide_lecture_retrieval(state: State, context: ChatContext) -> Optional[Ca
     )
 
 
-def provide_faq_retrieval(state: State, context: ChatContext) -> Optional[Callable]:
-    """Available: COURSE, LECTURE, EXERCISE, TEXT_EXERCISE"""
-    if context not in {
-        ChatContext.COURSE,
-        ChatContext.LECTURE,
-        ChatContext.EXERCISE,
-        ChatContext.TEXT_EXERCISE,
-    }:
-        return None
+def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not (state.dto.course and state.dto.course.name):
         return None
 
@@ -243,10 +175,7 @@ def provide_faq_retrieval(state: State, context: ChatContext) -> Optional[Callab
 # ---------------------------------------------------------------------------
 
 
-def provide_memory_search(state: State, context: ChatContext) -> Optional[Callable]:
-    """Available: COURSE, LECTURE"""
-    if context not in {ChatContext.COURSE, ChatContext.LECTURE}:
-        return None
+def provide_memory_search(state: State) -> Optional[Callable]:
     if not (
         state.dto.user
         and state.dto.user.memiris_enabled
@@ -259,12 +188,7 @@ def provide_memory_search(state: State, context: ChatContext) -> Optional[Callab
     )
 
 
-def provide_find_similar_memories(
-    state: State, context: ChatContext
-) -> Optional[Callable]:
-    """Available: COURSE, LECTURE"""
-    if context not in {ChatContext.COURSE, ChatContext.LECTURE}:
-        return None
+def provide_find_similar_memories(state: State) -> Optional[Callable]:
     if not (
         state.dto.user
         and state.dto.user.memiris_enabled
@@ -281,7 +205,7 @@ def provide_find_similar_memories(
 # Registry
 # ---------------------------------------------------------------------------
 
-CHAT_TOOL_PROVIDERS: list[Callable[[State, ChatContext], Optional[Callable]]] = [
+CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
     provide_faq_retrieval,
     provide_course_details,
