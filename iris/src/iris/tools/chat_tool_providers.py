@@ -14,9 +14,7 @@ from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDT
 from iris.domain.variant.chat_variant import ChatVariant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
 from iris.retrieval.faq_retrieval import FaqRetrieval
-from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
-from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.tools import (
     create_tool_faq_content_retrieval,
     create_tool_file_lookup,
@@ -127,10 +125,9 @@ def provide_file_lookup(state: State) -> Callable[[str], str] | None:
 def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     if not state.dto.course:
         return None
-
-    course_id = state.dto.course.id
-    if not should_allow_lecture_tool(state.db, course_id):
+    if not state.allow_lecture_tool:
         return None
+    course_id = state.dto.course.id
     lecture_retriever = LectureRetrieval(state.db.client)
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
@@ -152,10 +149,9 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not (state.dto.course and state.dto.course.name):
         return None
-
-    course_id = state.dto.course.id
-    if not should_allow_faq_tool(state.db, course_id):
+    if not state.allow_faq_tool:
         return None
+    course_id = state.dto.course.id
     faq_retriever = FaqRetrieval(state.db.client)
 
     return create_tool_faq_content_retrieval(
@@ -176,12 +172,7 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
 
 
 def provide_memory_search(state: State) -> Optional[Callable]:
-    if not (
-        state.dto.user
-        and state.dto.user.memiris_enabled
-        and state.memiris_wrapper
-        and state.memiris_wrapper.has_memories()
-    ):
+    if not state.allow_memiris_tool:
         return None
     return state.memiris_wrapper.create_tool_memory_search(
         state.accessed_memory_storage
@@ -189,12 +180,7 @@ def provide_memory_search(state: State) -> Optional[Callable]:
 
 
 def provide_find_similar_memories(state: State) -> Optional[Callable]:
-    if not (
-        state.dto.user
-        and state.dto.user.memiris_enabled
-        and state.memiris_wrapper
-        and state.memiris_wrapper.has_memories()
-    ):
+    if not state.allow_memiris_tool:
         return None
     return state.memiris_wrapper.create_tool_find_similar_memories(
         state.accessed_memory_storage

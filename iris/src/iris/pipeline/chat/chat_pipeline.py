@@ -213,6 +213,26 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             state.callback.error("Error in processing response")
             return state.result
 
+    def prepare_state(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+    ) -> None:
+        """
+        Pre-compute tool availability flags once, so both build_system_message
+        and get_tools can read them without redundant DB calls.
+        """
+        dto = state.dto
+        course_id = dto.course.id if dto.course else None
+        state.allow_lecture_tool = should_allow_lecture_tool(state.db, course_id)
+        state.allow_faq_tool = should_allow_faq_tool(state.db, course_id)
+        state.allow_memiris_tool = bool(
+            dto.user
+            and dto.user.memiris_enabled
+            and state.memiris_wrapper
+            and state.memiris_wrapper.has_memories()
+        )
+        state.query_text = self.get_text_of_latest_user_message(state)
+
     def get_tools(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
@@ -229,8 +249,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             List of tool functions for the agent.
         """
-        state.query_text = self.get_text_of_latest_user_message(state)
-
         tools: list[Callable] = []
         for provider in CHAT_TOOL_PROVIDERS:
             tool = provider(state)
@@ -258,17 +276,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         if dto.user and dto.user.lang_key:
             user_language = dto.user.lang_key
 
-        # Tool availability
-        course_id = dto.course.id if dto.course else None
-        allow_lecture_tool = should_allow_lecture_tool(state.db, course_id)
-        allow_faq_tool = should_allow_faq_tool(state.db, course_id)
-        allow_memiris_tool = bool(
-            dto.user
-            and dto.user.memiris_enabled
-            and state.memiris_wrapper
-            and state.memiris_wrapper.has_memories()
-        )
-
         # Custom instructions
         custom_instructions = format_custom_instructions(dto.custom_instructions or "")
 
@@ -293,9 +300,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             "user_language": user_language,
             "custom_instructions": custom_instructions,
             "course_name": course_name,
-            "allow_lecture_tool": allow_lecture_tool,
-            "allow_faq_tool": allow_faq_tool,
-            "allow_memiris_tool": allow_memiris_tool,
+            "allow_lecture_tool": state.allow_lecture_tool,
+            "allow_faq_tool": state.allow_faq_tool,
+            "allow_memiris_tool": state.allow_memiris_tool,
             "metrics_enabled": metrics_enabled,
             "has_chat_history": bool(state.message_history),
             "has_competencies": bool(dto.course and dto.course.competencies),

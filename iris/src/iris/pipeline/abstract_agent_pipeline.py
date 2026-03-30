@@ -58,6 +58,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     lecture_content_storage: dict
     faq_storage: dict
     accessed_memory_storage: list
+    allow_lecture_tool: bool
+    allow_faq_tool: bool
+    allow_memiris_tool: bool
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -264,6 +267,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             + [("placeholder", "{agent_scratchpad}")]
         )
         return ChatPromptTemplate.from_messages(combined)
+
+    def prepare_state(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> None:  # pylint: disable=unused-argument
+        """
+        Optional hook called once before build_system_message and get_tools.
+        Subclasses should override this to pre-compute values that are needed
+        by both methods (e.g. DB availability checks), so they are not duplicated.
+        Default implementation is a no-op.
+        """
+        pass
 
     def pre_agent_hook(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -507,6 +521,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.lecture_content_storage = {}
         state.faq_storage = {}
         state.accessed_memory_storage = []
+        state.allow_lecture_tool = False
+        state.allow_faq_tool = False
+        state.allow_memiris_tool = False
         state.tracing_context = self.create_tracing_context(dto, variant)
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
@@ -530,6 +547,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 completion_args=completion_args,
             )
 
+            self.prepare_state(state)
             system_message = self.build_system_message(state)
             state.prompt = self.assemble_prompt_with_history(
                 state=state, system_prompt=system_message
