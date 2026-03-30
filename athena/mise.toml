@@ -1,0 +1,4 @@
+[tools]
+node = "latest"
+poetry = "latest"
+python = "3.11"

@@ -140,6 +140,14 @@ decreasing the model's likelihood to repeat the same line verbatim.
             if attr in ("provider", "model_name"):
                 continue
             mapped = self.KW_REMAP.get(attr, attr)
+            # Remove stale keys from the template before applying remapped values.
+            # Some newer OpenAI-compatible models reject `max_tokens` and only accept
+            # `max_completion_tokens`, so keeping both causes a 400 error.
+            kwargs.pop(attr, None)
+            model_kwargs.pop(attr, None)
+            if mapped != attr:
+                kwargs.pop(mapped, None)
+                model_kwargs.pop(mapped, None)
             target = kwargs if hasattr(tmpl, mapped) else model_kwargs
             target[mapped] = value
 

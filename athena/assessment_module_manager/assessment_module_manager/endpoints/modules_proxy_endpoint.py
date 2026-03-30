@@ -75,6 +75,7 @@ async def proxy_to_module(
         lms_server_url,
         data,
         method=request.method,
+        lms_secret=request.headers.get('Authorization'),
     )
     return JSONResponse(
         status_code=resp.status,
