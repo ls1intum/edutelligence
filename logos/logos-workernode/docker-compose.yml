@@ -7,6 +7,7 @@ services:
         INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
         INSTALL_VLLM: ${INSTALL_VLLM:-0}
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
+        NCCL_PIP_SPEC: ${NCCL_PIP_SPEC:-}
     container_name: logos-workernode
     init: true
     restart: unless-stopped

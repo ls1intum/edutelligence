@@ -134,6 +134,15 @@ class VllmEngineConfig(BaseModel):
         default="",
         description="Comma-separated NCCL debug subsystems (e.g. INIT,COLL,GRAPH). Empty = NCCL default.",
     )
+    model_overrides: dict[str, dict] = Field(
+        default_factory=dict,
+        description="Per-model vLLM config overrides applied by this worker before launching a lane. "
+        "Keys are model names; values are partial VllmConfig dicts (e.g. "
+        "{disable_custom_all_reduce: true, quantization: awq}). "
+        "Overrides are merged on top of whatever the Logos server sends, so the worker "
+        "can enforce Turing/SM-7.5 workarounds without touching the server.",
+    )
+
     @field_validator("nccl_debug", "nccl_debug_subsys")
     @classmethod
     def _normalize_nccl_debug_fields(cls, value: str) -> str:

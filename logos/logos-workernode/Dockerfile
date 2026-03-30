@@ -1,6 +1,7 @@
 ARG PYTHON_IMAGE=python:3.12-slim
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC=vllm
+ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
 FROM debian:bookworm-slim AS ollama-builder
@@ -46,12 +47,33 @@ RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
 FROM ${PYTHON_IMAGE} AS builder
 ARG INSTALL_VLLM
 ARG VLLM_PIP_SPEC
+ARG NCCL_PIP_SPEC
+ARG FLASHINFER_PIP_SPEC=
 
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
          pip install --no-cache-dir --prefix=/install "$VLLM_PIP_SPEC"; \
+         site_pkgs="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
+         if [ -n "$NCCL_PIP_SPEC" ]; then \
+           # Allow controlled NCCL trials without rewriting the rest of the vLLM stack.
+           rm -rf "$site_pkgs/nvidia/nccl" "$site_pkgs"/nvidia_nccl_cu12-*.dist-info; \
+           pip install --no-cache-dir --prefix=/install --ignore-installed --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
+           expected_nccl="${NCCL_PIP_SPEC#nvidia-nccl-cu12==}"; \
+           if [ "$expected_nccl" != "$NCCL_PIP_SPEC" ]; then \
+             PYTHONPATH="$site_pkgs" python -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
+           fi; \
+         fi; \
+         if [ -n "$FLASHINFER_PIP_SPEC" ]; then \
+           # Allow controlled flashinfer trials without rewriting the rest of the vLLM stack.
+           rm -rf "$site_pkgs"/flashinfer* "$site_pkgs"/flashinfer_python-*.dist-info; \
+           pip install --no-cache-dir --prefix=/install --ignore-installed --force-reinstall --no-deps "$FLASHINFER_PIP_SPEC"; \
+           expected_fi="${FLASHINFER_PIP_SPEC#flashinfer==}"; \
+           if [ "$expected_fi" != "$FLASHINFER_PIP_SPEC" ]; then \
+             PYTHONPATH="$site_pkgs" python -c "import importlib.metadata as m; actual = m.version('flashinfer'); assert actual == '$expected_fi', f'expected $expected_fi, got {actual}'"; \
+           fi; \
+         fi; \
        fi
 
 FROM ${PYTHON_IMAGE}

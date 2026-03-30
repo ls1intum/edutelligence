@@ -19,6 +19,7 @@ from logos_worker_node.models import (
     LoadedModel,
     OllamaConfig,
     ProcessState,
+    VllmConfig,
     VllmEngineConfig,
 )
 from logos_worker_node.model_profiles import ModelProfileRegistry
@@ -654,6 +655,24 @@ class LaneManager:
     # CPU offload is controlled per-lane via vllm_config.cpu_offload_gb.
     # No auto-injection — only applied when explicitly set on a lane's config.
 
+    def _apply_model_vllm_overrides(self, lane_config: LaneConfig) -> LaneConfig:
+        """Merge worker-local per-model vLLM overrides into an incoming lane config.
+
+        Reads engines.vllm.model_overrides from config.yml and merges matching
+        entries on top of the lane's vllm_config.  Lets this worker enforce
+        SM-specific workarounds (e.g. disable_custom_all_reduce, quantization: awq
+        on Turing) without requiring changes to the Logos server.
+        """
+        if not lane_config.vllm or lane_config.vllm_config is None:
+            return lane_config
+        overrides = self._vllm_engine_config.model_overrides.get(lane_config.model)
+        if not overrides:
+            return lane_config
+        merged = {**lane_config.vllm_config.model_dump(), **overrides}
+        new_vc = VllmConfig.model_validate(merged)
+        logger.info("Applied local vLLM overrides for %s: %s", lane_config.model, list(overrides))
+        return lane_config.model_copy(update={"vllm_config": new_vc})
+
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
@@ -939,6 +958,7 @@ class LaneManager:
         return lane_config.model_copy(update={"gpu_devices": selector})
 
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
+        lane_config = self._apply_model_vllm_overrides(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)

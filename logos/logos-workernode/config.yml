@@ -22,17 +22,9 @@ logos:
       tensor_parallel_size: 1
       kv_budget_mb: 2048
       max_context_length: 4096
-    - model: Qwen/Qwen2.5-7B-Instruct-AWQ
-      tensor_parallel_size: 1
-      kv_budget_mb: 2048
-      max_context_length: 4096
     - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
-      tensor_parallel_size: 1
-      kv_budget_mb: 1024
-      max_context_length: 4096
-    - model: Qwen/Qwen2.5-14B-Instruct-AWQ
-      tensor_parallel_size: 1
-      kv_budget_mb: 1024
+      tensor_parallel_size: 2
+      kv_budget_mb: 2048
       max_context_length: 4096
     - model: solidrust/Mistral-7B-Instruct-v0.3-AWQ
       tensor_parallel_size: 1
@@ -57,3 +49,10 @@ engines:
     flashinfer_logdest: stderr
     nccl_debug: WARN
     nccl_debug_subsys: INIT
+    # Turing (SM 7.5) workarounds for TP=2 on 2× Quadro RTX 5000.
+    # awq_marlin is auto-selected at runtime but its SM 8.0+ kernels crash on Turing.
+    # disable_custom_all_reduce forces NCCL instead of vLLM's shared-mem reduction kernel.
+    model_overrides:
+      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
+        quantization: awq
+        disable_custom_all_reduce: true
