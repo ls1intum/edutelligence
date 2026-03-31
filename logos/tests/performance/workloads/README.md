@@ -37,6 +37,9 @@ explicit-coder7-0001,0,interactive,high,"{""model"":""Qwen/Qwen2.5-Coder-7B-Inst
 ## Current Benchmark Tree
 
 - `explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv`
+- `explicit/10m/workload_explicit_local4_no_coder14_bursty_200_10m.csv`
+- `explicit/10m/workload_explicit_local2_mistral_deepseek_bursty_200_10m.csv`
+- `explicit/10m/workload_explicit_local3_even_random_600_10m.csv`
 - `explicit/60m/workload_explicit_local5_skewed_bursty_60m.csv`
 - `resource/10m/workload_resource_local5_skewed_bursty_10m.csv`
 - `resource/60m/workload_resource_local5_skewed_bursty_60m.csv`
@@ -51,6 +54,8 @@ The `explicit/*` workloads:
 
 - set `"model"` directly
 - skip classification
+- include an alternate `10m` file without `Qwen/Qwen2.5-Coder-14B-Instruct-AWQ` for safer local stress tests
+- exclude embedding-only models from chat benchmarks because the runner targets `/v1/chat/completions`
 
 The `resource/*` workloads:
 

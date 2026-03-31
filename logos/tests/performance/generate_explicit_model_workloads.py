@@ -1,9 +1,9 @@
-"""Generate bursty direct-model workloads for explicit scheduling benchmarks.
+"""Generate direct-model workloads for explicit scheduling benchmarks.
 
 The generated CSVs:
 - use explicit ``model`` routing (no classification)
-- preserve the same skewed model distribution as the resource-mode benchmark
-- cluster same-model requests into bursts to stress per-model parallelism
+- preserve the configured model distribution for each benchmark variant
+- support both same-model burst clustering and randomized interleaving
 - write both a 60-minute and a 10-minute variant into explicit-duration folders
 """
 
@@ -28,6 +28,9 @@ TOTAL_REQUESTS = {
     "10m": 84,
 }
 
+LAYOUT_BURSTY = "bursty"
+LAYOUT_INTERLEAVED = "interleaved_random"
+
 
 @dataclass(frozen=True)
 class Archetype:
@@ -40,6 +43,7 @@ class Archetype:
     interactive_weight: float
     high_priority_weight: float
     mid_priority_weight: float
+    use_system_message: bool = True
 
 
 ARCHETYPES: tuple[Archetype, ...] = (
@@ -112,6 +116,24 @@ ARCHETYPES: tuple[Archetype, ...] = (
         mid_priority_weight=0.46,
     ),
     Archetype(
+        key="mistral7",
+        model_name="solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        base_count_60m=125,
+        prompts=(
+            "Rewrite a messy handoff for {team} into a short customer-ready update that mentions {signal} and one next step.",
+            "Summarize a brief incident note from {place} involving {material} and {animal}; keep it tight and actionable.",
+            "Convert a rough project note for {domain} into three crisp bullets without changing the meaning.",
+            "Draft a compact support reply for {role} about {issue}; keep the tone practical and brief.",
+            "Condense a noisy status thread from {team} into a direct handoff with one action item.",
+        ),
+        max_tokens_range=(110, 220),
+        temperature_range=(0.10, 0.32),
+        interactive_weight=0.86,
+        high_priority_weight=0.20,
+        mid_priority_weight=0.58,
+        use_system_message=False,
+    ),
+    Archetype(
         key="deepseek",
         model_name="casperhansen/deepseek-r1-distill-llama-8b-awq",
         base_count_60m=110,
@@ -128,6 +150,65 @@ ARCHETYPES: tuple[Archetype, ...] = (
         high_priority_weight=0.39,
         mid_priority_weight=0.44,
     ),
+)
+
+ARCHETYPE_BY_KEY = {archetype.key: archetype for archetype in ARCHETYPES}
+
+VARIANTS = (
+    {
+        "name": "60m",
+        "duration_ms": WINDOWS_MS["60m"],
+        "total_requests": TOTAL_REQUESTS["60m"],
+        "archetype_keys": ("coder7", "coder14", "general7", "general14", "deepseek"),
+        "seed_suffix": "60m",
+        "output_relpath": Path("60m") / "workload_explicit_local5_skewed_bursty_60m.csv",
+    },
+    {
+        "name": "10m",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": TOTAL_REQUESTS["10m"],
+        "archetype_keys": ("coder7", "coder14", "general7", "general14", "deepseek"),
+        "seed_suffix": "10m",
+        "output_relpath": Path("10m") / "workload_explicit_local5_skewed_bursty_10m.csv",
+    },
+    {
+        "name": "10m_no_coder14_200",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 200,
+        "archetype_keys": ("coder7", "general7", "general14", "deepseek"),
+        "seed_suffix": "10m-no-coder14-200",
+        "output_relpath": Path("10m") / "workload_explicit_local4_no_coder14_bursty_200_10m.csv",
+    },
+    {
+        "name": "10m_mistral_deepseek_200",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 200,
+        "archetype_keys": ("mistral7", "deepseek"),
+        "seed_suffix": "10m-mistral-deepseek-200",
+        "output_relpath": Path("10m") / "workload_explicit_local2_mistral_deepseek_bursty_200_10m.csv",
+    },
+    {
+        "name": "10m_mistral_deepseek_500",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 500,
+        "archetype_keys": ("mistral7", "deepseek"),
+        "seed_suffix": "10m-mistral-deepseek-500",
+        "output_relpath": Path("10m") / "workload_explicit_local2_mistral_deepseek_bursty_500_10m.csv",
+    },
+    {
+        "name": "10m_local3_even_random_600",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 600,
+        "archetype_keys": ("mistral7", "deepseek", "coder7"),
+        "seed_suffix": "10m-local3-even-random-600",
+        "output_relpath": Path("10m") / "workload_explicit_local3_even_random_600_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "mistral7": 200,
+            "deepseek": 200,
+            "coder7": 200,
+        },
+    },
 )
 
 
@@ -160,16 +241,36 @@ def choose_mode(archetype: Archetype, rng: random.Random) -> str:
     return "interactive" if rng.random() < archetype.interactive_weight else "batch"
 
 
-def scaled_counts(total_requests: int) -> dict[str, int]:
+def scaled_counts(total_requests: int, archetypes: tuple[Archetype, ...]) -> dict[str, int]:
+    base_total = sum(archetype.base_count_60m for archetype in archetypes)
+    if base_total <= 0:
+        raise ValueError("Archetype set must have a positive base request total")
     raw = []
-    for archetype in ARCHETYPES:
-        scaled = archetype.base_count_60m * total_requests / TOTAL_REQUESTS["60m"]
+    for archetype in archetypes:
+        scaled = archetype.base_count_60m * total_requests / base_total
         raw.append((archetype.key, scaled))
     counts = {key: int(value) for key, value in raw}
     remainder = total_requests - sum(counts.values())
     ranked = sorted(raw, key=lambda item: item[1] - int(item[1]), reverse=True)
     for key, _ in ranked[:remainder]:
         counts[key] += 1
+    return counts
+
+
+def resolve_counts(variant: dict, archetypes: tuple[Archetype, ...]) -> dict[str, int]:
+    override = variant.get("counts_override")
+    if override is None:
+        return scaled_counts(int(variant["total_requests"]), archetypes)
+
+    counts = {archetype.key: 0 for archetype in archetypes}
+    for key, value in override.items():
+        if key not in counts:
+            raise ValueError(f"Unknown archetype key in counts_override: {key}")
+        counts[key] = int(value)
+    total = sum(counts.values())
+    expected = int(variant["total_requests"])
+    if total != expected:
+        raise ValueError(f"counts_override totals {total}, expected {expected}")
     return counts
 
 
@@ -233,6 +334,55 @@ def build_burst_anchors(duration_ms: int, burst_count: int, rng: random.Random) 
     return anchors
 
 
+def build_random_offsets(duration_ms: int, total_requests: int, rng: random.Random) -> list[int]:
+    minute_count = max(1, duration_ms // 60_000)
+    weights = []
+    for minute in range(minute_count):
+        wave = 0.8 + 0.5 * (1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 2.2 + 0.4))
+        burst = rng.choice((0.65, 0.85, 1.0, 1.15, 1.35, 1.8, 2.4))
+        weights.append(wave * burst * rng.uniform(0.75, 1.35))
+
+    scaled = [total_requests * weight / sum(weights) for weight in weights]
+    per_minute = [int(value) for value in scaled]
+    remainder = total_requests - sum(per_minute)
+    ranked = sorted(enumerate(scaled), key=lambda item: item[1] - int(item[1]), reverse=True)
+    for idx, _ in ranked[:remainder]:
+        per_minute[idx] += 1
+
+    offsets: list[int] = []
+    for minute, count in enumerate(per_minute):
+        if count <= 0:
+            continue
+        cluster_count = max(1, min(count, rng.choice((2, 3, 4))))
+        centers = sorted(rng.uniform(1.5, 58.0) for _ in range(cluster_count))
+        for _ in range(count):
+            center = rng.choice(centers)
+            seconds = max(0.0, min(59.8, rng.gauss(center, rng.uniform(0.5, 4.6))))
+            offsets.append(min(duration_ms - 1, minute * 60_000 + int(seconds * 1000) + rng.randint(0, 250)))
+
+    offsets.sort()
+    return offsets
+
+
+def build_interleaved_sequence(counts: dict[str, int], rng: random.Random) -> list[str]:
+    remaining = dict(counts)
+    sequence: list[str] = []
+
+    while sum(remaining.values()) > 0:
+        candidates = [
+            (key, float(value))
+            for key, value in remaining.items()
+            if value > 0 and not (len(sequence) >= 2 and sequence[-1] == key and sequence[-2] == key)
+        ]
+        if not candidates:
+            candidates = [(key, float(value)) for key, value in remaining.items() if value > 0]
+        key = weighted_choice(rng, candidates)
+        sequence.append(key)
+        remaining[key] -= 1
+
+    return sequence
+
+
 def build_payload(archetype: Archetype, rng: random.Random) -> dict:
     language = rng.choice(LANGUAGES)
     domain = rng.choice(DOMAINS)
@@ -260,26 +410,37 @@ def build_payload(archetype: Archetype, rng: random.Random) -> dict:
         signal=signal,
         team=team,
     )
+    if archetype.use_system_message:
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+    else:
+        messages = [
+            {"role": "user", "content": f"{system}\n\n{user}"},
+        ]
     return {
         "model": archetype.model_name,
         "stream": True,
         "max_tokens": rng.randint(*archetype.max_tokens_range),
         "temperature": round(rng.uniform(*archetype.temperature_range), 2),
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
     }
 
 
-def build_rows(duration_key: str, rng: random.Random) -> list[dict[str, str]]:
-    duration_ms = WINDOWS_MS[duration_key]
-    total_requests = TOTAL_REQUESTS[duration_key]
-    counts = scaled_counts(total_requests)
-    archetype_by_key = {archetype.key: archetype for archetype in ARCHETYPES}
+def build_rows(
+    duration_ms: int,
+    total_requests: int,
+    archetypes: tuple[Archetype, ...],
+    rng: random.Random,
+    *,
+    counts: dict[str, int] | None = None,
+) -> list[dict[str, str]]:
+    counts = counts or scaled_counts(total_requests, archetypes)
+    archetype_by_key = {archetype.key: archetype for archetype in archetypes}
     bursts = build_bursts(counts, rng)
     anchors = build_burst_anchors(duration_ms, len(bursts), rng)
-    counters = {archetype.key: 0 for archetype in ARCHETYPES}
+    counters = {archetype.key: 0 for archetype in archetypes}
     rows: list[dict[str, str]] = []
 
     for anchor, (key, burst_size) in zip(anchors, bursts, strict=True):
@@ -306,7 +467,43 @@ def build_rows(duration_key: str, rng: random.Random) -> list[dict[str, str]]:
 
     rows.sort(key=lambda row: (float(row["arrival_offset"]), row["request_id"]))
     if len(rows) != total_requests:
-        raise ValueError(f"Expected {total_requests} rows for {duration_key}, built {len(rows)}")
+        raise ValueError(f"Expected {total_requests} rows, built {len(rows)}")
+    return rows
+
+
+def build_interleaved_rows(
+    duration_ms: int,
+    total_requests: int,
+    archetypes: tuple[Archetype, ...],
+    rng: random.Random,
+    *,
+    counts: dict[str, int] | None = None,
+) -> list[dict[str, str]]:
+    counts = counts or scaled_counts(total_requests, archetypes)
+    archetype_by_key = {archetype.key: archetype for archetype in archetypes}
+    sequence = build_interleaved_sequence(counts, rng)
+    offsets = build_random_offsets(duration_ms, len(sequence), rng)
+    counters = {archetype.key: 0 for archetype in archetypes}
+    rows: list[dict[str, str]] = []
+
+    for offset, key in zip(offsets, sequence, strict=True):
+        archetype = archetype_by_key[key]
+        counters[key] += 1
+        request_id = f"explicit-{key}-{counters[key]:04d}"
+        payload = build_payload(archetype, rng)
+        rows.append(
+            {
+                "request_id": request_id,
+                "arrival_offset": str(offset),
+                "mode": choose_mode(archetype, rng),
+                "priority": choose_priority(archetype, rng),
+                "body_json": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+            }
+        )
+
+    rows.sort(key=lambda row: (float(row["arrival_offset"]), row["request_id"]))
+    if len(rows) != total_requests:
+        raise ValueError(f"Expected {total_requests} rows, built {len(rows)}")
     return rows
 
 
@@ -331,24 +528,38 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(args.root)
-    outputs = {
-        "60m": root / "60m" / "workload_explicit_local5_skewed_bursty_60m.csv",
-        "10m": root / "10m" / "workload_explicit_local5_skewed_bursty_10m.csv",
-    }
+    for variant in VARIANTS:
+        archetypes = tuple(ARCHETYPE_BY_KEY[key] for key in variant["archetype_keys"])
+        rng = random.Random(f"{SEED}-{variant['seed_suffix']}")
+        counts = resolve_counts(variant, archetypes)
+        layout = str(variant.get("layout") or LAYOUT_BURSTY)
+        if layout == LAYOUT_INTERLEAVED:
+            rows = build_interleaved_rows(
+                variant["duration_ms"],
+                variant["total_requests"],
+                archetypes,
+                rng,
+                counts=counts,
+            )
+        else:
+            rows = build_rows(
+                variant["duration_ms"],
+                variant["total_requests"],
+                archetypes,
+                rng,
+                counts=counts,
+            )
+        output_path = root / variant["output_relpath"]
+        write_csv(output_path, rows)
+        print(f"Wrote {len(rows)} requests to {output_path}")
 
-    for duration_key in ("60m", "10m"):
-        rng = random.Random(f"{SEED}-{duration_key}")
-        rows = build_rows(duration_key, rng)
-        write_csv(outputs[duration_key], rows)
-        print(f"Wrote {len(rows)} requests to {outputs[duration_key]}")
-
-    print("60m base distribution:")
-    for archetype in ARCHETYPES:
-        print(f"  {archetype.key}: {archetype.base_count_60m} -> {archetype.model_name}")
-    print("10m scaled distribution:")
-    for key, count in scaled_counts(TOTAL_REQUESTS['10m']).items():
-        model_name = next(archetype.model_name for archetype in ARCHETYPES if archetype.key == key)
-        print(f"  {key}: {count} -> {model_name}")
+    print("Variant distributions:")
+    for variant in VARIANTS:
+        archetypes = tuple(ARCHETYPE_BY_KEY[key] for key in variant["archetype_keys"])
+        print(f"  {variant['name']}:")
+        for key, count in resolve_counts(variant, archetypes).items():
+            model_name = ARCHETYPE_BY_KEY[key].model_name
+            print(f"    {key}: {count} -> {model_name}")
     return 0
 
 

@@ -14,8 +14,8 @@ services:
       - "--api.dashboard=true"
       # - "--entrypoints.grpc.address=:50051"
     ports:
-      - "443:443"
-      - "8080:8080"
+      - "${LOGOS_TRAEFIK_HTTPS_PORT:-18443}:443"
+      - "${LOGOS_TRAEFIK_SECURE8080_PORT:-18081}:8080"
       # - "50051:50051"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

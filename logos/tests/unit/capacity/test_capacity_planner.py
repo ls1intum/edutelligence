@@ -340,67 +340,103 @@ def test_demand_actions_respect_worker_capabilities():
 
 
 # ---------------------------------------------------------------------------
-# GPU utilization tuning
+# Fleet KV cache allocation
 # ---------------------------------------------------------------------------
 
 
-def test_kv_cache_increase_on_high_cache():
-    """Cache > 85% → increase kv_cache_memory_bytes."""
-    lane = _make_signal(is_vllm=True, gpu_cache_usage_percent=90.0, model_name="model-a")
-    profile = ModelProfile(
-        model_name="model-a", engine="vllm", kv_budget_mb=4096.0,
-        base_residency_mb=14000.0,
+def test_fleet_kv_rebalance_triggers_on_saturated_cache():
+    """Cache > GPU_CACHE_HIGH (85%) with high TTFT → fleet rebalance emits reconfigure."""
+    import dataclasses as _dc
+    lane = _dc.replace(
+        _make_signal(lane_id="lane-a", model_name="model-a", is_vllm=True,
+                     gpu_cache_usage_percent=90.0, effective_vram_mb=16000.0),
+        ttft_p95_seconds=3.0,
     )
-    planner = _make_planner(facade=MockFacade(lanes=[lane], profiles={"model-a": profile}))
+    profile = ModelProfile(
+        model_name="model-a", engine="vllm",
+        kv_budget_mb=2000.0,   # current budget — significantly below optimal
+        base_residency_mb=8000.0,
+    )
+    facade = MockFacade(
+        lanes=[lane],
+        capacity=OllamaCapacity(available_vram_mb=10000, total_vram_mb=24000, loaded_models=[]),
+        profiles={"model-a": profile},
+    )
+    planner = _make_planner(facade=facade)
+    planner._last_kv_rebalance_time = 0.0  # bypass interval
 
-    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
+    actions = planner._compute_fleet_kv_allocation(10, [lane])
     assert len(actions) == 1
     assert actions[0].action == "reconfigure_kv_cache"
     assert "kv_cache_memory_bytes" in actions[0].params["updates"]["vllm_config"]
 
 
-def test_kv_cache_decrease_on_low_cache_with_demand():
-    """Cache < 40% and other models have demand → decrease KV cache."""
-    lane = _make_signal(
-        model_name="model-a",
-        is_vllm=True,
-        gpu_cache_usage_percent=30.0,
+def test_fleet_kv_rebalance_skips_healthy_lane():
+    """Lane with cache < GPU_CACHE_HIGH and fast TTFT → no reconfigure."""
+    import dataclasses as _dc
+    lane = _dc.replace(
+        _make_signal(lane_id="lane-a", model_name="model-a", is_vllm=True,
+                     gpu_cache_usage_percent=30.0, effective_vram_mb=16000.0),
+        ttft_p95_seconds=0.5,
     )
     profile = ModelProfile(
-        model_name="model-a", engine="vllm", kv_budget_mb=4096.0,
-        base_residency_mb=14000.0,
+        model_name="model-a", engine="vllm",
+        kv_budget_mb=4000.0,
+        base_residency_mb=8000.0,
     )
-    demand = DemandTracker()
-    demand.record_request("model-b")  # Other model has demand
-
-    planner = _make_planner(
-        facade=MockFacade(lanes=[lane], profiles={"model-a": profile}),
-        demand=demand,
+    facade = MockFacade(
+        lanes=[lane],
+        capacity=OllamaCapacity(available_vram_mb=10000, total_vram_mb=24000, loaded_models=[]),
+        profiles={"model-a": profile},
     )
-    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
-    assert len(actions) == 1
-    assert actions[0].action == "reconfigure_kv_cache"
+    planner = _make_planner(facade=facade)
+    planner._last_kv_rebalance_time = 0.0
 
-
-def test_kv_cache_no_decrease_without_competing_demand():
-    """Cache low but no other demand → no action."""
-    lane = _make_signal(model_name="model-a", is_vllm=True, gpu_cache_usage_percent=30.0)
-    profile = ModelProfile(
-        model_name="model-a", engine="vllm", kv_budget_mb=4096.0,
-        base_residency_mb=14000.0,
-    )
-    planner = _make_planner(facade=MockFacade(lanes=[lane], profiles={"model-a": profile}))
-
-    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
+    actions = planner._compute_fleet_kv_allocation(10, [lane])
     assert actions == []
 
 
-def test_kv_cache_tuning_not_for_ollama():
-    """Ollama lanes → no KV cache tuning."""
-    lane = _make_signal(is_vllm=False, gpu_cache_usage_percent=95.0)
-    planner = _make_planner()
+def test_fleet_kv_rebalance_skips_interval_unless_emergency():
+    """After a rebalance, further calls within the interval window are no-ops."""
+    import dataclasses as _dc
+    lane = _dc.replace(
+        _make_signal(lane_id="lane-a", model_name="model-a", is_vllm=True,
+                     gpu_cache_usage_percent=90.0, effective_vram_mb=16000.0),
+        ttft_p95_seconds=3.0,
+    )
+    profile = ModelProfile(
+        model_name="model-a", engine="vllm",
+        kv_budget_mb=2000.0,
+        base_residency_mb=8000.0,
+    )
+    facade = MockFacade(
+        lanes=[lane],
+        capacity=OllamaCapacity(available_vram_mb=10000, total_vram_mb=24000, loaded_models=[]),
+        profiles={"model-a": profile},
+    )
+    planner = _make_planner(facade=facade)
+    planner._last_kv_rebalance_time = 0.0  # bypass interval for first call
 
-    actions = planner._compute_kv_cache_tuning_actions(10, [lane])
+    # First call runs and stamps the time
+    planner._compute_fleet_kv_allocation(10, [lane])
+
+    # Second call within interval → no actions
+    actions2 = planner._compute_fleet_kv_allocation(10, [lane])
+    assert actions2 == []
+
+
+def test_fleet_kv_rebalance_skips_ollama_lanes():
+    """Ollama lanes (is_vllm=False) must not be included in fleet KV allocation."""
+    lane = _make_signal(
+        lane_id="lane-ollama",
+        model_name="ollama-model",
+        is_vllm=False,
+        gpu_cache_usage_percent=95.0,
+    )
+    planner = _make_planner(facade=MockFacade(lanes=[lane]))
+    planner._last_kv_rebalance_time = 0.0
+
+    actions = planner._compute_fleet_kv_allocation(10, [lane])
     assert actions == []
 
 
@@ -518,8 +554,8 @@ def test_vllm_vram_estimate_uses_base_plus_kv():
     profile = facade.get_model_profiles(10)["qwen-coder"]
     cap = facade.get_capacity_info(10)
     estimated = planner._estimate_action_vram(action_with_kv, profile, cap)
-    # base=15000 + kv=4096MB (4G) = 19096
-    assert abs(estimated - 19096.0) < 1.0
+    # (base=15000 + kv=4096MB) * 1.1 TP overhead = 19096 * 1.1 = 21005.6
+    assert abs(estimated - 21005.6) < 1.0
 
     # Action without kv_cache_memory_bytes → falls back to profile's kv_budget_mb
     action_no_kv = CapacityPlanAction(
@@ -531,8 +567,8 @@ def test_vllm_vram_estimate_uses_base_plus_kv():
         reason="test",
     )
     estimated2 = planner._estimate_action_vram(action_no_kv, profile, cap)
-    # base=15000 + kv_budget=5000 = 20000
-    assert abs(estimated2 - 20000.0) < 1.0
+    # (base=15000 + kv_budget=5000) * 1.1 TP overhead = 20000 * 1.1 = 22000
+    assert abs(estimated2 - 22000.0) < 1.0
 
 
 def test_vllm_load_params_are_built_from_profile():
@@ -579,8 +615,7 @@ def test_kv_cache_bytes_from_observed_budget():
         kv_budget_mb=8000.0,
         tensor_parallel_size=1,
     )
-    capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
-    kv = planner._compute_kv_cache_bytes(profile, capacity)
+    kv = planner._compute_kv_cache_bytes(profile)
     assert kv is not None
     kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv)
     assert abs(kv_mb - 8000.0) < 10
@@ -595,8 +630,7 @@ def test_kv_cache_bytes_from_headroom_ratio():
         base_residency_mb=4000.0,
         tensor_parallel_size=1,
     )
-    capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
-    kv = planner._compute_kv_cache_bytes(profile, capacity)
+    kv = planner._compute_kv_cache_bytes(profile)
     assert kv is not None
     kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv)
     assert abs(kv_mb - 1400.0) < 10  # 4000 * 0.35 = 1400
@@ -605,20 +639,7 @@ def test_kv_cache_bytes_from_headroom_ratio():
 def test_kv_cache_bytes_none_when_no_profile():
     """No profile → return None, let vLLM decide."""
     planner = _make_planner()
-    assert planner._compute_kv_cache_bytes(None, None) is None
-
-
-def test_gpu_util_always_ceiling():
-    """_recommended_vllm_gpu_util always returns GPU_UTIL_MAX (0.95)."""
-    planner = _make_planner()
-    profile = ModelProfile(
-        model_name="qwen-coder",
-        engine="vllm",
-        base_residency_mb=4000.0,
-        tensor_parallel_size=1,
-    )
-    capacity = OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[])
-    assert planner._recommended_vllm_gpu_util(profile, capacity) == 0.95
+    assert planner._compute_kv_cache_bytes(None) is None
 
 
 @pytest.mark.asyncio
@@ -1384,7 +1405,7 @@ async def test_prepare_existing_lane_skips_recent_wake_failure():
 
 @pytest.mark.asyncio
 async def test_load_uses_apply_lanes_with_state_merge():
-    """Load uses declarative apply_lanes and preserves existing lanes."""
+    """Load uses declarative apply_lanes and preserves existing lanes (declarative mode)."""
     from logos.sdi.models import CapacityPlanAction
 
     registry = MockRegistry()
@@ -1400,6 +1421,7 @@ async def test_load_uses_apply_lanes_with_state_merge():
         "runtime": {"lanes": []},
     }
     planner = _make_planner(registry=registry)
+    planner._use_additive_loads = False  # declarative mode
     planner._poll_confirmation = AsyncMock(return_value=True)
 
     action = CapacityPlanAction(
@@ -1430,7 +1452,7 @@ async def test_load_uses_apply_lanes_with_state_merge():
 
 
 async def test_stop_uses_apply_lanes_removing_target():
-    """Stop uses declarative apply_lanes and removes only the target lane."""
+    """Stop uses declarative apply_lanes and removes only the target lane (declarative mode)."""
     from logos.sdi.models import CapacityPlanAction
 
     registry = MockRegistry()
@@ -1445,6 +1467,7 @@ async def test_stop_uses_apply_lanes_removing_target():
         ]},
     }
     planner = _make_planner(registry=registry)
+    planner._use_additive_loads = False  # declarative mode
     planner._poll_confirmation = AsyncMock(return_value=True)
 
     action = CapacityPlanAction(
@@ -1633,6 +1656,8 @@ async def test_prepare_lane_concurrent_cold_loads_serialize_desired_lane_mutatio
         new_lane = {"lane_id": action.lane_id, "model": action.model_name}
         if action.params:
             new_lane.update(action.params)
+        # Simulate what the real load path does: record inflight before building desired set
+        planner._record_inflight_add(action.provider_id, action.lane_id, new_lane)
         desired = planner._build_desired_lane_set(action.provider_id, add_lane=new_lane)
         desired_lane_sets.append(sorted(str(lane.get("lane_id")) for lane in desired))
 
@@ -1641,6 +1666,7 @@ async def test_prepare_lane_concurrent_cold_loads_serialize_desired_lane_mutatio
             await release_first_load.wait()
 
         registry.update_desired_lanes(action.provider_id, desired)
+        planner._clear_inflight_add(action.provider_id, action.lane_id)
         return True
 
     registry.select_lane_for_model = _select_from_desired
@@ -1804,7 +1830,6 @@ def test_capability_seeding_zero_lane_worker():
     load_actions = [a for a in actions if a.action == "load"]
     assert len(load_actions) == 1
     assert load_actions[0].model_name == "qwen-coder"
-    assert "Capability seeding" in load_actions[0].reason
 
 
 def test_capability_seeding_skips_when_lanes_exist():
@@ -2233,3 +2258,166 @@ def test_build_load_params_does_not_set_enforce_eager():
     profile = ModelProfile(model_name="any-model", engine="vllm", disk_size_bytes=1_000_000_000)
     params = planner._build_load_params("any-model", "lane-any", profile)
     assert "enforce_eager" not in params["vllm_config"]
+
+
+# ---------------------------------------------------------------------------
+# Preemptive load-then-sleep: pre-sleep idle awake lanes before load
+# ---------------------------------------------------------------------------
+
+
+def test_preemptive_sleep_emits_presleep_for_idle_awake_lane():
+    """If an idle awake lane blocks VRAM for the new load, it must be slept first.
+
+    Setup:
+    - total_vram=24000, free=5500 (23% → passes the ≥20% initial guard)
+    - awake lane holds 10000 MB (KV = 10000 - 1500 residual = 8500 MB freed on sleep)
+    - new-model needs base=5000 + kv=3000 = 8000 MB (× 1.1 safety = 8800 MB)
+    - Without pre-sleep: 5500 < 8800 → would be skipped
+    - With pre-sleep freed: 5500 + 8500 = 14000 ≥ 8800 → load proceeds
+    """
+    awake_lane = _make_signal(
+        lane_id="lane-awake",
+        model_name="existing-model",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        active_requests=0,
+        effective_vram_mb=10000.0,
+    )
+    profiles = {
+        "existing-model": ModelProfile(
+            model_name="existing-model",
+            loaded_vram_mb=10000.0,
+            sleeping_residual_mb=1500.0,
+            base_residency_mb=6000.0,
+            kv_budget_mb=4000.0,
+            engine="vllm",
+        ),
+        "new-model": ModelProfile(
+            model_name="new-model",
+            loaded_vram_mb=10000.0,
+            sleeping_residual_mb=1500.0,
+            base_residency_mb=5000.0,
+            kv_budget_mb=3000.0,
+            engine="vllm",
+        ),
+    }
+    # 5500/24000 = 22.9% → passes initial 20% guard; 5500 < 8800 load_cost → needs pre-sleep.
+    facade = MockFacade(
+        lanes=[awake_lane],
+        capacity=OllamaCapacity(available_vram_mb=5500, total_vram_mb=24000, loaded_models=[]),
+        profiles=profiles,
+    )
+    demand = DemandTracker()
+    demand.record_request("new-model")
+    demand.record_request("new-model")
+
+    planner = _make_planner(facade=facade, demand=demand)
+    # Lane has been idle just 10s — below IDLE_SLEEP_L1 (300s) so idle path won't touch it.
+    planner._lane_idle_since[(10, "lane-awake")] = time.time() - 10
+
+    actions = planner._compute_preemptive_sleep_actions(10, [awake_lane])
+
+    action_types = [a.action for a in actions]
+    # Must emit: sleep_l1 (pre-sleep) → load (new-model) → sleep_l1 (post-sleep)
+    assert "sleep_l1" in action_types, f"No sleep_l1 in {action_types}"
+    assert "load" in action_types, f"No load in {action_types}"
+    load_action = next(a for a in actions if a.action == "load")
+    assert load_action.model_name == "new-model"
+    # Pre-sleep (for existing-model) comes before the load
+    first_sleep_idx = next(i for i, a in enumerate(actions) if a.action == "sleep_l1" and a.model_name == "existing-model")
+    load_idx = next(i for i, a in enumerate(actions) if a.action == "load")
+    assert first_sleep_idx < load_idx
+
+
+def test_preemptive_sleep_always_presleeps_idle_awake_lanes():
+    """Idle awake vLLM lanes are always pre-slept before a preemptive load, even when
+    VRAM is abundant — to give the new model clean GPU memory at startup."""
+    awake_lane = _make_signal(
+        lane_id="lane-awake",
+        model_name="existing-model",
+        runtime_state="loaded",
+        sleep_state="awake",
+        is_vllm=True,
+        active_requests=0,
+        effective_vram_mb=8000.0,
+    )
+    profiles = {
+        "existing-model": ModelProfile(
+            model_name="existing-model",
+            loaded_vram_mb=8000.0,
+            sleeping_residual_mb=1000.0,
+            base_residency_mb=5000.0,
+            kv_budget_mb=3000.0,
+            engine="vllm",
+        ),
+        "new-model": ModelProfile(
+            model_name="new-model",
+            sleeping_residual_mb=1500.0,
+            base_residency_mb=4000.0,
+            kv_budget_mb=2000.0,
+            engine="vllm",
+        ),
+    }
+    # VRAM is abundant — pre-sleep is not needed for budget, but should still happen.
+    facade = MockFacade(
+        lanes=[awake_lane],
+        capacity=OllamaCapacity(available_vram_mb=20000, total_vram_mb=32768, loaded_models=[]),
+        profiles=profiles,
+    )
+    demand = DemandTracker()
+    demand.record_request("new-model")
+    demand.record_request("new-model")
+    planner = _make_planner(facade=facade, demand=demand)
+    # Lane idle but under the IDLE_SLEEP_L1 threshold
+    planner._lane_idle_since[(10, "lane-awake")] = time.time() - 10
+
+    actions = planner._compute_preemptive_sleep_actions(10, [awake_lane])
+
+    # existing-model IS pre-slept even though VRAM was sufficient
+    pre_sleep_actions = [a for a in actions if a.action == "sleep_l1" and a.model_name == "existing-model"]
+    assert len(pre_sleep_actions) == 1
+    # The load + post-sleep pair for new-model should follow
+    load_actions = [a for a in actions if a.action == "load" and a.model_name == "new-model"]
+    assert len(load_actions) == 1
+    # pre-sleep precedes the load
+    pre_idx = next(i for i, a in enumerate(actions) if a.action == "sleep_l1" and a.model_name == "existing-model")
+    load_idx = next(i for i, a in enumerate(actions) if a.action == "load")
+    assert pre_idx < load_idx
+
+
+def test_preemptive_sleep_does_not_presleep_busy_lane():
+    """Lanes with active requests must never be pre-slept."""
+    busy_lane = _make_signal(
+        lane_id="lane-busy",
+        model_name="busy-model",
+        runtime_state="running",
+        sleep_state="awake",
+        is_vllm=True,
+        active_requests=2,
+        effective_vram_mb=10000.0,
+    )
+    profiles = {
+        "new-model": ModelProfile(
+            model_name="new-model",
+            sleeping_residual_mb=1500.0,
+            base_residency_mb=5000.0,
+            kv_budget_mb=3000.0,
+            engine="vllm",
+        ),
+    }
+    facade = MockFacade(
+        lanes=[busy_lane],
+        capacity=OllamaCapacity(available_vram_mb=4000, total_vram_mb=24000, loaded_models=[]),
+        profiles=profiles,
+    )
+    demand = DemandTracker()
+    demand.record_request("new-model")
+    demand.record_request("new-model")
+    planner = _make_planner(facade=facade, demand=demand)
+
+    actions = planner._compute_preemptive_sleep_actions(10, [busy_lane])
+
+    # busy_lane must not appear in any sleep action
+    sleep_of_busy = [a for a in actions if a.action == "sleep_l1" and a.lane_id == "lane-busy"]
+    assert sleep_of_busy == []

@@ -74,6 +74,10 @@ class RequestResult:
 
 
 DEFAULT_OUTPUT_DIR = Path("tests/performance/results")
+WORKLOAD_ROOT_CANDIDATES = (
+    Path("tests/performance/workloads"),
+    Path("/app/tests/performance/workloads"),
+)
 
 
 @dataclass(slots=True)
@@ -147,6 +151,18 @@ class LogRecord:
         return None
 
 
+@dataclass(slots=True)
+class OutputLayout:
+    run_dir: Path
+    experiment_name: str
+    summary_path: Path
+    detailed_path: Path
+    runtime_samples_path: Path
+    provider_vram_path: Path
+    request_log_stats_path: Path
+    run_meta_path: Path
+
+
 def parse_streaming_response(raw_text: str) -> dict:
     content_parts: List[str] = []
     usage: Optional[dict] = None
@@ -203,14 +219,45 @@ def parse_streaming_response(raw_text: str) -> dict:
     return reconstructed
 
 
-def default_output_path_for_workload(workload_path: Path) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    try:
-        relative = workload_path.relative_to(Path("tests/performance/workloads"))
+def _timestamped_run_dir(base_dir: Path, experiment_name: str, timestamp: str) -> Path:
+    return base_dir / f"{timestamp} - {experiment_name}"
+
+
+def default_output_dir_for_workload(workload_path: Path, timestamp: str) -> tuple[Path, str]:
+    relative: Optional[Path] = None
+    for root in WORKLOAD_ROOT_CANDIDATES:
+        try:
+            relative = workload_path.relative_to(root)
+            break
+        except ValueError:
+            continue
+
+    if relative is not None:
         output_dir = DEFAULT_OUTPUT_DIR / relative.parent
-    except ValueError:
+    else:
         output_dir = DEFAULT_OUTPUT_DIR
-    return output_dir / f"{workload_path.stem}_{timestamp}.csv"
+    experiment_name = workload_path.stem
+    return _timestamped_run_dir(output_dir, experiment_name, timestamp), experiment_name
+
+
+def resolve_output_layout(output_arg: Optional[Path], workload_path: Path, timestamp: str) -> OutputLayout:
+    if output_arg is None:
+        run_dir, experiment_name = default_output_dir_for_workload(workload_path, timestamp)
+    else:
+        experiment_name = output_arg.stem if output_arg.suffix else output_arg.name
+        base_dir = output_arg.parent if output_arg.parent != Path("") else DEFAULT_OUTPUT_DIR
+        run_dir = _timestamped_run_dir(base_dir, experiment_name, timestamp)
+
+    return OutputLayout(
+        run_dir=run_dir,
+        experiment_name=experiment_name,
+        summary_path=run_dir / "summary.csv",
+        detailed_path=run_dir / "detailed.csv",
+        runtime_samples_path=run_dir / "runtime_samples.jsonl",
+        provider_vram_path=run_dir / "provider_vram.json",
+        request_log_stats_path=run_dir / "request_log_stats.json",
+        run_meta_path=run_dir / "run_meta.json",
+    )
 
 
 def isoformat_utc(value: datetime) -> str:
@@ -1309,9 +1356,29 @@ async def run_workload(
     base_url: str,
     request_timeout_s: float,
 ) -> tuple[List[RequestResult], list[dict]]:
+    async def report_progress(
+        start_monotonic: float,
+        completed_counter: dict[str, int],
+        stop_event: asyncio.Event,
+    ) -> None:
+        loop = asyncio.get_event_loop()
+        total = len(workload)
+        while not stop_event.is_set():
+            elapsed_s = loop.time() - start_monotonic
+            due = sum(1 for entry in workload if (entry.arrival_offset / 1000.0) <= elapsed_s)
+            print(
+                f"[progress] elapsed={elapsed_s:.1f}s due={due}/{total} completed={completed_counter['count']}/{total}",
+                flush=True,
+            )
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                continue
+
     async with httpx.AsyncClient(timeout=request_timeout_s) as client:
         start_monotonic = asyncio.get_event_loop().time()
         stop_event = asyncio.Event()
+        completed_counter = {"count": 0}
         runtime_task = asyncio.create_task(
             collect_runtime_samples(
                 client,
@@ -1321,14 +1388,32 @@ async def run_workload(
                 interval_s=1.0,
             )
         )
+        progress_task = asyncio.create_task(
+            report_progress(
+                start_monotonic,
+                completed_counter,
+                stop_event,
+            )
+        )
         tasks = [
             asyncio.create_task(dispatch_request(client, base_url, logos_key, entry, start_monotonic))
             for entry in workload
         ]
+        results: List[RequestResult] = []
         try:
-            results = await asyncio.gather(*tasks)
+            for task in asyncio.as_completed(tasks):
+                result = await task
+                results.append(result)
+                completed_counter["count"] += 1
+                if completed_counter["count"] == len(workload):
+                    print(
+                        f"[progress] elapsed={asyncio.get_event_loop().time() - start_monotonic:.1f}s "
+                        f"due={len(workload)}/{len(workload)} completed={len(workload)}/{len(workload)}",
+                        flush=True,
+                    )
         finally:
             stop_event.set()
+            await asyncio.gather(progress_task, return_exceptions=True)
         runtime_samples = await runtime_task
         return results, runtime_samples
 
@@ -1355,6 +1440,10 @@ def main() -> None:
     parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
     parser.add_argument("--api-base", default="http://localhost:8080", help="Base URL for the Logos API.")
     parser.add_argument("--output", type=Path, help="Destination CSV file.")
+    parser.add_argument(
+        "--run-timestamp",
+        help="Optional precomputed local timestamp in YYYYMMDD_HHMMSS format, typically passed by the wrapper.",
+    )
     parser.add_argument("--latency-slo-ms", type=float, default=10_000.0, help="Latency SLO threshold in milliseconds.")
     parser.add_argument(
         "--request-timeout-s",
@@ -1377,8 +1466,9 @@ def main() -> None:
             set_log_level(process_id, "FULL")
         start_log_id = current_log_max(process_id)
 
-    output_path = args.output or default_output_path_for_workload(args.workload)
     run_started_at = datetime.now(timezone.utc)
+    run_timestamp = args.run_timestamp or datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    output_layout = resolve_output_layout(args.output, args.workload, run_timestamp)
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
         results, runtime_samples = asyncio.run(run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s))
@@ -1409,52 +1499,51 @@ def main() -> None:
         )
         summary_stats, detail_records, missing_logs = build_rows(results, logs, args.latency_slo_ms)
 
-        # Generate output file paths
-        output_base = output_path.stem
-        output_dir = output_path.parent
-        summary_path = output_dir / f"{output_base}_summary.csv"
-        detailed_path = output_dir / f"{output_base}_detailed.csv"
-        runtime_samples_path = output_dir / f"{output_base}_runtime_samples.jsonl"
-        provider_vram_path = output_dir / f"{output_base}_provider_vram.json"
-        request_log_stats_path = output_dir / f"{output_base}_request_log_stats.json"
-        run_meta_path = output_dir / f"{output_base}_run_meta.json"
-
         # Write both CSV files
-        write_summary_csv(summary_path, summary_stats)
-        write_detailed_csv(detailed_path, detail_records)
-        generate_visualizations(detailed_path, detail_records)
-        write_jsonl(runtime_samples_path, runtime_artifacts.runtime_samples)
-        write_json(provider_vram_path, runtime_artifacts.provider_vram)
-        write_json(request_log_stats_path, runtime_artifacts.request_log_stats)
+        write_summary_csv(output_layout.summary_path, summary_stats)
+        write_detailed_csv(output_layout.detailed_path, detail_records)
+        generate_visualizations(output_layout.detailed_path, detail_records)
+        write_jsonl(output_layout.runtime_samples_path, runtime_artifacts.runtime_samples)
+        write_json(output_layout.provider_vram_path, runtime_artifacts.provider_vram)
+        write_json(output_layout.request_log_stats_path, runtime_artifacts.request_log_stats)
         write_json(
-            run_meta_path,
+            output_layout.run_meta_path,
             {
                 "workload": str(args.workload),
                 "api_base": args.api_base,
                 "request_timeout_s": args.request_timeout_s,
                 "request_count": len(results),
+                "experiment_name": output_layout.experiment_name,
+                "output_dir": str(output_layout.run_dir),
                 "run_started_at": isoformat_utc(run_started_at),
                 "run_finished_at": isoformat_utc(run_finished_at),
-                "output_summary_csv": str(summary_path),
-                "output_detailed_csv": str(detailed_path),
-                "output_runtime_samples_jsonl": str(runtime_samples_path),
-                "output_provider_vram_json": str(provider_vram_path),
-                "output_request_log_stats_json": str(request_log_stats_path),
+                "output_summary_csv": str(output_layout.summary_path),
+                "output_detailed_csv": str(output_layout.detailed_path),
+                "output_runtime_samples_jsonl": str(output_layout.runtime_samples_path),
+                "output_provider_vram_json": str(output_layout.provider_vram_path),
+                "output_request_log_stats_json": str(output_layout.request_log_stats_path),
             },
         )
 
         if missing_logs:
-            print(
-                f"Warning: expected {len(results)} new log entries but only found {len(logs)}. "
-                "Some rows are marked with 'log entry missing'."
-            )
+            if isinstance(logs, dict):
+                print(
+                    f"Warning: matched {len(results) - missing_logs}/{len(results)} requests to log entries by request_id. "
+                    "Some rows are marked with 'log entry missing'."
+                )
+            else:
+                print(
+                    f"Warning: expected {len(results)} new log entries but only found {len(logs)}. "
+                    "Some rows are marked with 'log entry missing'."
+                )
         print(f"Completed run. Summary: {len(results)} requests")
-        print(f"  Summary metrics: {summary_path}")
-        print(f"  Detailed results: {detailed_path}")
-        print(f"  Runtime samples: {runtime_samples_path}")
-        print(f"  Provider VRAM: {provider_vram_path}")
-        print(f"  Request log stats: {request_log_stats_path}")
-        print(f"  Run metadata: {run_meta_path}")
+        print(f"  Result folder: {output_layout.run_dir}")
+        print(f"  Summary metrics: {output_layout.summary_path}")
+        print(f"  Detailed results: {output_layout.detailed_path}")
+        print(f"  Runtime samples: {output_layout.runtime_samples_path}")
+        print(f"  Provider VRAM: {output_layout.provider_vram_path}")
+        print(f"  Request log stats: {output_layout.request_log_stats_path}")
+        print(f"  Run metadata: {output_layout.run_meta_path}")
     finally:
         if local_mode and original_log != "FULL":
             set_log_level(process_id, restore_log)

@@ -29,6 +29,10 @@ class DemandTracker:
         self._request_timestamps: dict[str, collections.deque] = {}
         self._lock = threading.Lock()
 
+    # Latent demand: half-weight signal for models that classification wanted
+    # but the scheduler couldn't serve due to availability penalties.
+    LATENT_DEMAND_WEIGHT = 0.5
+
     def record_request(self, model_name: str) -> None:
         """Increment demand for model. Called from pipeline after scheduling.
 
@@ -53,6 +57,20 @@ class DemandTracker:
             self._demand[model_name] = self._demand.get(model_name, 0.0) + increment
             self._raw_count[model_name] = self._raw_count.get(model_name, 0) + 1
             self._last_request[model_name] = now
+
+    def record_latent_demand(self, model_name: str) -> None:
+        """Record that classification preferred this model but the scheduler picked another.
+
+        Weaker signal than a real request (LATENT_DEMAND_WEIGHT = 0.5) — enough to
+        accumulate over time so the capacity planner can drain/wake the model before
+        it fully starves, without triggering thrashing on every single request.
+        """
+        with self._lock:
+            self._demand[model_name] = (
+                self._demand.get(model_name, 0.0) + self.LATENT_DEMAND_WEIGHT
+            )
+            self._raw_count[model_name] = self._raw_count.get(model_name, 0) + 1
+            self._last_request[model_name] = time.time()
 
     def decay_all(self) -> None:
         """Multiply all scores by DECAY_FACTOR. Called once per planner cycle.

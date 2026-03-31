@@ -29,6 +29,12 @@ This benchmark pipeline replays workload CSVs against the live Logos `/v1/chat/c
 
 - `tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv`
   84 direct-model requests over 10 minutes.
+- `tests/performance/workloads/explicit/10m/workload_explicit_local4_no_coder14_bursty_200_10m.csv`
+  200 direct-model requests over 10 minutes, excluding `Qwen/Qwen2.5-Coder-14B-Instruct-AWQ`.
+- `tests/performance/workloads/explicit/10m/workload_explicit_local2_mistral_deepseek_bursty_200_10m.csv`
+  200 direct-model requests over 10 minutes using `solidrust/Mistral-7B-Instruct-v0.3-AWQ` and `casperhansen/deepseek-r1-distill-llama-8b-awq`.
+- `tests/performance/workloads/explicit/10m/workload_explicit_local3_even_random_600_10m.csv`
+  600 direct-model requests over 10 minutes with an even `200/200/200` split across `solidrust/Mistral-7B-Instruct-v0.3-AWQ`, `casperhansen/deepseek-r1-distill-llama-8b-awq`, and `Qwen/Qwen2.5-Coder-7B-Instruct-AWQ`, using randomized interleaving instead of same-model bursts.
 - `tests/performance/workloads/explicit/60m/workload_explicit_local5_skewed_bursty_60m.csv`
   500 direct-model requests over 60 minutes.
 - `tests/performance/workloads/resource/10m/workload_resource_local5_skewed_bursty_10m.csv`
@@ -102,30 +108,34 @@ docker compose exec logos-server python /app/tests/performance/run_api_workload.
 
 ## What Gets Saved
 
-For a run with output base `tests/performance/results/explicit/10m/my_run.csv`, the runner writes:
+Each run is written into its own folder using the wrapper host's local timestamp:
 
-- `tests/performance/results/explicit/10m/my_run_summary.csv`
+- `tests/performance/results/.../YYYYMMDD_HHMMSS - experiment-name/`
+
+For a run started at `20260329_180629` with `--output tests/performance/results/explicit/10m/my_run.csv`, the runner writes:
+
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/summary.csv`
   Aggregated latency and throughput summary.
-- `tests/performance/results/explicit/10m/my_run_detailed.csv`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/detailed.csv`
   One row per request. This is the main paired request/response file.
-- `tests/performance/results/explicit/10m/my_run_runtime_samples.jsonl`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/runtime_samples.jsonl`
   Periodic runtime snapshots collected during the run.
-- `tests/performance/results/explicit/10m/my_run_provider_vram.json`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/provider_vram.json`
   Provider VRAM history payload from the app.
-- `tests/performance/results/explicit/10m/my_run_request_log_stats.json`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/request_log_stats.json`
   Aggregated request-log stats for the run window.
-- `tests/performance/results/explicit/10m/my_run_run_meta.json`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/run_meta.json`
   Run metadata plus the exact output paths.
-- `tests/performance/results/explicit/10m/my_run_detailed.png`
-- `tests/performance/results/explicit/10m/my_run_detailed_client_duration.png`
-- `tests/performance/results/explicit/10m/my_run_detailed_queue_processing.png`
-- `tests/performance/results/explicit/10m/my_run_detailed_cumulative_success.png`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/detailed.png`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/detailed_client_duration.png`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/detailed_queue_processing.png`
+- `tests/performance/results/explicit/10m/20260329_180629 - my_run/detailed_cumulative_success.png`
 
-If you do not pass `--output`, the runner mirrors the workload folder under `tests/performance/results/` automatically.
+If you do not pass `--output`, the runner still mirrors the workload folder under `tests/performance/results/`, but now each run gets its own timestamped experiment folder.
 
 ## Where To Look
 
-Use `*_detailed.csv` when you want request/response pairing and per-request numbers:
+Use `detailed.csv` when you want request/response pairing and per-request numbers:
 
 - request id and server request id
 - request body and response body
@@ -139,7 +149,7 @@ Use `*_detailed.csv` when you want request/response pairing and per-request numb
 - cold-start flag
 - load duration if the provider reports it
 
-Use `*_runtime_samples.jsonl` when you want live scheduler and worker state during the run:
+Use `runtime_samples.jsonl` when you want live scheduler and worker state during the run:
 
 - connected providers
 - tracked requests
