@@ -7,3 +7,9 @@ certs/
 .venv/
 .mypy_cache/
 .pytest_cache/
+research/
+tests/
+tools/
+*.md
+.git/
+docker-compose*.yml

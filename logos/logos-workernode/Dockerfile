@@ -100,6 +100,11 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
          fi; \
          pip install --no-cache-dir --prefix=/install flashinfer-python; \
        fi
+# Normalize: pip --prefix layout varies across distros (lib/ vs local/lib/,
+# site-packages vs dist-packages).  Move everything into a flat /packages dir
+# so the runtime COPY is deterministic.
+RUN site_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
+    mkdir -p /packages && cp -a "$site_dir"/. /packages/
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
@@ -129,7 +134,11 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
     fi
 
 WORKDIR /app
-COPY --from=builder /install /usr/local
+# Copy packages into whichever directory this Python's import system expects.
+RUN mkdir -p "$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+COPY --from=builder /packages/ /tmp/packages/
+RUN cp -a /tmp/packages/. "$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/" \
+    && rm -rf /tmp/packages
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 RUN mkdir -p /app/certs
