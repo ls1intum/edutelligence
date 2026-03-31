@@ -90,7 +90,7 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
-         pip install --no-cache-dir --prefix=/install $VLLM_PIP_SPEC; \
+         pip install --no-cache-dir --prefix=/install --ignore-installed $VLLM_PIP_SPEC; \
          site_pkgs="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
          if [ -n "$NCCL_PIP_SPEC" ]; then \
            rm -rf "$site_pkgs/nvidia/nccl" "$site_pkgs"/nvidia_nccl_cu12-*.dist-info; \
@@ -100,8 +100,11 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
              PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
            fi; \
          fi; \
-         pip install --no-cache-dir --prefix=/install flashinfer-python \
-             --index-url "${FLASHINFER_WHL_URL}"; \
+         arch="$(dpkg --print-architecture)"; \
+         if [ "$arch" = "amd64" ]; then \
+           pip install --no-cache-dir --prefix=/install flashinfer-python \
+               --index-url "${FLASHINFER_WHL_URL}"; \
+         fi; \
        fi
 
 # ---------------------------------------------------------------------------
