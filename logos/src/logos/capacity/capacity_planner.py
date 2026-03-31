@@ -154,9 +154,6 @@ class CapacityPlanner:
         # physical removal so new requests don't route to dying lanes.
         self._marked_cold_lanes: set[tuple[int, str]] = set()
 
-        # Demand-preemptive drain state
-        # Lanes currently draining: (provider_id, lane_id) -> drain_started_at
-        self._draining_lanes: dict[tuple[int, str], float] = {}
         # Track how a lane was loaded: True = cold load, False = wake from sleep
         self._lane_was_cold_loaded: dict[tuple[int, str], bool] = {}
 
@@ -252,7 +249,7 @@ class CapacityPlanner:
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
             all_actions.extend(self._compute_demand_actions(provider_id, lanes))
-            self._compute_demand_drain_actions(provider_id, lanes)
+            all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
             # TODO: KV fleet rebalancing disabled — was computing budgets from total
             # worker VRAM instead of per-lane GPU VRAM, causing OOM on reconfigure.
             # Re-enable after the per-GPU fix is verified in production.
@@ -601,7 +598,29 @@ class CapacityPlanner:
             getattr(capacity, "total_vram_mb", None),
         )
 
-        if available < estimated * self.VRAM_SAFETY_MARGIN:
+        # Also check per-GPU availability for tp=1 (unknown placement) models.
+        # Provider-level VRAM can look fine (aggregate), but if no single GPU has
+        # enough room the load will OOM. vLLM places the model on the GPU with
+        # the most free memory, so we only need the BEST GPU to have room.
+        per_gpu_free = self._get_per_gpu_free(provider_id)
+        needs_reclaim = available < estimated * self.VRAM_SAFETY_MARGIN
+        if not needs_reclaim and per_gpu_free:
+            target_gpu_ids = self._parse_gpu_device_ids(
+                load_action.params.get("gpu_devices") if load_action.params else None
+            )
+            if not target_gpu_ids:
+                # tp=1 / unknown placement: check the best available GPU
+                max_gpu_free = max(per_gpu_free.values())
+                if max_gpu_free < estimated * self.VRAM_SAFETY_MARGIN:
+                    needs_reclaim = True
+                    logger.info(
+                        "Cold-load per-GPU check for %s on provider %s: "
+                        "best GPU has %.0f MB free, need %.0f MB — triggering reclaim",
+                        model_name, provider_id, max_gpu_free,
+                        estimated * self.VRAM_SAFETY_MARGIN,
+                    )
+
+        if needs_reclaim:
             # Build a synthetic target signal for VRAM reclaim
             synthetic_target = LaneSchedulerSignals(
                 lane_id=lane_id,
@@ -729,8 +748,6 @@ class CapacityPlanner:
             self._lane_idle_since[key] = confirmed_at
             self._lane_loaded_at[key] = confirmed_at
             self._lane_was_cold_loaded[key] = (action.action == "load")
-            # Clear any active drain on this lane (it's now freshly loaded/woken)
-            self._draining_lanes.pop(key, None)
             if action.action == "load" and self._is_preemptive_load_action(action):
                 self._preemptive_sleep_ready.add(key)
             else:
@@ -741,7 +758,6 @@ class CapacityPlanner:
             self._clear_lane_tracking(key)
             self._lane_loaded_at.pop(key, None)
             self._lane_was_cold_loaded.pop(key, None)
-            self._draining_lanes.pop(key, None)
 
     @classmethod
     def _is_preemptive_load_action(cls, action: CapacityPlanAction) -> bool:
@@ -1058,21 +1074,6 @@ class CapacityPlanner:
         for k in stale:
             self._clear_lane_tracking(k)
 
-        # Clean up completed or timed-out demand-preemptive drains
-        for key in list(self._draining_lanes):
-            pid, lid = key
-            if pid != provider_id:
-                continue
-            lane = next((l for l in lanes if l.lane_id == lid), None)
-            if lane is None:
-                self._draining_lanes.pop(key, None)
-                continue
-            if lane.active_requests == 0 and lane.queue_waiting == 0:
-                # Drain complete — lane is now reclaimable by normal logic
-                self._draining_lanes.pop(key, None)
-                logger.info("Drain complete for lane %s on provider %s", lid, pid)
-            elif now - self._draining_lanes[key] > self.DRAIN_TIMEOUT_SECONDS:
-                self._cancel_drain(pid, lid)
 
     def _compute_idle_actions(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
@@ -1474,16 +1475,17 @@ class CapacityPlanner:
 
     def _compute_demand_drain_actions(
         self, provider_id: int, lanes: List[LaneSchedulerSignals],
-    ) -> None:
-        """Proactively drain busy lanes to serve starving models.
+    ) -> List[CapacityPlanAction]:
+        """Return stop actions to evict busy lanes for starving high-demand models.
 
         Runs in the background planner cycle. Detects when a model has
         accumulated demand but cannot be served because VRAM is held by a
-        lower-demand model with active requests.  Initiates drains as a
-        side-effect; the actual sleep/wake happens once the lane has drained.
+        lower-demand model with active requests. Returns a committed stop action
+        so _execute_action drains and stops the lane atomically.
         """
         ranked = self._demand.get_ranked_models()
         profiles = self._safe_get_profiles(provider_id)
+        actions: list[CapacityPlanAction] = []
 
         lanes_by_model: dict[str, list[LaneSchedulerSignals]] = {}
         for lane in lanes:
@@ -1501,8 +1503,8 @@ class CapacityPlanner:
             if has_usable:
                 continue  # Model already has a serving lane
 
-            # This model needs VRAM — check if any busy lane should be drained
-            # Build a synthetic target for the drain check
+            # This model needs VRAM — check if any busy lane should be stopped
+            # Build a synthetic target for the eviction check
             synthetic_target = LaneSchedulerSignals(
                 lane_id=self._planner_lane_id(model_name),
                 model_name=model_name,
@@ -1545,14 +1547,26 @@ class CapacityPlanner:
                     continue
                 if lane.active_requests == 0 and lane.queue_waiting == 0:
                     continue  # Already idle — normal reclaim handles this
-                key = self._lane_key(provider_id, lane.lane_id)
-                if key in self._draining_lanes:
-                    continue  # Already draining
                 if self._should_initiate_drain(
                     provider_id, lane, synthetic_target, profiles,
                 ):
-                    self._initiate_drain(provider_id, lane.lane_id)
-                    break  # Only drain one lane at a time per cycle
+                    current_vram = float(lane.effective_vram_mb or 0.0)
+                    if current_vram <= 0:
+                        profile = profiles.get(lane.model_name)
+                        if profile is not None:
+                            current_vram = self._estimate_model_loaded_vram(profile)
+                    if current_vram > 0:
+                        actions.append(CapacityPlanAction(
+                            action="stop",
+                            provider_id=provider_id,
+                            lane_id=lane.lane_id,
+                            model_name=lane.model_name,
+                            params={"_stop_penalty": 1},
+                            reason=f"Demand drain: free VRAM for {model_name}",
+                        ))
+                    break  # Only one lane at a time per cycle
+
+        return actions
 
     def _compute_preemptive_sleep_actions(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
@@ -1824,6 +1838,20 @@ class CapacityPlanner:
                     0.0,
                 ) * len(target_gpu_ids)
                 shortfall = max(shortfall, gpu_shortfall)
+            elif per_gpu_free and not target_gpu_ids:
+                # GPU placement unknown (first load, tp=1 model). The model will
+                # land on the GPU with the most free memory, so check the best
+                # available GPU. If it fits there, allow the load. If not, the
+                # shortfall drives reclaim on the best GPU.
+                max_gpu_effective = max(
+                    self._vram_ledger.get_gpu_effective_available_mb(
+                        provider_id, dev, float(free_mb),
+                    )
+                    for dev, free_mb in per_gpu_free.items()
+                )
+                if max_gpu_effective >= needed:
+                    return True
+                shortfall = max(shortfall, needed - max_gpu_effective)
             elif provider_ready:
                 return True
 
@@ -1835,27 +1863,6 @@ class CapacityPlanner:
                 required_free_mb=shortfall,
             )
             if reclaim is None:
-                # Check if a drain was initiated — wait for it to complete
-                draining_key = self._find_draining_lane(provider_id, target.lane_id)
-                if draining_key is not None:
-                    logger.info(
-                        "Waiting for demand-preemptive drain of lane %s on provider %s "
-                        "to free VRAM for %s",
-                        draining_key[1], provider_id, target.model_name,
-                    )
-                    drained = await self._drain_lane(
-                        provider_id, draining_key[1],
-                        timeout_seconds=min(timeout_seconds, self.DRAIN_TIMEOUT_SECONDS),
-                    )
-                    if drained:
-                        prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(
-                            action="drain_completed",
-                        ).inc()
-                        continue  # Re-enter loop — drained lane is now reclaimable
-                    else:
-                        self._cancel_drain(provider_id, draining_key[1])
-                        return False
-
                 logger.info(
                     "No idle reclaim action available for provider=%s model=%s "
                     "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
@@ -1899,11 +1906,24 @@ class CapacityPlanner:
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
-                # Lane is busy — check if we should initiate a demand-preemptive drain
-                key = self._lane_key(provider_id, lane.lane_id)
-                if key not in self._draining_lanes:
-                    if self._should_initiate_drain(provider_id, lane, target, profiles):
-                        self._initiate_drain(provider_id, lane.lane_id)
+                # Lane is busy — add as stop candidate if it qualifies for eviction.
+                # _execute_action will drain atomically as part of the committed stop.
+                if self._should_initiate_drain(provider_id, lane, target, profiles):
+                    current_vram = float(lane.effective_vram_mb or 0.0)
+                    if current_vram <= 0 and profiles.get(lane.model_name) is not None:
+                        current_vram = self._estimate_model_loaded_vram(profiles[lane.model_name])
+                    if current_vram > 0:
+                        stop_candidates.append((
+                            current_vram,
+                            CapacityPlanAction(
+                                action="stop",
+                                provider_id=provider_id,
+                                lane_id=lane.lane_id,
+                                model_name=lane.model_name,
+                                params={"_stop_penalty": 1},
+                                reason=f"Request-time drain+stop for {target.model_name}",
+                            ),
+                        ))
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
                 continue
@@ -3080,38 +3100,6 @@ class CapacityPlanner:
 
         return True
 
-    def _initiate_drain(self, provider_id: int, lane_id: str) -> None:
-        """Start draining a lane: stop routing new requests, let actives complete."""
-        key = self._lane_key(provider_id, lane_id)
-        if key in self._draining_lanes:
-            return
-        self._draining_lanes[key] = time.time()
-        self._mark_lane_cold(provider_id, lane_id)
-        logger.info(
-            "Initiated demand-preemptive drain for lane %s on provider %s",
-            lane_id, provider_id,
-        )
-        prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action="drain_initiated").inc()
-
-    def _find_draining_lane(
-        self, provider_id: int, exclude_lane_id: str,
-    ) -> tuple[int, str] | None:
-        """Find a lane currently draining on this provider."""
-        for key in self._draining_lanes:
-            if key[0] == provider_id and key[1] != exclude_lane_id:
-                return key
-        return None
-
-    def _cancel_drain(self, provider_id: int, lane_id: str) -> None:
-        """Cancel a drain that timed out — restore request routing."""
-        key = self._lane_key(provider_id, lane_id)
-        self._draining_lanes.pop(key, None)
-        self._unmark_lane_cold(provider_id, lane_id)
-        logger.info(
-            "Cancelled drain for lane %s on provider %s (timeout or no longer needed)",
-            lane_id, provider_id,
-        )
-        prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action="drain_cancelled").inc()
 
     # ------------------------------------------------------------------
     # VRAM ledger helpers
@@ -3175,8 +3163,16 @@ class CapacityPlanner:
         for dev in device_list:
             if not isinstance(dev, dict):
                 continue
+            # Prefer extra["index"] (integer GPU index set by the GPU collector).
+            # device_id is the nvidia-smi UUID string (e.g. "GPU-abc123-..."),
+            # not parseable as an integer, so we cannot use it directly.
+            extra = dev.get("extra") or {}
+            raw_id = extra.get("index")
+            if raw_id is None:
+                # Fallback: try device_id in case it's a plain integer string
+                raw_id = dev.get("device_id", -1)
             try:
-                dev_id = int(dev.get("device_id", -1))
+                dev_id = int(raw_id)
             except (ValueError, TypeError):
                 continue
             if dev_id < 0:
@@ -3541,12 +3537,15 @@ class CapacityPlanner:
             logger.warning("Unknown capacity action: %s", action.action)
             return False
 
-        # Poll for confirmation
-        confirmed = await self._poll_confirmation(action, timeout_seconds)
-
-        # Release VRAM reservation after confirmation resolves — the worker's
-        # actual VRAM usage is now reflected in the next capacity snapshot.
-        self._release_vram(_reservation_id)
+        # Poll for confirmation.  try/finally guarantees the reservation is
+        # released even when asyncio.CancelledError is raised (e.g. client
+        # disconnect or task shutdown cancels the coroutine mid-poll).
+        try:
+            confirmed = await self._poll_confirmation(action, timeout_seconds)
+        finally:
+            # Release VRAM reservation after confirmation resolves — the worker's
+            # actual VRAM usage is now reflected in the next capacity snapshot.
+            self._release_vram(_reservation_id)
 
         if not confirmed:
             if action.action == "wake":
