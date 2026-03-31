@@ -7,51 +7,48 @@
 ## Prerequisites
 
 - **Python 3.13**
-- **Poetry** for dependency management
+- **[uv](https://docs.astral.sh/uv/)** for dependency management
 - **Docker** for containerization
 
 ## Installation
 
-### Poetry
+### uv
 
-Install Poetry, if you haven't already:
-
-```bash
-pip install poetry
-```
-
-Ensure that you are using poetry version 2.0.0 or higher.
+Install uv, if you haven't already:
 
 ```bash
-poetry --version
-```
-
-If you have poetry < 2.0.0 installed, please run
-
-```bash
-poetry self update
+pip install uv
 ```
 
 #### Dependencies
 
-Activate the virtual environment and install the dependencies:
+Create a virtual environment and install the dependencies:
 
 ```bash
-poetry env activate
-poetry install
+uv venv .venv
+source .venv/bin/activate
+uv pip install .
 ```
 
-## Running the Service
-To deploy Logos locally or on a server:
+## Docker Compose Files
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.yaml` | **Production** — pulls pre-built images from GHCR |
+| `docker-compose.dev.yaml` | **Development** — builds images locally from source |
+
+## Running the Service (Development)
+To deploy Logos locally:
 
 1. Clone the repository:
 
    ```bash
    git clone https://github.com/ls1intum/edutelligence/
-   
+   ```
+
 2. Insert initial Provider Configuration
 
-   In docker-compose.yml, adjust the environment section of the logos-server 
+   In docker-compose.dev.yaml, adjust the environment section of the logos-server
    container to specify the initial LLM provider that Logos should connect to after startup.
 
    Example Configuration:
@@ -63,16 +60,10 @@ To deploy Logos locally or on a server:
 
 3. Build and Run Logos
 
-   Now go to the root-directory of Edutelligence and execute the following commands:
-   
-   ```
-   docker compose -f ./logos/docker-compose.yaml build
-   ```
-   
-   and afterwards
-   
-   ```
-   docker compose -f ./logos/docker-compose.yaml up
+   From the `logos/` directory:
+
+   ```bash
+   docker compose -f docker-compose.dev.yaml up --build
    ```
 
    After startup, Logos will print your initial root key in the logs—save this, as it is required for first login.
@@ -125,7 +116,7 @@ Test scheduling behavior with a specific model. Classification is skipped.
 
 ```bash
 docker compose exec logos-server \
-  poetry run python logos/tests/support/scheduling/run_api_workload.py \
+  python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_direct.csv \
     --api-base http://localhost:8080 \
@@ -139,7 +130,7 @@ Test the full classification pipeline. Logos selects the best model based on pro
 
 ```bash
 docker compose exec logos-server \
-  poetry run python logos/tests/support/scheduling/run_api_workload.py \
+  python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_classify.csv \
     --api-base http://localhost:8080 \
@@ -153,7 +144,7 @@ Test both modes together to compare behavior side-by-side.
 
 ```bash
 docker compose exec logos-server \
-  poetry run python logos/tests/support/scheduling/run_api_workload.py \
+  python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_mixed.csv \
     --api-base http://localhost:8080 \

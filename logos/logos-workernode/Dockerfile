@@ -2,7 +2,7 @@
 # Logos Worker Node
 #
 # CPU / local build  (default):  BASE_IMAGE=python:3.12-slim, INSTALL_VLLM=0
-# GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.1.0-cudnn-devel-ubuntu24.04
+# GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04
 #                                INSTALL_VLLM=1 (via docker-compose.gpu.yml)
 #
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
@@ -13,7 +13,6 @@ ARG BASE_IMAGE=python:3.12-slim
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC=vllm --extra-index-url https://download.pytorch.org/whl/cu128
 ARG NCCL_PIP_SPEC=
-ARG FLASHINFER_WHL_URL=https://flashinfer.ai/whl/cu128/torch2.10/
 ARG INSTALL_OLLAMA=1
 
 # ---------------------------------------------------------------------------
@@ -67,7 +66,6 @@ FROM ${BASE_IMAGE} AS builder
 ARG INSTALL_VLLM
 ARG VLLM_PIP_SPEC
 ARG NCCL_PIP_SPEC
-ARG FLASHINFER_WHL_URL
 
 # Install Python 3.13 only when not already available (GPU/Ubuntu base).
 # python:*-slim images already have python3 + pip.
@@ -90,7 +88,7 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
-         pip install --no-cache-dir --prefix=/install $VLLM_PIP_SPEC; \
+         pip install --no-cache-dir --prefix=/install --ignore-installed $VLLM_PIP_SPEC; \
          site_pkgs="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
          if [ -n "$NCCL_PIP_SPEC" ]; then \
            rm -rf "$site_pkgs/nvidia/nccl" "$site_pkgs"/nvidia_nccl_cu12-*.dist-info; \
@@ -100,8 +98,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
              PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
            fi; \
          fi; \
-         pip install --no-cache-dir --prefix=/install flashinfer-python \
-             --index-url "${FLASHINFER_WHL_URL}"; \
+         pip install --no-cache-dir --prefix=/install flashinfer-python; \
        fi
 
 # ---------------------------------------------------------------------------

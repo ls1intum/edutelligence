@@ -97,7 +97,7 @@ The worker requires different Docker configurations depending on whether you wan
 **Required for production vLLM lanes.**
 
 *   **Configured via:** `.env` and `docker-compose.gpu.yml`
-*   **Default Base Image:** `nvidia/cuda:13.1.0-cudnn-devel-ubuntu24.04`
+*   **Default Base Image:** `nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04`
 *   **Behavior:** Pulls the large CUDA image, installs PyTorch/vLLM, configures NCCL and shared memory, and passes GPUs to the container.
 
 ## 5. Start the Worker

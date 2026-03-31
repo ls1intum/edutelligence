@@ -1,8 +1,8 @@
-# docker-compose.yml — Production GPU worker node (pulls pre-built vLLM image from GHCR)
-# For local development, use: docker compose -f docker-compose.dev.yml up --build
+# docker-compose.ollama.yml — Ollama worker node (pulls pre-built image from GHCR)
+# Usage: docker compose -f docker-compose.ollama.yml up
 services:
   logos-workernode:
-    image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:${IMAGE_TAG:-latest}
+    image: ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:${IMAGE_TAG:-latest}
     container_name: logos-workernode
     init: true
     restart: unless-stopped
@@ -17,24 +17,12 @@ services:
       LOGOS_WORKER_NODE_ID: ${LOGOS_WORKER_NODE_ID:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
       WORKER_PORT: ${WORKER_PORT:-80}
-      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
-      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
-      CUDA_HOME: ${CUDA_HOME:-/usr/local/cuda-12.8}
-    gpus: all
-    pid: host
-    ipc: host # Required for NCCL shared-memory transport in tensor-parallel vLLM
-    shm_size: "16g" # Default 64 MB is insufficient; NCCL hangs without adequate /dev/shm
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1 # Unlimited locked memory — needed for NCCL pinned buffers
     ports:
       - "127.0.0.1:${WORKER_PORT:-80}:${WORKER_PORT:-80}"
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
-      - ${CUDA_HOME:-/usr/local/cuda-12.8}:${CUDA_HOME:-/usr/local/cuda-12.8}:ro
     healthcheck:
       test:
         [
