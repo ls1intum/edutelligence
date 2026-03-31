@@ -103,7 +103,7 @@ def test_course_chat_parallel_mode_hides_tool():
     rendered = _render_template("course_chat_system_prompt.j2", context)
     assert "generate_mcq_questions" not in rendered
     assert "being generated" in rendered
-    assert "Do NOT write any follow-up" in rendered
+    assert "MUST NOT" in rendered
 
 
 def test_lecture_chat_parallel_mode_hides_tool():
@@ -112,7 +112,7 @@ def test_lecture_chat_parallel_mode_hides_tool():
     rendered = _render_template("lecture_chat_system_prompt.j2", context)
     assert "generate_mcq_questions" not in rendered
     assert "being generated" in rendered
-    assert "Do NOT write any follow-up" in rendered
+    assert "MUST NOT" in rendered
 
 
 def test_course_chat_non_parallel_shows_tool():
