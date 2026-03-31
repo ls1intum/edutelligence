@@ -46,6 +46,7 @@ class ClassificationManager:
 
     def update_manager(self, models):
         self.models = models
+        self.laura.remove_db()
         for model in self.models:
             if model["description"] is not None:
                 self.laura.register_model(model["id"], model["description"])

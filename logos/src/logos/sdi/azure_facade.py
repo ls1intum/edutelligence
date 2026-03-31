@@ -135,6 +135,49 @@ class AzureSchedulingDataFacade:
                 f"with Azure provider '{provider_name}' (id={provider_key}, deployment: {deployment_name})"
             )
 
+    def replace_registrations(self, registrations: list[dict]) -> None:
+        with self._lock:
+            desired_by_provider: Dict[int, Dict[str, object]] = {}
+            for registration in registrations:
+                provider_id = int(registration["provider_id"])
+                entry = desired_by_provider.setdefault(
+                    provider_id,
+                    {
+                        "provider_name": registration["provider_name"],
+                        "models": {},
+                    },
+                )
+                entry["provider_name"] = registration["provider_name"]
+                entry["models"][int(registration["model_id"])] = (
+                    registration["model_name"],
+                    registration["deployment_name"],
+                )
+
+            stale_provider_ids = set(self._providers) - set(desired_by_provider)
+            for provider_id in stale_provider_ids:
+                self._providers.pop(provider_id, None)
+
+            self._deployments = set()
+            for provider_id, entry in desired_by_provider.items():
+                provider = self._providers.get(provider_id)
+                if provider is None:
+                    provider = AzureDataProvider(
+                        name=str(entry["provider_name"]),
+                        db_manager=self._db,
+                        provider_id=provider_id,
+                    )
+                    self._providers[provider_id] = provider
+                else:
+                    provider.update_registration(name=str(entry["provider_name"]))
+
+                model_map = {
+                    int(model_id): tuple(model_info)
+                    for model_id, model_info in dict(entry["models"]).items()
+                }
+                provider.set_registered_models(model_map)
+                for model_id in model_map:
+                    self._deployments.add((model_id, provider_id))
+
     def get_model_status(self, model_id: int, provider_id: int) -> ModelStatus:
         """
         Get current status for a specific model.

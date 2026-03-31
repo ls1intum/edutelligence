@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+certs/
+*.pem
+.venv/
+.mypy_cache/
+.pytest_cache/

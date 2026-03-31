@@ -149,17 +149,28 @@ CREATE TABLE log_entry (
     policy_id INTEGER REFERENCES policies(id) ON DELETE SET NULL,
     classification_statistics JSONB,
 
-    -- SDI: Scheduling and performance metrics
-    request_id TEXT,  -- Links to request_events for scheduler metrics
+    -- Request lifecycle and performance metrics
+    request_id TEXT,
     priority VARCHAR(10) DEFAULT 'medium',
+    initial_priority TEXT,
+    priority_when_scheduled TEXT,
+    queue_depth_at_enqueue INTEGER,
+    queue_depth_at_schedule INTEGER,
+    timeout_s INTEGER,
     queue_depth_at_arrival INTEGER,
     utilization_at_arrival REAL,
     queue_wait_ms REAL,
     was_cold_start BOOLEAN DEFAULT FALSE,
-    load_duration_ms REAL
+    load_duration_ms REAL,
+    available_vram_mb INTEGER,
+    azure_rate_remaining_requests INTEGER,
+    azure_rate_remaining_tokens INTEGER,
+    result_status result_status_enum,
+    error_message TEXT
 );
 
 CREATE INDEX idx_log_entry_request_id ON log_entry(request_id);
+CREATE UNIQUE INDEX idx_log_entry_request_id_unique ON log_entry(request_id) WHERE request_id IS NOT NULL;
 
 CREATE TABLE token_types (
     id SERIAL PRIMARY KEY,
@@ -194,31 +205,4 @@ CREATE TABLE jobs (
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Request-level monitoring (one row per request)
-CREATE TABLE request_events (
-    request_id TEXT PRIMARY KEY,
-    model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
-    provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
-
-    initial_priority TEXT,
-    priority_when_scheduled TEXT,
-
-    queue_depth_at_enqueue INTEGER,
-    queue_depth_at_schedule INTEGER,
-
-    timeout_s INTEGER,
-
-    enqueue_ts TIMESTAMPTZ,
-    scheduled_ts TIMESTAMPTZ,
-    request_complete_ts TIMESTAMPTZ,
-
-    available_vram_mb INTEGER,
-    azure_rate_remaining_requests INTEGER,
-    azure_rate_remaining_tokens INTEGER,
-
-    cold_start BOOLEAN,
-    result_status result_status_enum,
-    error_message TEXT
 );

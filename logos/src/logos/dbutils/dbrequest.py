@@ -1,6 +1,6 @@
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LogosKeyModel(BaseModel):
@@ -36,6 +36,15 @@ class AddProviderRequest(LogosKeyModel):
 class AddProfileRequest(LogosKeyModel):
     profile_name: str
     process_id: int
+
+
+class UpdateProviderSdiConfigRequest(LogosKeyModel):
+    provider_id: int
+    ollama_admin_url: str | None = None
+    total_vram_mb: int | None = None
+    parallel_capacity: int | None = None
+    keep_alive_seconds: int | None = None
+    max_loaded_models: int | None = None
 
 
 class GetRole(LogosKeyModel):
@@ -155,3 +164,47 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+
+
+class LogosNodeAuthRequest(BaseModel):
+    provider_id: int
+    shared_key: str
+    worker_id: str = ""
+    capabilities_models: list[str] = Field(default_factory=list)
+
+
+class LogosNodeRegisterRequest(LogosKeyModel):
+    provider_name: str
+    base_url: str = ""
+
+
+class LogosNodeStatusRequest(LogosKeyModel):
+    provider_id: int
+
+
+class LogosNodeApplyLanesRequest(LogosKeyModel):
+    provider_id: int
+    lanes: list[dict[str, Any]]
+
+
+class LogosNodeSleepLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+    level: int = 1
+    mode: str = "wait"
+
+
+class LogosNodeWakeLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+
+
+class LogosNodeDeleteLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+
+
+class LogosNodeReconfigureLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+    updates: dict[str, Any]

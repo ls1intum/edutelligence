@@ -1,0 +1,22 @@
+meta {
+  name: Get Node Status
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/logosdb/providers/logosnode/status
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}",
+    "provider_id": "{{providerId}}"
+  }
+}

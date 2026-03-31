@@ -67,6 +67,33 @@ def stub_db(monkeypatch):
 
         def set_response_payload(self, *a, **k): ...
 
+        def get_request_logs(self, logos_key, request_ids):
+            return {
+                "requests": [
+                    {
+                        "request_id": request_id,
+                        "status": "success",
+                        "provider_name": "azure",
+                        "model_name": "gpt-4o",
+                        "enqueue_ts": "2026-03-22T10:00:00+00:00",
+                        "scheduled_ts": "2026-03-22T10:00:01+00:00",
+                        "request_complete_ts": "2026-03-22T10:00:03+00:00",
+                        "ttft_ms": 250.0,
+                        "total_latency_ms": 3000.0,
+                        "queue_wait_ms": 1000.0,
+                        "processing_ms": 2000.0,
+                        "scheduler_total_ms": 3000.0,
+                        "cold_start": False,
+                        "error_message": None,
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                    }
+                    for request_id in request_ids
+                ],
+                "missing_request_ids": [],
+            }, 200
+
     import logos.responses as responses
 
     monkeypatch.setattr(main, "DBManager", DummyDB, raising=False)
@@ -113,6 +140,15 @@ def test_openai_proxy_stream_calls_streaming_response(monkeypatch, client):
     assert resp.status_code == 200
     assert resp.json() == {"stream": True}
     assert called["args"][2]["stream"] is True
+
+
+def test_request_logs_endpoint_returns_requested_ids(client):
+    resp = client.post("/logosdb/request_logs", json={"request_ids": ["req-1", "req-2"]})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["missing_request_ids"] == []
+    assert [item["request_id"] for item in payload["requests"]] == ["req-1", "req-2"]
 
 
 # Resource mode (sync endpoints) --------------------------------------------

@@ -14,8 +14,8 @@ services:
       - "--api.dashboard=true"
       # - "--entrypoints.grpc.address=:50051"
     ports:
-      - "443:443"
-      - "8080:8080"
+      - "${LOGOS_TRAEFIK_HTTPS_PORT:-18443}:443"
+      - "${LOGOS_TRAEFIK_SECURE8080_PORT:-18081}:8080"
       # - "50051:50051"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -40,9 +40,14 @@ services:
     environment:
       PROVIDER_NAME: azure
       BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
+      LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
+      LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
     expose:
       - "8080"
       # - "50051"
+    ports:
+      - "18080:8080"
     labels:
       - "traefik.enable=true"
 
@@ -86,6 +91,14 @@ services:
       - "traefik.http.routers.logos-server-docs.service=logos-server"
       - "traefik.http.routers.logos-server-docs.priority=100"
 
+      # === Routing: /metrics (Prometheus) ===
+      - "traefik.http.routers.logos-server-metrics.rule=PathPrefix(`/metrics`)"
+      - "traefik.http.routers.logos-server-metrics.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-metrics.tls=true"
+      - "traefik.http.routers.logos-server-metrics.tls.certresolver=${LOGOS_CERT_RESOLVER:-}"
+      - "traefik.http.routers.logos-server-metrics.service=logos-server"
+      - "traefik.http.routers.logos-server-metrics.priority=100"
+
       # === Routing: /ws (WebSocket) ===
       - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
       - "traefik.http.routers.logos-server-ws.entrypoints=secure8080"
@@ -119,6 +132,8 @@ services:
       POSTGRES_PASSWORD: root
       POSTGRES_DB: logosdb
       POSTGRES_HOST: localhost
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready", "--username=postgres"]
       interval: 1s
@@ -141,7 +156,9 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === UI routing (https://${LOGOS_DOMAIN:-localhost}:8080) ===
+      # === UI routing ===
+      # Dev default: https://localhost:8080
+      # Prod override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
       - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
       - "traefik.http.routers.internal-ui.entrypoints=secure8080"
       - "traefik.http.routers.internal-ui.tls=true"
@@ -167,7 +184,9 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Landing page routing (https://${LOGOS_DOMAIN:-localhost}) ===
+      # === Landing page routing ===
+      # Dev default: https://localhost
+      # Prod override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
       - "traefik.http.routers.landing.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
       - "traefik.http.routers.landing.entrypoints=websecure"
       - "traefik.http.routers.landing.tls=true"
