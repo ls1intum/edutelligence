@@ -1,63 +1,95 @@
 # LogosWorkerNode Setup
 
-This is the minimal local flow.
+## How the connection works
 
-## 1. Start Logos locally
-Expose Logos on `http://localhost:18080`.
+The worker connects to the Logos server over a secure WebSocket (`wss://`).
+
+1. On startup the worker POSTs its `provider_id` and `api_key` to the Logos auth endpoint.
+2. If the credentials are valid the server issues a short-lived session token.
+3. The worker opens a `wss://` connection using that token — the session is established.
+4. If the credentials are wrong the server returns a 403 and the worker will not connect.
+
+The worker only makes **outbound** connections; it does not need TLS certificates of its own.
+TLS is terminated by the Logos server's reverse proxy (Traefik).
+
+---
+
+## 1. Start Logos
+
+Start the Logos server and make sure it is reachable over HTTPS (e.g. `https://logos.example.com`).
 
 ## 2. Register the provider
+
 ```bash
-curl -X POST http://localhost:18080/logosdb/providers/logosnode/register \
+curl -X POST https://logos.example.com/logosdb/providers/logosnode/register \
   -H 'Content-Type: application/json' \
-  -d '{"logos_key":"<root_key>","provider_name":"kubaj-laptop-node","base_url":""}'
+  -d '{"logos_key":"<root_key>","provider_name":"my-worker-node","base_url":""}'
 ```
 
-Save:
+Save the response values — you will need both:
 - `provider_id`
-- `shared_key`
+- `shared_key`  ← this is the provider API key
 
-## 3. Connect a model to the provider
-Use the normal Logos DB endpoints:
-- `POST /logosdb/get_models`
-- `POST /logosdb/connect_model_provider`
-- `POST /logosdb/connect_profile_model`
+## 3. Configure the worker credentials
 
-## 4. Configure LogosWorkerNode
-Edit [config.yml](/Users/kubaj/edutelligence/logos/logos-workernode/config.yml).
+Copy `.env.example` to `.env` and fill in the three required values:
 
-Required values:
-- `logos.logos_url`
-- `logos.provider_id`
-- `logos.shared_key`
-- `logos.worker_id`
-- `lanes[]`
+```bash
+cp .env.example .env
+```
+
+```dotenv
+LOGOS_URL=https://logos.example.com
+LOGOS_PROVIDER_ID=<provider_id from step 2>
+LOGOS_API_KEY=<shared_key from step 2>
+LOGOS_WORKER_NODE_ID=my-worker-node   # optional, defaults to "worker-<id>"
+```
+
+These env vars are picked up by `start.sh` automatically and passed into the container.
+**Do not** put these credentials in `config.yml`.
+
+## 4. Configure models and engine settings
+
+Edit [config.yml](../logos-workernode/config.yml) — set the worker name, capability model list,
+and any engine overrides. Connection credentials are intentionally absent from this file.
 
 ## 5. Start the worker
+
 ```bash
 cd logos/logos-workernode
 ./start.sh
 ```
 
 GPU-capable host:
+
 ```bash
 ./start.sh --gpu
 ```
 
 ## 6. Verify the local worker
+
 ```bash
 curl http://localhost:8444/health
-curl -H 'Authorization: Bearer <worker_api_key>' http://localhost:8444/admin/runtime
-curl -H 'Authorization: Bearer <worker_api_key>' http://localhost:8444/admin/lanes
+curl -H 'Authorization: Bearer <worker.api_key from config.yml>' http://localhost:8444/admin/runtime
+curl -H 'Authorization: Bearer <worker.api_key from config.yml>' http://localhost:8444/admin/lanes
 ```
 
 ## 7. Verify the Logos session
+
 ```bash
-curl -X POST http://localhost:18080/logosdb/providers/logosnode/status \
+curl -X POST https://logos.example.com/logosdb/providers/logosnode/status \
   -H 'Content-Type: application/json' \
   -d '{"logos_key":"<root_key>","provider_id":<provider_id>}'
 ```
 
-## 8. Scheduling & Capacity Management
+## 8. Connect a model to the provider
+
+Use the normal Logos DB endpoints:
+- `POST /logosdb/get_models`
+- `POST /logosdb/connect_model_provider`
+- `POST /logosdb/connect_profile_model`
+
+## 9. Scheduling & Capacity Management
 
 Once the worker is connected, Logos automatically uses two subsystems:
 
@@ -72,12 +104,18 @@ Once the worker is connected, Logos automatically uses two subsystems:
 
 Disable with `LOGOS_CAPACITY_PLANNER_ENABLED=false` on the Logos server.
 
-Both are enabled by default. No worker-side configuration needed — VRAM profiles are measured automatically and sent via the existing heartbeat.
+Both are enabled by default. No worker-side configuration needed.
 
-## 9. Troubleshooting
-- `400 TLS is required for logosnode auth/session endpoints`
-  Enable TLS in front of Logos and configure the worker to use an `https://` `logos_url`. Logos auth/session endpoints are intended to stay TLS-only.
-- worker shows healthy locally but Logos reports offline
-  Check `logos.provider_id`, `logos.shared_key`, and that the worker can reach `logos.logos_url`.
-- lane never becomes `loaded`
+## 10. Troubleshooting
+
+- **`403` on startup / "Invalid provider shared key"**
+  Check `LOGOS_API_KEY` in `.env` — it must match the `shared_key` from the registration response.
+
+- **`404` / "Provider not found"**
+  Check `LOGOS_PROVIDER_ID` in `.env`.
+
+- **worker shows healthy locally but Logos reports offline**
+  Check that `LOGOS_URL` is reachable from the worker host and that the URL is `https://`.
+
+- **lane never becomes `loaded`**
   Call `GET /admin/runtime` and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics`.

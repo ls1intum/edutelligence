@@ -28,6 +28,44 @@ def get_config_path() -> Path | None:
     return _config_path
 
 
+def _apply_env_overrides(cfg: AppConfig) -> None:
+    """Apply LOGOS_* environment variable overrides to the logos bridge config.
+
+    Environment variables take precedence over config.yml values.  Set these
+    in .env (see .env.example) so that connection credentials are never stored
+    in the config file:
+
+      LOGOS_URL              — Logos server base URL, e.g. https://logos.example.com
+      LOGOS_PROVIDER_ID      — Numeric provider ID issued during registration
+      LOGOS_API_KEY          — Provider API key (shared_key) issued during registration
+      LOGOS_WORKER_NODE_ID   — Optional worker identifier (defaults to worker-<id>)
+    """
+    logos_url = os.getenv("LOGOS_URL", "").strip()
+    if logos_url:
+        cfg.logos.logos_url = logos_url
+        cfg.logos.enabled = True
+
+    provider_id_str = os.getenv("LOGOS_PROVIDER_ID", "").strip()
+    if provider_id_str:
+        try:
+            cfg.logos.provider_id = int(provider_id_str)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"LOGOS_PROVIDER_ID must be an integer, got: {provider_id_str!r}"
+            ) from exc
+
+    api_key = os.getenv("LOGOS_API_KEY", "").strip()
+    if api_key:
+        cfg.logos.shared_key = api_key
+
+    worker_id = os.getenv("LOGOS_WORKER_NODE_ID", "").strip()
+    if worker_id:
+        cfg.logos.worker_id = worker_id
+
+    if os.getenv("LOGOS_ALLOW_INSECURE_HTTP", "").strip().lower() in {"1", "true", "yes"}:
+        cfg.logos.allow_insecure_http = True
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     global _config, _config_path
 
@@ -42,6 +80,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     else:
         logger.warning("No config file found — using defaults")
         _config = AppConfig()
+        _apply_env_overrides(_config)
         _config_path = None
         return _config
 
@@ -51,6 +90,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raw: dict[str, Any] = yaml.safe_load(f) or {}
 
     _config = AppConfig(**raw)
+    _apply_env_overrides(_config)
     _config_path = resolved
     return _config
 

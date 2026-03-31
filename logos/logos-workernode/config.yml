@@ -1,6 +1,5 @@
 # hochbruegge-node — Turing-friendly AWQ capability set on 2× Quadro RTX 5000
 # Lanes are commanded by the Logos server (capacity planner).
-# Temporary config for testing and development. Not for production use.
 
 worker:
   name: hochbruegge-node
@@ -13,10 +12,8 @@ worker:
 
 logos:
   enabled: true
-  logos_url: https://kuba.tail5a95ec.ts.net
-  allow_insecure_http: false
-  provider_id: 13
-  shared_key: P-XX0rCqNDt8q0n48JdDtBz2NOs7THPFdoQHIrnQGoZU6IX5uicLqpcOj63e4YfF
+  # Connection credentials are loaded from environment variables.
+  # Set LOGOS_URL, LOGOS_PROVIDER_ID, LOGOS_API_KEY, LOGOS_WORKER_NODE_ID in .env.
   capabilities_models:
     - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
       tensor_parallel_size: 1

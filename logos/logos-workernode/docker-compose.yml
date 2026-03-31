@@ -16,6 +16,11 @@ services:
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      LOGOS_URL: ${LOGOS_URL:-}
+      LOGOS_PROVIDER_ID: ${LOGOS_PROVIDER_ID:-}
+      LOGOS_API_KEY: ${LOGOS_API_KEY:-}
+      LOGOS_WORKER_NODE_ID: ${LOGOS_WORKER_NODE_ID:-}
+      LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
