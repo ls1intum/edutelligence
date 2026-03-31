@@ -13,7 +13,6 @@ ARG BASE_IMAGE=python:3.12-slim
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC=vllm --extra-index-url https://download.pytorch.org/whl/cu128
 ARG NCCL_PIP_SPEC=
-ARG FLASHINFER_WHL_URL=https://flashinfer.ai/whl/cu128/torch2.10/
 ARG INSTALL_OLLAMA=1
 
 # ---------------------------------------------------------------------------
@@ -67,7 +66,6 @@ FROM ${BASE_IMAGE} AS builder
 ARG INSTALL_VLLM
 ARG VLLM_PIP_SPEC
 ARG NCCL_PIP_SPEC
-ARG FLASHINFER_WHL_URL
 
 # Install Python 3.13 only when not already available (GPU/Ubuntu base).
 # python:*-slim images already have python3 + pip.
@@ -100,11 +98,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
              PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
            fi; \
          fi; \
-         arch="$(dpkg --print-architecture)"; \
-         if [ "$arch" = "amd64" ]; then \
-           pip install --no-cache-dir --prefix=/install flashinfer-python \
-               --index-url "${FLASHINFER_WHL_URL}"; \
-         fi; \
+         pip install --no-cache-dir --prefix=/install flashinfer-python; \
        fi
 
 # ---------------------------------------------------------------------------
