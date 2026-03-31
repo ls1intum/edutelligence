@@ -45,6 +45,7 @@ class LogosBridgeClient:
         self._app = app
         self._cfg = config
         self._task: asyncio.Task | None = None
+        self._command_tasks: set[asyncio.Task] = set()
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
         self._connected = False
@@ -142,6 +143,7 @@ class LogosBridgeClient:
                                 await task
                             except asyncio.CancelledError:
                                 pass
+                        await self._cancel_command_tasks()
             except asyncio.CancelledError:
                 raise
             except ConnectionClosed as exc:
@@ -336,31 +338,40 @@ class LogosBridgeClient:
         async with self._send_lock:
             await ws.send(json.dumps(payload))
 
-    async def _handle_message(self, ws, raw: str) -> None:
-        try:
-            message = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.debug("Ignoring non-JSON bridge message")
+    def _track_command_task(self, task: asyncio.Task, *, action: str, cmd_id: str) -> None:
+        self._command_tasks.add(task)
+
+        def _cleanup(done_task: asyncio.Task) -> None:
+            self._command_tasks.discard(done_task)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "%s<< CMD %s FAILED%s cmd_id=%s error=%s",
+                    _RED, action, _RESET, cmd_id[:8], exc,
+                )
+
+        task.add_done_callback(_cleanup)
+
+    async def _cancel_command_tasks(self) -> None:
+        tasks = tuple(self._command_tasks)
+        if not tasks:
             return
 
-        msg_type = message.get("type")
-        if msg_type == "ping":
-            await self._send_json(ws, {"type": "pong"})
-            return
-        if msg_type != "command":
-            return
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                logger.debug("Bridge background command task failed during shutdown", exc_info=True)
+        self._command_tasks.clear()
 
-        cmd_id = str(message.get("cmd_id", "")).strip()
-        action = str(message.get("action", "")).strip()
-        params = message.get("params") or {}
-        if not cmd_id or not action:
-            return
-
-        if action == "infer_stream":
-            await self._execute_stream_command(ws, cmd_id, params)
-            return
-
-        # Log non-infer commands prominently
+    async def _execute_command_and_respond(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
         if action != "infer":
             param_summary = ", ".join(f"{k}={v}" for k, v in params.items() if k != "messages")
             logger.info(
@@ -383,6 +394,44 @@ class LogosBridgeClient:
             )
             response = {"type": "command_result", "cmd_id": cmd_id, "success": False, "error": str(exc)}
         await self._send_json(ws, response)
+
+    async def _handle_message(self, ws, raw: str) -> None:
+        try:
+            message = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.debug("Ignoring non-JSON bridge message")
+            return
+
+        msg_type = message.get("type")
+        if msg_type == "ping":
+            await self._send_json(ws, {"type": "pong"})
+            return
+        if msg_type != "command":
+            return
+
+        cmd_id = str(message.get("cmd_id", "")).strip()
+        action = str(message.get("action", "")).strip()
+        params = message.get("params") or {}
+        if not cmd_id or not action:
+            return
+
+        if action == "infer_stream":
+            task = asyncio.create_task(
+                self._execute_stream_command(ws, cmd_id, params),
+                name=f"logos-bridge-{action}-{cmd_id[:8]}",
+            )
+            self._track_command_task(task, action=action, cmd_id=cmd_id)
+            return
+
+        if action == "infer":
+            task = asyncio.create_task(
+                self._execute_command_and_respond(ws, cmd_id, action, params),
+                name=f"logos-bridge-{action}-{cmd_id[:8]}",
+            )
+            self._track_command_task(task, action=action, cmd_id=cmd_id)
+            return
+
+        await self._execute_command_and_respond(ws, cmd_id, action, params)
 
     async def _execute_command(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager

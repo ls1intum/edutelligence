@@ -19,6 +19,8 @@ from logos_worker_node.models import (
     LoadedModel,
     OllamaConfig,
     ProcessState,
+    VllmConfig,
+    VllmEngineConfig,
 )
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.ollama_process import OllamaProcessHandle
@@ -33,7 +35,7 @@ ProcessHandle = OllamaProcessHandle | VllmProcessHandle
 _DEFAULT_PORT_START = 11436
 _DEFAULT_PORT_END = 11499
 
-_HOT_SWAP_TIMEOUT = 90  # seconds total for spawn + preload on new process
+_RESTART_TIMEOUT = 90  # seconds total for spawn + preload on new process
 _MAX_EVENT_LOG = 500    # max events kept in memory
 _HANDLE_DESTROY_TIMEOUT = 45
 _HANDLE_CLOSE_TIMEOUT = 10
@@ -128,24 +130,60 @@ def _routing_inference_endpoint(vllm: bool) -> str:
 
 
 def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
-    """Check if the lane config change requires a process restart."""
+    """Check if the lane config change requires a process restart.
+
+    Only compares fields that cannot be changed at runtime and truly require
+    stopping and re-spawning the vLLM/Ollama process.  Fields like
+    kv_cache_memory_bytes and enable_sleep_mode are set at spawn time but
+    changing them should NOT trigger a restart of an already-loaded lane —
+    the planner should use sleep/reconfigure for KV tuning instead.
+    """
+    if current.model != desired.model:
+        return True
     if current.vllm != desired.vllm:
         return True
+    # Ollama-specific fields
+    if not current.vllm:
+        return (
+            current.num_parallel != desired.num_parallel
+            or current.context_length != desired.context_length
+            or current.kv_cache_type != desired.kv_cache_type
+            or current.flash_attention != desired.flash_attention
+            or current.gpu_devices != desired.gpu_devices
+            or current.keep_alive != desired.keep_alive
+        )
+    # vLLM: only compare fields that require a process restart
+    cv = current.vllm_config
+    dv = desired.vllm_config
+    if cv is None and dv is None:
+        return False
+    if cv is None or dv is None:
+        return True
     return (
-        current.num_parallel != desired.num_parallel
-        or current.context_length != desired.context_length
-        or current.kv_cache_type != desired.kv_cache_type
-        or current.flash_attention != desired.flash_attention
+        cv.tensor_parallel_size != dv.tensor_parallel_size
+        or cv.max_model_len != dv.max_model_len
+        or cv.dtype != dv.dtype
+        or cv.quantization != dv.quantization
+        or cv.enforce_eager != dv.enforce_eager
+        or cv.attention_backend != dv.attention_backend
+        or cv.disable_custom_all_reduce != dv.disable_custom_all_reduce
+        or cv.disable_nccl_p2p != dv.disable_nccl_p2p
+        or cv.cpu_offload_gb != dv.cpu_offload_gb
+        or cv.extra_args != dv.extra_args
         or current.gpu_devices != desired.gpu_devices
-        or current.keep_alive != desired.keep_alive
-        or current.vllm_config != desired.vllm_config
     )
 
 
-def _create_handle(lane_id: str, port: int, global_config: OllamaConfig, lane_config: LaneConfig) -> ProcessHandle:
+def _create_handle(
+    lane_id: str,
+    port: int,
+    global_config: OllamaConfig,
+    vllm_engine_config: VllmEngineConfig,
+    lane_config: LaneConfig,
+) -> ProcessHandle:
     """Factory: create the correct process handle based on backend type."""
     if lane_config.vllm:
-        return VllmProcessHandle(lane_id, port, global_config)
+        return VllmProcessHandle(lane_id, port, global_config, vllm_engine_config)
     return OllamaProcessHandle(lane_id, port, global_config)
 
 
@@ -159,6 +197,7 @@ class LaneManager:
     def __init__(
         self,
         global_config: OllamaConfig,
+        vllm_engine_config: VllmEngineConfig | None = None,
         lane_port_start: int = _DEFAULT_PORT_START,
         lane_port_end: int = _DEFAULT_PORT_END,
         reserved_ports: Iterable[int] | None = None,
@@ -169,6 +208,7 @@ class LaneManager:
         gpu_snapshot: Callable[[], Awaitable[DeviceSummary]] | None = None,
     ) -> None:
         self._global_config = global_config
+        self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
@@ -193,6 +233,33 @@ class LaneManager:
         self._stuck_polls: dict[str, int] = {}  # consecutive polls with no progress
         _STUCK_POLL_THRESHOLD = 6  # ~30s at 5s heartbeat
         self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
+
+    def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
+        """Check which capabilities_models are available locally.
+
+        For each model, checks if it exists in the HF cache or models path.
+        Returns a list of models that could NOT be found (warnings only,
+        doesn't block startup).
+        """
+        import os
+        missing = []
+        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf"))
+        models_path = self._global_config.models_path
+        for model_name in capabilities_models:
+            # Check HF cache (transformers style: models--org--name)
+            hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
+            # Check direct model path
+            direct_path = os.path.join(models_path, model_name)
+            if not os.path.isdir(hf_cache_dir) and not os.path.isdir(direct_path):
+                missing.append(model_name)
+                logger.warning(
+                    "Capability model '%s' not found locally (checked %s and %s). "
+                    "Ensure the model is downloaded before it can be loaded.",
+                    model_name, hf_cache_dir, direct_path,
+                )
+        if not missing:
+            logger.info("All %d capability models verified as available locally", len(capabilities_models))
+        return missing
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [
@@ -222,7 +289,7 @@ class LaneManager:
 
         The manager diffs current vs desired and executes minimal transitions:
           1. Remove stale lanes (frees VRAM first)
-          2. Reconfigure changed lanes via hot-swap (zero-downtime)
+          2. Reconfigure changed lanes (stop-then-start)
           3. Add new lanes (uses freed VRAM)
 
         On failure mid-apply, already-completed transitions are rolled back
@@ -257,7 +324,7 @@ class LaneManager:
             # Track completed operations for rollback
             removed_snapshots: dict[str, tuple[ProcessHandle, LaneConfig | None, int]] = {}
             added_ids: list[str] = []
-            swapped_old_handles: dict[str, ProcessHandle] = {}  # lid -> old handle to cleanup
+            restarted_ids: list[str] = []  # lanes that were restarted (for rollback)
 
             try:
                 # Phase 1: Remove stale lanes (free VRAM)
@@ -282,7 +349,7 @@ class LaneManager:
                         errors.append(msg)
                         raise _ApplyAbort(msg)
 
-                # Phase 2: Reconfigure changed lanes (hot-swap)
+                # Phase 2: Reconfigure changed lanes (stop-then-start)
                 to_check = current_ids & desired_ids
                 for lid in to_check:
                     handle = self._handles[lid]
@@ -291,13 +358,13 @@ class LaneManager:
 
                     if current_lc is not None and _lane_needs_restart(current_lc, desired_lc):
                         try:
-                            old_handle = await self._hot_swap_lane_unlocked(lid, desired_lc)
-                            swapped_old_handles[lid] = old_handle
+                            await self._restart_lane_unlocked(lid, desired_lc)
+                            restarted_ids.append(lid)
                             if desired_lc.vllm:
-                                details = f"hot-swap: backend=vllm, ctx={desired_lc.context_length}"
+                                details = f"restart: backend=vllm, ctx={desired_lc.context_length}"
                             else:
                                 details = (
-                                    f"hot-swap: num_parallel={desired_lc.num_parallel}, "
+                                    f"restart: num_parallel={desired_lc.num_parallel}, "
                                     f"ctx={desired_lc.context_length}"
                                 )
                             actions.append(LaneAction(
@@ -306,7 +373,7 @@ class LaneManager:
                                 details=details,
                             ))
                         except Exception as e:
-                            msg = f"Failed to hot-swap lane '{lid}': {e}"
+                            msg = f"Failed to restart lane '{lid}': {e}"
                             logger.error(msg, exc_info=True)
                             errors.append(msg)
                             raise _ApplyAbort(msg)
@@ -342,13 +409,8 @@ class LaneManager:
                 logger.warning("apply_lanes failed mid-operation — rolling back")
                 rolled_back = True
                 await self._rollback_unlocked(
-                    removed_snapshots, added_ids, swapped_old_handles, snapshot,
+                    removed_snapshots, added_ids, restarted_ids, snapshot,
                 )
-
-            # Cleanup old handles from successful hot-swaps (not rolled back)
-            if not rolled_back:
-                for old_handle in swapped_old_handles.values():
-                    await old_handle.close()
 
             lane_statuses = await self._collect_statuses_unlocked()
             prom.LANE_TRANSITIONS_TOTAL.labels(action="apply").inc()
@@ -384,7 +446,7 @@ class LaneManager:
             prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
 
     async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
-        """Apply partial updates to an existing lane via hot-swap."""
+        """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
         async with self._lock:
             handle = self._handles.get(lane_id)
             if handle is None:
@@ -407,8 +469,7 @@ class LaneManager:
             new_lc = LaneConfig(**current_data)
             self._validate_vllm_runtime_requirements([new_lc])
             if _lane_needs_restart(current, new_lc):
-                old_handle = await self._hot_swap_lane_unlocked(lane_id, new_lc)
-                await old_handle.close()
+                await self._restart_lane_unlocked(lane_id, new_lc)
             prom.LANE_TRANSITIONS_TOTAL.labels(action="reconfigure").inc()
 
             return await self._get_status_unlocked(lane_id)
@@ -435,6 +496,7 @@ class LaneManager:
 
     async def wake_lane(self, lane_id: str) -> LaneStatus:
         """Wake a sleeping vLLM lane."""
+        cleanup: tuple[ProcessHandle, int | None, str] | None = None
         async with self._lock:
             handle = self._handles.get(lane_id)
             if handle is None:
@@ -442,15 +504,54 @@ class LaneManager:
             lc = handle.lane_config
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
-            await handle.wake_up()
-            prom.LANE_TRANSITIONS_TOTAL.labels(action="wake").inc()
-            self._record_event(
-                lane_id,
-                "wake",
-                model=lc.model,
-                port=handle.port,
-            )
-            return await self._get_status_unlocked(lane_id)
+            try:
+                await handle.wake_up()
+            except Exception as exc:
+                if not self._is_probable_cuda_oom(exc):
+                    raise
+                logger.error(
+                    "Wake of lane '%s' failed with CUDA OOM; detaching lane for cleanup",
+                    lane_id,
+                    exc_info=True,
+                )
+                persist_recent_logs = getattr(handle, "persist_recent_logs", None)
+                if callable(persist_recent_logs):
+                    try:
+                        persist_recent_logs("wake_oom")
+                    except Exception:
+                        logger.debug(
+                            "Could not persist recent logs for lane '%s' after wake OOM",
+                            lane_id,
+                            exc_info=True,
+                        )
+                self._record_event(
+                    lane_id,
+                    "wake_oom",
+                    model=lc.model,
+                    details=str(exc),
+                    port=handle.port,
+                )
+                detached_handle, port = self._detach_lane_unlocked(lane_id)
+                if detached_handle is not None:
+                    cleanup = (detached_handle, port, str(exc))
+                else:
+                    cleanup = (handle, handle.port, str(exc))
+            else:
+                prom.LANE_TRANSITIONS_TOTAL.labels(action="wake").inc()
+                self._record_event(
+                    lane_id,
+                    "wake",
+                    model=lc.model,
+                    port=handle.port,
+                )
+                return await self._get_status_unlocked(lane_id)
+
+        assert cleanup is not None
+        detached_handle, port, details = cleanup
+        await self._finalize_detached_lane(lane_id, detached_handle, port)
+        raise RuntimeError(
+            f"Lane '{lane_id}' wake failed with CUDA OOM and was removed for cleanup: {details}"
+        )
 
     # ------------------------------------------------------------------
     # Status / queries
@@ -550,6 +651,27 @@ class LaneManager:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    # CPU offload is controlled per-lane via vllm_config.cpu_offload_gb.
+    # No auto-injection — only applied when explicitly set on a lane's config.
+
+    def _apply_model_vllm_overrides(self, lane_config: LaneConfig) -> LaneConfig:
+        """Merge worker-local per-model vLLM overrides into an incoming lane config.
+
+        Reads engines.vllm.model_overrides from config.yml and merges matching
+        entries on top of the lane's vllm_config.  Lets this worker enforce
+        SM-specific workarounds (e.g. disable_custom_all_reduce, quantization: awq
+        on Turing) without requiring changes to the Logos server.
+        """
+        if not lane_config.vllm or lane_config.vllm_config is None:
+            return lane_config
+        overrides = self._vllm_engine_config.model_overrides.get(lane_config.model)
+        if not overrides:
+            return lane_config
+        merged = {**lane_config.vllm_config.model_dump(), **overrides}
+        new_vc = VllmConfig.model_validate(merged)
+        logger.info("Applied local vLLM overrides for %s: %s", lane_config.model, list(overrides))
+        return lane_config.model_copy(update={"vllm_config": new_vc})
 
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
@@ -836,10 +958,17 @@ class LaneManager:
         return lane_config.model_copy(update={"gpu_devices": selector})
 
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
+        lane_config = self._apply_model_vllm_overrides(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)
-        handle = _create_handle(lane_id, port, self._global_config, lane_config)
+        handle = _create_handle(
+            lane_id,
+            port,
+            self._global_config,
+            self._vllm_engine_config,
+            lane_config,
+        )
         try:
             await handle.init()
             status = await handle.spawn(lane_config)
@@ -860,7 +989,7 @@ class LaneManager:
             raise
         self._handles[lane_id] = handle
         self._active_requests[lane_id] = 0
-        self._starting_deadlines[lane_id] = asyncio.get_running_loop().time() + _HOT_SWAP_TIMEOUT
+        self._starting_deadlines[lane_id] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
         self._record_event(lane_id, "spawned", model=lane_config.model,
                            port=port)
         logger.info("Lane '%s' added (vllm=%s, model=%s, port=%d)",
@@ -872,137 +1001,88 @@ class LaneManager:
             return
         await self._finalize_detached_lane(lane_id, handle, port)
 
-    async def _hot_swap_lane_unlocked(
+    async def _restart_lane_unlocked(
         self, lane_id: str, new_config: LaneConfig,
-    ) -> ProcessHandle:
+    ) -> None:
         """
-        Hot-swap reconfiguration: when possible, put the old vLLM lane into
-        sleep mode to reduce VRAM pressure, spawn the new process on a temp
-        port, preload the model, then atomically replace the old handle.  If
-        the new process fails to come up, the old handle remains untouched and
-        is woken back up when we slept it.
-
-        Returns the OLD handle (caller must close it after success).
+        Reconfigure a lane by stopping the old process first, then spawning a
+        new one on the same port.  No concurrent processes — avoids zombie VRAM.
         """
         new_config = self._auto_tensor_parallel(new_config)
         old_handle = self._handles[lane_id]
-        old_port = self._port_alloc.get_port(lane_id)
+        port = self._port_alloc.get_port(lane_id)
         old_config = old_handle.lane_config
-        old_slept = False
 
-        if (
-            old_config is not None
-            and old_config.vllm
-            and old_config.vllm_config is not None
-            and old_config.vllm_config.enable_sleep_mode
-        ):
-            try:
-                await old_handle.sleep(level=1, mode="wait")
-                old_slept = True
-                self._record_event(
-                    lane_id,
-                    "hot_swap_sleep_old",
-                    model=old_config.model,
-                    port=old_port,
-                )
-                logger.info(
-                    "Hot-swap '%s': put old vLLM lane into sleep mode before replacement",
-                    lane_id,
-                )
-            except Exception:
-                logger.warning(
-                    "Hot-swap '%s': failed to sleep old lane before replacement; "
-                    "continuing with old lane fully resident",
-                    lane_id,
-                    exc_info=True,
-                )
+        self._record_event(
+            lane_id, "restart_stop_old",
+            model=old_config.model if old_config else new_config.model,
+            port=port,
+        )
+        logger.info(
+            "Restart '%s': stopping old %s process on port %d",
+            lane_id, "vllm" if (old_config and old_config.vllm) else "ollama", port,
+        )
+
+        # Stop old process and release its resources
+        try:
+            await old_handle.destroy()
+        except Exception:
+            logger.warning("Restart '%s': failed to destroy old handle", lane_id, exc_info=True)
+        await old_handle.close()
 
         new_config = await self._auto_place_gpu_devices(lane_id, new_config)
 
-        # Allocate a temporary port for the new process
-        temp_id = f"_swap_{lane_id}"
-        temp_port = self._port_alloc.allocate(temp_id)
+        # Spawn new process on the same port
+        new_handle = _create_handle(
+            lane_id,
+            port,
+            self._global_config,
+            self._vllm_engine_config,
+            new_config,
+        )
+        await new_handle.init()
 
         self._record_event(
-            lane_id, "hot_swap_start",
+            lane_id, "restart_spawn_new",
             model=new_config.model,
-            port=temp_port,
-            old_port=old_port,
+            port=port,
         )
         logger.info(
-            "Hot-swap '%s': new %s process on port %d (old port %d)",
-            lane_id, "vllm" if new_config.vllm else "ollama", temp_port, old_port,
+            "Restart '%s': spawning new %s process on port %d",
+            lane_id, "vllm" if new_config.vllm else "ollama", port,
         )
-
-        new_handle = _create_handle(lane_id, temp_port, self._global_config, new_config)
-        await new_handle.init()
 
         try:
             await new_handle.spawn(new_config)
-
-            # Verify the new process is healthy
-            version = await new_handle.get_version()
-            if version is None:
-                raise RuntimeError("New process did not respond to version check")
-
         except Exception as exc:
-            # Rollback: destroy new handle, release temp port, keep old handle
             logger.error(
-                "Hot-swap '%s' failed during spawn: %s — keeping old process",
+                "Restart '%s' failed during spawn: %s",
                 lane_id, exc,
             )
-            self._record_event(lane_id, "hot_swap_rollback",
+            self._record_event(lane_id, "restart_failed",
                                model=new_config.model, details=str(exc))
             try:
                 await new_handle.destroy()
             except Exception:
                 pass
             await new_handle.close()
-            self._port_alloc.release(temp_id)
-            if old_slept:
-                try:
-                    await old_handle.wake_up()
-                    self._record_event(
-                        lane_id,
-                        "hot_swap_wake_old",
-                        model=old_config.model if old_config is not None else new_config.model,
-                        port=old_port,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Hot-swap '%s': failed to wake old sleeping lane after rollback",
-                        lane_id,
-                        exc_info=True,
-                    )
+            # Lane is now dead — remove it from handles so it doesn't linger
+            self._handles.pop(lane_id, None)
             raise
 
-        # Success: swap handles
-        # Stop old process
-        try:
-            await old_handle.stop()
-        except Exception:
-            logger.warning("Could not stop old handle for lane '%s'", lane_id, exc_info=True)
-
-        # Update port allocator: release old port, move new port from temp_id to lane_id
-        self._port_alloc.release(lane_id)
-        self._port_alloc.release(temp_id)
-        self._port_alloc._used[lane_id] = temp_port
-
-        # Replace handle in registry
+        # Success
         self._handles[lane_id] = new_handle
-        self._starting_deadlines[lane_id] = asyncio.get_running_loop().time() + _HOT_SWAP_TIMEOUT
+        self._starting_deadlines[lane_id] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
 
         self._record_event(
-            lane_id, "hot_swap_ok",
+            lane_id, "restart_ok",
             model=new_config.model,
-            port=temp_port,
-            old_port=old_port,
+            port=port,
         )
         logger.info(
-            "Hot-swap '%s' complete: now on port %d with num_parallel=%d",
-            lane_id, temp_port, new_config.num_parallel,
+            "Restart '%s' complete: port %d with num_parallel=%d",
+            lane_id, port, new_config.num_parallel,
         )
-        return old_handle
     
     def _detach_lane_unlocked(self, lane_id: str) -> tuple[ProcessHandle | None, int | None]:
         handle = self._handles.pop(lane_id, None)
@@ -1049,7 +1129,7 @@ class LaneManager:
         self,
         removed_snapshots: dict[str, tuple[ProcessHandle, LaneConfig | None, int]],
         added_ids: list[str],
-        swapped_old_handles: dict[str, ProcessHandle],
+        restarted_ids: list[str],
         original_snapshot: dict[str, tuple[ProcessHandle, LaneConfig | None, int | None]],
     ) -> None:
         """Best-effort rollback of a failed apply_lanes operation."""
@@ -1061,45 +1141,56 @@ class LaneManager:
             except Exception:
                 logger.warning("Rollback: failed to remove added lane '%s'", lid, exc_info=True)
 
-        # 2. Restore hot-swapped lanes: stop new handle, restore old handle
-        for lid, old_handle in swapped_old_handles.items():
-            new_handle = self._handles.get(lid)
-            if new_handle is not None:
-                try:
-                    await new_handle.destroy()
-                    await new_handle.close()
-                except Exception:
-                    logger.warning("Rollback: failed to stop new handle for '%s'", lid, exc_info=True)
-            # Restore old handle — it was stopped but may be restartable
+        # 2. Restore restarted lanes from original config
+        for lid in restarted_ids:
             orig = original_snapshot.get(lid)
             if orig is not None:
                 _, orig_lc, orig_port = orig
                 if orig_lc is not None and orig_port is not None:
+                    # Stop the new (possibly broken) process
+                    new_handle = self._handles.get(lid)
+                    if new_handle is not None:
+                        try:
+                            await new_handle.destroy()
+                            await new_handle.close()
+                        except Exception:
+                            logger.warning("Rollback: failed to stop new handle for '%s'", lid, exc_info=True)
                     try:
-                        restored = _create_handle(lid, orig_port, self._global_config, orig_lc)
+                        restored = _create_handle(
+                            lid,
+                            orig_port,
+                            self._global_config,
+                            self._vllm_engine_config,
+                            orig_lc,
+                        )
                         await restored.init()
                         await restored.spawn(orig_lc)
                         self._handles[lid] = restored
                         self._port_alloc._used[lid] = orig_port
                         self._active_requests[lid] = 0
-                        self._starting_deadlines[lid] = asyncio.get_running_loop().time() + _HOT_SWAP_TIMEOUT
+                        self._starting_deadlines[lid] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
                         self._record_event(lid, "rollback_restored", model=orig_lc.model, port=orig_port)
                     except Exception:
                         logger.error("Rollback: failed to restore lane '%s'", lid, exc_info=True)
                         self._handles.pop(lid, None)
-                        await old_handle.close()
 
         # 3. Re-add removed lanes that had snapshots
         for lid, (handle, lc, port) in removed_snapshots.items():
             if lid not in self._handles and lc is not None:
                 try:
-                    restored = _create_handle(lid, port, self._global_config, lc)
+                    restored = _create_handle(
+                        lid,
+                        port,
+                        self._global_config,
+                        self._vllm_engine_config,
+                        lc,
+                    )
                     await restored.init()
                     await restored.spawn(lc)
                     self._handles[lid] = restored
                     self._port_alloc._used[lid] = port
                     self._active_requests[lid] = 0
-                    self._starting_deadlines[lid] = asyncio.get_running_loop().time() + _HOT_SWAP_TIMEOUT
+                    self._starting_deadlines[lid] = asyncio.get_running_loop().time() + _RESTART_TIMEOUT
                     self._record_event(lid, "rollback_restored", model=lc.model, port=port)
                 except Exception:
                     logger.error("Rollback: failed to re-add removed lane '%s'", lid, exc_info=True)
@@ -1192,6 +1283,18 @@ class LaneManager:
         await self._check_stuck_lanes(statuses)
         return statuses
 
+    @staticmethod
+    def _is_probable_cuda_oom(exc: BaseException) -> bool:
+        text = str(exc).lower()
+        return (
+            "out of memory" in text
+            and (
+                "cuda" in text
+                or "cuda error" in text
+                or "cumem_allocator" in text
+            )
+        )
+
     async def _check_stuck_lanes(self, statuses: list[LaneStatus]) -> None:
         """Detect vLLM lanes that have stopped generating tokens while requests are active.
 
@@ -1265,12 +1368,23 @@ class LaneManager:
             tensor_parallel_size = int(lane_config.vllm_config.tensor_parallel_size)
         previous_state = self._last_profile_state.get(status.lane_id)
         if status.runtime_state in ("loaded", "running"):
+            kv_cache_sent_mb = 0.0
+            if (
+                status.vllm
+                and lane_config is not None
+                and lane_config.vllm_config is not None
+                and lane_config.vllm_config.kv_cache_memory_bytes
+            ):
+                kv_cache_sent_mb = ModelProfileRegistry._parse_kv_cache_to_mb(
+                    lane_config.vllm_config.kv_cache_memory_bytes,
+                )
             self._model_profiles.record_loaded_vram(
                 model,
                 vram,
                 engine=engine,
                 observed_gpu_memory_utilization=observed_gpu_memory_utilization,
                 tensor_parallel_size=tensor_parallel_size,
+                kv_cache_sent_mb=kv_cache_sent_mb,
             )
             if (
                 status.vllm

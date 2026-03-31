@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
+import json
 
 from fastapi import HTTPException, Request
 import pytest
 
 from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
+from logos.dbutils.dbmodules import ThresholdLevel
 from logos.logosnode_registry import (
     LogosNodeOfflineError,
     LogosNodeSessionConflictError,
@@ -547,6 +549,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
             "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
             "total_vram_mb": 32768,
             "provider_id": 13,
+            "db_parallel": None,
         }
     ]
     assert main_mod._azure_facade.registrations == [
@@ -593,6 +596,65 @@ async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypat
 
     assert response == ({"result": "ok"}, 200)
     assert refresh_calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_get_model_endpoint_uses_id_only_and_serializes_enum(monkeypatch):
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_model(model_id: int):
+            assert model_id == 30
+            return {
+                "id": 30,
+                "name": "Qwen/Qwen2.5-Coder-7B-Instruct",
+                "weight_privacy": ThresholdLevel.LOCAL,
+            }
+
+    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+
+    req = main_mod.GetModelRequest(logos_key="root-key", id=30)
+    response = await main_mod.get_model(req)
+    payload = json.loads(response.body)
+
+    assert response.status_code == 200
+    assert payload["id"] == 30
+    assert payload["weight_privacy"] == "LOCAL"
+
+
+@pytest.mark.asyncio
+async def test_export_endpoint_json_encodes_enum_payload(monkeypatch):
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def export(logos_key: str):
+            assert logos_key == "root-key"
+            return {
+                "result": {
+                    "models": [
+                        {"id": 30, "name": "Qwen/Qwen2.5-Coder-7B-Instruct", "weight_privacy": ThresholdLevel.LOCAL}
+                    ]
+                }
+            }, 200
+
+    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+
+    req = main_mod.LogosKeyModel(logos_key="root-key")
+    response = await main_mod.export(req)
+    payload = json.loads(response.body)
+
+    assert response.status_code == 200
+    assert payload["result"]["models"][0]["weight_privacy"] == "LOCAL"
 
 
 @pytest.mark.asyncio

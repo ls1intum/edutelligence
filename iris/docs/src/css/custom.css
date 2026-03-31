@@ -1,0 +1,203 @@
+/* Self-hosted fonts (no external requests) */
+@font-face {
+  font-family: "DM Sans";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-sans-italic-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/dm-sans-normal-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Serif Display";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-serif-display-normal-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-normal-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-normal-500.woff2") format("woff2");
+}
+
+/* overflow-x on html/body is ignored by iOS Safari for touch scrolling;
+   targeting the Docusaurus wrapper actually prevents it. */
+#__docusaurus {
+  overflow-x: hidden;
+}
+
+:root {
+  --ifm-color-primary: #2a73b4;
+  --ifm-color-primary-dark: #235f94;
+  --ifm-color-primary-darker: #1f6789;
+  --ifm-color-primary-darkest: #1a5670;
+  --ifm-color-primary-light: #3e8acc;
+  --ifm-color-primary-lighter: #559bd4;
+  --ifm-color-primary-lightest: #84b7e1;
+  --iris-btn-bg: #2a73b4;
+  --iris-btn-bg-hover: #235f94;
+
+  --ifm-background-color: #ffffff;
+  --ifm-background-surface-color: #f8f9fa;
+  --ifm-font-color-base: #212529;
+
+  --iris-border-color: #dee2e6;
+  --iris-tertiary-bg: #e9ecef;
+  --iris-accent-bg: #dee2e6;
+  --iris-label-color: #636b72;
+  --iris-success: #1e7e34;
+  --iris-radius: 8px;
+  --iris-radius-card: 16px;
+  --iris-radius-pill: 999px;
+
+  /* Glassmorphism intensity ladder */
+  --iris-glass-blur-light: blur(8px);
+  --iris-glass-blur-standard: blur(16px) saturate(180%);
+  --iris-glass-blur-prominent: blur(20px) saturate(180%);
+  --iris-glass-blur-maximum: blur(24px) saturate(200%);
+
+  /* Shadow depth scale */
+  --iris-shadow-card: 0 4px 24px rgba(42, 115, 180, 0.08);
+  --iris-shadow-card-hover: 0 12px 48px rgba(42, 115, 180, 0.14);
+  --iris-shadow-panel: 0 8px 32px rgba(42, 115, 180, 0.1);
+  --iris-shadow-hero: 0 16px 64px rgba(42, 115, 180, 0.15);
+
+  /* Motion tokens */
+  --iris-motion-entrance: 0.5s ease-out;
+  --iris-motion-hover: 0.25s ease;
+  --iris-motion-stagger: 80ms;
+
+  --ifm-font-family-base: "DM Sans", system-ui, -apple-system, sans-serif;
+  --ifm-font-family-monospace:
+    "JetBrains Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --ifm-heading-font-weight: 600;
+  --ifm-font-weight-bold: 700;
+
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(62, 138, 204, 0.1);
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #5a9fd6;
+  --ifm-color-primary-dark: #4290cf;
+  --ifm-color-primary-darker: #3889cb;
+  --ifm-color-primary-darkest: #2b74b2;
+  --ifm-color-primary-light: #72aedd;
+  --ifm-color-primary-lighter: #7cb5e0;
+  --ifm-color-primary-lightest: #a0cbe9;
+
+  --ifm-background-color: #0f1319;
+  --ifm-background-surface-color: #151b24;
+  --ifm-font-color-base: #e8ecf1;
+
+  --iris-border-color: #243044;
+  --iris-tertiary-bg: #1a2230;
+  --iris-accent-bg: #1e2838;
+  --iris-label-color: #8a9bb2;
+  --iris-success: #00bc8c;
+  --iris-btn-bg: #235f94;
+  --iris-btn-bg-hover: #1b4d7a;
+
+  --iris-shadow-card: 0 4px 24px rgba(10, 20, 40, 0.4);
+  --iris-shadow-card-hover: 0 12px 48px rgba(10, 20, 40, 0.5);
+  --iris-shadow-panel: 0 8px 32px rgba(10, 20, 40, 0.4);
+  --iris-shadow-hero: 0 16px 64px rgba(10, 20, 40, 0.5);
+
+  --docusaurus-highlighted-code-line-bg: rgba(90, 159, 214, 0.15);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+body {
+  font-family: var(--ifm-font-family-base);
+}
+
+code {
+  font-family: var(--ifm-font-family-monospace);
+}
+
+.footer__copyright {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+/* ─── Subtle dot-grid background pattern ─── */
+main {
+  position: relative;
+}
+
+main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    circle,
+    rgba(42, 115, 180, 0.06) 1px,
+    transparent 1px
+  );
+  background-size: 32px 32px;
+  pointer-events: none;
+  z-index: 0;
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0%,
+    black 15%,
+    black 85%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent 0%,
+    black 15%,
+    black 85%,
+    transparent 100%
+  );
+}
+
+[data-theme="dark"] main::before {
+  background-image: radial-gradient(
+    circle,
+    rgba(90, 159, 214, 0.05) 1px,
+    transparent 1px
+  );
+}

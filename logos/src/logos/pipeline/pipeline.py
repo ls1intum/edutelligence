@@ -223,6 +223,16 @@ class RequestPipeline:
             if model_name:
                 self._demand_tracker.record_request(model_name)
 
+            # Record latent demand when the scheduler overrides classification's top
+            # choice due to availability (e.g. ETTFT penalties). This lets the
+            # capacity planner see that users want the unloaded model, so it can
+            # drain/wake it before it starves in resource mode.
+            if sorted_candidates and scheduling_result.model_id != sorted_candidates[0][0]:
+                top_model_name = self._resolve_model_name(sorted_candidates[0][0])
+                if top_model_name:
+                    self._demand_tracker.record_latent_demand(top_model_name)
+                    prom.DEMAND_LATENT_TOTAL.labels(model=top_model_name).inc()
+
         # 3. Resolve execution context (with authorization check)
         try:
             exec_context = await self._context_resolver.resolve_context(

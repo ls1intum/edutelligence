@@ -254,6 +254,7 @@ class ProviderSession:
     pending_commands: dict[str, asyncio.Future] = field(default_factory=dict)
     pending_streams: dict[str, asyncio.Queue] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def is_stale(self, stale_after_seconds: int) -> bool:
         return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
@@ -269,6 +270,9 @@ class LogosNodeRuntimeRegistry:
         self._recent_sample_window = timedelta(hours=1)
         self._recent_sample_max = 5000
         self._diag_log_cooldowns: dict[tuple[str, int], datetime] = {}
+        # Lanes pre-marked as cold by the capacity planner — excluded from
+        # scheduling so new requests don't route to lanes about to be stopped.
+        self._cold_marked_lanes: set[tuple[int, str]] = set()
 
     def _session_diagnostic_lines(
         self,
@@ -520,8 +524,11 @@ class LogosNodeRuntimeRegistry:
             return
         old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
+        was_first = not session.first_status_received
         session.first_status_received = True
         session.last_heartbeat = _utc_now()
+        if was_first:
+            self.sync_desired_lanes_from_runtime(provider_id)
         if capabilities_models is not None:
             session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
 
@@ -796,6 +803,75 @@ class LogosNodeRuntimeRegistry:
         session = self._sessions.get(int(provider_id))
         return session is not None and session.first_status_received
 
+    def get_desired_lane_set(self, provider_id: int) -> list[dict[str, Any]]:
+        """Return the server's last-intended lane configuration for a provider."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return []
+        return list(session.desired_lanes.values())
+
+    def update_desired_lanes(self, provider_id: int, lane_configs: list[dict[str, Any]]) -> None:
+        """Record the server's intended lane set after a successful apply_lanes."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        session.desired_lanes = {
+            str(lc.get("lane_id") or lc.get("model", "")): dict(lc)
+            for lc in lane_configs
+            if isinstance(lc, dict)
+        }
+
+    def update_desired_lane_add(self, provider_id: int, lane_config: dict[str, Any]) -> None:
+        """Record a single lane addition to the desired state."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        lane_id = str(lane_config.get("lane_id") or lane_config.get("model", ""))
+        if lane_id:
+            session.desired_lanes[lane_id] = dict(lane_config)
+
+    def update_desired_lane_remove(self, provider_id: int, lane_id: str) -> None:
+        """Record a lane removal from the desired state."""
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        session.desired_lanes.pop(lane_id, None)
+
+    def sync_desired_lanes_from_runtime(self, provider_id: int) -> None:
+        """Seed desired_lanes from the worker's reported runtime state.
+
+        Called after first_status_received to bootstrap the server's view
+        of what lanes the worker currently has.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return
+        lanes = (session.latest_runtime or {}).get("lanes") or []
+        if not isinstance(lanes, list):
+            return
+        desired: dict[str, dict[str, Any]] = {}
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            runtime_state = str(lane.get("runtime_state") or "").strip().lower()
+            if runtime_state in {"stopped", "error"}:
+                continue
+            lane_config = lane.get("lane_config")
+            if isinstance(lane_config, dict):
+                lid = str(lane_config.get("lane_id") or lane.get("lane_id") or "")
+                if lid:
+                    desired[lid] = dict(lane_config)
+            else:
+                lid = str(lane.get("lane_id") or "")
+                model = str(lane.get("model") or "")
+                if lid and model:
+                    desired[lid] = {"lane_id": lid, "model": model}
+        session.desired_lanes = desired
+        logger.info(
+            "Synced desired lanes from runtime for provider %s: %s",
+            provider_id, sorted(desired.keys()),
+        )
+
     async def get_lanes(self, provider_id: int, stale_after_seconds: int = 30) -> list[dict[str, Any]]:
         snap = await self.get_runtime_snapshot(provider_id, stale_after_seconds)
         lanes = snap.get("runtime", {}).get("lanes") or []
@@ -832,11 +908,31 @@ class LogosNodeRuntimeRegistry:
                 continue
             if lane.get("runtime_state") not in {"loaded", "running", "cold", "starting"}:
                 continue
+            # Exclude lanes pre-marked as cold by the capacity planner
+            lid = str(lane.get("lane_id") or "")
+            if lid and self.is_lane_cold_marked(provider_id, lid):
+                continue
             candidates.append(lane)
         if not candidates:
             return None
         candidates.sort(key=_lane_sort_key)
         return candidates[0]
+
+    # ------------------------------------------------------------------
+    # Cold lane marking (for capacity planner pre-removal exclusion)
+    # ------------------------------------------------------------------
+
+    def mark_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        """Pre-mark a lane as cold so it's excluded from scheduling."""
+        self._cold_marked_lanes.add((int(provider_id), lane_id))
+
+    def unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        """Restore a lane to normal scheduling after aborted stop."""
+        self._cold_marked_lanes.discard((int(provider_id), lane_id))
+
+    def is_lane_cold_marked(self, provider_id: int, lane_id: str) -> bool:
+        """Check if a lane is pre-marked as cold."""
+        return (int(provider_id), lane_id) in self._cold_marked_lanes
 
     async def _get_session(self, provider_id: int) -> ProviderSession | None:
         async with self._lock:

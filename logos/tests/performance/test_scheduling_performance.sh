@@ -18,10 +18,10 @@ err() { printf "[\033[1;31mFAIL\033[0m] %s\n" "$*"; }
 
 # Default values
 LOGOS_KEY=""
-WORKLOAD="tests/performance/workloads/sample_workload_mixed.csv"
-API_BASE="http://localhost:8080"
+WORKLOAD="tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv"
+API_BASE="http://localhost:18080"
 LATENCY_SLO_MS="10000"
-OUTPUT="tests/performance/results/benchmark_$(date +%Y%m%d_%H%M%S).csv"
+OUTPUT=""
 
 is_local_api_base() {
   case "$1" in
@@ -86,9 +86,9 @@ if is_local_api_base "$API_BASE"; then
         exit 1
     fi
 
-    log "Starting Docker containers..."
-    docker compose up -d
-    ok "Containers started"
+    log "Starting benchmark services..."
+    docker compose up -d logos-db logos-server
+    ok "Benchmark services started"
 
     echo ""
     log "Waiting for container to be ready..."
@@ -98,7 +98,7 @@ if is_local_api_base "$API_BASE"; then
 
     while [ $attempts -lt $max_attempts ]; do
         if docker compose ps "$CONTAINER_NAME" 2>/dev/null | grep -qE "Up|running"; then
-            if docker compose exec -T "$CONTAINER_NAME" poetry --version >/dev/null 2>&1; then
+            if docker compose exec -T "$CONTAINER_NAME" python --version >/dev/null 2>&1; then
                 ok "Container is ready (${attempts} attempts, $((attempts * 2))s)"
                 break
             fi
@@ -128,20 +128,40 @@ log "Running performance tests..."
 echo ""
 
 test_exit_code=0
+RUN_TIMESTAMP="$(date +"%Y%m%d_%H%M%S")"
 if is_local_api_base "$API_BASE"; then
-    docker compose exec "$CONTAINER_NAME" poetry run python tests/performance/run_api_workload.py \
-        --logos-key "$LOGOS_KEY" \
-        --workload "$WORKLOAD" \
-        --api-base "$API_BASE" \
-        --output "$OUTPUT" \
-        --latency-slo-ms "$LATENCY_SLO_MS" || test_exit_code=$?
+    log "Syncing local benchmark files into the container..."
+    docker compose cp tests/performance/run_api_workload.py "$CONTAINER_NAME":/app/tests/performance/run_api_workload.py >/dev/null
+    docker compose cp tests/performance/workloads/README.md "$CONTAINER_NAME":/app/tests/performance/workloads/README.md >/dev/null
+    docker compose cp tests/performance/workloads/explicit "$CONTAINER_NAME":/app/tests/performance/workloads >/dev/null
+    docker compose cp tests/performance/workloads/resource "$CONTAINER_NAME":/app/tests/performance/workloads >/dev/null
+    docker compose cp src/logos/dbutils/dbmanager.py "$CONTAINER_NAME":/app/src/logos/dbutils/dbmanager.py >/dev/null
+
+    RUNNER_CMD=(
+        python /app/tests/performance/run_api_workload.py
+        --logos-key "$LOGOS_KEY"
+        --workload "/app/$WORKLOAD"
+        --api-base "http://127.0.0.1:8080"
+        --run-timestamp "$RUN_TIMESTAMP"
+        --latency-slo-ms "$LATENCY_SLO_MS"
+    )
+    if [ -n "$OUTPUT" ]; then
+        RUNNER_CMD+=(--output "/app/$OUTPUT")
+    fi
+    docker compose exec "$CONTAINER_NAME" "${RUNNER_CMD[@]}" || test_exit_code=$?
 else
-    poetry run python tests/performance/run_api_workload.py \
-        --logos-key "$LOGOS_KEY" \
-        --workload "$WORKLOAD" \
-        --api-base "$API_BASE" \
-        --output "$OUTPUT" \
-        --latency-slo-ms "$LATENCY_SLO_MS" || test_exit_code=$?
+    RUNNER_CMD=(
+        poetry run python tests/performance/run_api_workload.py
+        --logos-key "$LOGOS_KEY"
+        --workload "$WORKLOAD"
+        --api-base "$API_BASE"
+        --run-timestamp "$RUN_TIMESTAMP"
+        --latency-slo-ms "$LATENCY_SLO_MS"
+    )
+    if [ -n "$OUTPUT" ]; then
+        RUNNER_CMD+=(--output "$OUTPUT")
+    fi
+    "${RUNNER_CMD[@]}" || test_exit_code=$?
 fi
 
 echo ""
@@ -150,10 +170,15 @@ echo "======================================"
 if [ $test_exit_code -eq 0 ]; then
     printf "\n\033[1;32m✅ Success!\033[0m Performance benchmark completed.\n\n"
     log "Test results:"
-    log "  - Detailed metrics: tests/performance/results/"
-    log "  - Latency charts: tests/performance/results/*.png"
-    log "  - Summary CSV: tests/performance/results/*_summary.csv"
-    log "  - Detailed CSV: tests/performance/results/*_detailed.csv"
+    log "  - Each run is saved in its own folder under tests/performance/results/"
+    log "  - Folder format: YYYYMMDD_HHMMSS - experiment-name"
+    log "  - Summary CSV: summary.csv"
+    log "  - Detailed CSV: detailed.csv"
+    log "  - Runtime snapshots: runtime_samples.jsonl"
+    log "  - VRAM snapshots: provider_vram.json"
+    log "  - Aggregated request stats: request_log_stats.json"
+    log "  - Run metadata: run_meta.json"
+    log "  - Charts: detailed*.png"
     printf "\n"
 else
     printf "\n\033[1;31m❌ Failed!\033[0m Performance test failed with exit code: %s\n\n" "$test_exit_code"

@@ -14,8 +14,8 @@ services:
       - "--api.dashboard=true"
       # - "--entrypoints.grpc.address=:50051"
     ports:
-      - "443:443"
-      - "8080:8080"
+      - "${LOGOS_TRAEFIK_HTTPS_PORT:-18443}:443"
+      - "${LOGOS_TRAEFIK_SECURE8080_PORT:-18081}:8080"
       # - "50051:50051"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -42,6 +42,7 @@ services:
       BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
       LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
     expose:
       - "8080"
       # - "50051"

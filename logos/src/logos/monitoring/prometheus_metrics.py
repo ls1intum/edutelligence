@@ -99,6 +99,13 @@ DEMAND_RAW_COUNT = Gauge(
     registry=registry,
 )
 
+DEMAND_LATENT_TOTAL = Counter(
+    "logos_demand_latent_total",
+    "Latent demand recordings: classification preferred a model the scheduler did not select",
+    ["model"],
+    registry=registry,
+)
+
 # ---------------------------------------------------------------------------
 # Capacity planner
 # ---------------------------------------------------------------------------

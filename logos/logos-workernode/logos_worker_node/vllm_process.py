@@ -24,6 +24,7 @@ import logging
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
@@ -31,7 +32,13 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
+from logos_worker_node.models import (
+    LaneConfig,
+    OllamaConfig,
+    ProcessState,
+    ProcessStatus,
+    VllmEngineConfig,
+)
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
@@ -54,10 +61,17 @@ _SCRUBBED_ENV_VARS = (
 class VllmProcessHandle:
     """Manages a single vLLM server process on a specific port."""
 
-    def __init__(self, lane_id: str, port: int, global_config: OllamaConfig) -> None:
+    def __init__(
+        self,
+        lane_id: str,
+        port: int,
+        global_config: OllamaConfig,
+        vllm_engine_config: VllmEngineConfig | None = None,
+    ) -> None:
         self.lane_id = lane_id
         self.port = port
         self._global_config = global_config
+        self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
         self._lane_config: LaneConfig | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._http: httpx.AsyncClient | None = None
@@ -137,6 +151,14 @@ class VllmProcessHandle:
             self._persist_failure_logs("startup_failed")
             await self._kill_process()
             raise RuntimeError(failure)
+
+        # Discover TP worker child PIDs so _verify_vram_released can track them
+        self._known_child_pids = await self._discover_child_pids(self._process.pid)
+        if self._known_child_pids:
+            logger.info(
+                "[%s] Discovered %d child PIDs for TP workers: %s",
+                self.lane_id, len(self._known_child_pids), self._known_child_pids,
+            )
 
         return self.status()
 
@@ -455,18 +477,87 @@ class VllmProcessHandle:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
-        # ``--enforce-eager`` is both an explicit option and our fallback when
-        # flash attention is disabled for the lane.
+        # enforce_eager defaults to True (skips torch.compile + CUDA graph
+        # capture).  Set enforce_eager=False in vllm_config to opt in to
+        # compilation on Ampere+ GPUs where it actually helps.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
+        # Attention backend: explicit config wins, otherwise auto-detect.
+        # FlashInfer JIT crashes drivers on pre-Ampere (compute < 8.0).
+        attn_backend = vc.attention_backend or self._auto_attention_backend()
+        if attn_backend:
+            cmd.extend(["--attention-config.backend", attn_backend])
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
         if vc.disable_custom_all_reduce:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
             cmd.append("--enable-sleep-mode")
+        # CUDA graph sizes: opt-in, only when not in eager mode
+        if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
+            cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
+        # CPU RAM offloading for KV cache
+        if vc.cpu_offload_gb > 0:
+            cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
+        # Persist vLLM compilation artifacts on the shared models volume so
+        # restarts can reuse them instead of recompiling from scratch.
+        if not self._has_compilation_config_override(vc.extra_args):
+            import json as _json
+            cache_root = os.path.join(self._global_config.models_path, ".cache", "vllm")
+            cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
+        if vc.chat_template_kwargs:
+            import json as _json
+            cmd.extend(["--default-chat-template-kwargs", _json.dumps(vc.chat_template_kwargs)])
         cmd.extend(vc.extra_args)
         return cmd
+
+    @staticmethod
+    def _has_compilation_config_override(extra_args: list[str]) -> bool:
+        """True when the user already supplied a vLLM compilation config flag."""
+        return any(
+            arg == "--compilation-config"
+            or arg.startswith("--compilation-config=")
+            or arg == "-cc"
+            or arg.startswith("-cc")
+            for arg in extra_args
+        )
+
+    def _auto_attention_backend(self) -> str:
+        """Auto-select attention backend based on GPU compute capability.
+
+        Returns an operator override when the worker has one, otherwise leaves
+        backend selection to vLLM.
+        """
+        forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
+        if forced_backend:
+            return forced_backend
+        return ""
+
+    _cached_cuda_arch: str | None = None
+
+    def _detect_cuda_arch(self) -> str | None:
+        """Auto-detect GPU compute capability via nvidia-smi. Cached per process."""
+        if VllmProcessHandle._cached_cuda_arch is not None:
+            return VllmProcessHandle._cached_cuda_arch or None
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                caps = set()
+                for line in result.stdout.strip().splitlines():
+                    cap = line.strip()
+                    if cap:
+                        caps.add(cap)
+                if caps:
+                    arch = ";".join(sorted(caps))
+                    VllmProcessHandle._cached_cuda_arch = arch
+                    return arch
+        except Exception:
+            pass
+        VllmProcessHandle._cached_cuda_arch = ""
+        return None
 
     def _resolve_vllm_binary(self, configured_binary: str) -> str:
         """Resolve the vLLM CLI executable with actionable fallback order.
@@ -592,16 +683,61 @@ class VllmProcessHandle:
         vc = lane_config.vllm_config
         if vc.server_dev_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
+
+        if self._vllm_engine_config.flashinfer_loglevel > 0:
+            env["FLASHINFER_LOGLEVEL"] = str(self._vllm_engine_config.flashinfer_loglevel)
+        if self._vllm_engine_config.flashinfer_logdest.strip():
+            env["FLASHINFER_LOGDEST"] = self._vllm_engine_config.flashinfer_logdest.strip()
+
+        # Persistent compilation caches: point to models_path (mounted volume)
+        # so JIT artifacts survive container rebuilds.
+        cache_root = os.path.join(gc.models_path, ".cache")
+
+        # vLLM cache root — controls where vLLM stores torch.compile cache,
+        # CUDA graph cache, and other artifacts (~/.cache/vllm by default).
+        if "VLLM_CACHE_ROOT" not in os.environ:
+            env["VLLM_CACHE_ROOT"] = os.path.join(cache_root, "vllm")
+
+        # torch.compile / inductor cache
+        if "TORCHINDUCTOR_CACHE_DIR" not in os.environ:
+            env["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(cache_root, "torch_inductor")
+        if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
+            env["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
+
+        # FlashInfer JIT kernel cache (critical — first compile can take 60s+)
+        if "FLASHINFER_JIT_DIR" not in os.environ:
+            env["FLASHINFER_JIT_DIR"] = os.path.join(cache_root, "flashinfer")
+
+        # Auto-detect CUDA arch for faster compilation
+        if "TORCH_CUDA_ARCH_LIST" not in os.environ:
+            detected_arch = self._detect_cuda_arch()
+            if detected_arch:
+                env["TORCH_CUDA_ARCH_LIST"] = detected_arch
+
         if vc.disable_nccl_p2p:
             env["NCCL_P2P_DISABLE"] = "1"
 
-        # NCCL safety defaults for tensor-parallel lanes (TP > 1).
-        # These prevent NCCL hangs from cascading into driver crashes.
-        # Each can be overridden by the host environment or disable_nccl_p2p config.
+        # NCCL defaults for tensor-parallel lanes (TP > 1).
+        # IMPORTANT: Do NOT set NCCL transport tuning vars (P2P_LEVEL,
+        # NET_GDR_LEVEL, BUFFSIZE, SHM_USE_CUDA_MEMCPY, etc.) — these are
+        # debugging knobs that override NCCL's auto-detection. NCCL reads the
+        # GPU/PCIe/NVLink topology and picks optimal transports automatically.
+        # Hardcoding them causes unpredictable behavior across different setups.
         if vc.tensor_parallel_size > 1:
-            env.setdefault("NCCL_P2P_DISABLE", "1")
-            env.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+            # Async error handling — detect NCCL failures instead of hanging.
+            # (NCCL_ASYNC_ERROR_HANDLING is deprecated; PyTorch reads this one.)
+            env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+            # Disable cuMem host allocations — unreliable in Docker/VM
+            # environments without proper NUMA config. We use ipc:host + shm
+            # instead, which is universally safe.
             env.setdefault("NCCL_CUMEM_ENABLE", "0")
+            # Extended timeout: FlashInfer JIT can take minutes on first
+            # compile, default 10min NCCL timeout is sometimes not enough.
+            env.setdefault("NCCL_TIMEOUT", "1800")               # 30 min
+            if self._vllm_engine_config.nccl_debug:
+                env["NCCL_DEBUG"] = self._vllm_engine_config.nccl_debug
+            if self._vllm_engine_config.nccl_debug_subsys:
+                env["NCCL_DEBUG_SUBSYS"] = self._vllm_engine_config.nccl_debug_subsys
 
         return env
 
@@ -756,13 +892,8 @@ class VllmProcessHandle:
         # Phase 4: Sweep for any orphaned descendants still holding GPU memory
         await self._kill_descendant_processes(pid)
 
-    async def _kill_descendant_processes(self, root_pid: int) -> None:
-        """Kill any remaining child processes that survived process-group kill.
-
-        With TP>1 vLLM spawns worker subprocesses. If the process-group kill
-        missed any (e.g. they re-parented to init), walk /proc to find and
-        kill them.  This is a best-effort safety net.
-        """
+    async def _discover_child_pids(self, root_pid: int) -> set[int]:
+        """Discover child PIDs of the root vLLM process (TP worker subprocesses)."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 "pgrep", "-P", str(root_pid),
@@ -771,16 +902,41 @@ class VllmProcessHandle:
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
         except (FileNotFoundError, asyncio.TimeoutError, OSError):
-            return
+            return set()
 
         if not stdout:
-            return
+            return set()
 
-        child_pids = []
+        pids: set[int] = set()
         for line in stdout.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if line.isdigit():
-                child_pids.append(int(line))
+                pids.add(int(line))
+        return pids
+
+    async def _kill_descendant_processes(self, root_pid: int) -> None:
+        """Kill any remaining child processes that survived process-group kill.
+
+        With TP>1 vLLM spawns worker subprocesses. If the process-group kill
+        missed any (e.g. they re-parented to init), walk /proc to find and
+        kill them.  This is a best-effort safety net.
+        """
+        # Use known child PIDs (discovered at spawn) + fresh pgrep scan
+        child_pids = set(self._known_child_pids)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pgrep", "-P", str(root_pid),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            if stdout:
+                for line in stdout.decode("utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if line.isdigit():
+                        child_pids.add(int(line))
+        except (FileNotFoundError, asyncio.TimeoutError, OSError):
+            pass
 
         for cpid in child_pids:
             try:
@@ -791,6 +947,8 @@ class VllmProcessHandle:
                 )
             except (ProcessLookupError, OSError):
                 pass
+
+        self._known_child_pids.clear()
 
     async def _verify_vram_released(
         self, pid: int, timeout: float = 10.0, poll_interval: float = 1.0,
@@ -889,6 +1047,10 @@ class VllmProcessHandle:
             logger.info("[%s] Failure logs saved to %s", self.lane_id, path)
         except OSError:
             logger.debug("[%s] Could not persist failure logs", self.lane_id, exc_info=True)
+
+    def persist_recent_logs(self, reason: str) -> None:
+        """Public wrapper for persisting recent vLLM logs after runtime failures."""
+        self._persist_failure_logs(reason)
 
     def _format_startup_failure(self, timeout_s: int) -> str:
         status = self.status()

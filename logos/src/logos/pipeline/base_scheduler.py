@@ -242,14 +242,64 @@ class BaseScheduler(SchedulerInterface):
             except Exception:
                 logger.debug("Failed to update Azure rate limits for model %s", model_id, exc_info=False)
 
+    def reevaluate_model_queues(self, model_name: str) -> None:
+        """Reevaluate queued requests for a model after state change (load/wake).
+
+        When a provider state changes (e.g. a new lane becomes available),
+        queued futures for that model may be resolvable immediately.
+        """
+        # Find all (model_id, provider_id) pairs for this model name
+        for (model_id, provider_id), ptype in self._model_registry.items():
+            if ptype != "logosnode":
+                continue
+            # Check if this provider now has capacity for the model
+            try:
+                status = self._logosnode.get_model_status(model_id, provider_id)
+            except (ValueError, KeyError):
+                continue
+            if not status.is_loaded:
+                continue
+
+            # Try to dequeue and resolve waiting futures
+            while True:
+                task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
+                if task is None:
+                    break
+                if not isinstance(task, asyncio.Future):
+                    break
+                if task.done():
+                    continue
+
+                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
+                queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
+
+                provider_metrics = {}
+                try:
+                    cap = self._logosnode.get_capacity_info(provider_id)
+                    provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                except Exception:
+                    pass
+
+                result = SchedulingResult(
+                    model_id=model_id,
+                    provider_id=provider_id,
+                    provider_type="logosnode",
+                    queue_entry_id=None,
+                    was_queued=True,
+                    queue_depth_at_schedule=queue_depth,
+                    queue_depth_at_arrival=queue_depth,
+                    priority_when_scheduled=priority_str,
+                    is_cold_start=False,
+                    provider_metrics=provider_metrics,
+                    available_vram_mb=provider_metrics.get('available_vram_mb'),
+                )
+
+                logger.info(
+                    "Reevaluation: resolving queued request for model %s (provider=%s) after state change",
+                    model_name, provider_id,
+                )
+                task.get_loop().call_soon_threadsafe(task.set_result, result)
+                break  # One at a time to avoid overwhelming the newly loaded lane
+
     def update_model_registry(self, model_registry: Dict[tuple[int, int], str]) -> None:
         self._model_registry = dict(model_registry or {})
-
-# TODO: fix that
-    # def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
-    #     """
-    #     Update provider statistics (e.g. rate limits) from response headers.
-    #     """
-    #     provider_type = self._model_registry.get(model_id)
-    #     if provider_type == 'azure':
-    #         self._azure.update_model_rate_limits(model_id, headers)

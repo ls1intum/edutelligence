@@ -12,7 +12,7 @@ services:
       - "443:443"
     command:
       - "--configFile=/traefik.yml"
-      - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
+      - "--certificatesresolvers.harica.acme.email=${ACME_EMAIL}"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -62,18 +62,17 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.atlasml.entrypoints=http"
-      - "traefik.http.routers.atlasml.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.atlasml.rule=Host(`${APP_HOSTNAME}`) && PathPrefix(`/`)"
       - "traefik.http.middlewares.atlasml-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.routers.atlasml.middlewares=atlasml-https-redirect"
       - "traefik.http.routers.atlasml-secure.entrypoints=https"
-      - "traefik.http.routers.atlasml-secure.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.atlasml-secure.rule=Host(`${APP_HOSTNAME}`) && PathPrefix(`/`)"
       - "traefik.http.routers.atlasml-secure.tls=true"
-      - "traefik.http.routers.atlasml-secure.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.atlasml-secure.tls.options=default@file"
+      - "traefik.http.routers.atlasml-secure.tls.certresolver=harica"
       # IP Whitelist middleware (only applied if ALLOWED_IPS is set)
       - "traefik.http.middlewares.atlasml-ipwhitelist.ipallowlist.sourcerange=${ALLOWED_IPS:-0.0.0.0/0}"
       # Apply middlewares (IP whitelist only used if explicitly enabled)
-      - "traefik.http.routers.atlasml-secure.middlewares=default-headers,rate-limit${ALLOWED_IPS:+,atlasml-ipwhitelist}"
+      - "traefik.http.routers.atlasml-secure.middlewares=default-headers@file${ALLOWED_IPS:+,atlasml-ipwhitelist}"
       - "traefik.http.routers.atlasml-secure.service=atlasml"
       - "traefik.http.services.atlasml.loadbalancer.server.port=8000"
     deploy:

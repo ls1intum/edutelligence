@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from logos_worker_node.models import LaneConfig, LaneSetRequest, VllmConfig
+from logos_worker_node.models import LaneConfig, LaneSetRequest, LogosConfig, VllmConfig
 
 
 def test_lane_config_normalizes_gpu_devices() -> None:
@@ -58,3 +58,27 @@ def test_lane_set_request_allows_same_model_with_unique_lane_ids() -> None:
         ]
     )
     assert len(req.lanes) == 2
+
+
+def test_logos_config_extracts_inline_capability_overrides() -> None:
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        provider_id=13,
+        shared_key="secret",
+        capabilities_models=[
+            {
+                "model": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+                "tensor_parallel_size": 1,
+                "kv_budget_mb": 2048,
+                "max_context_length": 4096,
+            }
+        ],
+    )
+
+    assert cfg.capabilities_models == ["Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"]
+    assert cfg.capabilities_overrides["Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"] == {
+        "tensor_parallel_size": 1,
+        "kv_budget_mb": 2048,
+        "max_context_length": 4096,
+    }

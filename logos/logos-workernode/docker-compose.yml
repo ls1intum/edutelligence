@@ -7,6 +7,7 @@ services:
         INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
         INSTALL_VLLM: ${INSTALL_VLLM:-0}
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
+        NCCL_PIP_SPEC: ${NCCL_PIP_SPEC:-}
     container_name: logos-workernode
     init: true
     restart: unless-stopped
@@ -14,6 +15,12 @@ services:
     stop_grace_period: 2m
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
+      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      LOGOS_URL: ${LOGOS_URL:-}
+      LOGOS_PROVIDER_ID: ${LOGOS_PROVIDER_ID:-}
+      LOGOS_API_KEY: ${LOGOS_API_KEY:-}
+      LOGOS_WORKER_NODE_ID: ${LOGOS_WORKER_NODE_ID:-}
+      LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

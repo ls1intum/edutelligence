@@ -8,5 +8,9 @@ services:
     pid: host
     ipc: host              # Required for NCCL shared-memory transport in tensor-parallel vLLM
     shm_size: "16g"        # Default 64 MB is insufficient; NCCL hangs without adequate /dev/shm
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1           # Unlimited locked memory — needed for NCCL pinned buffers
     volumes:
       - ${CUDA_HOME:-/usr/local/cuda-12.8}:${CUDA_HOME:-/usr/local/cuda-12.8}:ro # Please adjust if your CUDA installation is in a different location

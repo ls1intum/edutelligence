@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig
+from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 
@@ -83,6 +83,48 @@ def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
     cmd = handle._build_cmd(lane)
     idx = cmd.index("--kv-cache-memory-bytes")
     assert cmd[idx + 1] == "4G"
+
+
+def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.5-9B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template_kwargs={"enable_thinking": False}),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--default-chat-template-kwargs")
+    assert cmd[idx + 1] == '{"enable_thinking": false}'
+    assert "--chat-template-kwargs" not in cmd
+
+
+def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.5-9B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--compilation-config")
+    assert cmd[idx + 1] == '{"cache_dir": "/data/models/.cache/vllm"}'
+
+
+def test_build_cmd_respects_explicit_compilation_config(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.5-9B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(extra_args=["-cc", '{"mode": 3}']),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--compilation-config" not in cmd
 
 
 def test_build_cmd_injects_low_gpu_memory_utilization_with_kv_cache(monkeypatch) -> None:
@@ -182,6 +224,25 @@ def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
     env = handle._build_env(lane)
     assert env["VLLM_SERVER_DEV_MODE"] == "1"
     assert env["NCCL_P2P_DISABLE"] == "1"
+
+
+def test_build_env_sets_flashinfer_logging(monkeypatch) -> None:
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(gpu_devices="all"),
+        VllmEngineConfig(flashinfer_loglevel=3, flashinfer_logdest="stderr"),
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    assert env["FLASHINFER_LOGLEVEL"] == "3"
+    assert env["FLASHINFER_LOGDEST"] == "stderr"
 
 
 def test_require_c_compiler_honors_cc_absolute_path(monkeypatch, tmp_path: Path) -> None:
@@ -311,7 +372,12 @@ vllm:time_to_first_token_seconds_bucket{model_name=\"Qwen\",le=\"+Inf\"} 10
 
 
 def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> None:
-    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(gpu_devices="all"),
+        VllmEngineConfig(nccl_debug="INFO", nccl_debug_subsys="INIT,COLL,GRAPH"),
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -319,13 +385,26 @@ def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> Non
     )
     monkeypatch.delenv("HF_HOME", raising=False)
     env = handle._build_env(lane)
-    assert env["NCCL_P2P_DISABLE"] == "1"
-    assert env["NCCL_ASYNC_ERROR_HANDLING"] == "1"
+    # Only universally safe vars — no transport tuning (NCCL auto-detects)
+    assert env["TORCH_NCCL_ASYNC_ERROR_HANDLING"] == "1"
     assert env["NCCL_CUMEM_ENABLE"] == "0"
+    assert env["NCCL_TIMEOUT"] == "1800"
+    assert env["NCCL_DEBUG"] == "INFO"
+    assert env["NCCL_DEBUG_SUBSYS"] == "INIT,COLL,GRAPH"
+    # Transport knobs must NOT be set (NCCL auto-tunes based on topology)
+    assert "NCCL_P2P_LEVEL" not in env
+    assert "NCCL_BUFFSIZE" not in env
+    assert "NCCL_SHM_USE_CUDA_MEMCPY" not in env
+    assert "NCCL_NET_GDR_LEVEL" not in env
 
 
 def test_build_env_no_nccl_safety_for_tp_1(monkeypatch) -> None:
-    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(gpu_devices="all"),
+        VllmEngineConfig(nccl_debug="INFO", nccl_debug_subsys="INIT,COLL,GRAPH"),
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -336,6 +415,8 @@ def test_build_env_no_nccl_safety_for_tp_1(monkeypatch) -> None:
     # NCCL safety vars should NOT be injected for TP=1
     assert "NCCL_ASYNC_ERROR_HANDLING" not in env
     assert "NCCL_CUMEM_ENABLE" not in env
+    assert "NCCL_DEBUG" not in env
+    assert "NCCL_DEBUG_SUBSYS" not in env
 
 
 def test_build_env_nccl_safety_respects_explicit_disable_nccl_p2p(monkeypatch) -> None:
@@ -429,6 +510,7 @@ async def test_spawn_uses_new_process_session(monkeypatch) -> None:
     monkeypatch.setattr(handle, "_build_env", lambda _lane: {})
     monkeypatch.setattr(handle, "_require_c_compiler", lambda: None)
     monkeypatch.setattr(handle, "_require_nvcc", lambda _lane: None)
+    monkeypatch.setattr(handle, "_discover_child_pids", lambda _pid: asyncio.sleep(0, result=set()))
     
     async def _fake_wait_for_ready(timeout):  # noqa: ANN001
         return True
@@ -515,3 +597,130 @@ async def test_kill_process_does_not_wait_forever_after_sigkill(monkeypatch) -> 
 
     assert len(calls) == 2
     assert handle._process_group_id is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Cold start optimization
+# ---------------------------------------------------------------------------
+
+
+def test_build_cmd_includes_cuda_graph_sizes_when_set(monkeypatch):
+    """CUDA graph sizes should appear in cmd when set and not enforce_eager."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(cuda_graph_sizes="1,2,4,8", enforce_eager=False),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--cuda-graph-sizes" in cmd
+    idx = cmd.index("--cuda-graph-sizes")
+    assert cmd[idx + 1] == "1,2,4,8"
+
+
+def test_build_cmd_skips_cuda_graph_sizes_with_enforce_eager(monkeypatch):
+    """CUDA graph sizes should be skipped when enforce_eager is True."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(cuda_graph_sizes="1,2,4,8", enforce_eager=True),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--cuda-graph-sizes" not in cmd
+
+
+def test_build_cmd_includes_cpu_offload(monkeypatch):
+    """--cpu-offload-gb should appear when cpu_offload_gb > 0."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(cpu_offload_gb=10.0),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--cpu-offload-gb" in cmd
+    idx = cmd.index("--cpu-offload-gb")
+    assert cmd[idx + 1] == "10.0"
+
+
+def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
+    """--cpu-offload-gb should not appear when cpu_offload_gb == 0 (explicitly disabled)."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(
+        model="test-model", vllm=True,
+        vllm_config=VllmConfig(cpu_offload_gb=0.0),
+    )
+    cmd = handle._build_cmd(lc)
+    assert "--cpu-offload-gb" not in cmd
+
+
+def test_enforce_eager_on_by_default(monkeypatch):
+    """enforce_eager defaults to True so vLLM starts with --enforce-eager."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--enforce-eager" in cmd
+
+
+def test_enforce_eager_can_be_enabled(monkeypatch):
+    """Setting enforce_eager=True should add --enforce-eager."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(enforce_eager=True))
+    cmd = handle._build_cmd(lc)
+    assert "--enforce-eager" in cmd
+
+
+def test_no_attn_override_by_default(monkeypatch):
+    """By default no attention backend override — let vLLM pick (FlashInfer)."""
+    monkeypatch.delenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", raising=False)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" not in cmd
+
+
+def test_explicit_attention_backend_config(monkeypatch):
+    """Explicit attention_backend in config should be passed to vLLM."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig(attention_backend="TRITON_ATTN"))
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" in cmd
+    idx = cmd.index("--attention-config.backend")
+    assert cmd[idx + 1] == "TRITON_ATTN"
+
+
+def test_auto_attention_backend_env_override(monkeypatch):
+    """Worker-wide auto attention override should be passed through to vLLM."""
+    monkeypatch.setenv("LOGOS_VLLM_AUTO_ATTENTION_BACKEND", "TRITON_ATTN")
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lc)
+    assert "--attention-config.backend" in cmd
+    idx = cmd.index("--attention-config.backend")
+    assert cmd[idx + 1] == "TRITON_ATTN"
+
+
+def test_build_env_sets_persistent_caches(monkeypatch):
+    """All compilation caches should point to models_path for persistence."""
+    monkeypatch.delenv("VLLM_CACHE_ROOT", raising=False)
+    monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
+    monkeypatch.delenv("TORCHINDUCTOR_FX_GRAPH_CACHE", raising=False)
+    monkeypatch.delenv("FLASHINFER_JIT_DIR", raising=False)
+    monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
+    gc = OllamaConfig(models_path="/data/models")
+    handle = VllmProcessHandle("lane-test", 19000, gc)
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    env = handle._build_env(lc)
+    assert env["VLLM_CACHE_ROOT"] == "/data/models/.cache/vllm"
+    assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.cache/torch_inductor"
+    assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
+    assert env["FLASHINFER_JIT_DIR"] == "/data/models/.cache/flashinfer"
+    assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"

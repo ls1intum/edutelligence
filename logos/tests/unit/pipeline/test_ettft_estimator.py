@@ -159,7 +159,7 @@ def test_local_sleeping():
 
 
 def test_local_busy_high_queue():
-    """Loaded model with queue pressure → BUSY tier."""
+    """Loaded model with queue pressure → exponential penalty."""
     view = _make_view(
         best_lane_state="loaded",
         is_loaded=True,
@@ -167,11 +167,11 @@ def test_local_busy_high_queue():
         warmest_ttft_p95_seconds=0.2,
     )
     est = estimate_ettft_local(view)
-    # base=200ms, queue_delay=5*200=1000ms, total=1200ms → SLEEPING tier (501-3000)
-    assert est.ettft_ms == 1200.0
-    assert est.tier == ReadinessTier.SLEEPING
+    # base=200ms, queue_penalty=200*(1.3^5 - 1)=200*(3.71-1)=200*2.71=542ms, total≈742ms
+    assert est.ettft_ms > 700.0  # exponential: significantly higher than base
+    assert est.ettft_ms < 1000.0  # but not extreme for 5 queued
 
-    # With higher queue
+    # With higher queue — exponential grows faster
     view2 = _make_view(
         best_lane_state="loaded",
         is_loaded=True,
@@ -179,9 +179,10 @@ def test_local_busy_high_queue():
         warmest_ttft_p95_seconds=0.3,
     )
     est2 = estimate_ettft_local(view2)
-    # base=300ms, delay=20*300=6000ms, total=6300ms → BUSY tier (3001-10000)
-    assert est2.tier == ReadinessTier.BUSY
-    assert est2.penalty == 8.0
+    # base=300ms, penalty=300*(1.3^20 - 1) → capped at _DEFAULT_COLD_MS (45000ms)
+    # total=300+45000=45300ms → COLD tier
+    assert est2.ettft_ms > 10000.0  # very high queue = significant penalty
+    assert est2.penalty > 0
 
 
 def test_local_cold():
@@ -322,3 +323,26 @@ def test_tier_boundary_sleeping_busy():
     tier_3001, _ = classify_tier(3000.1)
     assert tier_3000 == ReadinessTier.SLEEPING
     assert tier_3001 == ReadinessTier.BUSY
+
+
+# ---------------------------------------------------------------------------
+# Phase 2B: Eviction cost in ETTFT
+# ---------------------------------------------------------------------------
+
+
+def test_cold_with_eviction_cost():
+    """Cold model with eviction cost adds to ETTFT."""
+    view = _make_view(best_lane_state="cold", is_loaded=False)
+    est_no_evict = estimate_ettft_local(view)
+    est_evict = estimate_ettft_local(view, eviction_cost_ms=10000.0)
+
+    assert est_evict.ettft_ms == est_no_evict.ettft_ms + 10000.0
+    assert "eviction" in est_evict.reasoning
+
+
+def test_warm_ignores_eviction_cost():
+    """Warm model should not be affected by eviction_cost_ms."""
+    view = _make_view(best_lane_state="loaded", is_loaded=True, warmest_ttft_p95_seconds=0.1)
+    est = estimate_ettft_local(view, eviction_cost_ms=10000.0)
+    assert est.tier == ReadinessTier.WARM
+    assert est.ettft_ms == 100.0  # No eviction cost added

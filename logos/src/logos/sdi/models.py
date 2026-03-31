@@ -181,6 +181,7 @@ class LaneSchedulerSignals:
     num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
     tensor_parallel_size: Optional[int] = None  # vLLM topology hint
+    gpu_devices: Optional[str] = None  # GPU device indices e.g. "0,1"
 
     def to_dict(self) -> dict:
         return {
@@ -198,6 +199,7 @@ class LaneSchedulerSignals:
             'num_parallel': self.num_parallel,
             'gpu_memory_utilization': self.gpu_memory_utilization,
             'tensor_parallel_size': self.tensor_parallel_size,
+            'gpu_devices': self.gpu_devices,
         }
 
 
@@ -282,6 +284,7 @@ class CapacityPlanAction:
     model_name: str
     params: Dict[str, Any] = field(default_factory=dict)
     reason: str = ""
+    vram_reservation_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -312,6 +315,7 @@ class ModelProfile:
     max_context_length: Optional[int] = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
+    residency_source: Optional[str] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -355,6 +359,7 @@ class ModelProfile:
             'max_context_length': self.max_context_length,
             'measurement_count': self.measurement_count,
             'last_measured_epoch': self.last_measured_epoch,
+            'residency_source': self.residency_source,
         }
 
 

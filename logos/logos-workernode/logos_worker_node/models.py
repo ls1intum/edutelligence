@@ -70,12 +70,31 @@ class VllmConfig(BaseModel):
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
-    enforce_eager: bool = False
+    enforce_eager: bool = True
+    attention_backend: str = Field(
+        default="",
+        description="Attention backend override (e.g. 'TRITON_ATTN', 'FLASHINFER'). "
+        "Empty = auto-detect (TRITON_ATTN on pre-Ampere, FlashInfer on Ampere+).",
+    )
     enable_prefix_caching: bool = True
     disable_custom_all_reduce: bool = False
     disable_nccl_p2p: bool = False
     enable_sleep_mode: bool = False
     server_dev_mode: bool = False
+    cuda_graph_sizes: str = Field(
+        default="",
+        description="Comma-separated batch sizes for CUDA graph capture (e.g. '1,2,4,8'). "
+        "Empty = vLLM default. Only effective when enforce_eager is False.",
+    )
+    cpu_offload_gb: float = Field(
+        default=0.0, ge=0.0,
+        description="CPU RAM for KV cache offloading (GB). Passed as --cpu-offload-gb to vLLM. 0 = disabled.",
+    )
+    chat_template_kwargs: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Default chat_template_kwargs passed to vLLM via --default-chat-template-kwargs. "
+        "e.g. {\"enable_thinking\": false} to disable Qwen3/3.5 thinking mode.",
+    )
     extra_args: list[str] = Field(default_factory=list)
 
     @field_validator("kv_cache_memory_bytes")
@@ -97,6 +116,37 @@ class VllmEngineConfig(BaseModel):
 
     metrics_path: str = "/metrics"
     metrics_timeout_seconds: int = Field(default=5, ge=1)
+    flashinfer_loglevel: int = Field(
+        default=0,
+        ge=0,
+        le=10,
+        description="FlashInfer logging level (0, 1, 3, 5, 10). 0 disables logging.",
+    )
+    flashinfer_logdest: str = Field(
+        default="",
+        description="FlashInfer log destination: stdout, stderr, or a file path. Empty = FlashInfer default.",
+    )
+    nccl_debug: str = Field(
+        default="",
+        description="NCCL debug log level (e.g. INFO, WARN, VERSION). Empty = disabled.",
+    )
+    nccl_debug_subsys: str = Field(
+        default="",
+        description="Comma-separated NCCL debug subsystems (e.g. INIT,COLL,GRAPH). Empty = NCCL default.",
+    )
+    model_overrides: dict[str, dict] = Field(
+        default_factory=dict,
+        description="Per-model vLLM config overrides applied by this worker before launching a lane. "
+        "Keys are model names; values are partial VllmConfig dicts (e.g. "
+        "{disable_custom_all_reduce: true, quantization: awq}). "
+        "Overrides are merged on top of whatever the Logos server sends, so the worker "
+        "can enforce Turing/SM-7.5 workarounds without touching the server.",
+    )
+
+    @field_validator("nccl_debug", "nccl_debug_subsys")
+    @classmethod
+    def _normalize_nccl_debug_fields(cls, value: str) -> str:
+        return (value or "").strip().upper()
 
 
 class EnginesConfig(BaseModel):
@@ -121,7 +171,16 @@ class WorkerConfig(BaseModel):
 
 
 class LogosConfig(BaseModel):
-    """Outbound control-plane connection to Logos."""
+    """Outbound control-plane connection to Logos.
+
+    capabilities_models accepts both plain strings and dicts with inline overrides:
+        capabilities_models:
+          - "org/model-a"
+          - model: "org/model-b"
+            base_residency_mb: 5800
+    Dict entries are normalized to plain model name strings; the overrides are
+    extracted into capabilities_overrides for the profile registry.
+    """
 
     enabled: bool = False
     logos_url: str = ""
@@ -130,8 +189,32 @@ class LogosConfig(BaseModel):
     shared_key: str = ""
     worker_id: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
+    capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
     reconnect_backoff_seconds: int = Field(default=3, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_capabilities(cls, values):
+        """Normalize capabilities_models: extract inline overrides from dict entries."""
+        raw = values.get("capabilities_models")
+        if not isinstance(raw, list):
+            return values
+        names = []
+        overrides = dict(values.get("capabilities_overrides") or {})
+        for entry in raw:
+            if isinstance(entry, str):
+                names.append(entry)
+            elif isinstance(entry, dict) and "model" in entry:
+                model_name = str(entry["model"])
+                names.append(model_name)
+                # Extract everything except "model" as profile overrides
+                ov = {k: v for k, v in entry.items() if k != "model"}
+                if ov:
+                    overrides[model_name] = ov
+        values["capabilities_models"] = names
+        values["capabilities_overrides"] = overrides
+        return values
 
 
 class LaneConfig(BaseModel):

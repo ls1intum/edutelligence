@@ -139,12 +139,8 @@ def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = Non
     with DBManager() as db:
         # Get available models for this key
         if profile_id is not None:
-            # Explicit profile-based filtering (new preferred path)
-            # TODO: change for the get_deployments_by_profile once available
             deployments = db.get_deployments_by_profile(logos_key, profile_id)
         else:
-            # Fallback: all models for key (for admin endpoints that don't need profile isolation)
-            # TODO: change for the get_deployments_by_key once available
             deployments = db.get_all_deployments()
 
         provider_cache: Dict[int, Dict[str, Any]] = {}

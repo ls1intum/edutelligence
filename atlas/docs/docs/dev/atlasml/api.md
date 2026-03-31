@@ -11,7 +11,8 @@ All endpoints are versioned and grouped by router.
 ## Health
 
 - `GET /api/v1/health/`
-  - Returns 200 OK with an empty JSON list, serving as a minimalist liveness endpoint. Use this for container orchestrator probes and uptime monitors.
+  - Returns `200 OK` only when AtlasML can still reach Weaviate, the required collections exist, and a lightweight read succeeds.
+  - Returns `503 Service Unavailable` with component details when the service is up but its vector-database dependency is not usable.
 
 ## Competency
 

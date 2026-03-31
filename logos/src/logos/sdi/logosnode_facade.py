@@ -87,6 +87,9 @@ class LogosNodeSchedulingDataFacade:
                 entry["base_url"] = registration.get("logosnode_admin_url")
                 entry["total_vram_mb"] = int(registration.get("total_vram_mb") or 0)
                 entry["models"][int(registration["model_id"])] = registration["model_name"]
+                db_parallel = registration.get("db_parallel")
+                if db_parallel is not None:
+                    entry.setdefault("db_parallel", {})[int(registration["model_id"])] = int(db_parallel)
 
             stale_provider_ids = set(self._providers) - set(desired_by_provider)
             for provider_id in stale_provider_ids:
@@ -118,6 +121,9 @@ class LogosNodeSchedulingDataFacade:
                     for model_id, model_name in dict(entry["models"]).items()
                 }
                 provider.set_registered_models(model_map)
+                db_parallel_map = {int(k): int(v) for k, v in dict(entry.get("db_parallel") or {}).items()}
+                if db_parallel_map:
+                    provider.set_db_parallel_ceilings(db_parallel_map)
                 for model_id in model_map:
                     current = self._model_to_provider.get(model_id, set())
                     current.add(provider_id)

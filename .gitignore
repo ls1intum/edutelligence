@@ -115,8 +115,5 @@ node_modules/
 athena/test-results/
 .coverage
 **/.coverage
-
-######################
-# Node Controller benchmarks
-######################
-logos/node-controller/bench_results/
+.superpowers/
+.playwright-cli/

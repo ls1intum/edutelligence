@@ -108,3 +108,66 @@ def test_decay_cleans_stale_metadata():
     assert tracker.get_raw_count("old-model") == 0
     stats = tracker.get_stats()
     assert "old-model" not in stats["last_request"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: Burst detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_burst_false_below_threshold():
+    """Below threshold requests should not trigger burst."""
+    tracker = DemandTracker()
+    for _ in range(4):
+        tracker.record_request("model-a")
+    assert tracker.is_burst("model-a") is False
+
+
+def test_is_burst_true_at_threshold():
+    """At or above threshold should trigger burst."""
+    tracker = DemandTracker()
+    for _ in range(5):
+        tracker.record_request("model-a")
+    assert tracker.is_burst("model-a") is True
+
+
+def test_burst_increases_demand_score():
+    """During burst, demand score should increase faster (1.5x per request)."""
+    tracker = DemandTracker()
+    # First 4 requests: normal (1.0 each) = 4.0
+    for _ in range(4):
+        tracker.record_request("model-a")
+    score_before_burst = tracker.get_score("model-a")
+    assert score_before_burst == 4.0
+
+    # 5th request triggers burst multiplier
+    tracker.record_request("model-a")
+    score_after = tracker.get_score("model-a")
+    assert score_after == 4.0 + 1.5  # 5th request at 1.5x
+
+
+def test_is_burst_untracked_model():
+    """Untracked model should not be in burst."""
+    tracker = DemandTracker()
+    assert tracker.is_burst("nonexistent") is False
+
+
+def test_burst_counts_in_stats():
+    """Stats should include burst counts."""
+    tracker = DemandTracker()
+    for _ in range(6):
+        tracker.record_request("model-a")
+    stats = tracker.get_stats()
+    assert "burst_counts" in stats
+    assert stats["burst_counts"]["model-a"] == 6
+
+
+def test_is_burst_custom_window_and_threshold():
+    """Custom window and threshold parameters should work."""
+    tracker = DemandTracker()
+    for _ in range(3):
+        tracker.record_request("model-a")
+    # Default threshold (5): not burst
+    assert tracker.is_burst("model-a") is False
+    # Custom threshold (3): burst
+    assert tracker.is_burst("model-a", threshold=3) is True

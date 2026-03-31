@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -39,10 +40,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
+    # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
+    # subsequent vLLM launches — including TP>1 — find cached .so files and
+    # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
+    try:
+        from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
+        cache_dir = os.path.join(cfg.engines.ollama.models_path, ".cache", "flashinfer")
+        capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
+        warmup_ok = flashinfer_warmup(cache_dir, model_names=capability_models)
+        if not warmup_ok:
+            forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
+            if not forced_backend:
+                os.environ["LOGOS_VLLM_AUTO_ATTENTION_BACKEND"] = "TRITON_ATTN"
+                logger.warning(
+                    "FlashInfer pre-warmup failed; forcing TRITON_ATTN for subsequent vLLM launches in this worker"
+                )
+            else:
+                logger.warning(
+                    "FlashInfer pre-warmup failed; keeping configured attention backend override %s",
+                    forced_backend,
+                )
+    except Exception:
+        logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch", exc_info=True)
+
     model_profiles = ModelProfileRegistry(config_path=get_config_path())
 
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
+        vllm_engine_config=cfg.engines.vllm,
         lane_port_start=cfg.worker.lane_port_start,
         lane_port_end=cfg.worker.lane_port_end,
         nvidia_smi_available=lambda: gpu_collector.available,
@@ -51,6 +76,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         per_gpu_vram_mb=lambda: gpu_collector.per_gpu_vram_mb,
         gpu_snapshot=gpu_collector.get_snapshot,
     )
+
+    # Validate capabilities models at startup (warnings only)
+    if cfg.logos and cfg.logos.capabilities_models:
+        lane_manager.validate_capabilities(cfg.logos.capabilities_models)
 
     if cfg.lanes:
         logger.info("Applying %d lane(s) from config", len(cfg.lanes))
@@ -71,18 +100,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             caps or "(none)",
         )
         if caps:
+            # Merge inline overrides from capabilities_models entries before seeding
+            if cfg.logos and cfg.logos.capabilities_overrides:
+                model_profiles.add_overrides(cfg.logos.capabilities_overrides)
             model_profiles.seed_capabilities(caps, engine="vllm")
             for cap_model in caps:
                 p = model_profiles.get_profile(cap_model)
                 if p:
+                    src = p.residency_source or "unknown"
+                    src_icon = {
+                        "measured": "\033[32m●\033[0m",   # green  — observed
+                        "cached": "\033[33m●\033[0m",     # yellow — from config
+                        "override": "\033[36m●\033[0m",   # cyan   — manual
+                    }.get(src, "\033[31m●\033[0m")         # red    — estimated
                     logger.info(
-                        "  \033[32m✓\033[0m %s: engine=%s base_residency=%.0fMB "
-                        "kv_per_token=%s max_ctx=%s disk=%.1fGB",
-                        cap_model, p.engine,
+                        "  %s %s [%s]: base_residency=%.0f MB | "
+                        "disk=%.1f GB | kv_per_token=%s B | max_ctx=%s | engine=%s",
+                        src_icon, cap_model, src.upper(),
                         p.base_residency_mb or 0,
+                        (p.disk_size_bytes or 0) / (1024**3),
                         p.kv_per_token_bytes,
                         p.max_context_length,
-                        (p.disk_size_bytes or 0) / (1024**3),
+                        p.engine,
                     )
 
     app.state.config = cfg

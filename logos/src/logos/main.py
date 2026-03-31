@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Set, Optional, Tuple
 import grpc
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
@@ -635,6 +636,15 @@ def _capture_logosnode_provider_snapshot(
             scheduler_signals=sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {},
             poll_success=True,
         )
+        # Persist calibrated model profiles into the dedicated table
+        runtime_payload = sample.get("runtime_payload")
+        if isinstance(runtime_payload, dict):
+            model_profiles = runtime_payload.get("model_profiles")
+            if isinstance(model_profiles, dict) and model_profiles:
+                try:
+                    db.upsert_model_profiles(provider_id, model_profiles)
+                except Exception:
+                    logger.debug("Failed to upsert model profiles for provider %s", provider_id, exc_info=True)
 
     sample["snapshot_id"] = snapshot_id
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
@@ -1178,6 +1188,7 @@ async def start_pipeline():
         logosnode_registry=_logosnode_registry,
         demand_tracker=_demand_tracker,
         enabled=planner_enabled,
+        on_state_change=scheduler.reevaluate_model_queues,
     )
     _context_resolver = ContextResolver(
         logosnode_registry=_logosnode_registry,
@@ -1251,6 +1262,7 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
                         "provider_id": provider_id,
+                        "db_parallel": model_info.get("parallel"),
                     }
                 )
             elif provider_type == "azure":
@@ -2650,7 +2662,8 @@ async def delete_model(data: DeleteModelRequest):
 @app.post("/logosdb/get_model")
 async def get_model(data: GetModelRequest):
     with DBManager() as db:
-        return db.get_model(**data.dict()), 200
+        payload = db.get_model(data.id)
+    return JSONResponse(content=jsonable_encoder(payload), status_code=200)
 
 
 @app.post("/logosdb/add_policy")
@@ -2728,7 +2741,8 @@ async def get_general_model_stats(data: LogosKeyModel):
 @app.post("/logosdb/export")
 async def export(data: LogosKeyModel):
     with DBManager() as db:
-        return db.export(**data.dict())
+        payload, status = db.export(**data.dict())
+    return JSONResponse(content=jsonable_encoder(payload), status_code=status)
 
 
 @app.post("/logosdb/import")

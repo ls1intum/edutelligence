@@ -13,7 +13,7 @@ Logos uses ETTFT-aware scheduling and a background capacity planner by default. 
 | Variable | Default | Effect when `false` |
 |----------|---------|-------------------|
 | `LOGOS_SCHEDULER_ETTFT_ENABLED` | `true` | Scheduler uses raw classification weights (no latency penalties) |
-| `LOGOS_CAPACITY_PLANNER_ENABLED` | `true` | Background planner does not start (no automatic sleep/wake/stop) |
+| `LOGOS_CAPACITY_PLANNER_ENABLED` | `true` | Background planner does not start (no automatic sleep/wake) |
 
 ## 2. Configure the worker
 Edit [config.yml](config.yml).
