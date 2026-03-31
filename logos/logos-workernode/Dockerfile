@@ -2,7 +2,7 @@
 # Logos Worker Node
 #
 # CPU / local build  (default):  BASE_IMAGE=python:3.12-slim, INSTALL_VLLM=0
-# GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.1.0-cudnn-devel-ubuntu24.04
+# GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04
 #                                INSTALL_VLLM=1 (via docker-compose.gpu.yml)
 #
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
