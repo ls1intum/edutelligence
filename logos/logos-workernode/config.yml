@@ -3,8 +3,7 @@
 
 worker:
   name: hochbruegge-node
-  port: 8444
-  api_key: 8befa151f5753b8a6d770f695f8eda80c09a5cdb5c03fb6a
+  port: 80
   tls_enabled: false
   gpu_poll_interval: 5
   lane_port_start: 11436
@@ -14,27 +13,7 @@ logos:
   enabled: true
   # Connection credentials are loaded from environment variables.
   # Set LOGOS_URL, LOGOS_PROVIDER_ID, LOGOS_API_KEY, LOGOS_WORKER_NODE_ID in .env.
-  capabilities_models:
-    - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
-      tensor_parallel_size: 1
-      kv_budget_mb: 2048
-      max_context_length: 4096
-    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
-      tensor_parallel_size: 2
-      kv_budget_mb: 2048
-      max_context_length: 4096
-    - model: solidrust/Mistral-7B-Instruct-v0.3-AWQ
-      tensor_parallel_size: 1
-      kv_budget_mb: 2048
-      max_context_length: 4096
-    - model: casperhansen/deepseek-r1-distill-llama-8b-awq
-      tensor_parallel_size: 1
-      kv_budget_mb: 4096
-      max_context_length: 4096
-    - model: MidnightPhreaker/Qwen3-Embedding-4B-AWQ-4Bit
-      tensor_parallel_size: 1
-      kv_budget_mb: 1024
-      max_context_length: 4096
+  capabilities_models: []
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 

@@ -1,12 +1,15 @@
 # =============================================================================
 # Logos Worker Node
-# Host: driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
 #
+# CPU / local build  (default):  BASE_IMAGE=python:3.12-slim, INSTALL_VLLM=0
+# GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.1.0-cudnn-devel-ubuntu24.04
+#                                INSTALL_VLLM=1 (via docker-compose.gpu.yml)
+#
+# Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
 # vLLM/PyTorch wheels: cu128 (newest on PyPI under CUDA 13.1 driver).
-# When cu131 PyTorch wheels ship: change VLLM_PIP_SPEC to cu131.
 # =============================================================================
 
-ARG CUDA_IMAGE=nvidia/cuda:13.1.0-cudnn-devel-ubuntu24.04
+ARG BASE_IMAGE=python:3.12-slim
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC=vllm --extra-index-url https://download.pytorch.org/whl/cu128
 ARG NCCL_PIP_SPEC=
@@ -56,41 +59,45 @@ RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
       fi
 
 # ---------------------------------------------------------------------------
-# Stage 2: Build — install Python deps against CUDA 13.1 system libs
+# Stage 2: Build — install Python deps
+#   CPU build  (BASE_IMAGE=python:3.12-slim):    Python already present, skip OS setup
+#   GPU build  (BASE_IMAGE=nvidia/cuda:...):      Install Python 3.13 from deadsnakes PPA
 # ---------------------------------------------------------------------------
-FROM ${CUDA_IMAGE} AS builder
+FROM ${BASE_IMAGE} AS builder
 ARG INSTALL_VLLM
 ARG VLLM_PIP_SPEC
 ARG NCCL_PIP_SPEC
 ARG FLASHINFER_WHL_URL
 
-# Python 3.13 via deadsnakes PPA (Ubuntu 24.04 ships 3.12 by default)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends software-properties-common ca-certificates gpg-agent \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        python3.13 python3.13-dev python3.13-venv \
-        build-essential curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-    && ln -sf /usr/bin/python3.13 /usr/bin/python \
-    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13 \
-    && python3.13 -m pip install --upgrade pip setuptools wheel
+# Install Python 3.13 only when not already available (GPU/Ubuntu base).
+# python:*-slim images already have python3 + pip.
+RUN if ! command -v python3 >/dev/null 2>&1; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends software-properties-common ca-certificates gpg-agent \
+        && add-apt-repository -y ppa:deadsnakes/ppa \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends \
+            python3.13 python3.13-dev python3.13-venv \
+            build-essential curl \
+        && rm -rf /var/lib/apt/lists/* \
+        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.13 /usr/bin/python \
+        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
+    fi \
+    && python3 -m pip install --upgrade pip setuptools wheel
 
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
          pip install --no-cache-dir --prefix=/install $VLLM_PIP_SPEC; \
-         site_pkgs="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
+         site_pkgs="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
          if [ -n "$NCCL_PIP_SPEC" ]; then \
-           # Allow controlled NCCL trials without rewriting the rest of the vLLM stack.
            rm -rf "$site_pkgs/nvidia/nccl" "$site_pkgs"/nvidia_nccl_cu12-*.dist-info; \
            pip install --no-cache-dir --prefix=/install --ignore-installed --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
            expected_nccl="${NCCL_PIP_SPEC#nvidia-nccl-cu12==}"; \
            if [ "$expected_nccl" != "$NCCL_PIP_SPEC" ]; then \
-             PYTHONPATH="$site_pkgs" python -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
+             PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
            fi; \
          fi; \
          pip install --no-cache-dir --prefix=/install flashinfer-python \
@@ -98,26 +105,31 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
        fi
 
 # ---------------------------------------------------------------------------
-# Stage 3: Runtime image — CUDA 13.1 + cuDNN + NCCL + Python 3.13
+# Stage 3: Runtime image
+#   CPU build  (BASE_IMAGE=python:3.12-slim):    lightweight, no CUDA overhead
+#   GPU build  (BASE_IMAGE=nvidia/cuda:...):      full CUDA + cuDNN + NCCL
 # ---------------------------------------------------------------------------
-FROM ${CUDA_IMAGE}
+FROM ${BASE_IMAGE}
 ARG INSTALL_VLLM
 ARG INSTALL_OLLAMA
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends software-properties-common ca-certificates gpg-agent \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        python3.13 python3.13-venv \
-        curl libnuma1 \
-    && if [ "$INSTALL_VLLM" = "1" ]; then \
-         apt-get install -y --no-install-recommends build-essential; \
-       fi \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-    && ln -sf /usr/bin/python3.13 /usr/bin/python \
-    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
+# Install Python 3.13 only on GPU/Ubuntu base (same logic as builder stage).
+RUN if ! command -v python3 >/dev/null 2>&1; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends software-properties-common ca-certificates gpg-agent \
+        && add-apt-repository -y ppa:deadsnakes/ppa \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends \
+            python3.13 python3.13-venv \
+            curl libnuma1 \
+        && if [ "$INSTALL_VLLM" = "1" ]; then \
+             apt-get install -y --no-install-recommends build-essential; \
+           fi \
+        && rm -rf /var/lib/apt/lists/* \
+        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.13 /usr/bin/python \
+        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
+    fi
 
 WORKDIR /app
 COPY --from=builder /install /usr/local
@@ -133,14 +145,13 @@ ENV LOGOS_WORKER_NODE_HAS_VLLM=${INSTALL_VLLM}
 ENV LOGOS_WORKER_NODE_HAS_OLLAMA=${INSTALL_OLLAMA}
 ENV LOGOS_WORKER_NODE_CONFIG=/app/config.yml
 
-# CUDA 13.1 system libs take priority over any bundled fallbacks in pip wheels
+# CUDA system libs — only relevant on GPU builds, harmless on CPU
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
 
 # NCCL — 2× Quadro RTX 5000 are PCIe-connected (no NVLink bridge on Turing RTX 5000)
-# P2P over PCIe is enabled by default; suppress IB probing noise on non-IB hosts
 ENV NCCL_IB_DISABLE=1
 ENV NCCL_DEBUG=WARN
 
-EXPOSE 8444
+EXPOSE ${WORKER_PORT:-80}
 
-CMD ["python3.13", "-m", "logos_worker_node.main"]
+CMD ["python3", "-m", "logos_worker_node.main"]

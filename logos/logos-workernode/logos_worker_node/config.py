@@ -65,6 +65,15 @@ def _apply_env_overrides(cfg: AppConfig) -> None:
     if os.getenv("LOGOS_ALLOW_INSECURE_HTTP", "").strip().lower() in {"1", "true", "yes"}:
         cfg.logos.allow_insecure_http = True
 
+    worker_port = os.getenv("WORKER_PORT", "").strip()
+    if worker_port:
+        try:
+            cfg.worker.port = int(worker_port)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"WORKER_PORT must be an integer, got: {worker_port!r}"
+            ) from exc
+
 
 def load_config(path: str | Path | None = None) -> AppConfig:
     global _config, _config_path

@@ -168,10 +168,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    from logos_worker_node.admin_api import router as admin_router
-
-    app.include_router(admin_router)
-
     @app.get("/", tags=["root"])
     async def root() -> dict[str, str]:
         return {

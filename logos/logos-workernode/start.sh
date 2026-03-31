@@ -50,9 +50,7 @@ else
   docker compose "${compose_files[@]}" up -d
 fi
 
-echo "Health: curl http://localhost:8444/health"
-echo "Runtime: curl -H 'Authorization: Bearer <worker_api_key>' http://localhost:8444/admin/runtime"
-echo "Lanes:   curl -H 'Authorization: Bearer <worker_api_key>' http://localhost:8444/admin/lanes"
+echo "Worker started (WebSocket bridge to Logos server)"
 if [[ "$mode" == "gpu" ]]; then
   echo "GPU mode enabled via docker-compose.gpu.yml"
 fi

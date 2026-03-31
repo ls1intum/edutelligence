@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        BASE_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
         INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
         INSTALL_VLLM: ${INSTALL_VLLM:-0}
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
@@ -21,17 +21,17 @@ services:
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_WORKER_NODE_ID: ${LOGOS_WORKER_NODE_ID:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
+      WORKER_PORT: ${WORKER_PORT:-80}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8444:8444"
-      - "11436-11499:11436-11499"
+      - "127.0.0.1:${WORKER_PORT:-80}:${WORKER_PORT:-80}"
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8444/health"]
+      test: ["CMD", "python", "-c", "import os,socket; s=socket.create_connection(('127.0.0.1',int(os.environ.get('WORKER_PORT',80))),2); s.close()"]
       interval: 30s
       timeout: 5s
       retries: 3

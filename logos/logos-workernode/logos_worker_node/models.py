@@ -159,8 +159,7 @@ class EnginesConfig(BaseModel):
 class WorkerConfig(BaseModel):
     """LogosWorkerNode service settings."""
 
-    port: int = 8444
-    api_key: str = "change-me-to-a-random-secret"
+    port: int = 80
     tls_enabled: bool = False
     tls_cert_path: str = "certs/cert.pem"
     tls_key_path: str = "certs/key.pem"
@@ -395,24 +394,7 @@ class LaneSetRequest(BaseModel):
         return self
 
 
-class LaneReconfigureRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
-    num_parallel: int | None = None
-    context_length: int | None = None
-    keep_alive: str | None = None
-    kv_cache_type: str | None = None
-    flash_attention: bool | None = None
-    gpu_devices: str | None = None
-    vllm: bool | None = None
-    vllm_config: VllmConfig | None = None
-
-
-class LaneSleepRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    level: int = Field(default=1, ge=1, le=2)
-    mode: str = "wait"
 
 
 class LaneAction(BaseModel):
@@ -441,16 +423,4 @@ class LaneEvent(BaseModel):
     old_port: int | None = None
 
 
-class ActionResponse(BaseModel):
-    success: bool
-    message: str
-    details: dict[str, Any] = Field(default_factory=dict)
 
-
-class HealthResponse(BaseModel):
-    status: str = "ok"
-    service: str = "LogosWorkerNode"
-    version: str = "2.0.0"
-    connected_to_logos: bool = False
-    lane_count: int = 0
-    gpu_available: bool = False
