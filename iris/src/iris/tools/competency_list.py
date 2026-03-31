@@ -37,12 +37,9 @@ def create_tool_get_competency_list(
         and mastery threshold.
         The response may include metrics for each competency, such as progress and mastery (0% - 100%).
         These are system-generated.
-        The judgment of learning (JOL) values indicate the self-reported mastery by the student (0 - 5, 5 star).
-        The object describing it also indicates the system-computed mastery at the time when the student
-        added their JoL assessment.
 
         Returns:
-            list: Competencies with info, exercise IDs, progress, mastery, and JOL.
+            list: Competencies with info, exercise IDs, progress, and mastery.
         """
         callback.in_progress("Reading competency list ...")
         if not competencies:
@@ -59,7 +56,6 @@ def create_tool_get_competency_list(
                     "exercise_ids": [],
                     "progress": 0,
                     "mastery": 0,
-                    "judgment_of_learning": None,
                 }
                 for comp in competencies
             ]
@@ -73,12 +69,6 @@ def create_tool_get_competency_list(
                 "mastery": get_mastery(
                     competency_metrics.progress.get(comp, 0),
                     competency_metrics.confidence.get(comp, 0),
-                ),
-                "judgment_of_learning": (
-                    competency_metrics.jol_values.get(comp).json()
-                    if competency_metrics.jol_values
-                    and comp in competency_metrics.jol_values
-                    else None
                 ),
             }
             for comp in competency_metrics.competency_information

@@ -118,7 +118,7 @@ def run_exercise_chat_pipeline(
     thread.start()
 
 
-def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
+def run_course_chat_pipeline_worker(dto, variant_id, request_id: str):
     set_request_id(request_id)
     try:
         callback = CourseChatStatusCallback(
@@ -132,7 +132,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
         is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = CourseChatPipeline(event=event, local=is_local)
+        pipeline = CourseChatPipeline(local=is_local)
     except Exception as e:
         logger.error("Error preparing course chat pipeline", exc_info=e)
         capture_exception(e)
@@ -151,7 +151,6 @@ def run_course_chat_pipeline_worker(dto, variant_id, event, request_id: str):
     dependencies=[Depends(TokenValidator())],
 )
 def run_course_chat_pipeline(
-    event: str | None = Query(None, description="Event query parameter"),
     dto: CourseChatPipelineExecutionDTO = Body(
         description="Course Chat Pipeline Execution DTO"
     ),
@@ -160,7 +159,7 @@ def run_course_chat_pipeline(
     request_id = get_request_id()
     thread = Thread(
         target=run_course_chat_pipeline_worker,
-        args=(dto, variant, event, request_id),
+        args=(dto, variant, request_id),
     )
     thread.start()
 
