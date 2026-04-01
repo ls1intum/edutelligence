@@ -957,6 +957,20 @@ async def lifespan(app: FastAPI):
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
 
+    # Auto-setup: create root user + API key on first startup
+    with DBManager() as db:
+        db.is_root_initialized()
+    if not DBManager.is_initialized():
+        logging.info("First startup detected — creating root user...")
+        with DBManager() as db:
+            result = db.setup()
+        if "error" in result:
+            logging.error("Error during initial setup: %s", result)
+        else:
+            logging.info("Initial setup complete. Root API key: %s", result["api_key"])
+    else:
+        logging.info("Database already initialized, skipping setup.")
+
     yield
 
     # Shutdown logic
@@ -966,8 +980,42 @@ async def lifespan(app: FastAPI):
         await _grpc_server.stop(0)
 
 
+# Prometheus metrics auth: set PROMETHEUS_API_KEY env var to require auth; if unset, deny all.
+_PROMETHEUS_API_KEY = os.getenv("PROMETHEUS_API_KEY")
+
 # Initialize FastAPI app with lifespan
-app = FastAPI(docs_url="/docs", openapi_url="/openapi.json", lifespan=lifespan)
+app = FastAPI(
+    docs_url="/docs",
+    openapi_url="/openapi.json",
+    lifespan=lifespan,
+    swagger_ui_init_oauth={},
+    openapi_tags=[{"name": "monitoring"}],
+)
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+    schema = get_openapi(
+        title=app.title or "Logos",
+        version=app.version or "0.1.0",
+        routes=app.routes,
+    )
+    schema["components"] = schema.get("components", {})
+    schema["components"]["securitySchemes"] = {
+        "LogosApiKey": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "logos_key",
+            "description": "Logos API key (also accepts `Authorization: Bearer <key>`)",
+        }
+    }
+    schema["security"] = [{"LogosApiKey": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
 
 app.add_middleware(
     CORSMiddleware,
@@ -993,8 +1041,15 @@ async def add_star_cors_headers(request: Request, call_next):
 
 
 @app.get("/metrics", tags=["monitoring"])
-async def prometheus_metrics():
-    """Prometheus metrics endpoint."""
+async def prometheus_metrics(request: Request):
+    """Prometheus metrics endpoint. Requires PROMETHEUS_API_KEY env var to be set.
+    Pass the key via `Authorization: Bearer <key>` header."""
+    if not _PROMETHEUS_API_KEY:
+        raise HTTPException(status_code=403, detail="Metrics endpoint disabled (PROMETHEUS_API_KEY not configured)")
+    auth = request.headers.get("authorization", "")
+    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
+    if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
     body, content_type = _prometheus_metrics_response()
     from starlette.responses import Response
     return Response(content=body, media_type=content_type)
@@ -2514,23 +2569,6 @@ async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
 # ============================================================================
 # DATABASE MANAGEMENT ENDPOINTS
 # ============================================================================
-
-@app.post("/logosdb/setup")
-async def setup_db(data: LogosSetupRequest):
-    try:
-        logging.info("Receiving setup request...")
-        with DBManager() as db:
-            db.is_root_initialized()
-        logging.info("Processing setup request. Initialized: %s", str(DBManager.is_initialized()))
-        if not DBManager.is_initialized():
-            # First-time setup: create initial provider and process
-            lk = setup_proxy.setup(**data.dict())
-            if "error" in lk:
-                return lk, 500
-            return {"logos-key": lk}
-        return {"error": "Database already initialized"}, 500
-    except Exception as e:
-        return {"error": f"{str(e)}"}, 500
 
 
 @app.post("/logosdb/add_service_proxy")

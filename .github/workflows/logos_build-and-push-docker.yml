@@ -62,9 +62,54 @@ jobs:
             core.setOutput("is_release", "false");
             return "FALSE";
 
+  # ---------------------------------------------------------------------------
+  # Detect which components actually changed to skip unnecessary builds.
+  # On release events, all components are built regardless of changes.
+  # ---------------------------------------------------------------------------
+  detect-changes:
+    name: Detect changed components
+    needs: [compute-tag]
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      ui: ${{ steps.filter.outputs.ui }}
+      landing: ${{ steps.filter.outputs.landing }}
+      db: ${{ steps.filter.outputs.db }}
+      workernode: ${{ steps.filter.outputs.workernode }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'logos/src/**'
+              - 'logos/db/**'
+              - 'logos/tests/**'
+              - 'logos/pyproject.toml'
+              - 'logos/Dockerfile'
+              - 'shared/**'
+              - '.github/workflows/logos_build-and-push-docker.yml'
+            ui:
+              - 'logos/logos-ui/**'
+              - '.github/workflows/logos_build-and-push-docker.yml'
+            landing:
+              - 'logos/logos-landing/**'
+              - '.github/workflows/logos_build-and-push-docker.yml'
+            db:
+              - 'logos/db/**'
+              - '.github/workflows/logos_build-and-push-docker.yml'
+            workernode:
+              - 'logos/logos-workernode/**'
+              - '.github/workflows/logos_build-and-push-docker.yml'
+
   build-and-push-server:
     name: Build Logos Server
-    needs: [compute-tag]
+    needs: [compute-tag, detect-changes]
+    if: ${{ needs.detect-changes.outputs.server == 'true' || github.event_name == 'release' }}
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos
@@ -74,27 +119,30 @@ jobs:
 
   build-and-push-ui:
     name: Build Logos UI
-    needs: [compute-tag]
+    needs: [compute-tag, detect-changes]
+    if: ${{ needs.detect-changes.outputs.ui == 'true' || github.event_name == 'release' }}
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos-ui
       docker-file: ./logos/logos-ui/Dockerfile
-      docker-context: .
+      docker-context: ./logos/logos-ui
       tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-ui:latest,ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.result) }}
 
   build-and-push-landing:
     name: Build Logos Landing
-    needs: [compute-tag]
+    needs: [compute-tag, detect-changes]
+    if: ${{ needs.detect-changes.outputs.landing == 'true' || github.event_name == 'release' }}
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos-landing
       docker-file: ./logos/logos-landing/Dockerfile
-      docker-context: .
+      docker-context: ./logos/logos-landing
       tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-landing:latest,ghcr.io/ls1intum/edutelligence/logos-landing:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-landing:{0}', needs.compute-tag.outputs.result) }}
 
   build-and-push-db:
     name: Build Logos DB
-    needs: [compute-tag]
+    needs: [compute-tag, detect-changes]
+    if: ${{ needs.detect-changes.outputs.db == 'true' || github.event_name == 'release' }}
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos-db
@@ -104,7 +152,8 @@ jobs:
 
   build-and-push-workernode-vllm:
     name: Build Logos Worker Node (vLLM)
-    needs: [compute-tag]
+    needs: [compute-tag, detect-changes]
+    if: ${{ needs.detect-changes.outputs.workernode == 'true' || github.event_name == 'release' }}
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm
@@ -118,7 +167,8 @@ jobs:
 
   build-and-push-workernode-ollama:
     name: Build Logos Worker Node (Ollama)
-    needs: [compute-tag]
+    needs: [compute-tag, detect-changes]
+    if: ${{ needs.detect-changes.outputs.workernode == 'true' || github.event_name == 'release' }}
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
       image-name: ghcr.io/ls1intum/edutelligence/logos-workernode-ollama

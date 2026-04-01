@@ -2983,10 +2983,9 @@ class DBManager:
 if __name__ == "__main__":
     """
     Logos Installation Steps:
-    1. Set up database. Creates an entry in "users" with "root" user and a process entry with an initial api key.
-        =>  Call "/logosdb/setup"
-        =>  In the response you get the logos-API-key for the root user. This key is used to setup the database
-            in the following steps.
+    1. Set up database. On first startup, the server automatically creates a "root" user and process entry
+        with an initial API key. The key is printed to stdout (check container logs).
+        This key is used to configure the database in the following steps.
     2. Add Provider. Add a new provider, the corresponding base url, the API key and authentication syntax.
         "auth_name" is the name used in the header for authorization (e.g. "api-key" for azure), 
         "auth_format" is used in the header to format the authentication (e.g. "Bearer {}" for OpenAI)
