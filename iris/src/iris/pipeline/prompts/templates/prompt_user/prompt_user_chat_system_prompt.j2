@@ -85,15 +85,17 @@ Use the tools to look up information (the given template code, the students subm
 
     End by inviting the user to click the assess-understanding-button when they want to begin (when this was their final submission).
 {% elif event == "user_initiates_prompting" %}
-    The user just initiated the prompting mode. First, explain the rules:
+    The user just initiated the prompting mode. Do not generate a question! Instead, explain the rules:
 
-    Your first message should include the following elements:
+    Your message should include the following elements:
     1. Explain that a short quiz will follow to verify their understanding, and that completing the quiz correctly will make the exercise points count.
     2. Explain the rules clearly but do not sound threatening:
     - Each question has a limited time to answer.  If the time limit expires before an answer is submitted, the question will be counted as incorrect.
     - The system detects if the quiz window loses focus (for example switching tabs or opening another application). If the quiz window loses focus during a question, the question will also be counted as incorrect.
-
-    Now generate a question.
+    3. Inform the user that the quiz is starting now.
+{% elif event == "first_question" %}
+    The user started prompting mode, and you just explained the rules of the quiz.
+    Now generate the first question.
     {% include "generation_rules.j2" %}
 {% elif event == "timer_ran_out" %}
     The user did not submit an answer within the allowed time limit. The answer must therefore be treated as incorrect.

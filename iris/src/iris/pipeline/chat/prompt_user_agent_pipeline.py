@@ -294,7 +294,7 @@ class PromptUserAgentPipeline(
 
         try:
             # Only run refinement pipeline when a new question was generated (only questions are refined)
-            if self.event == "user_initiates_prompting" or (self.verdict and self.verdict.verdict == "next_question"):
+            if self.event == "first_question" or (self.verdict and self.verdict.verdict == "next_question"):
                 # Refine response using guide prompt
                 result = self._refine_response(state)
             else:
@@ -358,6 +358,9 @@ class PromptUserAgentPipeline(
                 ]
             )
 
+            logger.info("Question before being rewritten:")
+            logger.info(state.result)
+
             guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
 
             self._track_tokens(state, llm_small.tokens)
@@ -367,6 +370,8 @@ class PromptUserAgentPipeline(
                 return state.result
             else:
                 logger.info("Question is rewritten")
+                logger.info("Question after being rewritten:")
+                logger.info(guide_response)
                 return guide_response
 
         except Exception as e:
