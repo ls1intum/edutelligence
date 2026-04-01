@@ -467,12 +467,12 @@ class DBManager:
         :return: Initial API-Key
         """
         # Check if database already exists
-        logging.info(".env exists?", os.path.exists("./logos/db/.env"))
+        logging.info(".env exists? %s", os.path.exists("./logos/db/.env"))
         if os.path.exists("./logos/db/.env"):
             return {"error": "Database already initialized"}
-        logging.info("Is root initialized?", self.is_root_initialized())
+        logging.info("Is root initialized? %s", self.is_root_initialized())
         if self.is_root_initialized():
-            return {"error": f"Database already initialized"}
+            return {"error": "Database already initialized"}
         logging.info("Setting up DB")
         self.__exec_init()
         self.create_all()

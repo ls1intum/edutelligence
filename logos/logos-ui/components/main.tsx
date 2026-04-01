@@ -10,6 +10,7 @@ import { Button, ButtonText } from "@/components/ui/button";
 import { VStack } from "@/components/ui/vstack";
 import { Center } from "@/components/ui/center";
 import { useAuth } from "@/components/auth-shell";
+import { API_BASE } from "@/components/statistics/constants";
 
 type MainProps = {
   /**
@@ -92,7 +93,7 @@ export default function Main({
     const safeKey = sanitizeKey(key);
     try {
       const response = await fetch(
-        "https://logos.ase.cit.tum.de:8080/logosdb/get_role",
+        `${API_BASE}/logosdb/get_role`,
         {
           method: "POST",
           headers: {

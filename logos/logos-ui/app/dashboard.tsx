@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-shell";
+import { API_BASE } from "@/components/statistics/constants";
 import { Box } from "@/components/ui/box";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
@@ -22,7 +23,7 @@ export default function Dashboard() {
       if (!apiKey) return;
       try {
         const response = await fetch(
-          "https://logos.ase.cit.tum.de:8080/logosdb/generalstats",
+          `${API_BASE}/logosdb/generalstats`,
           {
             method: "POST",
             headers: {

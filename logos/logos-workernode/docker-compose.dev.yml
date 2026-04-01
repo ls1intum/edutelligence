@@ -6,6 +6,7 @@ services:
       context: .
       args:
         BASE_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-${PYTHON_IMAGE:-python:3.12-slim}}
         INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
         INSTALL_VLLM: ${INSTALL_VLLM:-0}
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}

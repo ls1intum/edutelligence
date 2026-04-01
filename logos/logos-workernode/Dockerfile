@@ -3,13 +3,18 @@
 #
 # CPU / local build  (default):  BASE_IMAGE=python:3.12-slim, INSTALL_VLLM=0
 # GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04
-#                                INSTALL_VLLM=1 (via docker-compose.gpu.yml)
+#                                RUNTIME_IMAGE=nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04
+#                                INSTALL_VLLM=1
+#
+# The builder stage needs -devel (compilers/headers) but the runtime stage only
+# needs -runtime, saving ~2 GB in the final image.
 #
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
 # vLLM/PyTorch wheels: cu128 (newest on PyPI under CUDA 13.1 driver).
 # =============================================================================
 
 ARG BASE_IMAGE=python:3.12-slim
+ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC=vllm --extra-index-url https://download.pytorch.org/whl/cu128
 ARG NCCL_PIP_SPEC=
@@ -109,9 +114,13 @@ RUN site_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
 #   CPU build  (BASE_IMAGE=python:3.12-slim):    lightweight, no CUDA overhead
-#   GPU build  (BASE_IMAGE=nvidia/cuda:...):      full CUDA + cuDNN + NCCL
+#   GPU build  (BASE_IMAGE=nvidia/cuda:...):      CUDA runtime only (no compilers)
+#
+# RUNTIME_IMAGE defaults to BASE_IMAGE, but for GPU builds should be overridden
+# to the -runtime variant to save ~2 GB (no dev headers/compilers/static libs).
 # ---------------------------------------------------------------------------
-FROM ${BASE_IMAGE}
+ARG RUNTIME_IMAGE
+FROM ${RUNTIME_IMAGE}
 ARG INSTALL_VLLM
 ARG INSTALL_OLLAMA
 
@@ -124,9 +133,6 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
         && apt-get install -y --no-install-recommends \
             python3.13 python3.13-venv \
             curl libnuma1 \
-        && if [ "$INSTALL_VLLM" = "1" ]; then \
-             apt-get install -y --no-install-recommends build-essential; \
-           fi \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
         && ln -sf /usr/bin/python3.13 /usr/bin/python \
