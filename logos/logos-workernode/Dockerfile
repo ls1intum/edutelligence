@@ -130,6 +130,7 @@ ARG INSTALL_VLLM
 ARG INSTALL_OLLAMA
 
 # Install Python 3.13 only on GPU/Ubuntu base (same logic as builder stage).
+# When INSTALL_VLLM=1, also install a C compiler for Triton JIT kernel compilation.
 RUN if ! command -v python3 >/dev/null 2>&1; then \
         apt-get update \
         && apt-get install -y --no-install-recommends software-properties-common ca-certificates gpg-agent \
@@ -138,6 +139,9 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
         && apt-get install -y --no-install-recommends \
             python3.13 python3.13-venv \
             curl libnuma1 \
+        && if [ "$INSTALL_VLLM" = "1" ]; then \
+            apt-get install -y --no-install-recommends gcc; \
+           fi \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
         && ln -sf /usr/bin/python3.13 /usr/bin/python \

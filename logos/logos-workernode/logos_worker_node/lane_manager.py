@@ -656,29 +656,21 @@ class LaneManager:
     # No auto-injection — only applied when explicitly set on a lane's config.
 
     def _apply_model_vllm_overrides(self, lane_config: LaneConfig) -> LaneConfig:
-        """Apply global vLLM engine defaults and per-model overrides.
+        """Merge worker-local per-model vLLM overrides into an incoming lane config.
 
-        1. If engines.vllm.vllm_binary is set and the lane still has the
-           default ("vllm"), inject the global binary path.
-        2. Merge per-model overrides from engines.vllm.model_overrides on top.
+        Reads engines.vllm.model_overrides from config.yml and merges matching
+        entries on top of the lane's vllm_config.  Lets this worker enforce
+        SM-specific workarounds (e.g. disable_custom_all_reduce, quantization: awq
+        on Turing) without requiring changes to the Logos server.
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
-
-        vc_dict = lane_config.vllm_config.model_dump()
-
-        # Apply global vllm_binary default if the lane hasn't set one explicitly
-        global_binary = self._vllm_engine_config.vllm_binary
-        if global_binary and vc_dict.get("vllm_binary", "vllm") == "vllm":
-            vc_dict["vllm_binary"] = global_binary
-
-        # Merge per-model overrides (takes precedence over global defaults)
-        model_overrides = self._vllm_engine_config.model_overrides.get(lane_config.model)
-        if model_overrides:
-            vc_dict.update(model_overrides)
-            logger.info("Applied local vLLM overrides for %s: %s", lane_config.model, list(model_overrides))
-
-        new_vc = VllmConfig.model_validate(vc_dict)
+        overrides = self._vllm_engine_config.model_overrides.get(lane_config.model)
+        if not overrides:
+            return lane_config
+        merged = {**lane_config.vllm_config.model_dump(), **overrides}
+        new_vc = VllmConfig.model_validate(merged)
+        logger.info("Applied local vLLM overrides for %s: %s", lane_config.model, list(overrides))
         return lane_config.model_copy(update={"vllm_config": new_vc})
 
     def _auto_tensor_parallel(self, lane_config: LaneConfig) -> LaneConfig:
