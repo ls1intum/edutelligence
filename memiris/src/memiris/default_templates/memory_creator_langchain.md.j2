@@ -12,7 +12,7 @@ From a provided list of Learning objects (JSON), **cluster and condense** connec
 * **Focus over breadth:** Prefer fewer, compact memories by bundling related learnings into a single coherent theme; avoid one bloated multi-topic memory.
 * **Single-theme preference:** Each memory centers on **one clear theme**. Closely related sub-aspects that strengthen the theme are acceptable; if a distinct second theme is needed, create another memory.
 * **Coherence:** Do **not** mix tangential or weakly related learnings in the same memory.
-* **UUID integrity:** When referencing learnings, use the **full, exact UUIDs** from the input. Never invent, truncate, or alter UUIDs.
+* **UUID integrity:** When referencing learnings, use the **full, exact UUIDs** from the input. Never invent, truncate, or alter UUIDs. This only applies to the thinking and tool calling phase. The final output's description should not contain UUIDs.
 * **Selective inclusion of tool-based learnings:** Tool-derived learnings **may** be included if they clearly raise quality; they are **not required**. Memories should be formed around the original learnings.
 
 # Exploration & Thinking Phase (must happen before final JSON)
@@ -52,6 +52,8 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * Use **only** UUIDs that actually exist in the provided learnings.
 * Returning an empty array is acceptable **only** if no valid memory can be formed.
 * Produce the final JSON **only after** you have completed the exploration/thinking phase with multiple tool calls.
+* The final message **must not** contain any tool calls, reflections, or explanations — only the JSON array of Memory objects.
+* Do not output JSON that does not conform to the schema.
 
 # Style for Memory Content
 
@@ -65,5 +67,5 @@ You **must** perform a multi-iteration exploration phase using available retriev
 * [ ] Each memory centers on **one theme**; closely related sub-aspects acceptable; no unrelated blends.
 * [ ] No invented or altered UUIDs; all UUIDs exist in input.
 * [ ] Minimal duplication of the same learning across memories.
-* [ ] No extraneous text; output is a **JSON array only** that matches `{{ memory_json_schema }}` exactly.
+* [ ] No extraneous text; final message is a **JSON array only** that matches the above schema exactly.
 * [ ] Exploration phase completed with **multiple** tool calls; stop when further calls won’t change groupings.

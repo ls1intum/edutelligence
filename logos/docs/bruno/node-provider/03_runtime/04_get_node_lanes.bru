@@ -1,0 +1,22 @@
+meta {
+  name: Get Node Lanes
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/logosdb/providers/logosnode/lanes
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}",
+    "provider_id": "{{providerId}}"
+  }
+}

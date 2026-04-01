@@ -80,7 +80,6 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
                         │  Database (PostgreSQL)   │
                         │  - models, providers     │
                         │  - log_entry, jobs       │
-                        │  - request_events        │
                         └──────────────────────────┘
 ```
 
@@ -129,7 +128,7 @@ pipeline/
 - Delegates to `ClassificationManager` to rank candidate models
 - Calls scheduler to select best available model
 - Invokes executor to perform the actual API call
-- Records monitoring data to database (log_entry, request_events)
+- Records monitoring data to `log_entry`
 - Handles errors and ensures proper resource cleanup
 
 ### `scheduler_interface.py` - SchedulerInterface
@@ -207,4 +206,4 @@ The pipeline integrates several modules together
 
 ### Database (`../dbutils/`)
 - `DBManager`: Database connection and query execution
-- Schema: models, providers, log_entry, request_events, model_provider_config
+- Schema: models, providers, log_entry

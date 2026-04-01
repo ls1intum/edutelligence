@@ -1,0 +1,34 @@
+# hochbruegge-node — Turing-friendly AWQ capability set on 2× Quadro RTX 5000
+# Lanes are commanded by the Logos server (capacity planner).
+
+worker:
+  name: hochbruegge-node
+  port: 80
+  tls_enabled: false
+  gpu_poll_interval: 5
+  lane_port_start: 11436
+  lane_port_end: 11499
+
+logos:
+  enabled: true
+  # Connection credentials are loaded from environment variables.
+  # Set LOGOS_URL, LOGOS_PROVIDER_ID, LOGOS_API_KEY, LOGOS_WORKER_NODE_ID in .env.
+  capabilities_models: []
+  heartbeat_interval_seconds: 5
+  reconnect_backoff_seconds: 3
+
+engines:
+  vllm:
+    metrics_path: /metrics
+    metrics_timeout_seconds: 5
+    flashinfer_loglevel: 0
+    flashinfer_logdest: stderr
+    nccl_debug: WARN
+    nccl_debug_subsys: INIT
+    # Turing (SM 7.5) workarounds for TP=2 on 2× Quadro RTX 5000.
+    # awq_marlin is auto-selected at runtime but its SM 8.0+ kernels crash on Turing.
+    # disable_custom_all_reduce forces NCCL instead of vLLM's shared-mem reduction kernel.
+    model_overrides:
+      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
+        quantization: awq
+        disable_custom_all_reduce: true

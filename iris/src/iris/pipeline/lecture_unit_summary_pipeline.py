@@ -33,14 +33,17 @@ class LectureUnitSummaryPipeline(SubPipeline):
         client: WeaviateClient,
         lecture_unit_dto: LectureUnitDTO,
         lecture_unit_segment_summaries: List[str],
+        local: bool = False,
     ) -> None:
         super().__init__()
         self.client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.lecture_unit_segment_summaries = lecture_unit_segment_summaries
 
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-mini"
+        )
+        completion_args = CompletionArguments(temperature=0)
 
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

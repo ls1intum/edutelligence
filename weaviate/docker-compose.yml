@@ -36,7 +36,7 @@ services:
           memory: ${TRAEFIK_MEMORY_RESERVATION:-512M}
 
   weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:${WEAVIATE_VERSION:-1.30.0}
+    image: cr.weaviate.io/semitechnologies/weaviate:${WEAVIATE_VERSION:-1.34.10}
     container_name: weaviate
     restart: unless-stopped
     security_opt:

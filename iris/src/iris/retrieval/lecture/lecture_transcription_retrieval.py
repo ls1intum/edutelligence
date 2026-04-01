@@ -35,10 +35,12 @@ class LectureTranscriptionRetrieval(SubPipeline):
     """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
     and processing the transcription segments."""
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-mini"
+        )
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

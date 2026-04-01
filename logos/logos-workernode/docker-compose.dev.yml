@@ -1,0 +1,48 @@
+# docker-compose.dev.yml — Local development (builds worker node from source)
+# Usage: docker compose -f docker-compose.dev.yml up --build
+services:
+  logos-workernode:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-${PYTHON_IMAGE:-python:3.12-slim}}
+        INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
+        INSTALL_VLLM: ${INSTALL_VLLM:-0}
+        VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
+        NCCL_PIP_SPEC: ${NCCL_PIP_SPEC:-}
+    container_name: logos-workernode
+    init: true
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 2m
+    environment:
+      LOGOS_WORKER_NODE_CONFIG: /app/config.yml
+      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      LOGOS_URL: ${LOGOS_URL:-}
+      LOGOS_PROVIDER_ID: ${LOGOS_PROVIDER_ID:-}
+      LOGOS_API_KEY: ${LOGOS_API_KEY:-}
+      LOGOS_WORKER_NODE_ID: ${LOGOS_WORKER_NODE_ID:-}
+      LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
+      WORKER_PORT: ${WORKER_PORT:-80}
+    ports:
+      - "127.0.0.1:${WORKER_PORT:-80}:${WORKER_PORT:-80}"
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      - ./certs:/app/certs:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,socket; s=socket.create_connection(('127.0.0.1',int(os.environ.get('WORKER_PORT',80))),2); s.close()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  ollama-models:

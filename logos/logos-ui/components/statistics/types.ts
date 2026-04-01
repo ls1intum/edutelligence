@@ -1,4 +1,4 @@
-export type RequestEventRow = {
+export type RequestLogRow = {
   request_id: string;
   model_id: number | null;
   provider_id: number | null;
@@ -18,14 +18,14 @@ export type RequestEventRow = {
   error_message: string | null;
 };
 
-export type RequestEventResponse = {
-  stats?: RequestEventStats;
+export type RequestLogResponse = {
+  stats?: RequestLogStats;
   bucketSeconds?: number;
   range?: { start: string; end: string };
-  rows?: RequestEventRow[];
+  rows?: RequestLogRow[];
 };
 
-export type RequestEventStats = {
+export type RequestLogStats = {
   lastEventTs: string | null;
   totals: {
     requests: number;
@@ -56,6 +56,12 @@ export type RequestEventStats = {
     total: number;
     avgRunSeconds: number | null;
     avgVram: number | null;
+  }>;
+  modelTimeSeries?: Array<{
+    timestamp: number; // Unix ts (ms)
+    modelId: number;
+    modelName: string;
+    count: number;
   }>;
   queueDepth: {
     avgEnqueueDepth: number | null;

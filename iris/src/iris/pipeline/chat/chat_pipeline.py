@@ -56,10 +56,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     system_prompt_template: Any
     guide_prompt_template: Any
 
-    def __init__(
-        self,
-        context: ChatContext,
-    ):
+    def __init__(self, context: ChatContext, local: bool = False):
         super().__init__(implementation_id="chat_pipeline")
 
         self.context = context
@@ -67,11 +64,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         self.event = None
 
         # Initialize pipelines & retrievers
-        self.session_title_pipeline = SessionTitleGenerationPipeline()
-        self.citation_pipeline = CitationPipeline()
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant=self.context)
-        self.code_feedback_pipeline = (
-            CodeFeedbackPipeline()
+        self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
+        self.citation_pipeline = CitationPipeline(local=local)
+        self.suggestion_pipeline = InteractionSuggestionPipeline(
+            variant=self.context, local=local
+        )
+        self.code_feedback_pipeline = CodeFeedbackPipeline(
+            local=local
         )  # TODO: Ungenutzt? Entfernen?
 
         # Setup Jinja2 template environment
@@ -102,13 +101,19 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
-                agent_model="gpt-4.1-mini",
+                cloud_agent_model="gpt-5-mini",
+                cloud_citation_model="gpt-5-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="gpt-oss:120b",
             ),
             ChatVariant(
                 variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
-                agent_model="gpt-4.1",
+                cloud_agent_model="gpt-5.2",
+                cloud_citation_model="gpt-5-mini",
+                local_agent_model="gpt-oss:120b",
+                local_citation_model="gpt-oss:120b",
             ),
         ]
 
@@ -196,7 +201,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 final_result=result,
                 tokens=state.tokens,
                 session_title=session_title,
-                accessed_memories=(state.accessed_memory_storage),
+                accessed_memories=state.accessed_memory_storage,
             )
 
             # Generate and send suggestions separately (async from user's perspective)
@@ -466,9 +471,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             )
 
             # Create small LLM for refinement
-            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            completion_args = CompletionArguments(temperature=0.5)
+            is_local = state.dto.settings is not None and state.dto.settings.is_local()
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version="gpt-4.1-mini"),
+                request_handler=ModelVersionRequestHandler(
+                    version=("gpt-oss:120b" if is_local else "gpt-5-mini")
+                ),
                 completion_args=completion_args,
             )
 
@@ -564,7 +572,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             self.event = event
 
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback)
+            local = dto.settings is not None and dto.settings.is_local()
+            super().__call__(dto, variant, callback, local=local)
 
         except Exception as e:
             logger.error(

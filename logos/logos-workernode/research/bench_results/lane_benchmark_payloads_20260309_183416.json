@@ -1,0 +1,136 @@
+{
+  "timestamp_utc": "2026-03-09T18:53:49.304722+00:00",
+  "prompt_mode": "varied_unique_prefix",
+  "runs": [
+    {
+      "run_label": "vllm_prefix_off",
+      "backend": "vllm",
+      "configured_model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+      "payload_samples": [
+        {
+          "model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ]
+    },
+    {
+      "run_label": "vllm_prefix_on",
+      "backend": "vllm",
+      "configured_model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+      "payload_samples": [
+        {
+          "model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np2",
+      "backend": "ollama",
+      "configured_model": "qwen2.5-coder:32b",
+      "payload_samples": [
+        {
+          "model": "qwen2.5-coder:32b",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np4",
+      "backend": "ollama",
+      "configured_model": "qwen2.5-coder:32b",
+      "payload_samples": [
+        {
+          "model": "qwen2.5-coder:32b",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np8",
+      "backend": "ollama",
+      "configured_model": "qwen2.5-coder:32b",
+      "payload_samples": [
+        {
+          "model": "qwen2.5-coder:32b",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ]
+    }
+  ]
+}

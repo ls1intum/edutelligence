@@ -91,7 +91,7 @@ class WeaviateMemoryConnectionRepository(
     def all(self, tenant: str) -> List[MemoryConnection]:
         """Get all MemoryConnection objects."""
         try:
-            if not self.collection.with_tenant(tenant).exists():
+            if not self.collection.tenants.exists(tenant):
                 return []
 
             result = self.collection.with_tenant(tenant).query.fetch_objects(
@@ -191,4 +191,26 @@ class WeaviateMemoryConnectionRepository(
         except Exception as e:
             raise ValueError(
                 f"Error retrieving MemoryConnection objects by IDs: {e}"
+            ) from e
+
+    @observe(name="weaviate.memory_connection_repository.delete_all_for_tenant")
+    def delete_all_for_tenant(self, tenant: str) -> None:
+        """
+        Delete all memory connection entries for a given tenant efficiently without loading them first.
+
+        Args:
+            tenant: The tenant whose memory connections should be deleted.
+        """
+        try:
+            if not self.collection.tenants.exists(tenant):
+                return
+
+            # Delete all objects for the tenant using Weaviate's batch delete.
+            # Filter.by_id().not_equal(nil UUID) matches every stored object.
+            self.collection.with_tenant(tenant).data.delete_many(
+                where=Filter.by_id().not_equal("00000000-0000-0000-0000-000000000000")
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Error deleting all MemoryConnection objects for tenant {tenant}"
             ) from e

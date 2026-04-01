@@ -7,51 +7,48 @@
 ## Prerequisites
 
 - **Python 3.13**
-- **Poetry** for dependency management
+- **[uv](https://docs.astral.sh/uv/)** for dependency management
 - **Docker** for containerization
 
 ## Installation
 
-### Poetry
+### uv
 
-Install Poetry, if you haven't already:
-
-```bash
-pip install poetry
-```
-
-Ensure that you are using poetry version 2.0.0 or higher.
+Install uv, if you haven't already:
 
 ```bash
-poetry --version
-```
-
-If you have poetry < 2.0.0 installed, please run
-
-```bash
-poetry self update
+pip install uv
 ```
 
 #### Dependencies
 
-Activate the virtual environment and install the dependencies:
+Create a virtual environment and install the dependencies:
 
 ```bash
-poetry env activate
-poetry install
+uv venv .venv
+source .venv/bin/activate
+uv pip install .
 ```
 
-## Running the Service
-To deploy Logos locally or on a server:
+## Docker Compose Files
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.yaml` | **Production** — pulls pre-built images from GHCR |
+| `docker-compose.dev.yaml` | **Development** — builds images locally from source |
+
+## Running the Service (Development)
+To deploy Logos locally:
 
 1. Clone the repository:
 
    ```bash
    git clone https://github.com/ls1intum/edutelligence/
-   
+   ```
+
 2. Insert initial Provider Configuration
 
-   In docker-compose.yml, adjust the environment section of the logos-server 
+   In docker-compose.dev.yaml, adjust the environment section of the logos-server
    container to specify the initial LLM provider that Logos should connect to after startup.
 
    Example Configuration:
@@ -63,16 +60,10 @@ To deploy Logos locally or on a server:
 
 3. Build and Run Logos
 
-   Now go to the root-directory of Edutelligence and execute the following commands:
-   
-   ```
-   docker compose -f ./logos/docker-compose.yaml build
-   ```
-   
-   and afterwards
-   
-   ```
-   docker compose -f ./logos/docker-compose.yaml up
+   From the `logos/` directory:
+
+   ```bash
+   docker compose -f docker-compose.dev.yaml up --build
    ```
 
    After startup, Logos will print your initial root key in the logs—save this, as it is required for first login.
@@ -89,6 +80,26 @@ To deploy Logos locally or on a server:
 
    A full overview of available endpoints can be found at: https://logos.ase.cit.tum.de:8080/docs
    
+## Scheduling & Capacity Management
+
+Logos includes two independently toggleable subsystems for intelligent request routing and proactive worker management:
+
+| Subsystem | Env Variable | Default | What it does |
+|-----------|-------------|---------|-------------|
+| **ETTFT Scheduler** | `LOGOS_SCHEDULER_ETTFT_ENABLED` | `true` | Re-ranks classification candidates using estimated time-to-first-token penalties. Loaded models beat cold models even if classification weight is slightly lower. |
+| **Capacity Planner** | `LOGOS_CAPACITY_PLANNER_ENABLED` | `true` | Background loop (30s cycles) that sleeps idle lanes, wakes lanes on demand, and tunes vLLM GPU memory utilization. |
+
+Set either to `false` to disable. Set both to `false` for baseline (original) scheduling behavior.
+
+Add these to the `environment` section of `logos-server` in `docker-compose.yaml`:
+```yaml
+environment:
+  LOGOS_SCHEDULER_ETTFT_ENABLED: "true"
+  LOGOS_CAPACITY_PLANNER_ENABLED: "true"
+```
+
+Worker nodes auto-calibrate model VRAM profiles (how much GPU memory each model needs when loaded vs sleeping). Profiles persist in the worker's `config.yml` and are sent to Logos over the existing websocket heartbeat. No extra configuration needed on the worker side.
+
 ## Scheduler Benchmarking
 
 To evaluate scheduler behaviour against the running Logos API, replay a scripted workload via the `/v1` endpoint using the helper in `tests/support/scheduling/run_api_workload.py`.
@@ -105,7 +116,7 @@ Test scheduling behavior with a specific model. Classification is skipped.
 
 ```bash
 docker compose exec logos-server \
-  poetry run python logos/tests/support/scheduling/run_api_workload.py \
+  python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_direct.csv \
     --api-base http://localhost:8080 \
@@ -119,7 +130,7 @@ Test the full classification pipeline. Logos selects the best model based on pro
 
 ```bash
 docker compose exec logos-server \
-  poetry run python logos/tests/support/scheduling/run_api_workload.py \
+  python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_classify.csv \
     --api-base http://localhost:8080 \
@@ -133,7 +144,7 @@ Test both modes together to compare behavior side-by-side.
 
 ```bash
 docker compose exec logos-server \
-  poetry run python logos/tests/support/scheduling/run_api_workload.py \
+  python logos/tests/support/scheduling/run_api_workload.py \
     --logos-key "YourLogosApiKey" \
     --workload logos/tests/fixtures/scheduling/sample_workload_mixed.csv \
     --api-base http://localhost:8080 \

@@ -72,7 +72,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
     def all(self, tenant: str) -> list[Learning]:
         """Get all Learning objects."""
         try:
-            if not self.collection.with_tenant(tenant).exists():
+            if not self.collection.tenants.exists(tenant):
                 return []
 
             result = self.collection.with_tenant(tenant).query.fetch_objects(
@@ -176,3 +176,25 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
             return [self.object_to_learning(item) for item in result.objects]
         except Exception as e:
             raise ValueError(f"Error retrieving Learning objects by IDs: {e}") from e
+
+    @observe(name="weaviate.learning_repository.delete_all_for_tenant")
+    def delete_all_for_tenant(self, tenant: str) -> None:
+        """
+        Delete all learning entries for a given tenant efficiently without loading them first.
+
+        Args:
+            tenant: The tenant whose learnings should be deleted.
+        """
+        try:
+            if not self.collection.tenants.exists(tenant):
+                return
+
+            # Delete all objects for the tenant using Weaviate's batch delete.
+            # Filter.by_id().is_none(False) matches every stored object.
+            self.collection.with_tenant(tenant).data.delete_many(
+                where=Filter.by_id().not_equal("00000000-0000-0000-0000-000000000000")
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Error deleting all Learning objects for tenant {tenant}"
+            ) from e

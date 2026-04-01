@@ -5,30 +5,15 @@ on:
     inputs:
       image-tag:
         type: string
-        description: 'Image tag to deploy (default: pr-<number> if PR exists, latest for default branch)'
+        description: 'Image tag to deploy. AtlasML push builds usually publish branch-based tags such as atlas-health-check.'
       deploy-atlasml:
         type: boolean
         default: true
         description: (Re-)deploys AtlasML.
 
 jobs:
-  provision-env:
-    runs-on: ubuntu-latest
-    environment: 'Atlas - Test 1'
-    steps:
-      - name: Setup Traefik on remote host
-        uses: appleboy/ssh-action@v1.2.4
-        with:
-          host: ${{ vars.VM_HOST }}
-          username: ${{ vars.VM_USERNAME }}
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-          script: |
-            sudo mkdir -p /opt/atlasml/traefik
-            sudo touch /opt/atlasml/traefik/acme.json
-            sudo chmod 600 /opt/atlasml/traefik/acme.json
 
   deploy-atlasml:
-    needs: provision-env
     if: ${{ inputs.deploy-atlasml }}
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:

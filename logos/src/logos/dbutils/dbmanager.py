@@ -4,6 +4,7 @@ Central Manager for all Database-related actions for Logos
 import datetime
 import os
 import secrets
+import threading
 from typing import Dict, Any, Optional, Tuple, Union, List, cast
 
 import sqlalchemy.exc
@@ -28,6 +29,45 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+_DB_URL = os.getenv("LOGOS_DB_URL", "postgresql://postgres:root@logos-db:5432/logosdb")
+_POOL_SIZE = int(os.getenv("LOGOS_DB_POOL_SIZE", "10"))
+_MAX_OVERFLOW = int(os.getenv("LOGOS_DB_MAX_OVERFLOW", "20"))
+_POOL_RECYCLE = int(os.getenv("LOGOS_DB_POOL_RECYCLE", "1800"))
+
+_ENGINE = None
+_SESSION_FACTORY = None
+_METADATA = MetaData()
+_METADATA_REFLECTED = False
+_ENGINE_LOCK = threading.Lock()
+_METADATA_LOCK = threading.Lock()
+
+
+def _init_engine():
+    global _ENGINE, _SESSION_FACTORY
+    if _ENGINE is None:
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
+                _ENGINE = create_engine(
+                    _DB_URL,
+                    pool_size=_POOL_SIZE,
+                    max_overflow=_MAX_OVERFLOW,
+                    pool_pre_ping=True,
+                    pool_recycle=_POOL_RECYCLE,
+                )
+                _SESSION_FACTORY = sessionmaker(bind=_ENGINE)
+    return _ENGINE
+
+
+def _ensure_metadata(engine):
+    global _METADATA_REFLECTED
+    if _METADATA_REFLECTED:
+        return
+    with _METADATA_LOCK:
+        if _METADATA_REFLECTED:
+            return
+        _METADATA.reflect(bind=engine)
+        _METADATA_REFLECTED = True
 
 
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
@@ -77,19 +117,95 @@ class DBManager:
     def close(self):
         self.session.close()
 
+    @staticmethod
+    def _is_sequence_drift_integrity_error(
+        exc: sqlalchemy.exc.IntegrityError,
+        *,
+        table_name: str,
+        data: Dict[str, Any],
+        has_id_column: bool,
+    ) -> bool:
+        if "id" in data or not has_id_column:
+            return False
+
+        diag = getattr(getattr(exc, "orig", None), "diag", None)
+        constraint_name = getattr(diag, "constraint_name", None)
+        if constraint_name is not None:
+            return constraint_name == f"{table_name}_pkey"
+
+        message = str(getattr(exc, "orig", exc))
+        return (
+            "duplicate key value violates unique constraint" in message
+            and f'"{table_name}_pkey"' in message
+            and "Key (id)=" in message
+        )
+
+    def _reset_sequence_for_table(self, table_name: str, *, commit: bool = True) -> bool:
+        table = Base.metadata.tables.get(table_name)
+        if table is None or "id" not in table.c:
+            return False
+
+        sequence_name = self.session.execute(
+            text("SELECT pg_get_serial_sequence(:table_name, 'id')"),
+            {"table_name": table_name},
+        ).scalar()
+        if not sequence_name:
+            return False
+
+        max_id = self.session.execute(text(f'SELECT MAX(id) FROM "{table_name}"')).scalar()
+
+        if max_id is None:
+            self.session.execute(
+                text("SELECT setval(:sequence_name, 1, false)"),
+                {"sequence_name": sequence_name},
+            )
+        else:
+            # With is_called=true the next nextval() returns max_id + 1, which is
+            # exactly what we want after importing or manually inserting rows.
+            self.session.execute(
+                text("SELECT setval(:sequence_name, :new_value, true)"),
+                {"sequence_name": sequence_name, "new_value": int(max_id)},
+            )
+
+        if commit:
+            self.session.commit()
+        return True
+
     def insert(self, table: str, data: Dict[str, Any]) -> int:
-        table = Table(table, self.metadata, autoload_with=self.engine)
-        insert_stmt = table.insert().values(**data)
-        result = self.session.execute(insert_stmt)
-        self.session.commit()
-        return result.inserted_primary_key[0]
+        table_obj = Table(table, self.metadata, autoload_with=self.engine)
+        insert_stmt = table_obj.insert().values(**data)
+        try:
+            result = self.session.execute(insert_stmt)
+            self.session.commit()
+            return result.inserted_primary_key[0]
+        except sqlalchemy.exc.IntegrityError as exc:
+            self.session.rollback()
+            if self._is_sequence_drift_integrity_error(
+                exc,
+                table_name=table_obj.name,
+                data=data,
+                has_id_column="id" in table_obj.c,
+            ) and self._reset_sequence_for_table(table_obj.name):
+                result = self.session.execute(insert_stmt)
+                self.session.commit()
+                return result.inserted_primary_key[0]
+            raise
 
-    def upsert_request_event(self, request_id: str, **fields: Any) -> None:
+    def update_log_entry_metrics(
+        self,
+        *,
+        log_id: Optional[int] = None,
+        request_id: Optional[str] = None,
+        **fields: Any,
+    ) -> None:
         """
-        Insert or update a request_events row identified by request_id.
+        Update scheduler/runtime/completion metrics on a log_entry row.
 
-        Only provided fields are updated; omitted fields remain unchanged.
+        The log row can be targeted either by `log_id` or by `request_id`.
         """
+        if log_id is None and not request_id:
+            raise ValueError("Either log_id or request_id must be provided")
+
         allowed_fields = {
             "model_id",
             "provider_id",
@@ -98,7 +214,6 @@ class DBManager:
             "queue_depth_at_enqueue",
             "queue_depth_at_schedule",
             "timeout_s",
-            "enqueue_ts",
             "scheduled_ts",
             "request_complete_ts",
             "available_vram_mb",
@@ -107,28 +222,91 @@ class DBManager:
             "cold_start",
             "result_status",
             "error_message",
+            "queue_depth_at_arrival",
+            "utilization_at_arrival",
+            "queue_wait_ms",
         }
 
         payload = {k: v for k, v in fields.items() if k in allowed_fields and v is not None}
-        columns = ["request_id"] + list(payload.keys())
-        params = {"request_id": request_id, **payload}
+        update_data: Dict[str, Any] = {}
 
-        if payload:
-            assignments = ", ".join(f"{col}=EXCLUDED.{col}" for col in payload.keys())
-            placeholders = ", ".join(f":{col}" for col in columns)
-            sql = text(
-                f"INSERT INTO request_events ({', '.join(columns)}) "
-                f"VALUES ({placeholders}) "
-                f"ON CONFLICT (request_id) DO UPDATE SET {assignments}"
+        if request_id:
+            update_data["request_id"] = request_id
+
+        field_map = {
+            "model_id": "model_id",
+            "provider_id": "provider_id",
+            "initial_priority": "initial_priority",
+            "priority_when_scheduled": "priority_when_scheduled",
+            "queue_depth_at_enqueue": "queue_depth_at_enqueue",
+            "queue_depth_at_schedule": "queue_depth_at_schedule",
+            "timeout_s": "timeout_s",
+            "scheduled_ts": "timestamp_forwarding",
+            "request_complete_ts": "timestamp_response",
+            "available_vram_mb": "available_vram_mb",
+            "azure_rate_remaining_requests": "azure_rate_remaining_requests",
+            "azure_rate_remaining_tokens": "azure_rate_remaining_tokens",
+            "cold_start": "was_cold_start",
+            "result_status": "result_status",
+            "error_message": "error_message",
+            "queue_depth_at_arrival": "queue_depth_at_arrival",
+            "utilization_at_arrival": "utilization_at_arrival",
+            "queue_wait_ms": "queue_wait_ms",
+        }
+
+        for src_key, dst_key in field_map.items():
+            if src_key in payload:
+                value = payload[src_key]
+                if src_key == "result_status" and isinstance(value, ResultStatus):
+                    value = value.value
+                update_data[dst_key] = value
+
+        if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
+            lookup_sql = text(
+                "SELECT timestamp_request FROM log_entry "
+                + ("WHERE id = :log_id" if log_id is not None else "WHERE request_id = :request_id")
             )
+            lookup_params = {"log_id": log_id} if log_id is not None else {"request_id": request_id}
+            row = self.session.execute(lookup_sql, lookup_params).mappings().first()
+            timestamp_request = row.get("timestamp_request") if row else None
+            scheduled_ts = payload.get("scheduled_ts")
+            if timestamp_request and isinstance(scheduled_ts, datetime.datetime):
+                delta_ms = (scheduled_ts - timestamp_request).total_seconds() * 1000
+                update_data["queue_wait_ms"] = max(0.0, delta_ms)
+
+        if not update_data:
+            return
+
+        assignments = ", ".join(f"{col} = :{col}" for col in update_data.keys())
+        params = dict(update_data)
+        if log_id is not None:
+            params["log_id"] = log_id
+            where_clause = "id = :log_id"
         else:
-            sql = text(
-                "INSERT INTO request_events (request_id) VALUES (:request_id) "
-                "ON CONFLICT (request_id) DO NOTHING"
-            )
+            params["lookup_request_id"] = request_id
+            where_clause = "request_id = :lookup_request_id"
 
+        sql = text(f"UPDATE log_entry SET {assignments} WHERE {where_clause}")
         self.session.execute(sql, params)
         self.session.commit()
+
+    def update_request_log_metrics(
+        self,
+        *,
+        log_id: Optional[int] = None,
+        request_id: Optional[str] = None,
+        **fields: Any,
+    ) -> None:
+        """
+        Clearer alias for request lifecycle/performance updates on `log_entry`.
+        """
+        self.update_log_entry_metrics(log_id=log_id, request_id=request_id, **fields)
+
+    def upsert_request_log(self, request_id: str, **fields: Any) -> None:
+        """
+        Canonical upsert helper for request lifecycle/performance data on `log_entry`.
+        """
+        self.update_request_log_metrics(request_id=request_id, **fields)
 
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
@@ -289,12 +467,12 @@ class DBManager:
         :return: Initial API-Key
         """
         # Check if database already exists
-        logging.info(".env exists?", os.path.exists("./logos/db/.env"))
+        logging.info(".env exists? %s", os.path.exists("./logos/db/.env"))
         if os.path.exists("./logos/db/.env"):
             return {"error": "Database already initialized"}
-        logging.info("Is root initialized?", self.is_root_initialized())
+        logging.info("Is root initialized? %s", self.is_root_initialized())
         if self.is_root_initialized():
-            return {"error": f"Database already initialized"}
+            return {"error": "Database already initialized"}
         logging.info("Setting up DB")
         self.__exec_init()
         self.create_all()
@@ -312,12 +490,15 @@ class DBManager:
                      api_key: str, auth_name: str, auth_format: str, provider_type: str) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        provider_type = (provider_type or "").strip()
+        provider_type = (provider_type or "").strip().lower()
+        # Legacy fallback likely not needed anymore, but keeping for backward compatibility with existing provider entries
+        if provider_type in {"node", "node_controller", "ollama", "logos_worker_node"}:
+            provider_type = "logosnode"
         if not provider_type:
             return {"error": "provider_type is required"}, 400
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
                                        "auth_name": auth_name, "auth_format": auth_format,
-                                       "provider_type": provider_type})
+                                       "provider_type": provider_type, "api_key": api_key})
         return {"result": f"Created Provider.", "provider-id": pk}, 200
 
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
@@ -363,18 +544,49 @@ class DBManager:
         results = self.session.execute(sql, {"process_id": process_id}).fetchall()
         return [{"id": r.id, "name": r.name} for r in results]
 
-    def add_model(self, logos_key: str, name: str, endpoint: str):
+    def add_model(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name, "endpoint": endpoint})
+        pk = self.insert(
+            "models",
+            {
+                "name": name,
+                # Some deployed databases enforce non-null model weight columns even though the
+                # local ORM marks them optional. Seed a neutral baseline so admin model creation
+                # works before any explicit ranking/rebalancing happens.
+                "weight_privacy": "LOCAL",
+                "weight_latency": 0,
+                "weight_accuracy": 0,
+                "weight_cost": 0,
+                "weight_quality": 0,
+                "tags": "",
+                "parallel": 1,
+                "description": "",
+            },
+        )
         return {"result": f"Created Model", "model_id": pk}, 200
 
-    def add_full_model(self, logos_key: str, name: str, endpoint: str,
+    def add_full_model(self, logos_key: str, name: str,
                        weight_privacy: str = "LOCAL", worse_accuracy: int = None, worse_quality: int = None, worse_latency: int = None, worse_cost: int = None, tags: str = "", parallel: int = 1,
                        description: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name, "endpoint": endpoint, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
+        pk = self.insert(
+            "models",
+            {
+                "name": name,
+                "weight_privacy": weight_privacy,
+                # Seed explicit numeric weights before the rebalance step so stricter live
+                # schemas do not reject the initial insert.
+                "weight_latency": 0,
+                "weight_accuracy": 0,
+                "weight_cost": 0,
+                "weight_quality": 0,
+                "tags": tags,
+                "parallel": parallel,
+                "description": description,
+            },
+        )
         return self.rebalance_added_model(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
 
     def update_model_weights(self, logos_key: str, id: int, category: str, value: int):
@@ -430,7 +642,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
+            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
             if mid == updated_model_id and category == "privacy":
                 privacy_data.append((feedback, mid))
             else:
@@ -473,7 +685,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
+            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
             if mid != deleted_model_id:
                 privacy_data.append((p, mid))
             accuracy_data.append((a, mid))
@@ -511,7 +723,7 @@ class DBManager:
         cost_data = list()
         privacy_data = list()
         for model in data:
-            mid, p, l, a, c, q = model[0], model[3], model[4], model[5], model[6], model[7]
+            mid, p, l, a, c, q = model[0], model[2], model[3], model[4], model[5], model[6]
             # Add privacy data (we don't add it later as it's not handled via the model handler)
             privacy_data.append((p, mid))
             if mid == new_model_id:
@@ -644,7 +856,7 @@ class DBManager:
             "requests": request_count
         }, 200
 
-    def get_request_event_stats(
+    def get_request_log_stats(
         self,
         logos_key: str,
         start_date: Optional[str] = None,
@@ -652,7 +864,7 @@ class DBManager:
         target_buckets: int = 120
     ):
         """
-        Aggregate request_events metrics for a given time range.
+        Aggregate request performance metrics for a given time range.
 
         Args:
             logos_key: authentication key
@@ -682,11 +894,11 @@ class DBManager:
             "end_ts": end_dt,
             "bucket_seconds": bucket_seconds
         }
-        ts_expr = "COALESCE(scheduled_ts, enqueue_ts, request_complete_ts)"
+        ts_expr = "COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)"
 
         # Last event timestamp
         last_ts = self.session.execute(
-            text(f"SELECT MAX({ts_expr}) AS last_ts FROM request_events WHERE {ts_expr} BETWEEN :start_ts AND :end_ts"),
+            text(f"SELECT MAX({ts_expr}) AS last_ts FROM log_entry WHERE {ts_expr} BETWEEN :start_ts AND :end_ts"),
             params
         ).scalar()
         last_event_ts = last_ts.isoformat() if last_ts else None
@@ -703,14 +915,14 @@ class DBManager:
                 AVG(run_seconds) AS avg_run_seconds
             FROM (
                 SELECT
-                    re.cold_start,
+                    le.was_cold_start AS cold_start,
                     CASE WHEN m.weight_privacy = 'LOCAL' THEN FALSE ELSE TRUE END AS is_cloud,
-                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
-                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
-                FROM request_events re
-                LEFT JOIN models m ON m.id = re.model_id
+                    CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END AS queue_seconds,
+                    CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END AS run_seconds
+                FROM log_entry le
+                LEFT JOIN models m ON m.id = le.model_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             ) stats
         """), params).mappings().first() or {}
@@ -728,7 +940,7 @@ class DBManager:
         # Status counts
         status_rows = self.session.execute(text(f"""
             SELECT COALESCE(result_status::text, 'unknown') AS status, COUNT(*) AS count
-            FROM request_events
+            FROM log_entry
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             GROUP BY COALESCE(result_status::text, 'unknown')
         """), params).mappings().all()
@@ -744,17 +956,17 @@ class DBManager:
                 COUNT(*) AS request_count,
                 AVG(queue_seconds) AS avg_queue_seconds,
                 AVG(run_seconds) AS avg_run_seconds,
-                SUM(CASE WHEN re.cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
-                SUM(CASE WHEN re.cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
+                SUM(CASE WHEN re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS cold_starts,
+                SUM(CASE WHEN re.was_cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warm_starts,
                 SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success' OR (re.error_message IS NOT NULL AND re.error_message != '') THEN 1 ELSE 0 END) AS error_count
             FROM (
                 SELECT
-                    re.*,
-                    CASE WHEN re.enqueue_ts IS NOT NULL AND re.scheduled_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.scheduled_ts - re.enqueue_ts)) END AS queue_seconds,
-                    CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END AS run_seconds
-                FROM request_events re
+                    le.*,
+                    CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END AS queue_seconds,
+                    CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END AS run_seconds
+                FROM log_entry le
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             ) re
             LEFT JOIN models m ON m.id = re.model_id
@@ -789,10 +1001,10 @@ class DBManager:
                     COUNT(*) AS total,
                     SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 0 ELSE 1 END) AS cloud,
                     SUM(CASE WHEN m.weight_privacy = 'LOCAL' OR m.weight_privacy IS NULL THEN 1 ELSE 0 END) AS local,
-                    AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds,
+                    AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds,
                     AVG(re.available_vram_mb) AS avg_vram
-                FROM request_events re
+                FROM log_entry re
                 LEFT JOIN models m ON m.id = re.model_id
                 WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
                 GROUP BY 1
@@ -818,6 +1030,37 @@ class DBManager:
             "avgVram": float(row["avg_vram"]) if row["avg_vram"] is not None else None,
         } for row in time_rows if row["bucket_ts"] is not None]
 
+        # Per-model time series (bucketed by time AND model).
+        # We only return rows for actual model traffic, so avoid joining against
+        # a generated empty bucket series (saves DB work for wide windows).
+        model_ts_rows = self.session.execute(text(f"""
+            SELECT
+                EXTRACT(
+                    EPOCH FROM to_timestamp(
+                        FLOOR(EXTRACT(EPOCH FROM {ts_expr}) / :bucket_seconds) * :bucket_seconds
+                    )
+                ) AS bucket_ts,
+                re.model_id,
+                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
+                COUNT(*) AS count
+            FROM log_entry re
+            LEFT JOIN models m ON m.id = re.model_id
+            WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
+              AND re.model_id IS NOT NULL
+            GROUP BY 1, re.model_id, m.name
+            ORDER BY 1, model_name
+        """), params).mappings().all()
+        model_time_series: list[dict] = []
+        for row in model_ts_rows:
+            if row["bucket_ts"] is None:
+                continue
+            model_time_series.append({
+                "timestamp": int(row["bucket_ts"]) * 1000,
+                "modelId": row["model_id"],
+                "modelName": row["model_name"],
+                "count": int(row["count"] or 0),
+            })
+
         # Queue depth
         queue_row = self.session.execute(text(f"""
             SELECT
@@ -825,7 +1068,7 @@ class DBManager:
                 AVG(queue_depth_at_schedule) AS avg_schedule,
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_enqueue) AS p95_enqueue,
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_schedule) AS p95_schedule
-            FROM request_events re
+            FROM log_entry re
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
               AND (queue_depth_at_enqueue IS NOT NULL OR queue_depth_at_schedule IS NOT NULL)
         """), params).mappings().first()
@@ -841,11 +1084,11 @@ class DBManager:
         # Runtime by cold/warm
         runtime_rows = self.session.execute(text(f"""
             SELECT
-                CASE WHEN cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
+                CASE WHEN was_cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
                 COUNT(*) AS count,
-                AVG(CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts)) END) AS avg_run_seconds
-            FROM request_events re
+                AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avg_run_seconds
+            FROM log_entry re
             WHERE {ts_expr} BETWEEN :start_ts AND :end_ts
             GROUP BY kind
         """), params).mappings().all()
@@ -867,6 +1110,7 @@ class DBManager:
                 "statusCounts": status_counts,
                 "modelBreakdown": model_breakdown,
                 "timeSeries": time_series,
+                "modelTimeSeries": model_time_series,
                 "queueDepth": queue_depth,
                 "runtimeByColdStart": runtime_by_cold,
             },
@@ -875,28 +1119,42 @@ class DBManager:
 
     def get_latest_requests(self, logos_key: str, limit: int = 10):
         """
-        Fetch the most recent request events.
+        Fetch the most recent request logs with scheduling/performance metadata.
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
 
         sql = text("""
             SELECT
-                re.request_id,
-                COALESCE(m.name, CONCAT('Model ', re.model_id::text)) AS model_name,
-                COALESCE(p.name, CONCAT('Provider ', re.provider_id::text)) AS provider_name,
-                re.result_status,
-                re.enqueue_ts,
-                re.request_complete_ts,
-                CASE WHEN re.scheduled_ts IS NOT NULL AND re.request_complete_ts IS NOT NULL
-                     THEN EXTRACT(EPOCH FROM (re.request_complete_ts - re.scheduled_ts))
+                le.request_id,
+                COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
+                COALESCE(p.name, CONCAT('Provider ', le.provider_id::text)) AS provider_name,
+                le.result_status,
+                le.timestamp_request AS enqueue_ts,
+                le.timestamp_forwarding AS scheduled_ts,
+                le.timestamp_response AS request_complete_ts,
+                CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
                      ELSE NULL
                 END AS run_seconds,
-                re.cold_start
-            FROM request_events re
-            LEFT JOIN models m ON m.id = re.model_id
-            LEFT JOIN providers p ON p.id = re.provider_id
-            ORDER BY re.enqueue_ts DESC NULLS LAST
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                     ELSE NULL
+                END AS queue_seconds,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
+                     ELSE NULL
+                END AS total_seconds,
+                le.was_cold_start AS cold_start,
+                le.initial_priority,
+                le.priority_when_scheduled,
+                le.queue_depth_at_enqueue,
+                le.error_message
+            FROM log_entry le
+            LEFT JOIN models m ON m.id = le.model_id
+            LEFT JOIN providers p ON p.id = le.provider_id
+            WHERE le.request_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC NULLS LAST
             LIMIT :limit
         """)
 
@@ -908,13 +1166,151 @@ class DBManager:
                 "request_id": row["request_id"],
                 "model_name": row["model_name"],
                 "provider_name": row["provider_name"],
-                "status": row["result_status"] if row["result_status"] else "unknown",
+                "status": row["result_status"] if row["result_status"] else "pending",
                 "timestamp": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
                 "duration": float(row["run_seconds"]) if row["run_seconds"] is not None else None,
-                "cold_start": row["cold_start"]
+                "cold_start": row["cold_start"],
+                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
+                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
+                "queue_seconds": float(row["queue_seconds"]) if row["queue_seconds"] is not None else None,
+                "total_seconds": float(row["total_seconds"]) if row["total_seconds"] is not None else None,
+                "initial_priority": row["initial_priority"],
+                "priority_when_scheduled": row["priority_when_scheduled"],
+                "queue_depth_at_enqueue": row["queue_depth_at_enqueue"],
+                "error_message": row["error_message"],
             })
 
         return {"requests": results}, 200
+
+    def get_request_logs(self, logos_key: str, request_ids: list[str]):
+        """
+        Fetch request logs by request_id for the authenticated process.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        normalized_ids = []
+        seen_ids = set()
+        for request_id in request_ids:
+            if not isinstance(request_id, str):
+                continue
+            value = request_id.strip()
+            if not value or value in seen_ids:
+                continue
+            normalized_ids.append(value)
+            seen_ids.add(value)
+
+        if not normalized_ids:
+            return {"requests": [], "missing_request_ids": []}, 200
+
+        process_row = self.session.execute(
+            text("SELECT id FROM process WHERE logos_key = :logos_key"),
+            {"logos_key": logos_key},
+        ).fetchone()
+        if process_row is None:
+            return {"error": "Unknown user."}, 500
+
+        sql = text("""
+            SELECT
+                le.request_id,
+                COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
+                COALESCE(p.name, CONCAT('Provider ', le.provider_id::text)) AS provider_name,
+                le.result_status,
+                le.timestamp_request AS enqueue_ts,
+                le.timestamp_forwarding AS scheduled_ts,
+                le.timestamp_response AS request_complete_ts,
+                le.time_at_first_token,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.time_at_first_token IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.time_at_first_token - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS ttft_ms,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS total_latency_ms,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS queue_wait_ms,
+                CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) * 1000
+                     ELSE NULL
+                END AS processing_ms,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
+                     ELSE NULL
+                END AS scheduler_total_ms,
+                le.was_cold_start AS cold_start,
+                le.queue_depth_at_arrival,
+                le.utilization_at_arrival,
+                le.queue_depth_at_schedule,
+                le.priority_when_scheduled,
+                le.load_duration_ms,
+                le.available_vram_mb,
+                le.azure_rate_remaining_requests,
+                le.azure_rate_remaining_tokens,
+                le.error_message,
+                MAX(CASE WHEN tt.name = 'prompt_tokens' THEN ut.token_count END) AS prompt_tokens,
+                MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completion_tokens,
+                MAX(CASE WHEN tt.name = 'total_tokens' THEN ut.token_count END) AS total_tokens
+            FROM log_entry le
+            LEFT JOIN models m ON m.id = le.model_id
+            LEFT JOIN providers p ON p.id = le.provider_id
+            LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
+            LEFT JOIN token_types tt ON tt.id = ut.type_id
+            WHERE le.process_id = :process_id
+              AND le.request_id = ANY(:request_ids)
+            GROUP BY
+                le.request_id, m.name, le.model_id, p.name, le.provider_id, le.result_status,
+                le.timestamp_request, le.timestamp_forwarding, le.timestamp_response,
+                le.time_at_first_token, le.was_cold_start, le.queue_depth_at_arrival,
+                le.utilization_at_arrival, le.queue_depth_at_schedule, le.priority_when_scheduled,
+                le.load_duration_ms, le.available_vram_mb, le.azure_rate_remaining_requests,
+                le.azure_rate_remaining_tokens, le.error_message
+            ORDER BY le.timestamp_request ASC NULLS LAST
+        """)
+
+        rows = self.session.execute(
+            sql,
+            {"process_id": int(process_row.id), "request_ids": normalized_ids},
+        ).mappings().all()
+
+        results = []
+        found_ids = set()
+        for row in rows:
+            request_id = row["request_id"]
+            found_ids.add(request_id)
+            results.append({
+                "request_id": request_id,
+                "status": row["result_status"] if row["result_status"] else "pending",
+                "provider_name": row["provider_name"],
+                "model_name": row["model_name"],
+                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
+                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
+                "ttft_ms": float(row["ttft_ms"]) if row["ttft_ms"] is not None else None,
+                "total_latency_ms": float(row["total_latency_ms"]) if row["total_latency_ms"] is not None else None,
+                "queue_wait_ms": float(row["queue_wait_ms"]) if row["queue_wait_ms"] is not None else None,
+                "processing_ms": float(row["processing_ms"]) if row["processing_ms"] is not None else None,
+                "scheduler_total_ms": float(row["scheduler_total_ms"]) if row["scheduler_total_ms"] is not None else None,
+                "cold_start": row["cold_start"],
+                "queue_depth_at_arrival": int(row["queue_depth_at_arrival"]) if row["queue_depth_at_arrival"] is not None else None,
+                "utilization_at_arrival": float(row["utilization_at_arrival"]) if row["utilization_at_arrival"] is not None else None,
+                "queue_depth_at_schedule": int(row["queue_depth_at_schedule"]) if row["queue_depth_at_schedule"] is not None else None,
+                "priority_when_scheduled": row["priority_when_scheduled"],
+                "load_duration_ms": float(row["load_duration_ms"]) if row["load_duration_ms"] is not None else None,
+                "available_vram_mb": int(row["available_vram_mb"]) if row["available_vram_mb"] is not None else None,
+                "azure_rate_remaining_requests": int(row["azure_rate_remaining_requests"]) if row["azure_rate_remaining_requests"] is not None else None,
+                "azure_rate_remaining_tokens": int(row["azure_rate_remaining_tokens"]) if row["azure_rate_remaining_tokens"] is not None else None,
+                "error_message": row["error_message"],
+                "prompt_tokens": int(row["prompt_tokens"]) if row["prompt_tokens"] is not None else None,
+                "completion_tokens": int(row["completion_tokens"]) if row["completion_tokens"] is not None else None,
+                "total_tokens": int(row["total_tokens"]) if row["total_tokens"] is not None else None,
+            })
+
+        missing_request_ids = [request_id for request_id in normalized_ids if request_id not in found_ids]
+        return {"requests": results, "missing_request_ids": missing_request_ids}, 200
 
     def get_token_name(self, name):
         sql = text("""
@@ -1018,131 +1414,6 @@ class DBManager:
 
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
 
-    def add_model_provider_config(
-        self,
-        logos_key: str,
-        model_id: int,
-        provider_id: int,
-        cold_start_threshold_ms: float = None,
-        parallel_capacity: int = None,
-        keep_alive_seconds: int = None,
-        observed_avg_cold_load_ms: float = None,
-        observed_avg_warm_load_ms: float = None
-    ) -> Tuple[dict, int]:
-        """
-        Add or update SDI configuration for a model-provider pair.
-
-        This configures the Scheduling Data Interface (SDI) parameters for how
-        a specific model behaves when served by a specific provider.
-
-        Args:
-            logos_key: Authorization key (root user only)
-            model_id: Model ID to configure
-            provider_id: Provider ID
-            cold_start_threshold_ms: Threshold for detecting cold starts (ms)
-            parallel_capacity: Max concurrent requests this model can handle
-            keep_alive_seconds: How long model stays loaded when idle
-            observed_avg_cold_load_ms: Observed average cold start time (ms)
-            observed_avg_warm_load_ms: Observed average warm start time (ms)
-
-        Returns:
-            Tuple of (result dict, status code)
-        """
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-
-        # Build config dict with only provided values
-        config = {
-            "model_id": int(model_id),
-            "provider_id": int(provider_id)
-        }
-
-        if cold_start_threshold_ms is not None:
-            config["cold_start_threshold_ms"] = float(cold_start_threshold_ms)
-        if parallel_capacity is not None:
-            config["parallel_capacity"] = int(parallel_capacity)
-        if keep_alive_seconds is not None:
-            config["keep_alive_seconds"] = int(keep_alive_seconds)
-        if observed_avg_cold_load_ms is not None:
-            config["observed_avg_cold_load_ms"] = float(observed_avg_cold_load_ms)
-        if observed_avg_warm_load_ms is not None:
-            config["observed_avg_warm_load_ms"] = float(observed_avg_warm_load_ms)
-
-        # Use INSERT ... ON CONFLICT UPDATE pattern for upsert
-        from sqlalchemy import text
-
-        # Build column lists dynamically
-        columns = list(config.keys())
-        placeholders = [f":{col}" for col in columns]
-
-        # Build UPDATE clause for conflict resolution (exclude PK columns)
-        update_columns = [col for col in columns if col not in ["model_id", "provider_id"]]
-        if update_columns:
-            set_expressions = ", ".join(f"{col} = EXCLUDED.{col}" for col in update_columns)
-            set_clause = f"{set_expressions}, last_updated = CURRENT_TIMESTAMP"
-        else:
-            # Only PKs present; still advance timestamp on conflict
-            set_clause = "last_updated = CURRENT_TIMESTAMP"
-
-        sql = text(f"""
-            INSERT INTO model_provider_config ({', '.join(columns)})
-            VALUES ({', '.join(placeholders)})
-            ON CONFLICT (model_id, provider_id)
-            DO UPDATE SET {set_clause}
-            RETURNING model_id, provider_id
-        """)
-
-        result = self.session.execute(sql, config)
-        self.session.commit()
-        row = result.fetchone()
-
-        return {
-            "result": "Created/updated SDI model-provider configuration",
-            "model_id": row[0],
-            "provider_id": row[1]
-        }, 200
-
-    def get_model_provider_config(
-        self,
-        model_id: int,
-        provider_id: int
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve SDI configuration for a model-provider pair.
-
-        Args:
-            model_id: Model ID to query
-            provider_id: Provider ID
-
-        Returns:
-            Dictionary with configuration fields if found, None otherwise
-        """
-        sql = text("""
-            SELECT model_id, provider_id, cold_start_threshold_ms,
-                   parallel_capacity, keep_alive_seconds,
-                   observed_avg_cold_load_ms, observed_avg_warm_load_ms, last_updated
-            FROM model_provider_config
-            WHERE model_id = :model_id AND provider_id = :provider_id
-        """)
-
-        result = self.session.execute(sql, {
-            "model_id": model_id,
-            "provider_id": int(provider_id)
-        }).fetchone()
-
-        if result:
-            return {
-                "model_id": result[0],
-                "provider_id": result[1],
-                "cold_start_threshold_ms": result[2],
-                "parallel_capacity": result[3],
-                "keep_alive_seconds": result[4],
-                "observed_avg_cold_load_ms": result[5],
-                "observed_avg_warm_load_ms": result[6],
-                "last_updated": result[7]
-            }
-        return None
-
     def get_provider_config(
         self,
         provider_id: int
@@ -1179,25 +1450,20 @@ class DBManager:
             }
         return None
 
-    # TODO: Currently we support keys per provider/model pair , we dont have specific keys per provider, this is a workaround
     def get_provider_auth(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
-        Retrieve provider auth header formatting and any available API key.
+        Retrieve provider auth header formatting and API key.
 
         Returns:
             Dict with auth_name, auth_format, api_key (may be None) or None if provider not found.
         """
         sql = text("""
-            SELECT providers.id,
-                   providers.auth_name,
-                   providers.auth_format,
-                   model_api_keys.api_key
+            SELECT id,
+                   auth_name,
+                   auth_format,
+                   api_key
             FROM providers
-            LEFT JOIN model_api_keys
-                   ON model_api_keys.provider_id = providers.id
-            WHERE providers.id = :provider_id
-            ORDER BY model_api_keys.id
-            LIMIT 1
+            WHERE id = :provider_id
         """)
 
         result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
@@ -1295,7 +1561,7 @@ class DBManager:
             - ollama_admin_url
         """
         sql = text("""
-            SELECT id, ollama_admin_url
+            SELECT id, ollama_admin_url, name
             FROM providers
             WHERE provider_type = 'ollama'
             ORDER BY id
@@ -1307,56 +1573,171 @@ class DBManager:
             providers.append({
                 "id": row.id,
                 "ollama_admin_url": row.ollama_admin_url,
+                "name": row.name,
             })
         return providers
 
     def insert_provider_snapshot(
         self,
-        ollama_admin_url: str,
+        provider_id: int,
         total_models_loaded: int,
         total_vram_used_bytes: int,
         loaded_models: List[Dict[str, Any]],
+        snapshot_ts: Optional[datetime.datetime] = None,
+        total_memory_bytes: Optional[int] = None,
+        free_memory_bytes: Optional[int] = None,
+        snapshot_source: Optional[str] = None,
+        runtime_payload: Optional[Dict[str, Any]] = None,
+        scheduler_signals: Optional[Dict[str, Any]] = None,
         poll_success: bool = True,
         error_message: Optional[str] = None
-    ) -> None:
+    ) -> int:
         """
         Insert Ollama provider snapshot into monitoring table.
 
         Args:
-            ollama_admin_url: Ollama admin URL (e.g., "http://host.docker.internal:11435")
+            provider_id: Provider ID (FK to providers.id)
             total_models_loaded: Number of models currently loaded
             total_vram_used_bytes: Total VRAM used by all loaded models (in bytes)
             loaded_models: List of model details (name, size_vram, expires_at)
+            snapshot_ts: Snapshot timestamp from worker/runtime
+            total_memory_bytes: Total runtime memory capacity in bytes
+            free_memory_bytes: Free runtime memory in bytes
+            snapshot_source: Telemetry source label
             poll_success: Whether the poll was successful
             error_message: Error message if poll failed
         """
         sql = text("""
             INSERT INTO ollama_provider_snapshots (
-                ollama_admin_url,
+                provider_id,
+                snapshot_ts,
                 total_models_loaded,
                 total_vram_used_bytes,
+                total_memory_bytes,
+                free_memory_bytes,
                 loaded_models,
+                snapshot_source,
+                runtime_payload,
+                scheduler_signals,
                 poll_success,
                 error_message
             ) VALUES (
-                :ollama_admin_url,
+                :provider_id,
+                COALESCE(:snapshot_ts, CURRENT_TIMESTAMP),
                 :total_models_loaded,
                 :total_vram_used_bytes,
+                :total_memory_bytes,
+                :free_memory_bytes,
                 :loaded_models,
+                :snapshot_source,
+                :runtime_payload,
+                :scheduler_signals,
                 :poll_success,
                 :error_message
             )
+            RETURNING id
         """)
 
-        self.session.execute(sql, {
-            "ollama_admin_url": ollama_admin_url,
+        result = self.session.execute(sql, {
+            "provider_id": provider_id,
+            "snapshot_ts": snapshot_ts,
             "total_models_loaded": total_models_loaded,
             "total_vram_used_bytes": total_vram_used_bytes,
+            "total_memory_bytes": int(total_memory_bytes) if total_memory_bytes is not None else None,
+            "free_memory_bytes": int(free_memory_bytes) if free_memory_bytes is not None else None,
             "loaded_models": json.dumps(loaded_models),
+            "snapshot_source": snapshot_source or "unknown",
+            "runtime_payload": json.dumps(runtime_payload or {}),
+            "scheduler_signals": json.dumps(scheduler_signals or {}),
             "poll_success": poll_success,
             "error_message": error_message
-        })
+        }).fetchone()
         self.session.commit()
+        return int(result[0]) if result is not None else 0
+
+    def upsert_model_profiles(
+        self,
+        provider_id: int,
+        profiles: Dict[str, Dict[str, Any]],
+    ) -> int:
+        """Upsert model profiles from worker runtime into the model_profiles table.
+
+        Args:
+            provider_id: Provider ID (FK to providers.id)
+            profiles: Dict of model_name -> profile dict (from runtime_payload.model_profiles)
+
+        Returns:
+            Number of profiles upserted.
+        """
+        if not profiles:
+            return 0
+
+        sql = text("""
+            INSERT INTO model_profiles (
+                provider_id, model_name,
+                base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
+                kv_budget_mb, disk_size_bytes, engine,
+                tensor_parallel_size, kv_per_token_bytes, max_context_length,
+                residency_source, measurement_count, last_measured_at,
+                observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
+                updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
+                :kv_budget_mb, :disk_size_bytes, :engine,
+                :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
+                :residency_source, :measurement_count, :last_measured_at,
+                :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
+                CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                base_residency_mb = EXCLUDED.base_residency_mb,
+                loaded_vram_mb = EXCLUDED.loaded_vram_mb,
+                sleeping_residual_mb = EXCLUDED.sleeping_residual_mb,
+                kv_budget_mb = EXCLUDED.kv_budget_mb,
+                disk_size_bytes = EXCLUDED.disk_size_bytes,
+                engine = EXCLUDED.engine,
+                tensor_parallel_size = EXCLUDED.tensor_parallel_size,
+                kv_per_token_bytes = EXCLUDED.kv_per_token_bytes,
+                max_context_length = EXCLUDED.max_context_length,
+                residency_source = EXCLUDED.residency_source,
+                measurement_count = EXCLUDED.measurement_count,
+                last_measured_at = EXCLUDED.last_measured_at,
+                observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
+                min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
+                updated_at = CURRENT_TIMESTAMP
+        """)
+
+        count = 0
+        for model_name, data in profiles.items():
+            if not isinstance(data, dict):
+                continue
+            epoch = data.get("last_measured_epoch")
+            last_measured_at = (
+                datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+                if epoch and float(epoch) > 0 else None
+            )
+            self.session.execute(sql, {
+                "provider_id": provider_id,
+                "model_name": str(model_name),
+                "base_residency_mb": data.get("base_residency_mb"),
+                "loaded_vram_mb": data.get("loaded_vram_mb"),
+                "sleeping_residual_mb": data.get("sleeping_residual_mb"),
+                "kv_budget_mb": data.get("kv_budget_mb"),
+                "disk_size_bytes": data.get("disk_size_bytes"),
+                "engine": data.get("engine"),
+                "tensor_parallel_size": data.get("tensor_parallel_size"),
+                "kv_per_token_bytes": data.get("kv_per_token_bytes"),
+                "max_context_length": data.get("max_context_length"),
+                "residency_source": data.get("residency_source"),
+                "measurement_count": int(data.get("measurement_count", 0) or 0),
+                "last_measured_at": last_measured_at,
+                "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
+                "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
+            })
+            count += 1
+        self.session.commit()
+        return count
 
     def get_ollama_vram_stats(
         self,
@@ -1367,7 +1748,8 @@ class DBManager:
         """
         Return per-provider VRAM snapshots for a single UTC day. No bucketing/zero-fill; raw rows only.
 
-        `day` is required (YYYY-MM-DD or ISO date). If no rows exist for that day, an error is returned.
+        `day` is required (YYYY-MM-DD or ISO date). If no rows exist for that day, return
+        an empty payload instead of an HTTP error so dashboards can render an empty state.
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
@@ -1398,45 +1780,79 @@ class DBManager:
 
         sql = text("""
             SELECT
-                ollama_admin_url,
-                snapshot_ts,
-                total_vram_used_bytes,
-                total_models_loaded,
-                loaded_models,
-                MAX(total_vram_used_bytes) OVER (PARTITION BY ollama_admin_url) AS capacity_bytes
-            FROM ollama_provider_snapshots
-            WHERE poll_success = TRUE
-              AND snapshot_ts >= :start_ts
-              AND snapshot_ts < :end_ts
-            ORDER BY ollama_admin_url, snapshot_ts
+                s.id,
+                s.provider_id,
+                p.name AS provider_name,
+                s.snapshot_ts,
+                s.total_vram_used_bytes,
+                s.total_memory_bytes,
+                s.free_memory_bytes,
+                s.total_models_loaded,
+                s.loaded_models,
+                s.scheduler_signals,
+                p.total_vram_mb,
+                MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+            FROM ollama_provider_snapshots s
+            LEFT JOIN providers p
+              ON p.id = s.provider_id
+            WHERE s.poll_success = TRUE
+              AND s.snapshot_ts >= :start_ts
+              AND s.snapshot_ts < :end_ts
+            ORDER BY s.provider_id, s.snapshot_ts
         """)
 
         try:
             rows = self.session.execute(sql, params).fetchall()
             if not rows:
-                return {"error": "No VRAM data available for the requested day."}, 404
+                return {"providers": []}, 200
 
-            providers_data: Dict[str, List[Dict[str, Any]]] = {}
+            providers_data: Dict[int, Dict[str, Any]] = {}
 
-            for url, ts, used_bytes, models_loaded, loaded_models, capacity_bytes in rows:
+            for (
+                snapshot_id,
+                pid,
+                provider_name,
+                ts,
+                used_bytes,
+                total_memory_bytes,
+                free_memory_bytes,
+                models_loaded,
+                loaded_models,
+                scheduler_signals,
+                total_vram_mb,
+                capacity_bytes,
+            ) in rows:
                 used = int(used_bytes or 0)
-                cap = int(capacity_bytes or 0)
-                remaining_bytes = (cap - used) if cap and cap > used else None
-                if url not in providers_data:
-                    providers_data[url] = []
-                providers_data[url].append({
+                configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
+                cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
+                remaining_bytes = (
+                    int(free_memory_bytes)
+                    if free_memory_bytes is not None
+                    else max(cap - used, 0)
+                )
+                if pid not in providers_data:
+                    providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+                parsed_scheduler_signals = (
+                    json.loads(scheduler_signals)
+                    if isinstance(scheduler_signals, str)
+                    else scheduler_signals
+                )
+                providers_data[pid]["data"].append({
+                    "snapshot_id": int(snapshot_id or 0),
                     "timestamp": ts.isoformat() if ts else None,
                     "vram_mb": used // (1024 * 1024),
                     "vram_bytes": used,
                     "used_vram_mb": used // (1024 * 1024),
-                    "remaining_vram_mb": (remaining_bytes // (1024 * 1024)) if isinstance(remaining_bytes, int) else None,
+                    "remaining_vram_mb": remaining_bytes // (1024 * 1024),
+                    "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
                     "models_loaded": models_loaded,
                     "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
+                    "scheduler_signals": parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {},
                 })
 
             providers_list = [
-                {"url": url, "data": data_points}
-                for url, data_points in providers_data.items()
+                {"provider_id": pid, "name": info["name"], "data": info["data"]}
+                for pid, info in providers_data.items()
             ]
             return {"providers": providers_list}, 200
 
@@ -1444,7 +1860,386 @@ class DBManager:
             logger.error(f"Failed to query ollama_vram_stats: {e}")
             return {"error": str(e)}, 500
 
-    def connect_model_api(self, logos_key: str, model_id: int, provider_id: int, api_key: str):
+    def get_ollama_vram_deltas(
+        self,
+        logos_key: str,
+        day: str,
+        after_snapshot_id: int = 0,
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return incremental per-provider VRAM snapshots for a single UTC day.
+
+        Args:
+            logos_key: Auth key
+            day: UTC day (YYYY-MM-DD / ISO date) or "all" for full history
+            after_snapshot_id: Only rows with id > this cursor are returned
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+
+        full_history = isinstance(day, str) and day.strip().lower() == "all"
+        if full_history:
+            start_dt = None
+            end_dt = None
+        else:
+            try:
+                parsed_day = isoparse(day)
+            except Exception:
+                return {"error": f"Invalid day format: {day}"}, 400
+
+            day_date = parsed_day.date()
+            start_dt = datetime.datetime.combine(day_date, datetime.time.min, tzinfo=tz_utc)
+            end_dt = start_dt + datetime.timedelta(days=1)
+
+        now = datetime.datetime.now(tz_utc)
+        if not full_history:
+            if start_dt > now:
+                return {"error": "Requested day is in the future."}, 400
+            if end_dt > now:
+                end_dt = now
+
+        params = {
+            "after_snapshot_id": int(after_snapshot_id or 0),
+        }
+
+        if full_history:
+            sql = text("""
+                SELECT
+                    s.id,
+                    s.provider_id,
+                    p.name AS provider_name,
+                    s.snapshot_ts,
+                    s.total_vram_used_bytes,
+                    s.total_memory_bytes,
+                    s.free_memory_bytes,
+                    s.total_models_loaded,
+                    s.loaded_models,
+                    s.scheduler_signals,
+                    p.total_vram_mb,
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                FROM ollama_provider_snapshots s
+                LEFT JOIN providers p
+                  ON p.id = s.provider_id
+                WHERE s.poll_success = TRUE
+                  AND s.id > :after_snapshot_id
+                ORDER BY s.id
+            """)
+        else:
+            params["start_ts"] = start_dt
+            params["end_ts"] = end_dt
+            sql = text("""
+                SELECT
+                    s.id,
+                    s.provider_id,
+                    p.name AS provider_name,
+                    s.snapshot_ts,
+                    s.total_vram_used_bytes,
+                    s.total_memory_bytes,
+                    s.free_memory_bytes,
+                    s.total_models_loaded,
+                    s.loaded_models,
+                    s.scheduler_signals,
+                    p.total_vram_mb,
+                    MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes)) OVER (PARTITION BY s.provider_id) AS capacity_bytes
+                FROM ollama_provider_snapshots s
+                LEFT JOIN providers p
+                  ON p.id = s.provider_id
+                WHERE s.poll_success = TRUE
+                  AND s.snapshot_ts >= :start_ts
+                  AND s.snapshot_ts < :end_ts
+                  AND s.id > :after_snapshot_id
+                ORDER BY s.id
+            """)
+
+        try:
+            rows = self.session.execute(sql, params).fetchall()
+            if not rows:
+                return {
+                    "providers": [],
+                    "last_snapshot_id": int(after_snapshot_id or 0),
+                }, 200
+
+            providers_data: Dict[int, Dict[str, Any]] = {}
+            last_snapshot_id = int(after_snapshot_id or 0)
+
+            for (
+                snapshot_id,
+                pid,
+                provider_name,
+                ts,
+                used_bytes,
+                total_memory_bytes,
+                free_memory_bytes,
+                models_loaded,
+                loaded_models,
+                scheduler_signals,
+                total_vram_mb,
+                capacity_bytes,
+            ) in rows:
+                snapshot_id_int = int(snapshot_id or 0)
+                if snapshot_id_int > last_snapshot_id:
+                    last_snapshot_id = snapshot_id_int
+
+                used = int(used_bytes or 0)
+                configured_bytes = int(total_vram_mb or 0) * 1024 * 1024
+                cap = int(total_memory_bytes or 0) or configured_bytes or int(capacity_bytes or 0) or used
+                remaining_bytes = (
+                    int(free_memory_bytes)
+                    if free_memory_bytes is not None
+                    else max(cap - used, 0)
+                )
+
+                if pid not in providers_data:
+                    providers_data[pid] = {"name": provider_name or f"Provider {pid}", "data": []}
+                parsed_scheduler_signals = (
+                    json.loads(scheduler_signals)
+                    if isinstance(scheduler_signals, str)
+                    else scheduler_signals
+                )
+
+                providers_data[pid]["data"].append({
+                    "snapshot_id": snapshot_id_int,
+                    "timestamp": ts.isoformat() if ts else None,
+                    "vram_mb": used // (1024 * 1024),
+                    "vram_bytes": used,
+                    "used_vram_mb": used // (1024 * 1024),
+                    "remaining_vram_mb": remaining_bytes // (1024 * 1024),
+                    "total_vram_mb": cap // (1024 * 1024) if cap > 0 else None,
+                    "models_loaded": models_loaded,
+                    "loaded_models": json.loads(loaded_models) if isinstance(loaded_models, str) else loaded_models,
+                    "scheduler_signals": parsed_scheduler_signals if isinstance(parsed_scheduler_signals, dict) else {},
+                })
+
+            providers_list = [
+                {"provider_id": pid, "name": info["name"], "data": info["data"]}
+                for pid, info in providers_data.items()
+            ]
+
+            return {
+                "providers": providers_list,
+                "last_snapshot_id": last_snapshot_id,
+            }, 200
+
+        except Exception as e:
+            logger.error(f"Failed to query ollama_vram_deltas: {e}")
+            return {"error": str(e)}, 500
+
+    def get_request_enqueues_deltas(
+        self,
+        logos_key: str,
+        after_enqueue_ts: Optional[str],
+        after_request_id: Optional[str],
+        until_ts: Optional[str] = None,
+        limit: int = 5000,
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return enqueue-event deltas after a tuple cursor (enqueue_ts, request_id).
+
+        Args:
+            logos_key: Auth key
+            after_enqueue_ts: Cursor timestamp (ISO) or None for full start
+            after_request_id: Cursor request_id for tie-breaking identical timestamps
+            until_ts: Optional upper bound timestamp (ISO), defaults to now UTC
+            limit: Max rows returned
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+        cursor_request_id = str(after_request_id or "")
+        row_limit = max(1, int(limit or 5000))
+
+        cursor_dt: Optional[datetime.datetime] = None
+        if after_enqueue_ts:
+            try:
+                cursor_dt = isoparse(after_enqueue_ts).astimezone(tz_utc)
+            except Exception:
+                return {"error": f"Invalid after_enqueue_ts format: {after_enqueue_ts}"}, 400
+
+        if until_ts:
+            try:
+                until_dt = isoparse(until_ts).astimezone(tz_utc)
+            except Exception:
+                return {"error": f"Invalid until_ts format: {until_ts}"}, 400
+        else:
+            until_dt = datetime.datetime.now(tz_utc)
+
+        if cursor_dt and cursor_dt > until_dt:
+            return {"error": "after_enqueue_ts must be <= until_ts"}, 400
+
+        if cursor_dt is None:
+            sql = text("""
+                SELECT
+                    re.request_id,
+                    re.timestamp_request AS enqueue_ts,
+                    m.weight_privacy
+                FROM log_entry re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE re.timestamp_request IS NOT NULL
+                  AND re.request_id IS NOT NULL
+                  AND re.timestamp_request <= :until_ts
+                ORDER BY re.timestamp_request, re.request_id
+                LIMIT :limit
+            """)
+            params = {
+                "until_ts": until_dt,
+                "limit": row_limit,
+            }
+        else:
+            sql = text("""
+                SELECT
+                    re.request_id,
+                    re.timestamp_request AS enqueue_ts,
+                    m.weight_privacy
+                FROM log_entry re
+                LEFT JOIN models m ON m.id = re.model_id
+                WHERE re.timestamp_request IS NOT NULL
+                  AND re.request_id IS NOT NULL
+                  AND (re.timestamp_request, re.request_id) > (:cursor_ts, :cursor_request_id)
+                  AND re.timestamp_request <= :until_ts
+                ORDER BY re.timestamp_request, re.request_id
+                LIMIT :limit
+            """)
+            params = {
+                "cursor_ts": cursor_dt,
+                "cursor_request_id": cursor_request_id,
+                "until_ts": until_dt,
+                "limit": row_limit,
+            }
+
+        try:
+            rows = self.session.execute(sql, params).mappings().all()
+
+            events: List[Dict[str, Any]] = []
+            next_cursor_ts = after_enqueue_ts
+            next_cursor_id = cursor_request_id
+
+            for row in rows:
+                enqueue_ts = row.get("enqueue_ts")
+                request_id = str(row.get("request_id") or "")
+                if not enqueue_ts or not request_id:
+                    continue
+
+                weight_privacy = row.get("weight_privacy")
+                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
+                ts_ms = int(enqueue_ts.timestamp() * 1000)
+
+                events.append({
+                    "request_id": request_id,
+                    "enqueue_ts": ts_iso,
+                    "timestamp_ms": ts_ms,
+                    "is_cloud": bool(is_cloud),
+                })
+                next_cursor_ts = ts_iso
+                next_cursor_id = request_id
+
+            return {
+                "events": events,
+                "cursor": {
+                    "enqueue_ts": next_cursor_ts,
+                    "request_id": next_cursor_id,
+                },
+            }, 200
+        except Exception as e:
+            logger.error(f"Failed to query request enqueue deltas: {e}")
+            return {"error": str(e)}, 500
+
+    def get_request_enqueues_in_range(
+        self,
+        logos_key: str,
+        start_ts: str,
+        end_ts: str,
+        limit: int = 200000,
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        Return enqueue events for a fixed time window.
+
+        Args:
+            logos_key: Auth key
+            start_ts: Inclusive range start (ISO timestamp)
+            end_ts: Inclusive range end (ISO timestamp)
+            limit: Max rows returned
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        tz_utc = datetime.timezone.utc
+        row_limit = max(1, int(limit or 200000))
+
+        try:
+            start_dt = isoparse(start_ts).astimezone(tz_utc)
+        except Exception:
+            return {"error": f"Invalid start_ts format: {start_ts}"}, 400
+
+        try:
+            end_dt = isoparse(end_ts).astimezone(tz_utc)
+        except Exception:
+            return {"error": f"Invalid end_ts format: {end_ts}"}, 400
+
+        if start_dt > end_dt:
+            return {"error": "start_ts must be <= end_ts"}, 400
+
+        sql = text("""
+            SELECT
+                re.request_id,
+                re.timestamp_request AS enqueue_ts,
+                m.weight_privacy
+            FROM log_entry re
+            LEFT JOIN models m ON m.id = re.model_id
+            WHERE re.timestamp_request IS NOT NULL
+              AND re.request_id IS NOT NULL
+              AND re.timestamp_request >= :start_ts
+              AND re.timestamp_request <= :end_ts
+            ORDER BY re.timestamp_request, re.request_id
+            LIMIT :limit
+        """)
+        params = {
+            "start_ts": start_dt,
+            "end_ts": end_dt,
+            "limit": row_limit,
+        }
+
+        try:
+            rows = self.session.execute(sql, params).mappings().all()
+            events: List[Dict[str, Any]] = []
+            last_cursor_ts: Optional[str] = None
+            last_cursor_id = ""
+
+            for row in rows:
+                enqueue_ts = row.get("enqueue_ts")
+                request_id = str(row.get("request_id") or "")
+                if not enqueue_ts or not request_id:
+                    continue
+
+                weight_privacy = row.get("weight_privacy")
+                is_cloud = weight_privacy is not None and weight_privacy != "LOCAL"
+                ts_iso = enqueue_ts.astimezone(tz_utc).isoformat()
+                ts_ms = int(enqueue_ts.timestamp() * 1000)
+
+                events.append({
+                    "request_id": request_id,
+                    "enqueue_ts": ts_iso,
+                    "timestamp_ms": ts_ms,
+                    "is_cloud": bool(is_cloud),
+                })
+                last_cursor_ts = ts_iso
+                last_cursor_id = request_id
+
+            return {
+                "events": events,
+                "cursor": {
+                    "enqueue_ts": last_cursor_ts,
+                    "request_id": last_cursor_id,
+                },
+            }, 200
+        except Exception as e:
+            logger.error(f"Failed to query request enqueue range: {e}")
+            return {"error": str(e)}, 500
+
+    def connect_model_api(self, logos_key: str, model_id: int, provider_id: int, api_key: str, endpoint: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
 
@@ -1458,16 +2253,17 @@ class DBManager:
             return {"error": "Model is not connected to the specified provider."}, 400
 
         sql = text("""
-                    INSERT INTO model_api_keys (model_id, provider_id, api_key)
-                    VALUES (:model_id, :provider_id, :api_key)
+                    INSERT INTO model_api_keys (model_id, provider_id, api_key, endpoint)
+                    VALUES (:model_id, :provider_id, :api_key, :endpoint)
                     ON CONFLICT (model_id, provider_id)
-                    DO UPDATE SET api_key = EXCLUDED.api_key
+                    DO UPDATE SET api_key = EXCLUDED.api_key, endpoint = EXCLUDED.endpoint
                     RETURNING id
                 """)
         result = self.session.execute(sql, {
             "model_id": int(model_id),
             "provider_id": int(provider_id),
-            "api_key": api_key
+            "api_key": api_key,
+            "endpoint": endpoint
         }).fetchone()
         self.session.commit()
         return {"result": f"Added api-connection to model.", "api_key_id": result.id if result else None}, 200
@@ -1475,7 +2271,7 @@ class DBManager:
     def add_model_provider_profile(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, profile_id: int, api_key: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        r, c = self.add_model(logos_key, model_name, model_endpoint)
+        r, c = self.add_model(logos_key, model_name)
         if c != 200:
             return r, c
         model_id = r["model_id"]
@@ -1485,7 +2281,7 @@ class DBManager:
         r, c = self.connect_profile_model(logos_key, model_id, profile_id)
         if c != 200:
             return r, c
-        r, c = self.connect_model_api(logos_key, model_id, provider_id, api_key)
+        r, c = self.connect_model_api(logos_key, model_id, provider_id, api_key, endpoint=model_endpoint)
         if c != 200:
             return r, c
         return {"result": f"Successfully added model and connected to profile {profile_id}"}, 200
@@ -1538,13 +2334,14 @@ class DBManager:
         sql = text(f"""
             SELECT m.id          AS model_id,
                    m.name        AS model_name,
-                   m.endpoint    AS endpoint,
+                   mak.endpoint  AS endpoint,
                    p.id          AS provider_id,
                    p.name        AS provider_name,
+                   p.provider_type AS provider_type,
                    p.base_url    AS base_url,
                    p.auth_name   AS auth_name,
                    p.auth_format AS auth_format,
-                   mak.api_key   AS api_key
+                   COALESCE(NULLIF(mak.api_key, ''), p.api_key, '') AS api_key
             FROM models m
             JOIN model_provider mp ON m.id = mp.model_id
             JOIN providers p ON mp.provider_id = p.id
@@ -1557,6 +2354,15 @@ class DBManager:
 
         row = self.session.execute(sql, params).mappings().first()
         return dict(row) if row else None
+
+    def get_endpoint_for_deployment(self, model_id: int, provider_id: int) -> Optional[str]:
+        """Get the endpoint for a specific model-provider deployment from model_api_keys."""
+        sql = text("""
+            SELECT endpoint FROM model_api_keys
+            WHERE model_id = :model_id AND provider_id = :provider_id
+        """)
+        row = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
+        return row.endpoint if row else None
 
     def get_deployments_by_profile(self, logos_key: str, profile_id: int) -> list[Deployment]:
         """
@@ -1611,6 +2417,43 @@ class DBManager:
                    """)
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
+
+    def get_models_for_profile(self, profile_id: int) -> list[Dict[str, Any]]:
+        """
+        Get all models that a profile has access to via profile_model_permissions.
+
+        Returns:
+            List of dicts with model id, name, and description.
+        """
+        sql = text("""
+            SELECT DISTINCT m.id, m.name, m.description
+            FROM models m
+                JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+            WHERE pmp.profile_id = :profile_id
+            ORDER BY m.id
+        """)
+        rows = self.session.execute(sql, {"profile_id": int(profile_id)}).mappings().all()
+        return [dict(row) for row in rows]
+
+    def get_model_for_profile(self, profile_id: int, model_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a single model by name if the profile has access to it.
+
+        Returns:
+            Dict with model id, name, and description, or None if not found.
+        """
+        sql = text("""
+            SELECT DISTINCT m.id, m.name, m.description
+            FROM models m
+                JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+            WHERE pmp.profile_id = :profile_id
+              AND m.name = :name
+            ORDER BY m.id LIMIT 1
+        """)
+        row = self.session.execute(
+            sql, {"profile_id": int(profile_id), "name": model_name}
+        ).mappings().first()
+        return dict(row) if row else None
 
     # TODO: Remove these methods if not needed anymore
     # def get_models_by_profile(self, logos_key: str, profile_id: int):
@@ -1723,7 +2566,7 @@ class DBManager:
         Get a list of models accessible by a given key.
         """
         sql = text("""
-            SELECT DISTINCT models.id, models.name, models.endpoint, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT DISTINCT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models, profile_model_permissions, profiles, process
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
@@ -1731,18 +2574,18 @@ class DBManager:
                 and profile_model_permissions.model_id = models.id
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.name, i.endpoint, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [(i.id, i.name, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
     def get_all_models_data(self):
         """
         Get a list of models and their data in the database. Used for rebalancing.
         """
         sql = text("""
-            SELECT models.id, models.name, models.endpoint, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT models.id, models.name, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models
         """)
         result = self.session.execute(sql).fetchall()
-        return [(i.id, i.name, i.endpoint, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+        return [(i.id, i.name, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
     def get_policy_info(self, logos_key: str):
         """
@@ -1781,7 +2624,6 @@ class DBManager:
         return {
             "id": result.id,
             "name": result.name,
-            "endpoint": result.endpoint,
             "weight_privacy": result.weight_privacy,
             "weight_latency": result.weight_latency,
             "weight_accuracy": result.weight_accuracy,
@@ -1805,9 +2647,55 @@ class DBManager:
             "id": result.id,
             "name": result.name,
             "base_url": result.base_url,
+            "provider_type": result.provider_type,
             "auth_name": result.auth_name,
             "auth_format": result.auth_format,
+            "api_key": result.api_key,
         }
+
+    def get_local_provider_inventory(self, logos_key: str) -> Tuple[Any, int]:
+        """
+        Return all local/self-hosted providers for dashboards and operator tooling.
+
+        Local provider types were historically named in several ways. Normalize them at the
+        query layer so statistics views can reason about all worker-backed providers uniformly.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        sql = text("""
+            SELECT
+                id,
+                name,
+                provider_type,
+                base_url,
+                ollama_admin_url,
+                total_vram_mb,
+                parallel_capacity
+            FROM providers
+            WHERE LOWER(provider_type) IN (
+                'logosnode',
+                'ollama',
+                'node',
+                'node_controller',
+                'logos_worker_node'
+            )
+            ORDER BY LOWER(name), id
+        """)
+
+        rows = self.session.execute(sql).fetchall()
+        return [
+            {
+                "provider_id": row.id,
+                "name": row.name,
+                "provider_type": row.provider_type,
+                "base_url": row.base_url,
+                "ollama_admin_url": row.ollama_admin_url,
+                "total_vram_mb": row.total_vram_mb,
+                "parallel_capacity": row.parallel_capacity,
+            }
+            for row in rows
+        ], 200
 
     def get_provider_to_model(self, model_id: int):
         sql = text("""
@@ -1848,7 +2736,7 @@ class DBManager:
             return False
         return result.log
 
-    def log_usage(self, process_id: int, client_ip: str = None, input_payload=None, headers=None):
+    def log_usage(self, process_id: int, client_ip: str = None, input_payload=None, headers=None, request_id: str | None = None):
         # Hole log_level für den Prozess
         log_level_result = self.session.execute(
             text("SELECT log FROM process WHERE id = :pid"),
@@ -1862,9 +2750,9 @@ class DBManager:
 
         sql = text("""
                    INSERT INTO log_entry (timestamp_request, process_id, client_ip, input_payload, headers,
-                                          privacy_level)
+                                          privacy_level, request_id)
                    VALUES (:timestamp_request, :process_id, :client_ip, :input_payload, :headers,
-                           :privacy_level) RETURNING id
+                           :privacy_level, :request_id) RETURNING id
                    """)
         result = self.session.execute(sql, {
             "timestamp_request": datetime.datetime.now(datetime.timezone.utc),
@@ -1872,7 +2760,8 @@ class DBManager:
             "client_ip": client_ip if log_level == "FULL" else None,
             "input_payload": json.dumps(input_payload) if log_level == "FULL" else None,
             "headers": json.dumps(headers) if log_level == "FULL" else None,
-            "privacy_level": log_level
+            "privacy_level": log_level,
+            "request_id": request_id,
         })
 
         log_id = result.scalar()
@@ -1958,6 +2847,7 @@ class DBManager:
                        timestamp_response = :timestamp,
                        policy_id        = COALESCE(:policy_id, policy_id),
                        classification_statistics = :classification_statistics,
+                       request_id = COALESCE(:request_id, request_id),
                        queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
                        utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
                    WHERE id = :log_id
@@ -1970,6 +2860,7 @@ class DBManager:
             "log_id": log_id,
             "policy_id": policy_id if policy_id != -1 else None,
             "classification_statistics": json.dumps(classified),
+            "request_id": kwargs.get("request_id"),
             "queue_depth": kwargs.get("queue_depth_at_arrival"),
             "utilization": kwargs.get("utilization_at_arrival")
         })
@@ -2006,32 +2897,7 @@ class DBManager:
             "token_prices",
             "jobs"
         ]:
-            # Check if table exists
-            table = Base.metadata.tables.get(table_name)
-            if table is None:
-                continue
-
-            # Check if column 'id' exists
-            if 'id' in table.c:
-                # Get name of related sequence (PostgreSQL-Name-convention)
-                sequence_name = f"{table_name}_id_seq"
-
-                # Max ID of Table
-                result = self.session.execute(text(f"SELECT MAX(id) FROM {table_name}"))
-                max_id = result.scalar()
-
-                if max_id is not None:
-                    # Data → next ID = max_id + 1
-                    self.session.execute(
-                        text("SELECT setval(:sequence_name, :new_value, true)"),
-                        {"sequence_name": sequence_name, "new_value": max_id + 1}
-                    )
-                else:
-                    # Empty Table
-                    self.session.execute(
-                        text("SELECT setval(:sequence_name, 1, false)"),
-                        {"sequence_name": sequence_name}
-                    )
+            self._reset_sequence_for_table(table_name, commit=False)
         self.session.commit()
 
     def import_from_json(self, logos_key: str, json_data: dict):
@@ -2097,26 +2963,29 @@ class DBManager:
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def __enter__(self):
-        # conf = load_postgres_env_vars_from_compose()    # {conf['port']}
-        db_url = f"postgresql://postgres:root@logos-db:5432/logosdb"
-        self.engine = create_engine(db_url)
-        self.metadata = MetaData()
-        self.metadata.reflect(bind=self.engine)
-        self.Session = sessionmaker(bind=self.engine)
+        self.engine = _init_engine()
+        _ensure_metadata(self.engine)
+        self.metadata = _METADATA
+        if _SESSION_FACTORY is None:
+            raise RuntimeError("Database session factory was not initialized.")
+        self.Session = _SESSION_FACTORY
         self.session = self.Session()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.session.close()
+        try:
+            if exc_type is not None:
+                self.session.rollback()
+        finally:
+            self.session.close()
 
 
 if __name__ == "__main__":
     """
     Logos Installation Steps:
-    1. Set up database. Creates an entry in "users" with "root" user and a process entry with an initial api key.
-        =>  Call "/logosdb/setup"
-        =>  In the response you get the logos-API-key for the root user. This key is used to setup the database
-            in the following steps.
+    1. Set up database. On first startup, the server automatically creates a "root" user and process entry
+        with an initial API key. The key is printed to stdout (check container logs).
+        This key is used to configure the database in the following steps.
     2. Add Provider. Add a new provider, the corresponding base url, the API key and authentication syntax.
         "auth_name" is the name used in the header for authorization (e.g. "api-key" for azure), 
         "auth_format" is used in the header to format the authentication (e.g. "Bearer {}" for OpenAI)

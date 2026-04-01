@@ -24,6 +24,7 @@ Usage:
 """
 
 from iris.tracing.langfuse_tracer import (
+    TracedThreadPoolExecutor,
     TracingContext,
     clear_current_context,
     get_current_context,
@@ -37,6 +38,7 @@ from iris.tracing.langfuse_tracer import (
 )
 
 __all__ = [
+    "TracedThreadPoolExecutor",
     "TracingContext",
     "clear_current_context",
     "get_current_context",

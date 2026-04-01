@@ -12,6 +12,9 @@ from iris.domain import (
     FeatureDTO,
     InconsistencyCheckPipelineExecutionDTO,
 )
+from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
+    AutonomousTutorPipelineExecutionDTO,
+)
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
@@ -21,6 +24,7 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
+from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
@@ -33,6 +37,7 @@ from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPip
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
+    AutonomousTutorCallback,
     ChatStatusCallback,
     CompetencyExtractionCallback,
     InconsistencyCheckCallback,
@@ -59,7 +64,8 @@ def run_chat_pipeline_worker(
             context=dto.context,
             initial_stages=dto.initial_stages,
         )
-        pipeline = ChatPipeline(context=dto.context)
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = ChatPipeline(context=dto.context, local=is_local)
     except Exception as e:
         logger.error("Error preparing chat pipeline", exc_info=e)
         capture_exception(e)
@@ -106,7 +112,11 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = CompetencyExtractionPipeline(callback=callback)
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
+        pipeline = CompetencyExtractionPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing competency extraction pipeline", exc_info=e)
         capture_exception(e)
@@ -146,9 +156,17 @@ def run_rewriting_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
         match variant:
             case "faq" | "problem_statement":
-                pipeline = RewritingPipeline(callback=callback, variant=variant)
+                pipeline = RewritingPipeline(
+                    callback=callback,
+                    variant=variant,
+                    local=is_local,
+                )
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
@@ -191,7 +209,11 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = InconsistencyCheckPipeline(callback=callback)
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
+        pipeline = InconsistencyCheckPipeline(callback=callback, local=is_local)
     except Exception as e:
         logger.error("Error preparing inconsistency check pipeline", exc_info=e)
         capture_exception(e)
@@ -271,6 +293,50 @@ def run_communication_tutor_suggestions_pipeline(
     thread.start()
 
 
+def run_autonomous_tutor_pipeline_worker(
+    dto: AutonomousTutorPipelineExecutionDTO, variant_id: str, request_id: str
+):
+    set_request_id(request_id)
+    logger.info("Autonomous tutor pipeline started")
+    try:
+        callback = AutonomousTutorCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        for variant in AutonomousTutorPipeline.get_variants():
+            if variant.id == variant_id:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {variant_id}")
+        pipeline = AutonomousTutorPipeline()
+    except Exception as e:
+        logger.error("Error preparing autonomous tutor pipeline", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
+        pipeline(dto=dto, variant=variant, callback=callback)
+    except Exception as e:
+        logger.error("Error running autonomous tutor pipeline", exc_info=e)
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/autonomous-tutor/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
+    variant = validate_pipeline_variant(dto.settings, AutonomousTutorPipeline)
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_autonomous_tutor_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
+    thread.start()
+
+
 @router.get("/{feature}/variants")
 def get_pipeline(feature: str) -> list[FeatureDTO]:
     """
@@ -306,6 +372,10 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
         case "TUTOR_SUGGESTION":
             return get_available_variants(
                 TutorSuggestionPipeline.get_variants(), available_llms
+            )
+        case "AUTONOMOUS_TUTOR":
+            return get_available_variants(
+                AutonomousTutorPipeline.get_variants(), available_llms
             )
         case _:
             raise HTTPException(

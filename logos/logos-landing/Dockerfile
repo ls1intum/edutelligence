@@ -3,11 +3,14 @@ FROM node:alpine AS build
 
 WORKDIR /app
 
-# Copy React UI source code
-COPY ./logos/logos-landing/ ./
+# Copy dependency manifests first for layer caching
+COPY package.json package-lock.json ./
 
-# Install dependencies
+# Install dependencies (cached unless package.json/package-lock.json changes)
 RUN npm ci
+
+# Copy remaining source
+COPY . ./
 
 # Build React app (defaults to production mode)
 RUN npx expo export --platform web --output-dir landing-build

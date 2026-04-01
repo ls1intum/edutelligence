@@ -67,7 +67,6 @@ class Model(Base):
     __tablename__ = 'models'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    endpoint = Column(Text)
     weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
@@ -88,6 +87,7 @@ class Provider(Base):
     base_url = Column(Text, nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
+    api_key = Column(Text, nullable=True)
 
 
 class ModelProvider(Base):
@@ -106,6 +106,7 @@ class ModelApiKey(Base):
     model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
     provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
     api_key = Column(Text, nullable=False)
+    endpoint = Column(Text, nullable=False, default='')
 
     model = relationship("Model")
     provider = relationship("Provider")
@@ -159,42 +160,25 @@ class LogEntry(Base):
     policy_id = Column(Integer, ForeignKey('policies.id', ondelete="SET NULL"))
 
     classification_statistics = Column(JSON)
-
-    usage_tokens = relationship("UsageTokens")
-
-
-class RequestEvent(Base):
-    """
-    One row per request_id capturing scheduling and completion timestamps plus
-    provider-specific snapshots.
-    """
-
-    __tablename__ = "request_events"
-
-    request_id = Column(Text, primary_key=True)
-    model_id = Column(Integer, ForeignKey("models.id", ondelete="SET NULL"))
-    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="SET NULL"))
-
-    initial_priority = Column(Text)  # Start priority (e.g. 'normal')
-    priority_when_scheduled = Column(Text)  # Final priority (may be escalated, e.g. 'high')
-
-    queue_depth_at_enqueue = Column(Integer)  # Total system load when request arrived
-    queue_depth_at_schedule = Column(Integer)  # Total system load when scheduled (after waiting)
-
-    timeout_s = Column(Integer)  # Max wait time requested (or null)
-
-    enqueue_ts = Column(TIMESTAMP(timezone=True))
-    scheduled_ts = Column(TIMESTAMP(timezone=True))
-    request_complete_ts = Column(TIMESTAMP(timezone=True))
-
-    # Provider specific snapshots (NULL if not applicable)
-    available_vram_mb = Column(Integer)  # Ollama only: VRAM free at schedule time
-    azure_rate_remaining_requests = Column(Integer)  # Azure only: requests remaining in window
-    azure_rate_remaining_tokens = Column(Integer)  # Azure only: tokens remaining in window
-
-    cold_start = Column(Boolean)  # True if model had to be loaded (Ollama)
+    request_id = Column(Text)
+    priority = Column(String(10), default='medium')
+    initial_priority = Column(Text)
+    priority_when_scheduled = Column(Text)
+    queue_depth_at_enqueue = Column(Integer)
+    queue_depth_at_schedule = Column(Integer)
+    timeout_s = Column(Integer)
+    queue_depth_at_arrival = Column(Integer)
+    utilization_at_arrival = Column(Numeric)
+    queue_wait_ms = Column(Numeric)
+    was_cold_start = Column(Boolean, default=False)
+    load_duration_ms = Column(Numeric)
+    available_vram_mb = Column(Integer)
+    azure_rate_remaining_requests = Column(Integer)
+    azure_rate_remaining_tokens = Column(Integer)
     result_status = Column(Enum(ResultStatus, name="result_status_enum"))
     error_message = Column(Text)
+
+    usage_tokens = relationship("UsageTokens")
 
 
 class TokenTypes(Base):
