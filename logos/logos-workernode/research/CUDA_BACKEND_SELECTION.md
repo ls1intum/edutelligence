@@ -59,7 +59,7 @@ services:
 docker run -d --gpus all -e OLLAMA_LLM_LIBRARY=cuda_v12 ollama/ollama:latest
 ```
 
-### LogosWorkerNode (config.yml)
+### LogosWorkerNode (env vars)
 
 The logosworkernode supports this natively via the `llm_library` configuration field:
 
@@ -188,7 +188,7 @@ Older architectures (Pascal 6.x, Volta 7.0) are likely also affected. Ampere (8.
 
 ## Related Configuration
 
-The logosworkernode's `config.yml` supports these CUDA-related fields:
+The logosworkernode supports these CUDA-related settings:
 
 ```yaml
 ollama:

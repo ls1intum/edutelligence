@@ -147,7 +147,7 @@ RUN cp -a /tmp/packages/. "$(python3 -c 'import sysconfig; print(sysconfig.get_p
     && rm -rf /tmp/packages
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
-RUN mkdir -p /app/certs
+RUN mkdir -p /app/certs /app/data
 
 # ---------------------------------------------------------------------------
 # Runtime environment
@@ -156,6 +156,7 @@ ENV PYTHONUNBUFFERED=1
 ENV LOGOS_WORKER_NODE_HAS_VLLM=${INSTALL_VLLM}
 ENV LOGOS_WORKER_NODE_HAS_OLLAMA=${INSTALL_OLLAMA}
 ENV LOGOS_WORKER_NODE_CONFIG=/app/config.yml
+ENV LOGOS_STATE_DIR=/app/data
 
 # CUDA system libs — only relevant on GPU builds, harmless on CPU
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}

@@ -151,15 +151,15 @@ def test_get_all_profiles():
 
 
 # ---------------------------------------------------------------------------
-# Persistence (config.yml)
+# Persistence (state directory)
 # ---------------------------------------------------------------------------
 
 
 def test_persist_and_reload(tmp_path):
-    """Write to temp config.yml, create new registry from same path, verify loaded."""
-    config_path = tmp_path / "config.yml"
+    """Write to temp state dir, create new registry from same dir, verify loaded."""
+    state_dir = tmp_path / "state"
 
-    registry1 = ModelProfileRegistry(config_path=config_path)
+    registry1 = ModelProfileRegistry(state_dir=state_dir)
     registry1.record_loaded_vram(
         "llama3:8b",
         8000.0,
@@ -171,8 +171,8 @@ def test_persist_and_reload(tmp_path):
     registry1.record_sleeping_vram("llama3:8b", 512.0)
     registry1.record_disk_size("qwen3:8b", 5_000_000_000)
 
-    # Create new registry from same path
-    registry2 = ModelProfileRegistry(config_path=config_path)
+    # Create new registry from same state dir
+    registry2 = ModelProfileRegistry(state_dir=state_dir)
     profiles = registry2.get_all_profiles()
     assert len(profiles) == 2
 
@@ -190,18 +190,18 @@ def test_persist_and_reload(tmp_path):
     assert qwen.disk_size_bytes == 5_000_000_000
 
 
-def test_persist_no_config_path():
-    """No config path → persist is a no-op."""
-    registry = ModelProfileRegistry(config_path=None)
+def test_persist_no_state_dir():
+    """No state dir → persist is a no-op."""
+    registry = ModelProfileRegistry(state_dir=None)
     registry.record_loaded_vram("llama3:8b", 8000.0)
     # Should not raise
     assert registry.get_profile("llama3:8b").loaded_vram_mb == 8000.0
 
 
-def test_reload_nonexistent_config(tmp_path):
-    """Non-existent config file → no profiles loaded."""
-    config_path = tmp_path / "does-not-exist.yml"
-    registry = ModelProfileRegistry(config_path=config_path)
+def test_reload_nonexistent_state_dir(tmp_path):
+    """Non-existent state dir → no profiles loaded."""
+    state_dir = tmp_path / "does-not-exist"
+    registry = ModelProfileRegistry(state_dir=state_dir)
     assert registry.get_all_profiles() == {}
 
 

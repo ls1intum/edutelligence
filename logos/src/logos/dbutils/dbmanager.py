@@ -2653,6 +2653,27 @@ class DBManager:
             "api_key": result.api_key,
         }
 
+    def get_logosnode_provider_by_api_key(self, api_key: str):
+        """Look up a logosnode provider by its shared API key."""
+        sql = text("""
+            SELECT *
+            FROM providers
+            WHERE api_key = :api_key
+              AND provider_type = 'logosnode'
+        """)
+        result = self.session.execute(sql, {"api_key": api_key}).fetchone()
+        if result is None:
+            return None
+        return {
+            "id": result.id,
+            "name": result.name,
+            "base_url": result.base_url,
+            "provider_type": result.provider_type,
+            "auth_name": result.auth_name,
+            "auth_format": result.auth_format,
+            "api_key": result.api_key,
+        }
+
     def get_local_provider_inventory(self, logos_key: str) -> Tuple[Any, int]:
         """
         Return all local/self-hosted providers for dashboards and operator tooling.

@@ -2385,26 +2385,26 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
 @app.post("/logosdb/providers/logosnode/auth")
 async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     """
-    Pre-provisioned provider authentication for LogosWorkerNode.
+    Authenticate a LogosWorkerNode by its API key.
+
+    The server resolves the provider from the key. The worker never needs
+    to know or send a provider_id.
     """
     _require_tls_request(request)
     with DBManager() as db:
-        provider = db.get_provider(data.provider_id)
+        provider = db.get_logosnode_provider_by_api_key(data.shared_key)
 
     if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
+        raise HTTPException(status_code=404, detail="Provider not found for this API key")
     provider_type = _normalize_provider_type(provider.get("provider_type"))
     if provider_type != "logosnode":
         raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
 
-    expected = str(provider.get("api_key") or "")
-    presented = data.shared_key or ""
-    if not expected or not hmac.compare_digest(presented, expected):
-        raise HTTPException(status_code=403, detail="Invalid provider shared key")
+    provider_id = provider["id"]
+    worker_id = provider.get("name") or f"worker-{provider_id}"
 
-    worker_id = data.worker_id.strip() if data.worker_id else f"worker-{data.provider_id}"
     conflicting_session = await _logosnode_registry.get_conflicting_session(
-        data.provider_id,
+        provider_id,
         worker_id,
         stale_after_seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS,
     )
@@ -2412,13 +2412,12 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Provider {data.provider_id} is already connected as worker "
-                f"'{conflicting_session.worker_id}'. Register a separate logosnode "
-                f"provider for '{worker_id}' or stop the existing worker first."
+                f"Worker '{conflicting_session.worker_id}' is already connected. "
+                f"Stop the existing worker first."
             ),
         )
     token = await _logosnode_registry.issue_ticket(
-        provider_id=data.provider_id,
+        provider_id=provider_id,
         worker_id=worker_id,
         capabilities_models=data.capabilities_models,
         ttl_seconds=60,
@@ -2426,6 +2425,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     return {
         "session_token": token,
         "ws_url": _build_logosnode_ws_url(request, token),
+        "worker_id": worker_id,
         "expires_in_seconds": 60,
     }
 

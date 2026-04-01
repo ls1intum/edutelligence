@@ -105,9 +105,9 @@ The worker automatically measures memory footprints:
 
 For vLLM, Logos does not blindly reuse `loaded_vram_mb` as the next load cost. It uses `base_residency_mb` plus a scaled `kv_budget_mb`, then chooses a lower or higher automatic `gpu_memory_utilization` target based on how large the model is relative to the provider VRAM budget.
 
-Profiles update via exponential moving average (alpha=0.3) and persist in `config.yml` under `model_profiles`. They survive restarts and are sent to Logos every 5s so the capacity planner can validate VRAM budgets before loading or waking lanes.
+Profiles update via exponential moving average (alpha=0.3) and persist in the state directory (`/app/data/model_profiles.yml`). They survive restarts and are sent to Logos every 5s so the capacity planner can validate VRAM budgets before loading or waking lanes.
 
-Example persisted profiles (added automatically to config.yml):
+Example persisted profiles (saved automatically to the state directory):
 ```yaml
 model_profiles:
   gemma2:2b:

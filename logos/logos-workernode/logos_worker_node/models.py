@@ -184,9 +184,7 @@ class LogosConfig(BaseModel):
     enabled: bool = False
     logos_url: str = ""
     allow_insecure_http: bool = False
-    provider_id: int = 0
     shared_key: str = ""
-    worker_id: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
     capabilities_overrides: dict[str, dict] = Field(default_factory=dict)
     heartbeat_interval_seconds: int = Field(default=5, ge=1)
@@ -264,6 +262,12 @@ class AppConfig(BaseModel):
     logos: LogosConfig = Field(default_factory=LogosConfig)
     engines: EnginesConfig = Field(default_factory=EnginesConfig)
     lanes: list[LaneConfig] = Field(default_factory=list)
+    model_profile_overrides: dict[str, dict] = Field(
+        default_factory=dict,
+        description="Per-model VRAM profile overrides for niche models with "
+        "incorrect or unavailable HF metadata. Keys are model names; values are "
+        "dicts with fields like base_residency_mb, kv_per_token_bytes, etc.",
+    )
 
 
 class ProcessState(str, enum.Enum):

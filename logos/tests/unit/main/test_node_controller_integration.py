@@ -306,16 +306,18 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
             return False
 
         @staticmethod
-        def get_provider(provider_id: int):
+        def get_logosnode_provider_by_api_key(api_key: str):
+            if api_key != "shared-secret":
+                return None
             return {
-                "id": provider_id,
+                "id": 3,
                 "provider_type": "logosnode",
                 "api_key": "shared-secret",
             }
 
     monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
 
-    req = LogosNodeAuthRequest(provider_id=3, shared_key="shared-secret", worker_id="worker-3")
+    req = LogosNodeAuthRequest(shared_key="shared-secret")
     request = Request(
         {
             "type": "http",
@@ -329,7 +331,7 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
     assert "session_token" in response
     assert response["ws_url"].startswith("wss://logos.local:8080/")
 
-    bad_req = LogosNodeAuthRequest(provider_id=3, shared_key="wrong", worker_id="worker-3")
+    bad_req = LogosNodeAuthRequest(shared_key="wrong")
     with pytest.raises(HTTPException):
         await main_mod.logosnode_auth(bad_req, request)
 
@@ -350,16 +352,19 @@ async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
             return False
 
         @staticmethod
-        def get_provider(provider_id: int):
+        def get_logosnode_provider_by_api_key(api_key: str):
+            if api_key != "shared-secret":
+                return None
             return {
-                "id": provider_id,
+                "id": 3,
+                "name": "worker-b",
                 "provider_type": "logosnode",
                 "api_key": "shared-secret",
             }
 
     monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
 
-    req = LogosNodeAuthRequest(provider_id=3, shared_key="shared-secret", worker_id="worker-b")
+    req = LogosNodeAuthRequest(shared_key="shared-secret")
     request = Request(
         {
             "type": "http",
@@ -379,7 +384,7 @@ async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
 @pytest.mark.asyncio
 async def test_logosnode_auth_requires_tls(monkeypatch):
     monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
-    req = LogosNodeAuthRequest(provider_id=3, shared_key="secret", worker_id="worker-3")
+    req = LogosNodeAuthRequest(shared_key="secret")
     request = Request(
         {
             "type": "http",
@@ -407,16 +412,18 @@ async def test_logosnode_auth_allows_http_in_dev_mode(monkeypatch):
             return False
 
         @staticmethod
-        def get_provider(provider_id: int):
+        def get_logosnode_provider_by_api_key(api_key: str):
+            if api_key != "shared-secret":
+                return None
             return {
-                "id": provider_id,
+                "id": 3,
                 "provider_type": "logosnode",
                 "api_key": "shared-secret",
             }
 
     monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
 
-    req = LogosNodeAuthRequest(provider_id=3, shared_key="shared-secret", worker_id="worker-3")
+    req = LogosNodeAuthRequest(shared_key="shared-secret")
     request = Request(
         {
             "type": "http",

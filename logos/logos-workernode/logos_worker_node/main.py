@@ -13,7 +13,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from logos_worker_node.config import load_config, get_config_path
+from logos_worker_node.config import load_config, get_state_dir
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.logos_bridge import LogosBridgeClient
@@ -63,7 +63,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("FlashInfer pre-warmup failed; vLLM will JIT-compile on first launch", exc_info=True)
 
-    model_profiles = ModelProfileRegistry(config_path=get_config_path())
+    model_profiles = ModelProfileRegistry(
+        state_dir=get_state_dir(),
+        model_profile_overrides=cfg.model_profile_overrides,
+    )
 
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
