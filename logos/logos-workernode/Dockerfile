@@ -110,6 +110,11 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
 # so the runtime COPY is deterministic.
 RUN site_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
     mkdir -p /packages && cp -a "$site_dir"/. /packages/
+# Collect console_scripts (e.g. vllm) installed under --prefix into /scripts.
+RUN mkdir -p /scripts \
+    && for d in /install/bin /install/local/bin; do \
+         [ -d "$d" ] && cp -a "$d"/. /scripts/; \
+       done; true
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
@@ -145,6 +150,7 @@ RUN mkdir -p "$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"
 COPY --from=builder /packages/ /tmp/packages/
 RUN cp -a /tmp/packages/. "$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/" \
     && rm -rf /tmp/packages
+COPY --from=builder /scripts/ /usr/local/bin/
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 RUN mkdir -p /app/certs /app/data
