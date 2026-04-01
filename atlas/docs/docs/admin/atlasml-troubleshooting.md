@@ -134,7 +134,7 @@ docker inspect atlasml | jq '.[0].State.Health'
 docker inspect atlasml | jq '.[0].State.Health.Log'
 
 # Test health endpoint manually
-curl http://localhost/api/v1/health
+curl -k https://your-atlasml-domain.com/api/v1/health/
 ```
 
 **Solutions**:
@@ -784,11 +784,8 @@ openssl s_client -connect atlasml.company.com:443 -servername atlasml.company.co
 #### Certificate Expired
 
 ```bash
-# Renew Let's Encrypt certificate
-sudo certbot renew
-
-# Reload Nginx
-sudo systemctl reload nginx
+# Inspect Traefik ACME / resolver configuration
+docker logs atlasml-traefik 2>&1 | grep -i "certificate\\|acme\\|harica"
 ```
 
 #### Self-Signed Certificate

@@ -209,27 +209,27 @@ async def suggest_competencies(request: SuggestCompetencyRequest):
 
 ### `routers/health.py` - Health Check
 
-**Purpose**: Provides a simple liveness/readiness endpoint for container orchestrators.
+**Purpose**: Provides a dependency-aware health endpoint that verifies AtlasML can still use Weaviate.
 
 **Endpoints**:
 
 ```python
 @router.get("/")
-async def health():
-    return []
+def health():
+    ...
 ```
 
 - **Path**: `/api/v1/health/`
 - **Method**: GET
 - **Authentication**: None
-- **Response**: `[]` (200 OK)
+- **Response**: Structured JSON status, `200 OK` when Weaviate is usable and `503` otherwise
 
 **Use Cases**:
 - Docker healthchecks
 - Load balancer health checks
 
 **When to Modify**:
-- Adding detailed health status (database, external APIs)
+- Extending dependency checks
 - Changing response format
 
 **File**: `atlasml/routers/health.py`

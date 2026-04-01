@@ -1,0 +1,203 @@
+{
+  "timestamp_utc": "2026-03-09T00:05:50.478966+00:00",
+  "controller_url": "http://127.0.0.1:8444",
+  "concurrency": [
+    1,
+    4,
+    8,
+    16,
+    32
+  ],
+  "max_tokens": 200,
+  "warmup": 1,
+  "backends": [
+    {
+      "backend": "vllm",
+      "configured_model": "Qwen/Qwen2.5-32B-Instruct-AWQ",
+      "served_model": "Qwen/Qwen2.5-32B-Instruct-AWQ",
+      "lane_port": 11436,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "total_tokens": 200,
+          "batch_time_s": 9.931,
+          "aggregate_tok_s": 20.139,
+          "avg_latency_s": 9.93,
+          "p50_latency_s": 9.93,
+          "p95_latency_s": 9.93,
+          "avg_ttft_ms": 323.0,
+          "avg_tok_per_req_s": 20.14
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "total_tokens": 800,
+          "batch_time_s": 10.375,
+          "aggregate_tok_s": 77.106,
+          "avg_latency_s": 10.348,
+          "p50_latency_s": 10.374,
+          "p95_latency_s": 10.374,
+          "avg_ttft_ms": 202.6,
+          "avg_tok_per_req_s": 19.327
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "total_tokens": 1600,
+          "batch_time_s": 22.187,
+          "aggregate_tok_s": 72.114,
+          "avg_latency_s": 22.17,
+          "p50_latency_s": 22.184,
+          "p95_latency_s": 22.185,
+          "avg_ttft_ms": 10289.2,
+          "avg_tok_per_req_s": 9.021
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "total_tokens": 3200,
+          "batch_time_s": 10.681,
+          "aggregate_tok_s": 299.587,
+          "avg_latency_s": 10.668,
+          "p50_latency_s": 10.675,
+          "p95_latency_s": 10.68,
+          "avg_ttft_ms": 331.7,
+          "avg_tok_per_req_s": 18.747
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "total_tokens": 6400,
+          "batch_time_s": 17.037,
+          "aggregate_tok_s": 375.659,
+          "avg_latency_s": 17.02,
+          "p50_latency_s": 17.027,
+          "p95_latency_s": 17.031,
+          "avg_ttft_ms": 541.3,
+          "avg_tok_per_req_s": 11.751
+        }
+      ]
+    },
+    {
+      "backend": "ollama",
+      "configured_model": "qwen2.5-coder:32b",
+      "served_model": "qwen2.5-coder:32b",
+      "lane_port": 11436,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "total_tokens": 200,
+          "batch_time_s": 11.909,
+          "aggregate_tok_s": 16.794,
+          "avg_latency_s": 11.909,
+          "p50_latency_s": 11.909,
+          "p95_latency_s": 11.909,
+          "avg_ttft_ms": 608.9,
+          "avg_tok_per_req_s": 16.794
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "total_tokens": 800,
+          "batch_time_s": 19.278,
+          "aggregate_tok_s": 41.498,
+          "avg_latency_s": 19.239,
+          "p50_latency_s": 19.276,
+          "p95_latency_s": 19.277,
+          "avg_ttft_ms": 1069.2,
+          "avg_tok_per_req_s": 10.395
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "total_tokens": 1600,
+          "batch_time_s": 37.094,
+          "aggregate_tok_s": 43.134,
+          "avg_latency_s": 27.868,
+          "p50_latency_s": 27.831,
+          "p95_latency_s": 37.092,
+          "avg_ttft_ms": 9696.3,
+          "avg_tok_per_req_s": 8.051
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "total_tokens": 3200,
+          "batch_time_s": 74.159,
+          "aggregate_tok_s": 43.151,
+          "avg_latency_s": 46.426,
+          "p50_latency_s": 46.378,
+          "p95_latency_s": 74.156,
+          "avg_ttft_ms": 28192.2,
+          "avg_tok_per_req_s": 5.585
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "total_tokens": 6400,
+          "batch_time_s": 148.543,
+          "aggregate_tok_s": 43.085,
+          "avg_latency_s": 83.798,
+          "p50_latency_s": 83.8,
+          "p95_latency_s": 148.534,
+          "avg_ttft_ms": 65504.5,
+          "avg_tok_per_req_s": 3.61
+        }
+      ]
+    }
+  ],
+  "comparison": [
+    {
+      "concurrency": 1,
+      "vllm_aggregate_tok_s": 20.139,
+      "vllm_avg_ttft_ms": 323.0,
+      "ollama_aggregate_tok_s": 16.794,
+      "ollama_avg_ttft_ms": 608.9,
+      "throughput_speedup_vllm_over_ollama": 1.199
+    },
+    {
+      "concurrency": 4,
+      "vllm_aggregate_tok_s": 77.106,
+      "vllm_avg_ttft_ms": 202.6,
+      "ollama_aggregate_tok_s": 41.498,
+      "ollama_avg_ttft_ms": 1069.2,
+      "throughput_speedup_vllm_over_ollama": 1.858
+    },
+    {
+      "concurrency": 8,
+      "vllm_aggregate_tok_s": 72.114,
+      "vllm_avg_ttft_ms": 10289.2,
+      "ollama_aggregate_tok_s": 43.134,
+      "ollama_avg_ttft_ms": 9696.3,
+      "throughput_speedup_vllm_over_ollama": 1.672
+    },
+    {
+      "concurrency": 16,
+      "vllm_aggregate_tok_s": 299.587,
+      "vllm_avg_ttft_ms": 331.7,
+      "ollama_aggregate_tok_s": 43.151,
+      "ollama_avg_ttft_ms": 28192.2,
+      "throughput_speedup_vllm_over_ollama": 6.943
+    },
+    {
+      "concurrency": 32,
+      "vllm_aggregate_tok_s": 375.659,
+      "vllm_avg_ttft_ms": 541.3,
+      "ollama_aggregate_tok_s": 43.085,
+      "ollama_avg_ttft_ms": 65504.5,
+      "throughput_speedup_vllm_over_ollama": 8.719
+    }
+  ]
+}

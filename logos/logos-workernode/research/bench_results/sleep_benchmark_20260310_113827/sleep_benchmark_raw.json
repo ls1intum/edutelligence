@@ -1,0 +1,1598 @@
+[
+  {
+    "summary": {
+      "timestamp_utc": "2026-03-10T11:39:55.272254+00:00",
+      "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "sleep_level": 1,
+      "repeat": 1,
+      "ready_ms": 57103.22820208967,
+      "warmup_ms": 776.5200883150101,
+      "sleep_call_ms": 10123.06303344667,
+      "sleep_to_state_ms": 5.310043692588806,
+      "wake_call_ms": 1252.9346533119678,
+      "wake_to_not_sleeping_ms": 4.090439528226852,
+      "wake_to_first_response_ms": 533.368892967701,
+      "first_response_latency_ms": 533.2270618528128,
+      "probe_attempts": 1,
+      "vram_before_sleep_total_mb": 24032.0,
+      "vram_sleep_min_total_mb": 1588.0,
+      "vram_sleep_avg_total_mb": 1588.0,
+      "vram_sleep_max_total_mb": 1588.0,
+      "vram_after_sleep_total_mb": 1588.0,
+      "vram_after_wake_total_mb": 22788.0,
+      "vram_after_first_response_total_mb": 22788.0
+    },
+    "model_plan": {
+      "name": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "gpu_devices": "0,1",
+      "tensor_parallel_size": 2,
+      "dtype": "float16",
+      "quantization": "",
+      "gpu_memory_utilization": 0.7,
+      "max_model_len": 4096,
+      "enforce_eager": true,
+      "enable_prefix_caching": false
+    },
+    "spawn_cmd": [
+      ".venv/bin/vllm",
+      "serve",
+      "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "11560",
+      "--tensor-parallel-size",
+      "2",
+      "--gpu-memory-utilization",
+      "0.7",
+      "--dtype",
+      "float16",
+      "--max-model-len",
+      "4096",
+      "--enable-sleep-mode",
+      "--enforce-eager"
+    ],
+    "before_sleep_snapshot": {
+      "timestamp_utc": "2026-03-10T11:39:30.199499+00:00",
+      "total_used_mb": 24032.0,
+      "gpus": [
+        {
+          "index": 0,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 12016.0
+        },
+        {
+          "index": 1,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 12016.0
+        }
+      ]
+    },
+    "during_sleep_samples": [
+      {
+        "timestamp_utc": "2026-03-10T11:39:40.370894+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:40.910297+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:41.449794+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:41.990053+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:42.529674+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:43.069262+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:43.608912+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:44.148440+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:44.686787+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:45.224740+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:45.763504+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:46.303711+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:46.843440+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:47.383637+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:47.923263+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:48.367205+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      }
+    ],
+    "after_sleep_snapshot": {
+      "timestamp_utc": "2026-03-10T11:39:48.408577+00:00",
+      "total_used_mb": 1588.0,
+      "gpus": [
+        {
+          "index": 0,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 794.0
+        },
+        {
+          "index": 1,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 794.0
+        }
+      ]
+    },
+    "after_wake_snapshot": {
+      "timestamp_utc": "2026-03-10T11:39:50.233981+00:00",
+      "total_used_mb": 22788.0,
+      "gpus": [
+        {
+          "index": 0,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 11394.0
+        },
+        {
+          "index": 1,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 11394.0
+        }
+      ]
+    },
+    "post_wake_samples": [
+      {
+        "timestamp_utc": "2026-03-10T11:39:50.272895+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:50.811596+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:51.350078+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:51.888112+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:52.426967+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:52.966923+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:53.505536+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:54.044343+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:54.583381+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:55.123166+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:55.272221+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      }
+    ],
+    "baseline_samples": [
+      {
+        "timestamp_utc": "2026-03-10T11:39:25.160548+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:25.699249+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:26.238175+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:26.777483+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:27.316519+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:27.854745+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:28.394757+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:28.933520+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:29.472137+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:30.011415+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:30.160751+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "summary": {
+      "timestamp_utc": "2026-03-10T11:40:10.000962+00:00",
+      "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "sleep_level": 2,
+      "repeat": 1,
+      "ready_ms": 57103.22820208967,
+      "warmup_ms": 776.5200883150101,
+      "sleep_call_ms": 736.1325137317181,
+      "sleep_to_state_ms": 5.049454048275948,
+      "wake_call_ms": 258.6687561124563,
+      "wake_to_not_sleeping_ms": 4.085388034582138,
+      "wake_to_first_response_ms": 531.5810926258564,
+      "first_response_latency_ms": 531.4565971493721,
+      "probe_attempts": 1,
+      "vram_before_sleep_total_mb": 22788.0,
+      "vram_sleep_min_total_mb": 1588.0,
+      "vram_sleep_avg_total_mb": 1588.0,
+      "vram_sleep_max_total_mb": 1588.0,
+      "vram_after_sleep_total_mb": 1588.0,
+      "vram_after_wake_total_mb": 22788.0,
+      "vram_after_first_response_total_mb": 22788.0
+    },
+    "model_plan": {
+      "name": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "gpu_devices": "0,1",
+      "tensor_parallel_size": 2,
+      "dtype": "float16",
+      "quantization": "",
+      "gpu_memory_utilization": 0.7,
+      "max_model_len": 4096,
+      "enforce_eager": true,
+      "enable_prefix_caching": false
+    },
+    "spawn_cmd": [
+      ".venv/bin/vllm",
+      "serve",
+      "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "11560",
+      "--tensor-parallel-size",
+      "2",
+      "--gpu-memory-utilization",
+      "0.7",
+      "--dtype",
+      "float16",
+      "--max-model-len",
+      "4096",
+      "--enable-sleep-mode",
+      "--enforce-eager"
+    ],
+    "before_sleep_snapshot": {
+      "timestamp_utc": "2026-03-10T11:39:55.310847+00:00",
+      "total_used_mb": 22788.0,
+      "gpus": [
+        {
+          "index": 0,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 11394.0
+        },
+        {
+          "index": 1,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 11394.0
+        }
+      ]
+    },
+    "during_sleep_samples": [
+      {
+        "timestamp_utc": "2026-03-10T11:39:56.091912+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:56.629625+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:57.167105+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:57.706271+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:58.244743+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:58.783505+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:59.321175+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:59.860711+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:00.398629+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:00.939049+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:01.477616+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:02.016937+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:02.554910+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:03.093408+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:03.633127+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:04.090856+00:00",
+        "total_used_mb": 1588.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 794.0
+          }
+        ]
+      }
+    ],
+    "after_sleep_snapshot": {
+      "timestamp_utc": "2026-03-10T11:40:04.128825+00:00",
+      "total_used_mb": 1588.0,
+      "gpus": [
+        {
+          "index": 0,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 794.0
+        },
+        {
+          "index": 1,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 794.0
+        }
+      ]
+    },
+    "after_wake_snapshot": {
+      "timestamp_utc": "2026-03-10T11:40:04.961955+00:00",
+      "total_used_mb": 22788.0,
+      "gpus": [
+        {
+          "index": 0,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 11394.0
+        },
+        {
+          "index": 1,
+          "name": "Quadro RTX 5000",
+          "total_mb": 16384.0,
+          "used_mb": 11394.0
+        }
+      ]
+    },
+    "post_wake_samples": [
+      {
+        "timestamp_utc": "2026-03-10T11:40:04.998375+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:05.536462+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:06.075712+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:06.613789+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:07.152174+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:07.691149+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:08.230422+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:08.769398+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:09.309483+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:09.848959+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:40:10.000933+00:00",
+        "total_used_mb": 22788.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 11394.0
+          }
+        ]
+      }
+    ],
+    "baseline_samples": [
+      {
+        "timestamp_utc": "2026-03-10T11:39:25.160548+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:25.699249+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:26.238175+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:26.777483+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:27.316519+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:27.854745+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:28.394757+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:28.933520+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:29.472137+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:30.011415+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      },
+      {
+        "timestamp_utc": "2026-03-10T11:39:30.160751+00:00",
+        "total_used_mb": 24032.0,
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          },
+          {
+            "index": 1,
+            "name": "Quadro RTX 5000",
+            "total_mb": 16384.0,
+            "used_mb": 12016.0
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,21 @@
+meta {
+  name: List Models
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/logosdb/get_models
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}"
+  }
+}

@@ -1,0 +1,277 @@
+{
+  "range": {
+    "start": "2026-03-29T18:55:43+00:00",
+    "end": "2026-03-29T19:05:38+00:00"
+  },
+  "bucketSeconds": 60,
+  "stats": {
+    "lastEventTs": "2026-03-29T19:05:30.711902+00:00",
+    "totals": {
+      "requests": 200,
+      "cloudRequests": 0,
+      "localRequests": 200,
+      "coldStarts": 0,
+      "warmStarts": 200,
+      "avgQueueSeconds": 0.164984085,
+      "avgRunSeconds": 4.06113852
+    },
+    "statusCounts": {
+      "error": 106,
+      "success": 94
+    },
+    "modelBreakdown": [
+      {
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "providerName": "hochbruegge-node",
+        "requestCount": 106,
+        "avgQueueSeconds": 0.055586971698113205,
+        "avgRunSeconds": 0.9118424339622642,
+        "coldStarts": 0,
+        "warmStarts": 106,
+        "errorCount": 106
+      },
+      {
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "providerName": "hochbruegge-node",
+        "requestCount": 94,
+        "avgQueueSeconds": 0.28834678723404256,
+        "avgRunSeconds": 7.612472404255319,
+        "coldStarts": 0,
+        "warmStarts": 94,
+        "errorCount": 0
+      }
+    ],
+    "timeSeries": [
+      {
+        "timestamp": 1774810500000,
+        "label": "",
+        "cloud": 0,
+        "local": 12,
+        "total": 12,
+        "avgRunSeconds": 5.0284185,
+        "avgVram": 28505.333333333332
+      },
+      {
+        "timestamp": 1774810560000,
+        "label": "",
+        "cloud": 0,
+        "local": 19,
+        "total": 19,
+        "avgRunSeconds": 5.635138105263158,
+        "avgVram": 14816.0
+      },
+      {
+        "timestamp": 1774810620000,
+        "label": "",
+        "cloud": 0,
+        "local": 10,
+        "total": 10,
+        "avgRunSeconds": 4.2392537,
+        "avgVram": 14796.0
+      },
+      {
+        "timestamp": 1774810680000,
+        "label": "",
+        "cloud": 0,
+        "local": 17,
+        "total": 17,
+        "avgRunSeconds": 0.479868,
+        "avgVram": 14796.0
+      },
+      {
+        "timestamp": 1774810740000,
+        "label": "",
+        "cloud": 0,
+        "local": 6,
+        "total": 6,
+        "avgRunSeconds": 6.090236166666667,
+        "avgVram": 14796.0
+      },
+      {
+        "timestamp": 1774810800000,
+        "label": "",
+        "cloud": 0,
+        "local": 56,
+        "total": 56,
+        "avgRunSeconds": 3.3998126785714287,
+        "avgVram": 14790.035714285714
+      },
+      {
+        "timestamp": 1774810860000,
+        "label": "",
+        "cloud": 0,
+        "local": 37,
+        "total": 37,
+        "avgRunSeconds": 3.9468244324324324,
+        "avgVram": 15592.648648648648
+      },
+      {
+        "timestamp": 1774810920000,
+        "label": "",
+        "cloud": 0,
+        "local": 13,
+        "total": 13,
+        "avgRunSeconds": 2.890684153846154,
+        "avgVram": 14776.0
+      },
+      {
+        "timestamp": 1774810980000,
+        "label": "",
+        "cloud": 0,
+        "local": 5,
+        "total": 5,
+        "avgRunSeconds": 7.4524676,
+        "avgVram": 14776.0
+      },
+      {
+        "timestamp": 1774811040000,
+        "label": "",
+        "cloud": 0,
+        "local": 9,
+        "total": 9,
+        "avgRunSeconds": 5.188916,
+        "avgVram": 14776.0
+      },
+      {
+        "timestamp": 1774811100000,
+        "label": "",
+        "cloud": 0,
+        "local": 16,
+        "total": 16,
+        "avgRunSeconds": 6.235241125,
+        "avgVram": 14776.0
+      }
+    ],
+    "modelTimeSeries": [
+      {
+        "timestamp": 1774810500000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 4
+      },
+      {
+        "timestamp": 1774810500000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 8
+      },
+      {
+        "timestamp": 1774810560000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 13
+      },
+      {
+        "timestamp": 1774810560000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 6
+      },
+      {
+        "timestamp": 1774810620000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 5
+      },
+      {
+        "timestamp": 1774810620000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 5
+      },
+      {
+        "timestamp": 1774810680000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 17
+      },
+      {
+        "timestamp": 1774810740000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 6
+      },
+      {
+        "timestamp": 1774810800000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 22
+      },
+      {
+        "timestamp": 1774810800000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 34
+      },
+      {
+        "timestamp": 1774810860000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 15
+      },
+      {
+        "timestamp": 1774810860000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 22
+      },
+      {
+        "timestamp": 1774810920000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 4
+      },
+      {
+        "timestamp": 1774810920000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 9
+      },
+      {
+        "timestamp": 1774810980000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 5
+      },
+      {
+        "timestamp": 1774811040000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 6
+      },
+      {
+        "timestamp": 1774811040000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 3
+      },
+      {
+        "timestamp": 1774811100000,
+        "modelId": 40,
+        "modelName": "casperhansen/deepseek-r1-distill-llama-8b-awq",
+        "count": 14
+      },
+      {
+        "timestamp": 1774811100000,
+        "modelId": 46,
+        "modelName": "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+        "count": 2
+      }
+    ],
+    "queueDepth": {
+      "avgEnqueueDepth": 0.29,
+      "avgScheduleDepth": 0.105,
+      "p95EnqueueDepth": 3.0,
+      "p95ScheduleDepth": 0.0
+    },
+    "runtimeByColdStart": [
+      {
+        "type": "warm",
+        "avgRunSeconds": 4.06113852,
+        "count": 200
+      }
+    ]
+  }
+}
