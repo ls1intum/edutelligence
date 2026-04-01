@@ -17,6 +17,7 @@ logos:
 
 engines:
   vllm:
+    vllm_binary: ""
     metrics_path: /metrics
     metrics_timeout_seconds: 5
     flashinfer_loglevel: 0
