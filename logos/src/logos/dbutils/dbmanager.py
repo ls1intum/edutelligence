@@ -486,6 +486,132 @@ class DBManager:
             file.write("\n")
         return {"result": f"Created root user. ID: {user_id}", "api_key": api_key}
 
+    def run_migrations(self, is_fresh_install: bool = False):
+        """
+        Apply pending database migrations on startup.
+        - Fresh install: marks all migrations as applied without executing (init.sql is current)
+        - Existing install: executes pending migrations in order, records each
+
+        Args:
+            is_fresh_install: If True, assumes init.sql has all current schema and skips execution
+        """
+        import pathlib
+
+        # List of all migrations in order (matches run_all_migrations.sh)
+        MIGRATION_FILES = [
+            "001_add_jobs_table.sql",
+            "002_add_provider_sdi_columns.sql",
+            "003a_drop_provider_ssh_columns.sql",
+            "003b_create_model_provider_config.sql",
+            "004_add_log_entry_sdi_columns.sql",
+            "005_create_request_events_table.sql",
+            "006_update_model_endpoints_to_local_ollama.sql",
+            "007_rename_openwebui_to_ollama_no_auth.sql",
+            "008_create_ollama_provider_snapshots.sql",
+            "009_add_profile_id_to_jobs.sql",
+            "010_remove_api_id_from_models.sql",
+            "010b_revert_profile_constraint.sql",
+            "011_restructure_model_api_keys_to_model_based.sql",
+            "012_dedup_models_providers.sql",
+            "013_set_ollama_provider_urls_and_auth.sql",
+            "014_add_api_key_to_providers.sql",
+            "015_add_snapshot_retention_cron.sql",
+            "016_move_endpoint_to_model_api_keys.sql",
+            "017_snapshot_provider_id_migration.sql",
+            "018_drop_model_provider_config.sql",
+            "019_add_request_id_to_log_entry.sql",
+            "020_normalize_local_provider_types_to_logosnode.sql",
+            "021_collapse_request_events_into_log_entry.sql",
+            "022_drop_request_events_table.sql",
+            "023_extend_provider_snapshots_for_worker_runtime.sql",
+            "024_store_logosnode_runtime_payload.sql",
+            "025_create_model_profiles_table.sql",
+            "026_create_schema_migrations.sql",
+        ]
+
+        # Ensure schema_migrations table exists
+        try:
+            self.session.execute(text("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    id SERIAL PRIMARY KEY,
+                    filename TEXT NOT NULL UNIQUE,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            self.session.commit()
+        except Exception as e:
+            logging.warning("Could not create schema_migrations table: %s", e)
+            self.session.rollback()
+            return
+
+        # Get list of already-applied migrations
+        try:
+            existing = set(
+                row[0] for row in
+                self.session.execute(text("SELECT filename FROM schema_migrations")).fetchall()
+            )
+        except Exception as e:
+            logging.warning("Could not query schema_migrations: %s", e)
+            existing = set()
+
+        # Determine which migrations to apply
+        pending = [m for m in MIGRATION_FILES if m not in existing]
+
+        if not pending:
+            logging.info("All migrations already applied")
+            return
+
+        # Get migrations directory
+        migrations_dir = pathlib.Path(__file__).parent.parent.parent / "db" / "migrations"
+
+        if is_fresh_install:
+            # Fresh install: just record all migrations without executing
+            logging.info("Fresh install detected — recording all %d migrations as applied", len(MIGRATION_FILES))
+            for migration_file in MIGRATION_FILES:
+                try:
+                    self.session.execute(text(
+                        "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
+                    ), {"filename": migration_file})
+                except Exception as e:
+                    logging.warning("Could not record migration %s: %s", migration_file, e)
+            self.session.commit()
+        else:
+            # Existing install: execute pending migrations
+            logging.info("Applying %d pending migrations", len(pending))
+            for migration_file in pending:
+                migration_path = migrations_dir / migration_file
+                if not migration_path.exists():
+                    logging.warning("Migration file not found: %s", migration_file)
+                    continue
+
+                # Special handling for migration 015 (pg_cron extension)
+                is_pg_cron = migration_file == "015_add_snapshot_retention_cron.sql"
+
+                try:
+                    migration_sql = migration_path.read_text()
+
+                    # Execute migration in its own transaction
+                    try:
+                        self.session.execute(text(migration_sql))
+                        self.session.commit()
+                    except Exception as e:
+                        if is_pg_cron:
+                            # pg_cron might not be available; log warning but don't block startup
+                            logging.warning("Migration %s skipped (pg_cron may not be installed): %s", migration_file, e)
+                            self.session.rollback()
+                        else:
+                            raise
+
+                    # Record migration as applied
+                    self.session.execute(text(
+                        "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
+                    ), {"filename": migration_file})
+                    self.session.commit()
+                    logging.info("Applied migration: %s", migration_file)
+                except Exception as e:
+                    logging.error("Error applying migration %s: %s", migration_file, e)
+                    self.session.rollback()
+
     def add_provider(self, logos_key: str, provider_name: str, base_url: str,
                      api_key: str, auth_name: str, auth_format: str, provider_type: str) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):

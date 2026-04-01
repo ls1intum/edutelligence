@@ -968,8 +968,16 @@ async def lifespan(app: FastAPI):
             logging.error("Error during initial setup: %s", result)
         else:
             logging.info("Initial setup complete. Root API key: %s", result["api_key"])
+        # Apply migrations on fresh install (init.sql already has current schema)
+        with DBManager() as db:
+            logging.info("Applying pending migrations on fresh install...")
+            db.run_migrations(is_fresh_install=True)
     else:
         logging.info("Database already initialized, skipping setup.")
+        # Apply any pending migrations on existing install
+        with DBManager() as db:
+            logging.info("Checking for pending migrations...")
+            db.run_migrations(is_fresh_install=False)
 
     yield
 
