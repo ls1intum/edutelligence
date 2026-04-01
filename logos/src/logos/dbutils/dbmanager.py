@@ -562,7 +562,7 @@ class DBManager:
             return
 
         # Get migrations directory
-        migrations_dir = pathlib.Path(__file__).parent.parent.parent / "db" / "migrations"
+        migrations_dir = pathlib.Path(__file__).parent.parent.parent.parent / "db" / "migrations"
 
         if is_fresh_install:
             # Fresh install: just record all migrations without executing
