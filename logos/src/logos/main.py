@@ -1007,37 +1007,62 @@ def custom_openapi():
             "type": "apiKey",
             "in": "header",
             "name": "logos_key",
-            "description": "Logos API key (also accepts `Authorization: Bearer <key>`)",
-        }
+            "description": "Logos API key for all endpoints",
+        },
+        "PrometheusApiKey": {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "Prometheus metrics API key (set via PROMETHEUS_API_KEY env var)",
+        },
     }
+    # Default: all endpoints require LogosApiKey
     schema["security"] = [{"LogosApiKey": []}]
+    # Fix duplicate operationIds: api_route() with multiple methods shares one
+    # function name, so FastAPI generates the same operationId for each method.
+    # Append the HTTP method to make them unique.
+    seen_ids: dict[str, int] = {}
+    for path, methods in schema.get("paths", {}).items():
+        for method, detail in methods.items():
+            if not isinstance(detail, dict):
+                continue
+            # Override /metrics to use PrometheusApiKey instead of the global default
+            if path == "/metrics":
+                detail["security"] = [{"PrometheusApiKey": []}]
+            op_id = detail.get("operationId")
+            if op_id:
+                if op_id in seen_ids:
+                    detail["operationId"] = f"{op_id}_{method}"
+                else:
+                    seen_ids[op_id] = 1
     app.openapi_schema = schema
     return schema
 
 
 app.openapi = custom_openapi
 
+_logos_domain = os.getenv("LOGOS_DOMAIN", "localhost")
+_allowed_origins = [
+    f"https://{_logos_domain}",
+    f"https://{_logos_domain}:8080",
+    f"https://{_logos_domain}:443",
+]
+# Also allow plain HTTP on localhost for local development
+if _logos_domain == "localhost":
+    _allowed_origins += [
+        "http://localhost",
+        "http://localhost:8080",
+        "http://localhost:18080",
+        "http://localhost:18081",
+        "http://localhost:18443",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In Produktion ggf. einschränken
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],  # logos_key etc.
+    allow_headers=["*"],  # logos_key, Authorization, etc.
 )
-
-
-# Temporary CORS helper to unblock local testing; safe to remove when Traefik/CORS is stable.
-@app.middleware("http")
-async def add_star_cors_headers(request: Request, call_next):
-    if request.method == "OPTIONS":
-        response = JSONResponse(content={}, status_code=200)
-    else:
-        response = await call_next(request)
-
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
 
 
 @app.get("/metrics", tags=["monitoring"])
