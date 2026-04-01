@@ -114,6 +114,12 @@ class VllmConfig(BaseModel):
 class VllmEngineConfig(BaseModel):
     """Worker-wide vLLM defaults and telemetry settings."""
 
+    vllm_binary: str = Field(
+        default="",
+        description="Global default vLLM binary path for all lanes. "
+        "Empty = use per-lane default ('vllm' on PATH). "
+        "Per-model overrides in model_overrides take precedence.",
+    )
     metrics_path: str = "/metrics"
     metrics_timeout_seconds: int = Field(default=5, ge=1)
     flashinfer_loglevel: int = Field(
