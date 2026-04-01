@@ -14,6 +14,18 @@ TLS is terminated by the Logos server's reverse proxy (Traefik).
 
 ---
 
+## Configuration split
+
+| Source | What | Managed by |
+|---|---|---|
+| `.env` | Credentials (`LOGOS_URL`, `LOGOS_API_KEY`) | GitHub secrets/variables |
+| `config.yml` | Hardware & tuning (capabilities, vLLM overrides, NCCL/FlashInfer, port ranges) | Ansible |
+| `/app/data/` | Runtime state (lane config, model profiles) | Auto-managed (Docker volume) |
+
+No overlap between `.env` and `config.yml`.
+
+---
+
 ## 1. Start Logos
 
 Start the Logos server and make sure it is reachable over HTTPS (e.g. `https://logos.example.com`).
@@ -30,9 +42,9 @@ Save the response values — you will need both:
 - `provider_id`
 - `shared_key`  ← this is the provider API key
 
-## 3. Configure the worker credentials
+## 3. Configure credentials (.env)
 
-Copy `.env.example` to `.env` and fill in the three required values:
+Copy `.env.example` to `.env` and fill in the required values:
 
 ```bash
 cp .env.example .env
@@ -40,38 +52,53 @@ cp .env.example .env
 
 ```dotenv
 LOGOS_URL=https://logos.example.com
-LOGOS_PROVIDER_ID=<provider_id from step 2>
 LOGOS_API_KEY=<shared_key from step 2>
-LOGOS_WORKER_NODE_ID=my-worker-node   # optional, defaults to "worker-<id>"
 ```
 
-These env vars are picked up by `start.sh` automatically and passed into the container.
-**Do not** put these credentials in `config.yml`.
+That's it. The server resolves the provider identity from the API key.
+In production, these are set as GitHub environment secrets and written to `.env` automatically by the deploy workflow.
 
-## 4. Configure models and engine settings
+## 4. Configure hardware (config.yml)
 
-Edit [config.yml](../logos-workernode/config.yml) — set the worker name, capability model list,
-and any engine overrides. Connection credentials are intentionally absent from this file.
+`config.yml` is managed by Ansible and contains hardware-specific settings:
+
+```yaml
+worker:
+  gpu_poll_interval: 5
+  lane_port_start: 11436
+  lane_port_end: 11499
+
+logos:
+  enabled: true
+  capabilities_models:
+    - Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
+      tensor_parallel_size: 2
+
+engines:
+  vllm:
+    nccl_debug: WARN
+    nccl_debug_subsys: INIT
+    model_overrides:
+      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
+        quantization: awq
+        disable_custom_all_reduce: true
+```
+
+**Do not** put credentials in `config.yml`. They come from `.env`.
 
 ## 5. Start the worker
 
 ```bash
-cd logos/logos-workernode
-./start.sh
-```
-
-GPU-capable host:
-
-```bash
-./start.sh --gpu
+docker compose up -d
 ```
 
 ## 6. Verify the local worker
 
 ```bash
 curl http://localhost:8444/health
-curl -H 'Authorization: Bearer <worker.api_key from config.yml>' http://localhost:8444/admin/runtime
-curl -H 'Authorization: Bearer <worker.api_key from config.yml>' http://localhost:8444/admin/lanes
+curl http://localhost:8444/admin/runtime
+curl http://localhost:8444/admin/lanes
 ```
 
 ## 7. Verify the Logos session
@@ -112,10 +139,13 @@ Both are enabled by default. No worker-side configuration needed.
   Check `LOGOS_API_KEY` in `.env` — it must match the `shared_key` from the registration response.
 
 - **`404` / "Provider not found"**
-  Check `LOGOS_PROVIDER_ID` in `.env`.
+  Check `LOGOS_API_KEY` in `.env` — the server could not find a logosnode provider matching this key.
 
 - **worker shows healthy locally but Logos reports offline**
   Check that `LOGOS_URL` is reachable from the worker host and that the URL is `https://`.
 
 - **lane never becomes `loaded`**
   Call `GET /admin/runtime` and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics`.
+
+- **`IsADirectoryError: /app/config.yml`**
+  The `config.yml` file is missing on the host. Ansible must create it before the first deploy.

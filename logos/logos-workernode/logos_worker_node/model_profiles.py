@@ -4,7 +4,7 @@ Records observed lane reservation after model load and sleeping_residual_mb afte
 sleep. Logos uses these observations as calibration input, but may derive a
 different planning budget for vLLM based on current gpu_memory_utilization.
 Uses exponential moving average after the first measurement. Persists in
-config.yml.
+the state directory (model_profiles.yml).
 """
 
 from __future__ import annotations
@@ -236,7 +236,7 @@ class ModelProfileRecord:
     #   "hf"        — estimated from HuggingFace safetensors metadata
     #   "name"      — estimated from model name heuristic (param count × bytes_per_param)
     #   "override"  — operator-provided manual override in config
-    #   "cached"    — loaded from persisted config.yml on restart
+    #   "cached"    — loaded from persisted state on restart
     residency_source: str | None = None
 
     def estimate_vram_mb(self) -> float:
@@ -285,16 +285,30 @@ class ModelProfileRecord:
 
 
 class ModelProfileRegistry:
-    """Auto-calibrating model VRAM profiles. Optionally persisted in config.yml."""
+    """Auto-calibrating model VRAM profiles. Optionally persisted in state directory."""
 
-    def __init__(self, config_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        state_dir: Path | None = None,
+        model_profile_overrides: dict[str, dict] | None = None,
+    ) -> None:
         self._profiles: dict[str, ModelProfileRecord] = {}
-        self._config_path = config_path
+        self._state_dir = state_dir
         self._lock = threading.Lock()
         self._hf_fetch_attempted: set[str] = set()  # models we already tried HF API for
         # Manual overrides from config.yml — operator-provided values that
         # take priority over HF API fetch and name-based estimation.
         self._manual_overrides: dict[str, dict[str, Any]] = {}
+        if model_profile_overrides:
+            for model_name, ov in model_profile_overrides.items():
+                if isinstance(ov, dict):
+                    self._manual_overrides[str(model_name)] = dict(ov)
+            if self._manual_overrides:
+                logger.info(
+                    "Loaded manual profile overrides for %d model(s): %s",
+                    len(self._manual_overrides),
+                    ", ".join(sorted(self._manual_overrides)),
+                )
         self._load_persisted()
 
     def _update_metadata(
@@ -614,8 +628,8 @@ class ModelProfileRegistry:
             return {name: profile.to_dict() for name, profile in self._profiles.items()}
 
     def _persist(self) -> None:
-        """Append model_profiles section to config.yml."""
-        if self._config_path is None or yaml is None:
+        """Save model profiles to state directory as YAML."""
+        if self._state_dir is None or yaml is None:
             return
         try:
             with self._lock:
@@ -623,42 +637,23 @@ class ModelProfileRegistry:
             if not data:
                 return
 
-            existing: dict = {}
-            if self._config_path.exists():
-                try:
-                    with self._config_path.open() as f:
-                        existing = yaml.safe_load(f) or {}
-                except Exception:  # noqa: BLE001
-                    existing = {}
-
-            existing["model_profiles"] = data
-            with self._config_path.open("w") as f:
-                yaml.safe_dump(existing, f, default_flow_style=False)
+            self._state_dir.mkdir(parents=True, exist_ok=True)
+            state_path = self._state_dir / "model_profiles.yml"
+            with state_path.open("w") as f:
+                yaml.safe_dump({"model_profiles": data}, f, default_flow_style=False)
         except Exception:  # noqa: BLE001
             logger.debug("Failed to persist model profiles", exc_info=True)
 
     def _load_persisted(self) -> None:
-        """Read model_profiles and model_profile_overrides from config.yml on startup."""
-        if self._config_path is None or yaml is None:
+        """Read persisted model profiles from state file on startup."""
+        if self._state_dir is None or yaml is None:
             return
-        if not self._config_path.exists():
+        state_path = self._state_dir / "model_profiles.yml"
+        if not state_path.exists():
             return
         try:
-            with self._config_path.open() as f:
+            with state_path.open() as f:
                 data = yaml.safe_load(f) or {}
-
-            # Load manual overrides (operator-provided values for niche models)
-            overrides = data.get("model_profile_overrides")
-            if isinstance(overrides, dict):
-                for model_name, ov in overrides.items():
-                    if isinstance(ov, dict):
-                        self._manual_overrides[str(model_name)] = dict(ov)
-                if self._manual_overrides:
-                    logger.info(
-                        "Loaded manual profile overrides for %d model(s): %s",
-                        len(self._manual_overrides),
-                        ", ".join(sorted(self._manual_overrides)),
-                    )
 
             profiles = data.get("model_profiles")
             if not isinstance(profiles, dict):
@@ -666,8 +661,6 @@ class ModelProfileRegistry:
             for model_name, profile_data in profiles.items():
                 if not isinstance(profile_data, dict):
                     continue
-                # If loading from persisted config, mark source as "cached"
-                # (preserves original source if present, otherwise "cached")
                 persisted_source = profile_data.get("residency_source")
                 self._profiles[str(model_name)] = ModelProfileRecord(
                     loaded_vram_mb=profile_data.get("loaded_vram_mb"),
@@ -686,7 +679,7 @@ class ModelProfileRegistry:
                     residency_source=persisted_source or "cached",
                 )
             logger.info(
-                "Loaded %d model profile(s) from %s", len(self._profiles), self._config_path,
+                "Loaded %d model profile(s) from %s", len(self._profiles), state_path,
             )
             for name, prof in self._profiles.items():
                 src = prof.residency_source or "unknown"

@@ -543,7 +543,7 @@ Is the model in FP16-blocked list (gemma2/3, plamo2, glm4)?
 
 ```
 logos-workernode/
-├── config.yml                    # Runtime config (controller + Ollama + lanes)
+├── .env.example                  # Environment variable template (all config)
 ├── AGENTS.md                     # AI agent project guide
 ├── CUDA_BACKEND_SELECTION.md     # CUDA v12 vs v13 findings
 ├── RESEARCH_SUMMARY.md           # This file
@@ -556,7 +556,7 @@ logos-workernode/
 │   ├── admin_api.py     (541 L)  # Management endpoints (23 routes)
 │   ├── logos_api.py     (131 L)  # Logos status endpoints
 │   ├── auth.py          (55 L)   # Bearer token authentication
-│   ├── config.py        (164 L)  # YAML config load/save/reconfigure
+│   ├── config.py        (164 L)  # Env-var config loading and state persistence
 │   ├── models.py        (412 L)  # Pydantic models (OllamaConfig, VllmConfig, LaneConfig, etc.)
 │   ├── lane_manager.py  (597 L)  # Multi-lane orchestration, hot-swap, event log
 │   ├── process_handle.py (45 L)  # ProcessHandle Protocol (backend interface)
@@ -570,7 +570,7 @@ logos-workernode/
     └── test_logos_worker_node.py (474 L) # 24 unit tests
 ```
 
-### Key Configuration (config.yml)
+### Key Configuration (environment variables)
 
 ```yaml
 controller:

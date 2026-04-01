@@ -1,7 +1,15 @@
-"""Configuration loading and persistence for LogosWorkerNode."""
+"""Configuration loading for LogosWorkerNode.
+
+Two sources, zero overlap:
+  config.yml  — hardware & tuning (managed by Ansible, mounted read-only)
+  .env        — identity & credentials (managed by GitHub secrets/variables)
+
+Runtime state (lanes, model profiles) persists in a separate data volume.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -14,7 +22,9 @@ from logos_worker_node.models import AppConfig, LaneConfig
 logger = logging.getLogger("logos_worker_node.config")
 
 _config: AppConfig | None = None
-_config_path: Path | None = None
+
+# Directory for runtime state (lane config, model profiles).
+STATE_DIR = Path(os.getenv("LOGOS_STATE_DIR", "/app/data"))
 
 
 def get_config() -> AppConfig:
@@ -23,107 +33,105 @@ def get_config() -> AppConfig:
     return _config
 
 
-def get_config_path() -> Path | None:
-    """Return the resolved path of the loaded config file, or None."""
-    return _config_path
+def get_state_dir() -> Path:
+    """Return the state directory, creating it if needed."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return STATE_DIR
+
+
+# ── Env helpers ──────────────────────────────────────────────────────────────
+
+def _getenv(name: str) -> str:
+    return os.getenv(name, "").strip()
+
+
+def _getenv_int(name: str) -> int | None:
+    val = _getenv(name)
+    if not val:
+        return None
+    try:
+        return int(val)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer, got: {val!r}") from exc
+
+
+def _getenv_bool(name: str) -> bool:
+    return _getenv(name).lower() in {"1", "true", "yes"}
+
+
+# ── Config loading ───────────────────────────────────────────────────────────
+
+def _load_config_yml() -> AppConfig:
+    """Load config.yml if present, otherwise return defaults."""
+    config_path = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+    candidates = (
+        [Path(config_path)] if config_path
+        else [Path("/app/config.yml"), Path("config.yml")]
+    )
+
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved.is_file():
+            logger.info("Loading config from %s", resolved)
+            with open(resolved, "r", encoding="utf-8") as f:
+                raw: dict[str, Any] = yaml.safe_load(f) or {}
+            return AppConfig(**raw)
+
+    logger.info("No config.yml found — using defaults (all tuning via env or defaults)")
+    return AppConfig()
 
 
 def _apply_env_overrides(cfg: AppConfig) -> None:
-    """Apply LOGOS_* environment variable overrides to the logos bridge config.
+    """Apply .env overrides — credentials only.
 
-    Environment variables take precedence over config.yml values.  Set these
-    in .env (see .env.example) so that connection credentials are never stored
-    in the config file:
-
-      LOGOS_URL              — Logos server base URL, e.g. https://logos.example.com
-      LOGOS_PROVIDER_ID      — Numeric provider ID issued during registration
-      LOGOS_API_KEY          — Provider API key (shared_key) issued during registration
-      LOGOS_WORKER_NODE_ID   — Optional worker identifier (defaults to worker-<id>)
+    These are the ONLY values that come from .env (GitHub secrets/variables).
+    Hardware and tuning settings live in config.yml (Ansible).
+    Identity (provider_id, worker_id) is resolved by the server from the API key.
     """
-    logos_url = os.getenv("LOGOS_URL", "").strip()
+    logos_url = _getenv("LOGOS_URL")
     if logos_url:
         cfg.logos.logos_url = logos_url
         cfg.logos.enabled = True
 
-    provider_id_str = os.getenv("LOGOS_PROVIDER_ID", "").strip()
-    if provider_id_str:
-        try:
-            cfg.logos.provider_id = int(provider_id_str)
-        except ValueError as exc:
-            raise RuntimeError(
-                f"LOGOS_PROVIDER_ID must be an integer, got: {provider_id_str!r}"
-            ) from exc
-
-    api_key = os.getenv("LOGOS_API_KEY", "").strip()
+    api_key = _getenv("LOGOS_API_KEY")
     if api_key:
         cfg.logos.shared_key = api_key
 
-    worker_id = os.getenv("LOGOS_WORKER_NODE_ID", "").strip()
-    if worker_id:
-        cfg.logos.worker_id = worker_id
-
-    if os.getenv("LOGOS_ALLOW_INSECURE_HTTP", "").strip().lower() in {"1", "true", "yes"}:
+    if _getenv_bool("LOGOS_ALLOW_INSECURE_HTTP"):
         cfg.logos.allow_insecure_http = True
 
-    worker_port = os.getenv("WORKER_PORT", "").strip()
-    if worker_port:
-        try:
-            cfg.worker.port = int(worker_port)
-        except ValueError as exc:
-            raise RuntimeError(
-                f"WORKER_PORT must be an integer, got: {worker_port!r}"
-            ) from exc
 
+def load_config() -> AppConfig:
+    """Load config.yml (hardware/tuning), then apply .env overrides (credentials)."""
+    global _config
 
-def load_config(path: str | Path | None = None) -> AppConfig:
-    global _config, _config_path
-
-    if path is not None:
-        resolved = Path(path)
-    elif env := os.environ.get("LOGOS_WORKER_NODE_CONFIG"):
-        resolved = Path(env)
-    elif Path("config.yml").exists():
-        resolved = Path("config.yml")
-    elif Path("../config.yml").exists():
-        resolved = Path("../config.yml")
-    else:
-        logger.warning("No config file found — using defaults")
-        _config = AppConfig()
-        _apply_env_overrides(_config)
-        _config_path = None
-        return _config
-
-    resolved = resolved.resolve()
-    logger.info("Loading config from %s", resolved)
-    with open(resolved, "r", encoding="utf-8") as f:
-        raw: dict[str, Any] = yaml.safe_load(f) or {}
-
-    _config = AppConfig(**raw)
+    _config = _load_config_yml()
     _apply_env_overrides(_config)
-    _config_path = resolved
+
+    # Restore persisted lanes from state file if present
+    lanes_path = get_state_dir() / "lanes.json"
+    if lanes_path.exists() and not _config.lanes:
+        try:
+            with lanes_path.open("r", encoding="utf-8") as f:
+                lanes_data = json.load(f)
+            _config.lanes = [LaneConfig(**item) for item in lanes_data]
+            logger.info("Restored %d lane(s) from %s", len(_config.lanes), lanes_path)
+        except Exception:
+            logger.debug("Failed to restore lanes from %s", lanes_path, exc_info=True)
+
     return _config
 
 
-def save_config(config: AppConfig | None = None) -> None:
-    global _config
-
-    if config is not None:
-        _config = config
-
-    cfg = get_config()
-    if _config_path is None:
-        raise RuntimeError("Cannot save — config was never loaded from a file")
-
-    data = cfg.model_dump(mode="json", exclude_none=True)
-    with open(_config_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
-        f.flush()
-        os.fsync(f.fileno())
-
-    logger.info("Config saved to %s", _config_path)
-
-
-def save_lanes_config(lanes: list[LaneConfig]) -> None:
-    cfg = get_config()
-    cfg.lanes = lanes
-    save_config(cfg)
+def save_lanes_state(lanes: list[LaneConfig]) -> None:
+    """Persist lane configuration to the state directory."""
+    try:
+        state_dir = get_state_dir()
+        lanes_path = state_dir / "lanes.json"
+        data = [lane.model_dump(mode="json", exclude_none=True) for lane in lanes]
+        with lanes_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        logger.info("Lane state saved to %s", lanes_path)
+    except OSError:
+        logger.debug("Could not persist lane state", exc_info=True)
