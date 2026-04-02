@@ -6,6 +6,10 @@ from iris.pipeline.transcription.utils.slide_detector import (
 )
 from iris.pipeline.transcription.utils.video_utils import download_video, extract_audio
 from iris.pipeline.transcription.utils.whisper_client import WhisperClient
+from iris.pipeline.transcription.utils.youtube_utils import (
+    YouTubeDownloadError,
+    download_youtube_audio,
+)
 
 __all__ = [
     "download_video",
@@ -15,4 +19,6 @@ __all__ = [
     "SlideTurnDetector",
     "detect_slide_timestamps",
     "align_slides_with_segments",
+    "YouTubeDownloadError",
+    "download_youtube_audio",
 ]

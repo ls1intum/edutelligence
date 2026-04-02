@@ -1,9 +1,15 @@
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import Field
 
 from iris.domain import PipelineExecutionDTO, PipelineExecutionSettingsDTO
 from iris.domain.status.stage_dto import StageDTO
+
+
+class VideoSourceType(str, Enum):
+    TUM_LIVE = "TUM_LIVE"
+    YOUTUBE = "YOUTUBE"
 
 
 class VideoTranscriptionPipelineExecutionDto(PipelineExecutionDTO):
@@ -16,6 +22,9 @@ class VideoTranscriptionPipelineExecutionDto(PipelineExecutionDTO):
     course_name: str = Field(..., alias="courseName")
     lecture_name: str = Field(..., alias="lectureName")
     lecture_unit_name: str = Field(..., alias="lectureUnitName")
+    video_source_type: VideoSourceType = Field(
+        default=VideoSourceType.TUM_LIVE, alias="videoSourceType"
+    )
     settings: Optional[PipelineExecutionSettingsDTO] = None
     initial_stages: Optional[List[StageDTO]] = Field(
         default=None, alias="initialStages"

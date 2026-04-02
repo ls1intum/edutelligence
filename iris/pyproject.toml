@@ -38,6 +38,7 @@ memiris = {path = "../memiris", develop = true}
 apscheduler = "^3.11.1"
 opencv-python-headless = "^4.10.0"
 ffmpeg-python = "^0.2.0"
+yt-dlp = "^2024.0.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.17.1"

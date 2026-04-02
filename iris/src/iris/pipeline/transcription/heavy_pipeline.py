@@ -7,9 +7,11 @@ from typing import Any, Dict
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.domain.transcription.video_transcription_execution_dto import (
+    VideoSourceType,
     VideoTranscriptionPipelineExecutionDto,
 )
 from iris.pipeline.transcription.utils.video_utils import download_video, extract_audio
+from iris.pipeline.transcription.utils.youtube_utils import download_youtube_audio
 from iris.pipeline.transcription.utils.whisper_client import WhisperClient
 from iris.tracing import observe
 from iris.web.status.video_transcription_callback import VideoTranscriptionCallback
@@ -82,51 +84,84 @@ class HeavyTranscriptionPipeline:
             video_url_clean,
         )
 
-        # Stage 1: Download video
-        self.callback.in_progress("Downloading video...")
-        logger.info(
-            "[Lecture %d] Stage 1/3: Downloading video -> %s",
-            self.dto.lecture_unit_id,
-            video_path,
-        )
-        download_video(
-            self.dto.video_url,
-            str(video_path),
-            lecture_unit_id=self.dto.lecture_unit_id,
-            timeout=settings.transcription.download_timeout_seconds,
-        )
-        self.callback.done("Video downloaded")
-        logger.info(
-            "[Lecture %d] Stage 1/3: Video downloaded successfully (%d MB)",
-            self.dto.lecture_unit_id,
-            video_path.stat().st_size // (1024 * 1024) if video_path.exists() else 0,
-        )
+        is_youtube = self.dto.video_source_type == VideoSourceType.YOUTUBE
+        total_stages = 2 if is_youtube else 3
 
-        # Stage 2: Extract audio
-        self.callback.in_progress("Extracting audio from video...")
-        logger.info(
-            "[Lecture %d] Stage 2/3: Extracting audio to %s",
-            self.dto.lecture_unit_id,
-            audio_path,
-        )
-        extract_audio(
-            str(video_path),
-            str(audio_path),
-            lecture_unit_id=self.dto.lecture_unit_id,
-            timeout=settings.transcription.extract_audio_timeout_seconds,
-        )
-        self.callback.done("Audio extracted")
-        logger.info(
-            "[Lecture %d] Stage 2/3: Audio extracted successfully (%d MB)",
-            self.dto.lecture_unit_id,
-            audio_path.stat().st_size // (1024 * 1024) if audio_path.exists() else 0,
-        )
+        if is_youtube:
+            # YouTube: download audio directly (no video download needed)
+            self.callback.in_progress("Downloading audio from YouTube...")
+            logger.info(
+                "[Lecture %d] Stage 1/%d: Downloading YouTube audio -> %s",
+                self.dto.lecture_unit_id,
+                total_stages,
+                audio_path,
+            )
+            download_youtube_audio(
+                self.dto.video_url,
+                str(audio_path),
+                lecture_unit_id=self.dto.lecture_unit_id,
+                timeout=settings.transcription.download_timeout_seconds,
+            )
+            self.callback.done("YouTube audio downloaded")
+            video_path = None  # No video file for slide detection
 
-        # Stage 3: Transcribe
+        else:
+            # TUM-Live (default): download HLS video, then extract audio
+            # Stage 1: Download video
+            self.callback.in_progress("Downloading video...")
+            logger.info(
+                "[Lecture %d] Stage 1/%d: Downloading video -> %s",
+                self.dto.lecture_unit_id,
+                total_stages,
+                video_path,
+            )
+            download_video(
+                self.dto.video_url,
+                str(video_path),
+                lecture_unit_id=self.dto.lecture_unit_id,
+                timeout=settings.transcription.download_timeout_seconds,
+            )
+            self.callback.done("Video downloaded")
+            logger.info(
+                "[Lecture %d] Stage 1/%d: Video downloaded successfully (%d MB)",
+                self.dto.lecture_unit_id,
+                total_stages,
+                video_path.stat().st_size // (1024 * 1024)
+                if video_path.exists()
+                else 0,
+            )
+
+            # Stage 2: Extract audio
+            self.callback.in_progress("Extracting audio from video...")
+            logger.info(
+                "[Lecture %d] Stage 2/%d: Extracting audio to %s",
+                self.dto.lecture_unit_id,
+                total_stages,
+                audio_path,
+            )
+            extract_audio(
+                str(video_path),
+                str(audio_path),
+                lecture_unit_id=self.dto.lecture_unit_id,
+                timeout=settings.transcription.extract_audio_timeout_seconds,
+            )
+            self.callback.done("Audio extracted")
+            logger.info(
+                "[Lecture %d] Stage 2/%d: Audio extracted successfully (%d MB)",
+                self.dto.lecture_unit_id,
+                total_stages,
+                audio_path.stat().st_size // (1024 * 1024)
+                if audio_path.exists()
+                else 0,
+            )
+
+        # Final stage (both paths): Transcribe
         self.callback.in_progress("Transcribing audio with Whisper...")
         logger.info(
-            "[Lecture %d] Stage 3/3: Starting transcription with %s (chunk duration: %ds)",
+            "[Lecture %d] Stage %d/%d: Starting transcription with %s (chunk duration: %ds)",
             self.dto.lecture_unit_id,
+            total_stages,
+            total_stages,
             self.whisper_client.provider_name,
             self.whisper_client.chunk_duration,
         )
@@ -137,8 +172,10 @@ class HeavyTranscriptionPipeline:
         self.callback.done(f"Transcribed {segment_count} segments")
 
         logger.info(
-            "[Lecture %d] Stage 3/3: Transcription complete - %d segments, language: %s",
+            "[Lecture %d] Stage %d/%d: Transcription complete - %d segments, language: %s",
             self.dto.lecture_unit_id,
+            total_stages,
+            total_stages,
             segment_count,
             transcription.get("language", "unknown"),
         )

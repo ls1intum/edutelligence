@@ -1,7 +1,7 @@
 """Light transcription pipeline: slide detection and alignment."""
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from iris.common.logging_config import get_logger
 from iris.domain.transcription.video_transcription_execution_dto import (
@@ -38,7 +38,7 @@ class LightTranscriptionPipeline:
         dto: VideoTranscriptionPipelineExecutionDto,
         callback: VideoTranscriptionCallback,
         transcription: Dict[str, Any],
-        video_path: Path,
+        video_path: Optional[Path],
     ):
         """
         Initialize the light pipeline.
@@ -47,7 +47,8 @@ class LightTranscriptionPipeline:
             dto: Execution DTO with lecture information.
             callback: Status callback for progress updates.
             transcription: Dict with "segments" list from heavy pipeline.
-            video_path: Path to video file for frame extraction.
+            video_path: Path to video file for frame extraction, or None
+                        for YouTube sources where no video was downloaded.
         """
         self.dto = dto
         self.callback = callback
@@ -72,6 +73,15 @@ class LightTranscriptionPipeline:
             self.dto.lecture_unit_id,
             len(segments),
         )
+
+        if self.video_path is None:
+            logger.info(
+                "[Lecture %d] No video file available (YouTube source), "
+                "skipping slide detection",
+                self.dto.lecture_unit_id,
+            )
+            # Return transcription segments with slideNumber = -1 (unmatched)
+            return [{**seg, "slideNumber": -1} for seg in segments]
 
         # Stage 4: Detect slide changes
         self.callback.in_progress("Detecting slide changes with GPT Vision...")
