@@ -154,8 +154,13 @@ WORKDIR /app
 # Copy the entire /install prefix into /usr/local so pip scripts, libraries,
 # and site-packages all land in standard system paths. This ensures the dynamic
 # linker can find torch/lib/*.so (libc10, libtorch, etc.) that vLLM links against.
-COPY --from=builder /install /usr/local
-RUN ldconfig
+# Note: pip --prefix=/install on Ubuntu creates /install/local/lib/... — we merge
+# that into /install/ first so COPY puts everything directly under /usr/local.
+COPY --from=builder /install /tmp/install
+RUN if [ -d /tmp/install/local ]; then cp -a /tmp/install/local/. /tmp/install/ && rm -rf /tmp/install/local; fi \
+    && cp -a /tmp/install/. /usr/local/ \
+    && rm -rf /tmp/install \
+    && ldconfig
 # Bake nvcc + CUDA headers from the devel base so GPU lanes can JIT-compile
 # kernels (FlashInfer, Triton) without a host /usr/local/cuda mount or the full
 # -devel base image. No-op for CPU builds (cuda-exporter dirs are empty there).
