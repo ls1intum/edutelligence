@@ -16,7 +16,7 @@
 ARG BASE_IMAGE=python:3.12-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC=vllm --extra-index-url https://download.pytorch.org/whl/cu128
+ARG VLLM_PIP_SPEC=vllm
 ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
@@ -93,8 +93,21 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
+         # 1. Install vLLM (pins torch to its required version from PyPI)
          pip install --no-cache-dir --prefix=/install --ignore-installed $VLLM_PIP_SPEC; \
          site_pkgs="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
+         # 2. Reinstall torch+vision+audio with CUDA wheels matching vLLM's pinned version.
+         #    Extract the exact versions vLLM installed so the ABI stays consistent.
+         PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; print(m.version('torch'))"  > /tmp/_torch_ver; \
+         PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; print(m.version('torchvision'))" > /tmp/_tv_ver; \
+         PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; print(m.version('torchaudio'))"  > /tmp/_ta_ver; \
+         pip install --no-cache-dir --prefix=/install \
+             --ignore-installed --force-reinstall --no-deps \
+             --extra-index-url https://download.pytorch.org/whl/cu128 \
+             "torch==$(cat /tmp/_torch_ver)" \
+             "torchvision==$(cat /tmp/_tv_ver)" \
+             "torchaudio==$(cat /tmp/_ta_ver)"; \
+         # 3. Optional: override NCCL version
          if [ -n "$NCCL_PIP_SPEC" ]; then \
            rm -rf "$site_pkgs/nvidia/nccl" "$site_pkgs"/nvidia_nccl_cu12-*.dist-info; \
            pip install --no-cache-dir --prefix=/install --ignore-installed --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
@@ -103,7 +116,19 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
              PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
            fi; \
          fi; \
+         # 4. FlashInfer
          pip install --no-cache-dir --prefix=/install flashinfer-python; \
+         # 5. Verify torch ABI consistency
+         PYTHONPATH="$site_pkgs" python3 -c "\
+import importlib.metadata as m; \
+tv = m.version('torch'); \
+import pathlib, subprocess; \
+so = str(pathlib.Path('$site_pkgs') / 'vllm' / '_C.abi3.so'); \
+r = subprocess.run(['ldd', so], capture_output=True, text=True); \
+nf = [l.strip() for l in r.stdout.splitlines() if 'not found' in l]; \
+print(f'torch={tv}, unresolved libs={len(nf)}'); \
+[print(f'  {l}') for l in nf]; \
+"; \
        fi
 # Normalize: pip --prefix layout varies across distros (lib/ vs local/lib/,
 # site-packages vs dist-packages).  Move everything into a flat /packages dir
