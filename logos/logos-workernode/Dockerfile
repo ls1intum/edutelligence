@@ -16,7 +16,8 @@
 ARG BASE_IMAGE=python:3.12-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC=vllm --extra-index-url https://download.pytorch.org/whl/cu128
+ARG VLLM_PIP_SPEC=vllm
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
@@ -63,13 +64,14 @@ RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
       fi
 
 # ---------------------------------------------------------------------------
-# Stage 2: Build — install Python deps
+# Stage 2: Build — install Python deps in a virtualenv
 #   CPU build  (BASE_IMAGE=python:3.12-slim):    Python already present, skip OS setup
 #   GPU build  (BASE_IMAGE=nvidia/cuda:...):      Install Python 3.13 from deadsnakes PPA
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS builder
 ARG INSTALL_VLLM
 ARG VLLM_PIP_SPEC
+ARG TORCH_INDEX_URL
 ARG NCCL_PIP_SPEC
 
 # Install Python 3.13 only when not already available (GPU/Ubuntu base).
@@ -89,21 +91,31 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
     fi \
     && python3 -m pip install --upgrade pip setuptools wheel
 
+# Use a virtualenv so pip has a clean, self-contained environment.
+# This avoids --prefix quirks (path layout, metadata conflicts).
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
+RUN pip install --no-cache-dir -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
-         pip install --no-cache-dir --prefix=/install $VLLM_PIP_SPEC; \
-         site_pkgs="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
-         if [ -n "$NCCL_PIP_SPEC" ]; then \
-           rm -rf "$site_pkgs/nvidia/nccl" "$site_pkgs"/nvidia_nccl_cu12-*.dist-info; \
-           pip install --no-cache-dir --prefix=/install --ignore-installed --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
-           expected_nccl="${NCCL_PIP_SPEC#nvidia-nccl-cu12==}"; \
-           if [ "$expected_nccl" != "$NCCL_PIP_SPEC" ]; then \
-             PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
-           fi; \
+         # 1. Install vLLM (pins torch to its required version from PyPI)
+         pip install --no-cache-dir $VLLM_PIP_SPEC; \
+         # 2. Reinstall torch from CUDA index (same version, GPU-enabled wheels)
+         if [ -n "$TORCH_INDEX_URL" ]; then \
+           torch_ver=$(python3 -c "import importlib.metadata as m; print(m.version('torch'))"); \
+           echo "Reinstalling torch==${torch_ver} from ${TORCH_INDEX_URL}"; \
+           pip install --no-cache-dir --force-reinstall --no-deps \
+               --extra-index-url "$TORCH_INDEX_URL" \
+               "torch==${torch_ver}"; \
          fi; \
-         pip install --no-cache-dir --prefix=/install flashinfer-python; \
+         # 3. Optional: override NCCL version
+         if [ -n "$NCCL_PIP_SPEC" ]; then \
+           pip install --no-cache-dir --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
+         fi; \
+         # 4. FlashInfer (install AFTER torch so it picks up the correct version)
+         pip install --no-cache-dir --no-deps flashinfer-python; \
        fi
 
 # ---------------------------------------------------------------------------
@@ -151,16 +163,11 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
     fi
 
 WORKDIR /app
-# Copy the entire /install prefix into /usr/local so pip scripts, libraries,
-# and site-packages all land in standard system paths. This ensures the dynamic
-# linker can find torch/lib/*.so (libc10, libtorch, etc.) that vLLM links against.
-# Note: pip --prefix=/install on Ubuntu creates /install/local/lib/... — we merge
-# that into /install/ first so COPY puts everything directly under /usr/local.
-COPY --from=builder /install /tmp/install
-RUN if [ -d /tmp/install/local ]; then cp -a /tmp/install/local/. /tmp/install/ && rm -rf /tmp/install/local; fi \
-    && cp -a /tmp/install/. /usr/local/ \
-    && rm -rf /tmp/install \
-    && ldconfig
+# Copy the entire virtualenv from the builder. The venv has its own bin/, lib/,
+# and include/ — everything is self-contained.
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN ldconfig
 # Bake nvcc + CUDA headers from the devel base so GPU lanes can JIT-compile
 # kernels (FlashInfer, Triton) without a host /usr/local/cuda mount or the full
 # -devel base image. No-op for CPU builds (cuda-exporter dirs are empty there).
