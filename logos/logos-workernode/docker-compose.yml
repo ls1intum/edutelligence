@@ -25,7 +25,7 @@ services:
       # ── GPU / CUDA ────────────────────────────────────────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
-      CUDA_HOME: ${CUDA_HOME:-/usr/local/cuda-12.8}
+      CUDA_HOME: ${CUDA_HOME:-/usr/local/cuda}
     gpus: all
     pid: host
     ipc: host # Required for NCCL shared-memory transport in tensor-parallel vLLM
@@ -41,7 +41,6 @@ services:
       - worker-state:/app/data
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
-      - ${CUDA_HOME:-/usr/local/cuda-12.8}:${CUDA_HOME:-/usr/local/cuda-12.8}:ro
     healthcheck:
       test:
         [

@@ -438,9 +438,9 @@ class VllmProcessHandle:
         if not lane_config.vllm_config:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
-        vllm_binary = self._resolve_vllm_binary(vc.vllm_binary)
+        vllm_prefix = self._resolve_vllm_binary(vc.vllm_binary)
         cmd = [
-            vllm_binary, "serve", lane_config.model,
+            *vllm_prefix, "serve", lane_config.model,
             "--host", "0.0.0.0",
             "--port", str(self.port),
             "--tensor-parallel-size", str(vc.tensor_parallel_size),
@@ -547,13 +547,18 @@ class VllmProcessHandle:
         VllmProcessHandle._cached_cuda_arch = ""
         return None
 
-    def _resolve_vllm_binary(self, configured_binary: str) -> str:
+    def _resolve_vllm_binary(self, configured_binary: str) -> list[str]:
         """Resolve the vLLM CLI executable with actionable fallback order.
 
+        Returns a list of tokens so callers can do ``[*prefix, "serve", model, ...]``.
+
         Resolution order:
-          1. ``configured_binary`` (absolute/relative path or command name)
-          2. ``PATH`` lookup
-          3. Sibling executable next to current interpreter (``<venv>/bin/vllm``)
+          1. ``configured_binary`` (absolute/relative path or bare command name)
+          2. ``PATH`` lookup for configured name, then plain ``vllm``
+          3. Sibling executable next to the active interpreter (handles unactivated venvs)
+          4. Well-known venv roots: ``/opt/venv/bin/vllm``, ``/usr/local/bin/vllm``
+          5. Module fallback: ``sys.executable -m vllm`` (works when the package is
+             installed but the entry-point script is absent or not on PATH)
         """
         raw = (configured_binary or "vllm").strip() or "vllm"
 
@@ -561,23 +566,39 @@ class VllmProcessHandle:
         if os.path.sep in raw or (os.path.altsep and os.path.altsep in raw):
             candidate = os.path.abspath(os.path.expanduser(raw))
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return candidate
+                return [candidate]
 
-        # 2) PATH lookup (configured name first, then fallback 'vllm')
-        for cmd_name in (raw, "vllm"):
+        # 2) PATH lookup (configured name first, then plain 'vllm')
+        for cmd_name in dict.fromkeys((raw, "vllm")):
             found = shutil.which(cmd_name)
             if found:
-                return found
+                return [found]
 
-        # 3) Active interpreter sibling (works for unactivated virtualenvs)
+        # 3) Sibling to the active interpreter (correct for activated venvs)
         venv_sibling = str(Path(sys.executable).resolve().with_name("vllm"))
         if os.path.isfile(venv_sibling) and os.access(venv_sibling, os.X_OK):
-            return venv_sibling
+            return [venv_sibling]
 
+        # 4) Well-known venv/install roots (handles non-activated /opt/venv setups)
+        for root in ("/opt/venv/bin", "/usr/local/bin"):
+            candidate = os.path.join(root, "vllm")
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return [candidate]
+
+        # 5) Module fallback: works when the package is installed but the script
+        #    entry-point is missing or not on PATH (e.g. bare pip install without bin)
+        try:
+            import importlib.util
+            if importlib.util.find_spec("vllm") is not None:
+                return [sys.executable, "-m", "vllm"]
+        except Exception:
+            pass
+
+        checked = [raw, "PATH", venv_sibling, "/opt/venv/bin/vllm", "/usr/local/bin/vllm",
+                   f"{sys.executable} -m vllm"]
         raise FileNotFoundError(
-            f"[{self.lane_id}] Could not find vLLM executable. Checked '{raw}', PATH, "
-            f"and '{venv_sibling}'. Set lanes[].vllm_config.vllm_binary to an absolute path "
-            f"or install vLLM in this interpreter: {sys.executable} -m pip install vllm"
+            f"[{self.lane_id}] Could not find vLLM executable. Checked: {', '.join(checked)}. "
+            f"Install vLLM in this interpreter: {sys.executable} -m pip install vllm"
         )
 
     def _require_c_compiler(self) -> None:
@@ -624,7 +645,8 @@ class VllmProcessHandle:
         candidates: list[str] = []
         if cuda_home_env:
             candidates.append(os.path.join(cuda_home_env, "bin", "nvcc"))
-        for root in ("/usr/local/cuda", "/usr/local/cuda-12.8", "/usr/local/cuda-12"):
+        for root in ("/usr/local/cuda", "/usr/local/cuda-13.2", "/usr/local/cuda-13.1",
+                     "/usr/local/cuda-13", "/usr/local/cuda-12.8", "/usr/local/cuda-12"):
             candidates.append(os.path.join(root, "bin", "nvcc"))
 
         checked: list[str] = []
@@ -656,7 +678,8 @@ class VllmProcessHandle:
 
         # CUDA toolkit — FlashInfer JIT needs nvcc.  Detect common paths.
         if "CUDA_HOME" not in os.environ:
-            for candidate in ("/usr/local/cuda", "/usr/local/cuda-12.8", "/usr/local/cuda-12"):
+            for candidate in ("/usr/local/cuda", "/usr/local/cuda-13.2", "/usr/local/cuda-13.1",
+                              "/usr/local/cuda-13", "/usr/local/cuda-12.8", "/usr/local/cuda-12"):
                 if os.path.isdir(candidate):
                     env["CUDA_HOME"] = candidate
                     break

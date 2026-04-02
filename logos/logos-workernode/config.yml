@@ -11,7 +11,10 @@ worker:
 
 logos:
   enabled: true
-  capabilities_models: []
+  capabilities_models:
+    - Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
+      tensor_parallel_size: 2
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 
@@ -23,4 +26,9 @@ engines:
     flashinfer_logdest: stderr
     nccl_debug: WARN
     nccl_debug_subsys: INIT
-    model_overrides: {}
+    # Turing (SM 7.5) workaround for AWQ + TP=2 on Quadro RTX 5000:
+    # force awq path and avoid vLLM custom all-reduce kernels.
+    model_overrides:
+      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
+        quantization: awq
+        disable_custom_all_reduce: true

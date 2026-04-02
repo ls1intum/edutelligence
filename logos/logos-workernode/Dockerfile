@@ -2,8 +2,8 @@
 # Logos Worker Node
 #
 # CPU / local build  (default):  BASE_IMAGE=python:3.12-slim, INSTALL_VLLM=0
-# GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04
-#                                RUNTIME_IMAGE=nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04
+# GPU build (--gpu flag):        BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
+#                                RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
 #                                INSTALL_VLLM=1
 #
 # The builder stage needs -devel (compilers/headers) but the runtime stage only
@@ -126,7 +126,10 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # instructions in Stage 3 become safe no-ops instead of errors.
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS cuda-exporter
-RUN mkdir -p /usr/local/cuda/bin /usr/local/cuda/include /usr/local/cuda/nvvm/libdevice
+# Only stage libdevice (PTX builtins needed for kernel compilation).
+# nvcc, headers, and stubs are installed via apt in the runtime stage,
+# which avoids symlink-chain issues with Docker COPY --from.
+RUN mkdir -p /usr/local/cuda/nvvm/libdevice
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
@@ -143,36 +146,64 @@ FROM ${RUNTIME_IMAGE}
 ARG INSTALL_VLLM
 ARG INSTALL_OLLAMA
 
-# Install Python 3.13 only on GPU/Ubuntu base (same logic as builder stage).
-# When INSTALL_VLLM=1, also install a C compiler for Triton JIT kernel compilation.
-RUN if ! command -v python3 >/dev/null 2>&1; then \
+# ── Python 3.13 ──────────────────────────────────────────────────────────────
+# nvidia/cuda Ubuntu 24.04 images ship Python 3.12; python:*-slim images already
+# have the right Python. Check for python3.13 specifically, not just python3.
+RUN if ! command -v python3.13 >/dev/null 2>&1; then \
         apt-get update \
-        && apt-get install -y --no-install-recommends software-properties-common ca-certificates gpg-agent \
+        && apt-get install -y --no-install-recommends \
+            software-properties-common ca-certificates gpg-agent \
         && add-apt-repository -y ppa:deadsnakes/ppa \
         && apt-get update \
         && apt-get install -y --no-install-recommends \
-            python3.13 python3.13-venv \
-            curl libnuma1 \
-        && if [ "$INSTALL_VLLM" = "1" ]; then \
-            apt-get install -y --no-install-recommends gcc; \
-           fi \
+            python3.13 python3.13-dev python3.13-venv curl libnuma1 \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
         && ln -sf /usr/bin/python3.13 /usr/bin/python \
         && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
     fi
 
+# Ensure Python C headers exist even if python3.13 is already present from a
+# prior layer/image variant; Triton runtime JIT needs Python.h.
+RUN if [ "$INSTALL_VLLM" = "1" ] && [ ! -f /usr/include/python3.13/Python.h ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            software-properties-common ca-certificates gpg-agent \
+        && add-apt-repository -y ppa:deadsnakes/ppa \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends python3.13-dev \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# ── CUDA toolchain (vLLM/Triton JIT) ─────────────────────────────────────────
+# Runs unconditionally when INSTALL_VLLM=1 and we are on a CUDA base image
+# (CUDA_VERSION is set by the nvidia/cuda base). Matches the approach used by
+# the official vLLM Dockerfile: install versioned apt packages rather than
+# copying from the devel stage (avoids multi-level symlink resolution issues).
+RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
+        CUDA_VER=$(echo "${CUDA_VERSION}" | cut -d. -f1,2 | tr '.' '-'); \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            gcc \
+            cuda-nvcc-${CUDA_VER} \
+            cuda-cudart-${CUDA_VER} \
+            cuda-nvrtc-${CUDA_VER} \
+            libcublas-${CUDA_VER} \
+        && rm -rf /var/lib/apt/lists/*; \
+    elif [ "$INSTALL_VLLM" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends gcc \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 WORKDIR /app
 # Copy the entire virtualenv from the builder. The venv has its own bin/, lib/,
 # and include/ — everything is self-contained.
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:/usr/local/cuda/bin:$PATH"
 RUN ldconfig
-# Bake nvcc + CUDA headers from the devel base so GPU lanes can JIT-compile
-# kernels (FlashInfer, Triton) without a host /usr/local/cuda mount or the full
-# -devel base image. No-op for CPU builds (cuda-exporter dirs are empty there).
-COPY --from=cuda-exporter /usr/local/cuda/bin/            /usr/local/cuda/bin/
-COPY --from=cuda-exporter /usr/local/cuda/include/        /usr/local/cuda/include/
+# Copy libdevice (PTX builtins) from the devel stage — not included in cuda-nvcc apt pkg.
+# No-op for CPU builds (cuda-exporter dirs are empty).
 COPY --from=cuda-exporter /usr/local/cuda/nvvm/libdevice/ /usr/local/cuda/nvvm/libdevice/
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
@@ -188,7 +219,9 @@ ENV LOGOS_WORKER_NODE_CONFIG=/app/config.yml
 ENV LOGOS_STATE_DIR=/app/data
 
 # CUDA system libs — only relevant on GPU builds, harmless on CPU
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
+# /usr/local/nvidia/lib64 — NVIDIA Container Runtime injects real driver libs here (CUDA 13.x)
+# /usr/local/cuda/lib64  — CUDA runtime libs from the apt packages
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
 
 # NCCL — 2× Quadro RTX 5000 are PCIe-connected (no NVLink bridge on Turing RTX 5000)
 ENV NCCL_IB_DISABLE=1
