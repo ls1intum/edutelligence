@@ -103,6 +103,8 @@ class HeavyTranscriptionPipeline:
                 timeout=settings.transcription.download_timeout_seconds,
             )
             self.callback.done("YouTube audio downloaded")
+            # Skip "Extracting audio" callback stage — not needed for YouTube
+            self.callback.skip("Skipped (YouTube source)")
             video_path = None  # No video file for slide detection
 
         else:

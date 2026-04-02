@@ -80,6 +80,9 @@ class LightTranscriptionPipeline:
                 "skipping slide detection",
                 self.dto.lecture_unit_id,
             )
+            # Skip "Detecting slides" and "Aligning" callback stages
+            self.callback.skip("Skipped (YouTube source)")
+            self.callback.skip("Skipped (YouTube source)")
             # Return transcription segments with slideNumber = -1 (unmatched)
             return [{**seg, "slideNumber": -1} for seg in segments]
 

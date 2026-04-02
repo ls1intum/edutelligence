@@ -93,22 +93,28 @@ class TestDownloadYouTubeAudio:
     def test_successful_download(self, mock_validate, mock_ydl_class, tmp_path):
         mock_validate.return_value = {"id": "test123", "duration": 60}
 
+        audio_path = str(tmp_path / "output.mp3")
+
         mock_ydl = MagicMock()
         mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)
         mock_ydl.__exit__ = MagicMock(return_value=False)
+        # Simulate yt-dlp creating the output file during download
+        mock_ydl.download.side_effect = lambda urls: (
+            tmp_path / "output.mp3"
+        ).write_bytes(b"fake mp3 data")
         mock_ydl_class.return_value = mock_ydl
-
-        audio_path = str(tmp_path / "output.mp3")
-        # Simulate yt-dlp creating the output file at the expected path
-        (tmp_path / "output.mp3").write_bytes(b"fake mp3 data")
 
         download_youtube_audio(
             "https://youtube.com/watch?v=test123",
             audio_path,
             lecture_unit_id=42,
+            timeout=600,
         )
 
         assert os.path.exists(audio_path)
+        # Verify timeout is passed through as socket_timeout
+        ydl_opts = mock_ydl_class.call_args[0][0]
+        assert ydl_opts["socket_timeout"] == 600
 
     @patch("iris.pipeline.transcription.utils.youtube_utils.yt_dlp.YoutubeDL")
     @patch("iris.pipeline.transcription.utils.youtube_utils._validate_youtube_video")

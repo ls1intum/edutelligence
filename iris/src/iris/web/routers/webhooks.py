@@ -247,8 +247,9 @@ def video_transcription_webhook(dto: VideoTranscriptionPipelineExecutionDto):
     via callbacks at each stage.
     """
     logger.info(
-        "Received transcription webhook: lecture_unit=%d, video_url=%s",
+        "Received transcription webhook: lecture_unit=%d, source=%s, video_url=%s",
         dto.lecture_unit_id,
+        dto.video_source_type.value,
         dto.video_url.split("?")[0],  # strip JWT query param
     )
 
