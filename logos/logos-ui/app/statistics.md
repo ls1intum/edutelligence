@@ -27,7 +27,7 @@ This document explains what each chart on [`statistics.tsx`](./statistics.tsx) r
   - aggregated time-series (`cloud`, `local`, `total`) for selected range
   - optional per-model bucket counts
   - raw enqueue events used for accurate client-side re-bucketing when zooming
-- Source: backend `DBManager.get_request_event_stats(...)` + `get_request_enqueues_in_range(...)`
+- Source: backend `DBManager.get_request_log_stats(...)` + `get_request_enqueues_in_range(...)`
 
 4. `Request Type` (cloud vs local)
 
