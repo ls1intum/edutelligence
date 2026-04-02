@@ -13,6 +13,7 @@ installed (e.g. inside the Docker image) it takes precedence automatically.
 import sys
 import pathlib
 import types
+import importlib.machinery
 
 # ---------------------------------------------------------------------------
 # Python path
@@ -45,6 +46,7 @@ _noop = lambda *a, **k: None  # noqa: E731
 def _make_module(name: str, attrs: dict | None = None) -> types.ModuleType:
     """Create a stub module, set it in *sys.modules* (if absent), and return it."""
     mod = types.ModuleType(name)
+    mod.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
     for k, v in (attrs or {}).items():
         setattr(mod, k, v)
     sys.modules.setdefault(name, mod)
@@ -140,6 +142,8 @@ _torch = _make_module("torch", {
     "no_grad": lambda fn=None: (lambda f: f) if fn is None else fn,
 })
 _torch_cuda = _make_submodule(_torch, "cuda", {"is_available": lambda: False})
+_torch_nn = _make_submodule(_torch, "nn", {"Module": type("Module", (), {})})
+_make_submodule(_torch_nn, "functional", {"normalize": _noop})
 
 # ---------------------------------------------------------------------------
 # 7. SQLAlchemy  (ORM — dbmodules.py defines models at import time)
@@ -222,4 +226,18 @@ _make_submodule(_mpl, "pyplot", {
     "xlabel": _noop, "ylabel": _noop, "title": _noop,
     "legend": _noop, "savefig": _noop, "close": _noop,
     "bar": _noop, "subplot": _noop, "tight_layout": _noop,
+})
+
+# ---------------------------------------------------------------------------
+# 12. huggingface_hub / transformers  (only logging utils are needed in tests)
+# ---------------------------------------------------------------------------
+
+_hf = _make_module("huggingface_hub")
+_make_submodule(_hf, "utils", {"disable_progress_bars": _noop})
+
+_transformers = _make_module("transformers")
+_transformers_utils = _make_submodule(_transformers, "utils")
+_make_submodule(_transformers_utils, "logging", {
+    "set_verbosity_error": _noop,
+    "disable_progress_bar": _noop,
 })

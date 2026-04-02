@@ -54,6 +54,13 @@ MIGRATIONS=(
     "017_snapshot_provider_id_migration.sql"
     "018_drop_model_provider_config.sql"
     "019_add_request_id_to_log_entry.sql"
+    "020_normalize_local_provider_types_to_logosnode.sql"
+    "021_collapse_request_events_into_log_entry.sql"
+    "022_drop_request_events_table.sql"
+    "023_extend_provider_snapshots_for_worker_runtime.sql"
+    "024_store_logosnode_runtime_payload.sql"
+    "025_create_model_profiles_table.sql"
+    "026_create_schema_migrations.sql"
 )
 
 FAILED=0
@@ -113,7 +120,7 @@ else
 
     # Verify key tables exist
 log "Checking for new tables..."
-docker exec logos-db psql -U postgres -d logosdb -c "\dt" | grep -E "jobs|request_events|ollama_provider_snapshots" || true
+docker exec logos-db psql -U postgres -d logosdb -c "\dt" | grep -E "jobs|ollama_provider_snapshots" || true
 
     echo ""
     log "Checking providers table columns..."

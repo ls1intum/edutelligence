@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1780" height="980" viewBox="0 0 1780 980">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8fbff"/>
+      <stop offset="100%" stop-color="#f3f7ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1780" height="980" fill="url(#bg)"/>
+
+  <text x="52" y="40" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="28" fill="#0f172a">
+    Qwen2.5-Coder Throughput by Load Type (tok/s | peak GPU memory)
+  </text>
+  <text x="52" y="62" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="13" fill="#475569">
+    varied=lane_benchmark_20260309_190938.json | fixed=lane_benchmark_20260309_192836.json
+  </text>
+  <line x1="70" y1="74" x2="98" y2="74" stroke="#0b84f3" stroke-width="4"/><text x="106" y="78" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="14" fill="#0f172a">vLLM prefix OFF</text><line x1="395" y1="74" x2="423" y2="74" stroke="#00a884" stroke-width="4"/><text x="431" y="78" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="14" fill="#0f172a">vLLM prefix ON</text><line x1="720" y1="74" x2="748" y2="74" stroke="#f97316" stroke-width="4"/><text x="756" y="78" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="14" fill="#0f172a">Ollama np=2</text><line x1="1045" y1="74" x2="1073" y2="74" stroke="#ef4444" stroke-width="4"/><text x="1081" y="78" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="14" fill="#0f172a">Ollama np=4</text><line x1="1370" y1="74" x2="1398" y2="74" stroke="#b45309" stroke-width="4"/><text x="1406" y="78" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="14" fill="#0f172a">Ollama np=8</text>
+
+  <rect x="50" y="118" width="840" height="820" rx="14" fill="#ffffff" stroke="#dbe5f4"/>
+<text x="68" y="148" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="17" fill="#0f172a">Load: varied_unique_prefix (cache-hostile)</text>
+<line x1="130" y1="876.00" x2="862" y2="876.00" stroke="#eef3fb" stroke-width="1"/>
+<text x="120" y="880.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">0</text>
+<line x1="130" y1="757.67" x2="862" y2="757.67" stroke="#eef3fb" stroke-width="1"/>
+<text x="120" y="761.67" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">64</text>
+<line x1="130" y1="639.33" x2="862" y2="639.33" stroke="#eef3fb" stroke-width="1"/>
+<text x="120" y="643.33" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">127</text>
+<line x1="130" y1="521.00" x2="862" y2="521.00" stroke="#eef3fb" stroke-width="1"/>
+<text x="120" y="525.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">191</text>
+<line x1="130" y1="402.67" x2="862" y2="402.67" stroke="#eef3fb" stroke-width="1"/>
+<text x="120" y="406.67" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">255</text>
+<line x1="130" y1="284.33" x2="862" y2="284.33" stroke="#eef3fb" stroke-width="1"/>
+<text x="120" y="288.33" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">318</text>
+<line x1="130" y1="166.00" x2="862" y2="166.00" stroke="#eef3fb" stroke-width="1"/>
+<text x="120" y="170.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">382</text>
+<line x1="130.00" y1="166" x2="130.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="130.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">1</text>
+<line x1="313.00" y1="166" x2="313.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="313.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">4</text>
+<line x1="496.00" y1="166" x2="496.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="496.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">8</text>
+<line x1="679.00" y1="166" x2="679.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="679.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">16</text>
+<line x1="862.00" y1="166" x2="862.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="862.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">32</text>
+<line x1="130" y1="876" x2="862" y2="876" stroke="#0f172a" stroke-width="1.8"/>
+<line x1="130" y1="166" x2="130" y2="876" stroke="#0f172a" stroke-width="1.8"/>
+<polyline points="130.00,846.94 313.00,762.23 496.00,683.88 679.00,525.79 862.00,385.13" fill="none" stroke="#0b84f3" stroke-width="3.5"/>
+<circle cx="130.00" cy="846.94" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="137.00" y="832.94" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">15.6 | 30.1G</text>
+<circle cx="313.00" cy="762.23" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="320.00" y="748.23" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">61.2 | 30.1G</text>
+<circle cx="496.00" cy="683.88" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="503.00" y="669.88" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">103.4 | 30.1G</text>
+<circle cx="679.00" cy="525.79" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="686.00" y="511.79" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">188.5 | 30.1G</text>
+<circle cx="862.00" cy="385.13" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="869.00" y="371.13" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">264.2 | 30.1G</text>
+<polyline points="130.00,842.13 313.00,752.97 496.00,682.59 679.00,526.48 862.00,387.57" fill="none" stroke="#00a884" stroke-width="3.5"/>
+<circle cx="130.00" cy="842.13" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="137.00" y="856.13" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">18.2 | 30.1G</text>
+<circle cx="313.00" cy="752.97" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="320.00" y="766.97" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">66.2 | 30.1G</text>
+<circle cx="496.00" cy="682.59" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="503.00" y="696.59" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">104.1 | 30.1G</text>
+<circle cx="679.00" cy="526.48" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="686.00" y="540.48" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">188.1 | 30.1G</text>
+<circle cx="862.00" cy="387.57" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="869.00" y="401.57" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">262.9 | 30.1G</text>
+<polyline points="130.00,845.40 313.00,823.87 496.00,821.92 679.00,821.41 862.00,820.90" fill="none" stroke="#f97316" stroke-width="3.5"/>
+<circle cx="130.00" cy="845.40" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="137.00" y="827.40" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">16.5 | 20.3G</text>
+<circle cx="313.00" cy="823.87" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="320.00" y="805.87" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">28.1 | 20.3G</text>
+<circle cx="496.00" cy="821.92" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="503.00" y="803.92" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">29.1 | 20.3G</text>
+<circle cx="679.00" cy="821.41" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="686.00" y="803.41" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">29.4 | 20.3G</text>
+<circle cx="862.00" cy="820.90" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="869.00" y="802.90" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">29.7 | 20.3G</text>
+<polyline points="130.00,847.88 313.00,808.09 496.00,809.23 679.00,805.62 862.00,804.40" fill="none" stroke="#ef4444" stroke-width="3.5"/>
+<circle cx="130.00" cy="847.88" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="137.00" y="863.88" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">15.1 | 21.4G</text>
+<circle cx="313.00" cy="808.09" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="320.00" y="824.09" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">36.6 | 21.4G</text>
+<circle cx="496.00" cy="809.23" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="503.00" y="825.23" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">35.9 | 21.4G</text>
+<circle cx="679.00" cy="805.62" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="686.00" y="821.62" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">37.9 | 21.4G</text>
+<circle cx="862.00" cy="804.40" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="869.00" y="820.40" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">38.5 | 21.4G</text>
+<polyline points="130.00,847.28 313.00,808.03 496.00,800.04 679.00,804.19 862.00,804.97" fill="none" stroke="#b45309" stroke-width="3.5"/>
+<circle cx="130.00" cy="847.28" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="137.00" y="877.28" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">15.5 | 23.7G</text>
+<circle cx="313.00" cy="808.03" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="320.00" y="838.03" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">36.6 | 23.7G</text>
+<circle cx="496.00" cy="800.04" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="503.00" y="830.04" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">40.9 | 23.7G</text>
+<circle cx="679.00" cy="804.19" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="686.00" y="834.19" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">38.6 | 23.7G</text>
+<circle cx="862.00" cy="804.97" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="869.00" y="834.97" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">38.2 | 23.7G</text>
+<text x="496.00" y="922" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12.5" text-anchor="middle" fill="#0f172a">Concurrency</text>
+<text x="70" y="521.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12.5" text-anchor="middle" transform="rotate(-90 70,521.00)" fill="#0f172a">Aggregate tok/s</text>
+  <rect x="890" y="118" width="840" height="820" rx="14" fill="#ffffff" stroke="#dbe5f4"/>
+<text x="908" y="148" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="17" fill="#0f172a">Load: fixed_shared_prefix (cache-friendly)</text>
+<line x1="970" y1="876.00" x2="1702" y2="876.00" stroke="#eef3fb" stroke-width="1"/>
+<text x="960" y="880.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">0</text>
+<line x1="970" y1="757.67" x2="1702" y2="757.67" stroke="#eef3fb" stroke-width="1"/>
+<text x="960" y="761.67" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">64</text>
+<line x1="970" y1="639.33" x2="1702" y2="639.33" stroke="#eef3fb" stroke-width="1"/>
+<text x="960" y="643.33" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">127</text>
+<line x1="970" y1="521.00" x2="1702" y2="521.00" stroke="#eef3fb" stroke-width="1"/>
+<text x="960" y="525.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">191</text>
+<line x1="970" y1="402.67" x2="1702" y2="402.67" stroke="#eef3fb" stroke-width="1"/>
+<text x="960" y="406.67" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">255</text>
+<line x1="970" y1="284.33" x2="1702" y2="284.33" stroke="#eef3fb" stroke-width="1"/>
+<text x="960" y="288.33" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">318</text>
+<line x1="970" y1="166.00" x2="1702" y2="166.00" stroke="#eef3fb" stroke-width="1"/>
+<text x="960" y="170.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="end" fill="#475569">382</text>
+<line x1="970.00" y1="166" x2="970.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="970.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">1</text>
+<line x1="1153.00" y1="166" x2="1153.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="1153.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">4</text>
+<line x1="1336.00" y1="166" x2="1336.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="1336.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">8</text>
+<line x1="1519.00" y1="166" x2="1519.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="1519.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">16</text>
+<line x1="1702.00" y1="166" x2="1702.00" y2="876" stroke="#f5f8fc" stroke-width="1"/>
+<text x="1702.00" y="900" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" text-anchor="middle" fill="#334155">32</text>
+<line x1="970" y1="876" x2="1702" y2="876" stroke="#0f172a" stroke-width="1.8"/>
+<line x1="970" y1="166" x2="970" y2="876" stroke="#0f172a" stroke-width="1.8"/>
+<polyline points="970.00,840.48 1153.00,745.43 1336.00,619.35 1519.00,375.29 1702.00,242.07" fill="none" stroke="#0b84f3" stroke-width="3.5"/>
+<circle cx="970.00" cy="840.48" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="977.00" y="826.48" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">19.1 | 30.1G</text>
+<circle cx="1153.00" cy="745.43" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1160.00" y="731.43" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">70.3 | 30.1G</text>
+<circle cx="1336.00" cy="619.35" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1343.00" y="605.35" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">138.1 | 30.1G</text>
+<circle cx="1519.00" cy="375.29" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1526.00" y="361.29" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">269.5 | 30.1G</text>
+<circle cx="1702.00" cy="242.07" r="4.4" fill="#0b84f3" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1709.00" y="228.07" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#0b84f3">341.2 | 30.1G</text>
+<polyline points="970.00,841.24 1153.00,748.81 1336.00,625.43 1519.00,388.75 1702.00,244.86" fill="none" stroke="#00a884" stroke-width="3.5"/>
+<circle cx="970.00" cy="841.24" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="977.00" y="855.24" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">18.7 | 30.1G</text>
+<circle cx="1153.00" cy="748.81" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1160.00" y="762.81" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">68.5 | 30.1G</text>
+<circle cx="1336.00" cy="625.43" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1343.00" y="639.43" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">134.9 | 30.1G</text>
+<circle cx="1519.00" cy="388.75" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1526.00" y="402.75" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">262.3 | 30.1G</text>
+<circle cx="1702.00" cy="244.86" r="4.4" fill="#00a884" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1709.00" y="258.86" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#00a884">339.7 | 30.1G</text>
+<polyline points="970.00,844.96 1153.00,821.09 1336.00,817.52 1519.00,819.02 1702.00,818.04" fill="none" stroke="#f97316" stroke-width="3.5"/>
+<circle cx="970.00" cy="844.96" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="977.00" y="826.96" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">16.7 | 20.3G</text>
+<circle cx="1153.00" cy="821.09" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1160.00" y="803.09" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">29.6 | 20.3G</text>
+<circle cx="1336.00" cy="817.52" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1343.00" y="799.52" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">31.5 | 20.3G</text>
+<circle cx="1519.00" cy="819.02" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1526.00" y="801.02" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">30.7 | 20.3G</text>
+<circle cx="1702.00" cy="818.04" r="4.4" fill="#f97316" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1709.00" y="800.04" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#f97316">31.2 | 20.3G</text>
+<polyline points="970.00,844.51 1153.00,802.29 1336.00,797.37 1519.00,798.64 1702.00,798.44" fill="none" stroke="#ef4444" stroke-width="3.5"/>
+<circle cx="970.00" cy="844.51" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="977.00" y="860.51" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">16.9 | 21.4G</text>
+<circle cx="1153.00" cy="802.29" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1160.00" y="818.29" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">39.7 | 21.4G</text>
+<circle cx="1336.00" cy="797.37" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1343.00" y="813.37" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">42.3 | 21.4G</text>
+<circle cx="1519.00" cy="798.64" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1526.00" y="814.64" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">41.6 | 21.4G</text>
+<circle cx="1702.00" cy="798.44" r="4.4" fill="#ef4444" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1709.00" y="814.44" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#ef4444">41.7 | 21.4G</text>
+<polyline points="970.00,844.76 1153.00,807.33 1336.00,798.26 1519.00,796.40 1702.00,795.34" fill="none" stroke="#b45309" stroke-width="3.5"/>
+<circle cx="970.00" cy="844.76" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="977.00" y="874.76" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">16.8 | 23.7G</text>
+<circle cx="1153.00" cy="807.33" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1160.00" y="837.33" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">37.0 | 23.7G</text>
+<circle cx="1336.00" cy="798.26" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1343.00" y="828.26" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">41.8 | 23.7G</text>
+<circle cx="1519.00" cy="796.40" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1526.00" y="826.40" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">42.8 | 23.7G</text>
+<circle cx="1702.00" cy="795.34" r="4.4" fill="#b45309" stroke="#ffffff" stroke-width="1.3"/>
+<text x="1709.00" y="825.34" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" fill="#b45309">43.4 | 23.7G</text>
+<text x="1336.00" y="922" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12.5" text-anchor="middle" fill="#0f172a">Concurrency</text>
+<text x="910" y="521.00" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12.5" text-anchor="middle" transform="rotate(-90 910,521.00)" fill="#0f172a">Aggregate tok/s</text>
+
+  <text x="52" y="962" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12" fill="#64748b">
+    Point label format: throughput tok/s | peak total GPU memory (GiB)
+  </text>
+</svg>

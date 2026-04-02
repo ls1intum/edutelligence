@@ -1,0 +1,40 @@
+meta {
+  name: Apply Lanes
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/logosdb/providers/logosnode/lanes/apply
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}",
+    "provider_id": "{{providerId}}",
+    "lanes": [
+      {
+        "lane_id": "qwen-32b-r1",
+        "model": "{{modelName}}",
+        "backend": "ollama",
+        "num_parallel": 4,
+        "context_length": 4096,
+        "gpu_devices": "0"
+      },
+      {
+        "lane_id": "qwen-32b-r2",
+        "model": "{{modelName}}",
+        "backend": "ollama",
+        "num_parallel": 4,
+        "context_length": 4096,
+        "gpu_devices": "1"
+      }
+    ]
+  }
+}

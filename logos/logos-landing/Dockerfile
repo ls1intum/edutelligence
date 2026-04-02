@@ -4,13 +4,13 @@ FROM node:alpine AS build
 WORKDIR /app
 
 # Copy dependency manifests first for layer caching
-COPY ./logos/logos-landing/package.json ./logos/logos-landing/package-lock.json ./
+COPY package.json package-lock.json ./
 
 # Install dependencies (cached unless package.json/package-lock.json changes)
 RUN npm ci
 
 # Copy remaining source
-COPY ./logos/logos-landing/ ./
+COPY . ./
 
 # Build React app (defaults to production mode)
 RUN npx expo export --platform web --output-dir landing-build
