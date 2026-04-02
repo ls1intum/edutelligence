@@ -18,7 +18,7 @@ The Priority Queue subsystem provides multi-level priority queue management for 
 
 Queue depths and request priorities are **logged to the database** by the pipeline (not by the queue itself):
 - `pipeline.py` records queue metrics at enqueue and schedule events via the monitoring module
-- Data is written to `log_entry.queue_depth_at_arrival` and `request_events` table
+- Data is written to `log_entry`
 - This enables analysis of queueing behavior and scheduler performance
 
 ## Core Components

@@ -9,7 +9,7 @@ AtlasML is a FastAPI-based microservice that exposes competency-centric ML featu
 ## Architecture
 
 - FastAPI app: `atlasml/app.py`. Creates the application, wires startup/shutdown logic, installs logging middleware, and registers routers. Centralized validation error handling provides consistent 422 responses with debugging details.
-- Routers: `atlasml/routers/`. `health.py` offers a minimal liveness check for probes. `competency.py` provides endpoints for suggesting competencies, persisting items, and proposing relations within a course context.
+- Routers: `atlasml/routers/`. `health.py` provides a dependency-aware health endpoint that verifies AtlasML can still use Weaviate. `competency.py` provides endpoints for suggesting competencies, persisting items, and proposing relations within a course context.
 - Models: `atlasml/models/competency.py`. Defines request/response Pydantic models for endpoint contracts and core domain DTOs such as `Competency` and `ExerciseWithCompetencies`.
 - Configuration: `atlasml/config.py`. Loads strongly typed settings from environment variables, including API keys, Weaviate endpoints, and optional Sentry DSN. Safe defaults are used in tests or when explicitly requested.
 - Auth dependencies: `atlasml/dependencies.py`. Supplies `TokenValidator`/`validate_token` dependencies to enforce a simple API-key based authorization using the `Authorization` header.
@@ -19,7 +19,7 @@ AtlasML is a FastAPI-based microservice that exposes competency-centric ML featu
 
 - Sentry (optional) is initialized automatically when `ENV=production` and `SENTRY_DSN` is set. This captures errors and traces with PII only when explicitly enabled.
 - Request/response logging middleware emits concise request lines, best-effort bodies for POST, response codes, and end-to-end duration. This supports rapid debugging in dev and observability in staging.
-- The Weaviate client is checked on startup for liveness and closed gracefully on shutdown, ensuring connections are released and schemas are validated before requests hit the endpoints.
+- The Weaviate client is checked on startup and closed gracefully on shutdown, ensuring connections are released and schemas are validated before requests hit the endpoints. The health endpoint also performs ongoing Weaviate availability checks during normal operation.
 
 ## Related Documentation
 

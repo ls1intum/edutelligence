@@ -3,6 +3,7 @@ import { ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/components/auth-shell";
+import { API_BASE } from "@/components/statistics/constants";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
@@ -60,7 +61,7 @@ export default function AddModel() {
     try {
       setLoadingModels(true);
       const response = await fetch(
-        "https://logos.ase.cit.tum.de:8080/logosdb/get_models",
+        `${API_BASE}/logosdb/get_models`,
         {
           method: "POST",
           headers: {
@@ -118,7 +119,7 @@ export default function AddModel() {
       setSubmitting(true);
       setStatusMessage(null);
       const res = await fetch(
-        "https://logos.ase.cit.tum.de:8080/logosdb/add_model",
+        `${API_BASE}/logosdb/add_model`,
         {
           method: "POST",
           headers: {

@@ -121,6 +121,19 @@ class AzureDataProvider:
             self._ensure_deployment(deployment_name)
         logger.info(f"[{self.name}] Registered model {model_id} as '{model_name}' (deployment: {deployment_name})")
 
+    def update_registration(self, *, name: str) -> None:
+        with self._lock:
+            self.name = name
+
+    def set_registered_models(self, models: Dict[int, tuple[str, str]]) -> None:
+        with self._lock:
+            self._registered_models = {}
+            self._model_to_deployment = {}
+            for model_id, (model_name, deployment_name) in models.items():
+                self._registered_models[int(model_id)] = model_name
+                self._model_to_deployment[int(model_id)] = deployment_name
+                self._ensure_deployment(deployment_name)
+
     def get_model_status(self, model_id: int) -> ModelStatus:
         """
         Get model status for Azure provider.

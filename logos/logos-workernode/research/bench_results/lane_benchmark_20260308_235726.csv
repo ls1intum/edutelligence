@@ -1,0 +1,11 @@
+timestamp_utc,backend,configured_model,served_model,lane_port,concurrency,requests_ok,errors,total_tokens,batch_time_s,aggregate_tok_s,avg_latency_s,p50_latency_s,p95_latency_s,avg_ttft_ms,avg_tok_per_req_s
+2026-03-09T00:05:50.480891+00:00,vllm,Qwen/Qwen2.5-32B-Instruct-AWQ,Qwen/Qwen2.5-32B-Instruct-AWQ,11436,1,1,0,200,9.931,20.139,9.93,9.93,9.93,323.0,20.14
+2026-03-09T00:05:50.480891+00:00,vllm,Qwen/Qwen2.5-32B-Instruct-AWQ,Qwen/Qwen2.5-32B-Instruct-AWQ,11436,4,4,0,800,10.375,77.106,10.348,10.374,10.374,202.6,19.327
+2026-03-09T00:05:50.480891+00:00,vllm,Qwen/Qwen2.5-32B-Instruct-AWQ,Qwen/Qwen2.5-32B-Instruct-AWQ,11436,8,8,0,1600,22.187,72.114,22.17,22.184,22.185,10289.2,9.021
+2026-03-09T00:05:50.480891+00:00,vllm,Qwen/Qwen2.5-32B-Instruct-AWQ,Qwen/Qwen2.5-32B-Instruct-AWQ,11436,16,16,0,3200,10.681,299.587,10.668,10.675,10.68,331.7,18.747
+2026-03-09T00:05:50.480891+00:00,vllm,Qwen/Qwen2.5-32B-Instruct-AWQ,Qwen/Qwen2.5-32B-Instruct-AWQ,11436,32,32,0,6400,17.037,375.659,17.02,17.027,17.031,541.3,11.751
+2026-03-09T00:05:50.480891+00:00,ollama,qwen2.5-coder:32b,qwen2.5-coder:32b,11436,1,1,0,200,11.909,16.794,11.909,11.909,11.909,608.9,16.794
+2026-03-09T00:05:50.480891+00:00,ollama,qwen2.5-coder:32b,qwen2.5-coder:32b,11436,4,4,0,800,19.278,41.498,19.239,19.276,19.277,1069.2,10.395
+2026-03-09T00:05:50.480891+00:00,ollama,qwen2.5-coder:32b,qwen2.5-coder:32b,11436,8,8,0,1600,37.094,43.134,27.868,27.831,37.092,9696.3,8.051
+2026-03-09T00:05:50.480891+00:00,ollama,qwen2.5-coder:32b,qwen2.5-coder:32b,11436,16,16,0,3200,74.159,43.151,46.426,46.378,74.156,28192.2,5.585
+2026-03-09T00:05:50.480891+00:00,ollama,qwen2.5-coder:32b,qwen2.5-coder:32b,11436,32,32,0,6400,148.543,43.085,83.798,83.8,148.534,65504.5,3.61

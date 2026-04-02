@@ -1,9 +1,9 @@
 """
 Simple config test for a single root user
-1. Run test_setup() single
-2. Set VALID_LOGOS_KEY to the key provided in the previous response
-3. Set API-Endpoints and Provider BaseURLs
-4. Run all tests. The last test should print out a response from a registered LLM
+1. Start the server — root API key is auto-generated on first startup (check logs).
+2. Set VALID_LOGOS_KEY to the key from the logs.
+3. Set API-Endpoints and Provider BaseURLs.
+4. Run all tests. The last test should print out a response from a registered LLM.
 """
 
 import unittest
@@ -23,21 +23,6 @@ API_VERSION = ""
 
 
 class TestOpenAIForwardingProxy(unittest.TestCase):
-    def test_setup(self):
-        headers = {
-            "Content-Type": "application/json",
-        }
-
-        data = {
-            "provider_name": "azure",
-            "base_url": BASE_URL,
-            "provider_type": "azure",
-        }
-
-        response = requests.post("http://0.0.0.0:8080/logosdb/setup", json=data, headers=headers)
-        from pprint import pprint
-        pprint(response.json())
-
     def test_add_provider(self):
         headers = {
             "Content-Type": "application/json",
