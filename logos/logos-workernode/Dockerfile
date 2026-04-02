@@ -16,7 +16,7 @@
 ARG BASE_IMAGE=python:3.12-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC=vllm
+ARG VLLM_PIP_SPEC=vllm --extra-index-url https://download.pytorch.org/whl/cu128
 ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
@@ -93,21 +93,8 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
-         # 1. Install vLLM (pins torch to its required version from PyPI)
-         pip install --no-cache-dir --prefix=/install --ignore-installed $VLLM_PIP_SPEC; \
+         pip install --no-cache-dir --prefix=/install $VLLM_PIP_SPEC; \
          site_pkgs="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
-         # 2. Reinstall torch+vision+audio with CUDA wheels matching vLLM's pinned version.
-         #    Extract the exact versions vLLM installed so the ABI stays consistent.
-         PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; print(m.version('torch'))"  > /tmp/_torch_ver; \
-         PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; print(m.version('torchvision'))" > /tmp/_tv_ver; \
-         PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; print(m.version('torchaudio'))"  > /tmp/_ta_ver; \
-         pip install --no-cache-dir --prefix=/install \
-             --ignore-installed --force-reinstall --no-deps \
-             --extra-index-url https://download.pytorch.org/whl/cu128 \
-             "torch==$(cat /tmp/_torch_ver)" \
-             "torchvision==$(cat /tmp/_tv_ver)" \
-             "torchaudio==$(cat /tmp/_ta_ver)"; \
-         # 3. Optional: override NCCL version
          if [ -n "$NCCL_PIP_SPEC" ]; then \
            rm -rf "$site_pkgs/nvidia/nccl" "$site_pkgs"/nvidia_nccl_cu12-*.dist-info; \
            pip install --no-cache-dir --prefix=/install --ignore-installed --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
@@ -116,30 +103,8 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
              PYTHONPATH="$site_pkgs" python3 -c "import importlib.metadata as m; actual = m.version('nvidia-nccl-cu12'); assert actual == '$expected_nccl', f'expected $expected_nccl, got {actual}'"; \
            fi; \
          fi; \
-         # 4. FlashInfer
          pip install --no-cache-dir --prefix=/install flashinfer-python; \
-         # 5. Verify torch ABI consistency
-         PYTHONPATH="$site_pkgs" python3 -c "\
-import importlib.metadata as m; \
-tv = m.version('torch'); \
-import pathlib, subprocess; \
-so = str(pathlib.Path('$site_pkgs') / 'vllm' / '_C.abi3.so'); \
-r = subprocess.run(['ldd', so], capture_output=True, text=True); \
-nf = [l.strip() for l in r.stdout.splitlines() if 'not found' in l]; \
-print(f'torch={tv}, unresolved libs={len(nf)}'); \
-[print(f'  {l}') for l in nf]; \
-"; \
        fi
-# Normalize: pip --prefix layout varies across distros (lib/ vs local/lib/,
-# site-packages vs dist-packages).  Move everything into a flat /packages dir
-# so the runtime COPY is deterministic.
-RUN site_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base":"/install","platbase":"/install"}))')"; \
-    mkdir -p /packages && cp -a "$site_dir"/. /packages/
-# Collect console_scripts (e.g. vllm) installed under --prefix into /scripts.
-RUN mkdir -p /scripts \
-    && for d in /install/bin /install/local/bin; do \
-         [ -d "$d" ] && cp -a "$d"/. /scripts/; \
-       done; true
 
 # ---------------------------------------------------------------------------
 # Stage 2b: CUDA toolkit exporter
@@ -186,12 +151,11 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
     fi
 
 WORKDIR /app
-# Copy packages into whichever directory this Python's import system expects.
-RUN mkdir -p "$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
-COPY --from=builder /packages/ /tmp/packages/
-RUN cp -a /tmp/packages/. "$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/" \
-    && rm -rf /tmp/packages
-COPY --from=builder /scripts/ /usr/local/bin/
+# Copy the entire /install prefix into /usr/local so pip scripts, libraries,
+# and site-packages all land in standard system paths. This ensures the dynamic
+# linker can find torch/lib/*.so (libc10, libtorch, etc.) that vLLM links against.
+COPY --from=builder /install /usr/local
+RUN ldconfig
 # Bake nvcc + CUDA headers from the devel base so GPU lanes can JIT-compile
 # kernels (FlashInfer, Triton) without a host /usr/local/cuda mount or the full
 # -devel base image. No-op for CPU builds (cuda-exporter dirs are empty there).
@@ -211,11 +175,7 @@ ENV LOGOS_WORKER_NODE_HAS_OLLAMA=${INSTALL_OLLAMA}
 ENV LOGOS_WORKER_NODE_CONFIG=/app/config.yml
 ENV LOGOS_STATE_DIR=/app/data
 
-# CUDA system libs and PyTorch native libs (libc10, libtorch, etc.)
-# vLLM's _C extension links against torch libs that must be on LD_LIBRARY_PATH.
-RUN TORCH_LIB="$(python3 -c 'import pathlib, sysconfig; p = pathlib.Path(sysconfig.get_path("purelib")) / "torch" / "lib"; print(p) if p.is_dir() else print("")' 2>/dev/null)" \
-    && echo "TORCH_LIB=${TORCH_LIB}" \
-    && if [ -n "$TORCH_LIB" ]; then echo "$TORCH_LIB" > /etc/ld.so.conf.d/torch.conf && ldconfig; fi
+# CUDA system libs — only relevant on GPU builds, harmless on CPU
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
 
 # NCCL — 2× Quadro RTX 5000 are PCIe-connected (no NVLink bridge on Turing RTX 5000)
