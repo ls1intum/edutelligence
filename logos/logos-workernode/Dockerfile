@@ -117,9 +117,21 @@ RUN mkdir -p /scripts \
        done; true
 
 # ---------------------------------------------------------------------------
+# Stage 2b: CUDA toolkit exporter
+# GPU builds (BASE_IMAGE=nvidia/cuda:*-devel): nvcc, headers, and device libs
+# are already present. The mkdir just ensures the paths always exist.
+# CPU builds (BASE_IMAGE=python:3.12-slim): creates empty dirs so the COPY
+# instructions in Stage 3 become safe no-ops instead of errors.
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS cuda-exporter
+RUN mkdir -p /usr/local/cuda/bin /usr/local/cuda/include /usr/local/cuda/nvvm/libdevice
+
+# ---------------------------------------------------------------------------
 # Stage 3: Runtime image
 #   CPU build  (BASE_IMAGE=python:3.12-slim):    lightweight, no CUDA overhead
-#   GPU build  (BASE_IMAGE=nvidia/cuda:...):      CUDA runtime only (no compilers)
+#   GPU build  (BASE_IMAGE=nvidia/cuda:...):      CUDA runtime only; nvcc and
+#              headers are copied from cuda-exporter below, keeping the image
+#              self-contained without needing the full -devel base (~2 GB saved).
 #
 # RUNTIME_IMAGE defaults to BASE_IMAGE, but for GPU builds should be overridden
 # to the -runtime variant to save ~2 GB (no dev headers/compilers/static libs).
@@ -155,6 +167,12 @@ COPY --from=builder /packages/ /tmp/packages/
 RUN cp -a /tmp/packages/. "$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/" \
     && rm -rf /tmp/packages
 COPY --from=builder /scripts/ /usr/local/bin/
+# Bake nvcc + CUDA headers from the devel base so GPU lanes can JIT-compile
+# kernels (FlashInfer, Triton) without a host /usr/local/cuda mount or the full
+# -devel base image. No-op for CPU builds (cuda-exporter dirs are empty there).
+COPY --from=cuda-exporter /usr/local/cuda/bin/            /usr/local/cuda/bin/
+COPY --from=cuda-exporter /usr/local/cuda/include/        /usr/local/cuda/include/
+COPY --from=cuda-exporter /usr/local/cuda/nvvm/libdevice/ /usr/local/cuda/nvvm/libdevice/
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 RUN mkdir -p /app/certs /app/data
