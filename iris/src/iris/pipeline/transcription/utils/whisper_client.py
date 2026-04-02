@@ -214,7 +214,7 @@ class WhisperClient:
         detected_language = (
             language_map.get(winner, "en") if winner is not None else "en"
         )
-        if winner not in language_map:
+        if winner is not None and winner not in language_map:
             prefix = (
                 f"[Lecture {lecture_unit_id}]"
                 if lecture_unit_id is not None
