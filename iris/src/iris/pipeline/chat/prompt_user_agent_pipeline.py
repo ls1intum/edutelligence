@@ -300,6 +300,13 @@ class PromptUserAgentPipeline(
             else:
                 result = state.result
 
+            # Set callback event if verdict exists
+            if self.verdict:
+                if self.verdict.verdict == "suspicious" or self.verdict.verdict == "unsuspicious":
+                    state.callback.status.event = "prompting_finished"
+                elif self.verdict.verdict == "next_question":
+                    state.callback.status.event = "next_question"
+
             state.callback.done("Done!", final_result=result, tokens=state.tokens)
 
         except Exception as e:
