@@ -186,7 +186,11 @@ ENV LOGOS_WORKER_NODE_HAS_OLLAMA=${INSTALL_OLLAMA}
 ENV LOGOS_WORKER_NODE_CONFIG=/app/config.yml
 ENV LOGOS_STATE_DIR=/app/data
 
-# CUDA system libs — only relevant on GPU builds, harmless on CPU
+# CUDA system libs and PyTorch native libs (libc10, libtorch, etc.)
+# vLLM's _C extension links against torch libs that must be on LD_LIBRARY_PATH.
+RUN TORCH_LIB="$(python3 -c 'import pathlib, sysconfig; p = pathlib.Path(sysconfig.get_path("purelib")) / "torch" / "lib"; print(p) if p.is_dir() else print("")' 2>/dev/null)" \
+    && echo "TORCH_LIB=${TORCH_LIB}" \
+    && if [ -n "$TORCH_LIB" ]; then echo "$TORCH_LIB" > /etc/ld.so.conf.d/torch.conf && ldconfig; fi
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
 
 # NCCL — 2× Quadro RTX 5000 are PCIe-connected (no NVLink bridge on Turing RTX 5000)
