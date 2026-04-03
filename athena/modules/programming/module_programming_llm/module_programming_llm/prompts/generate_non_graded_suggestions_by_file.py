@@ -4,6 +4,10 @@ You are an AI tutor for programming assessment at a prestigious university.
 # Problem statement
 {problem_statement}
 
+# Grading instructions
+{grading_instructions}
+Max points: {max_points}, bonus points: {bonus_points} (whole assessment, not just this file)
+
 # Task
 Create non graded improvement suggestions for a student\'s programming submission that a human tutor would recommend. \
 Assume the tutor is not familiar with the solution.
@@ -23,6 +27,15 @@ No need to mention anything that is not explicitly in the template->submission d
 In git diff, lines marked with '-' were removed and with '+' were added by the student.
 
 # The student will be reading your response, use you instead of them
+
+# Credits
+For each feedback item, provide a non-negative `credits` value that reflects how many points were earned for the shown work.
+Never use negative credits. Incorrect, missing, or wrong parts must receive `0` credits, not deductions.
+Only assign positive credits when the student has implemented something correctly or partially correctly according to the grading instructions.
+Use higher absolute credit values for feedback that is more important for the grading outcome.
+Do not invent grading criteria that are not supported by the provided grading instructions.
+The sum of all `credits` values across the whole submission must never exceed `max_points + bonus_points`.
+If you identify mistakes or missing parts, do not assign the full score.
 """
 
 human_message = """\

@@ -22,6 +22,7 @@ from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo,
     add_line_numbers,
+    format_grading_instructions,
     get_programming_language_file_extension,
 )
 
@@ -37,6 +38,7 @@ class FeedbackModel(BaseModel):
     line_end: Optional[int] = Field(
         None, description="Referenced line number end, or empty if unreferenced"
     )
+    credits: float = Field(0.0, description="Number of points received/deducted")
     model_config = ConfigDict(title="Feedback")
 
 
@@ -45,6 +47,54 @@ class ImprovementModel(BaseModel):
 
     feedbacks: Sequence[FeedbackModel] = Field(description="Improvement feedbacks")
     model_config = ConfigDict(title="ImprovementModel")
+
+
+def get_smallest_positive_credit(exercise: Exercise) -> float:
+    positive_credits = [
+        instruction.credits
+        for criterion in exercise.grading_criteria or []
+        for instruction in criterion.structured_grading_instructions
+        if instruction.credits > 0
+    ]
+    if positive_credits:
+        return min(positive_credits)
+    if exercise.max_points + exercise.bonus_points >= 1:
+        return 0.5
+    return max((exercise.max_points + exercise.bonus_points) / 2, 0.0)
+
+
+def normalize_feedback_credits(
+    feedbacks: List[Feedback], exercise: Exercise
+) -> List[Feedback]:
+    feedbacks = [
+        feedback.model_copy(update={"credits": max(feedback.credits, 0.0)})
+        for feedback in feedbacks
+    ]
+
+    max_points = exercise.max_points
+    bonus_points = exercise.bonus_points
+    max_total_points = max_points + bonus_points
+    if max_total_points <= 0:
+        return feedbacks
+
+    has_zero_credit_feedback = any(feedback.credits == 0.0 for feedback in feedbacks)
+    if has_zero_credit_feedback:
+        reserved_credit = min(get_smallest_positive_credit(exercise), max_total_points)
+        max_total_points = max(max_total_points - reserved_credit, 0.0)
+
+    total_positive_credits = sum(max(feedback.credits, 0.0) for feedback in feedbacks)
+    if total_positive_credits <= max_total_points:
+        return feedbacks
+
+    scale_factor = max_total_points / total_positive_credits
+    return [
+        feedback.model_copy(
+            update={
+                "credits": round(feedback.credits * scale_factor, 2)
+            }
+        )
+        for feedback in feedbacks
+    ]
 
 
 # pylint: disable=too-many-locals
@@ -65,6 +115,9 @@ async def generate_suggestions_by_file(
     # Feature extraction
     template_repo = exercise.get_template_repository()
     submission_repo = submission.get_repository()
+    grading_instructions = format_grading_instructions(
+        exercise.grading_instructions, exercise.grading_criteria
+    )
 
     changed_files_from_template_to_submission = get_diff(
         src_repo=template_repo, dst_repo=submission_repo, file_path=None, name_only=True
@@ -154,6 +207,10 @@ async def generate_suggestions_by_file(
                 "submission_file": file_content,
                 "template_to_submission_diff": template_to_submission_diff,
                 "problem_statement": problem_statement,
+                "grading_instructions": grading_instructions
+                or "No grading instructions found.",
+                "max_points": exercise.max_points,
+                "bonus_points": exercise.bonus_points,
                 "file_path": file_path,
                 "summary": summary_string,
             }
@@ -162,6 +219,7 @@ async def generate_suggestions_by_file(
     omittable_features = [
         "template_to_submission_diff",
         "summary",
+        "grading_instructions",
         "problem_statement",
         # In the future we might indicate the changed lines in the submission_file additionally
     ]
@@ -251,9 +309,10 @@ async def generate_suggestions_by_file(
                     file_path=file_path,
                     line_start=feedback.line_start,
                     line_end=feedback.line_end,
+                    credits=feedback.credits,
                     is_graded=False,
                     meta={},
                 )
             )
 
-    return feedbacks
+    return normalize_feedback_credits(feedbacks, exercise)
