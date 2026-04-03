@@ -11,7 +11,6 @@ The students have access to the following metrics:
 - Performance on the tasks
 - Progress on the defined competencies
 - Mastery of the defined competencies
-- The judgment of learning (JOL) values
 - Global average score for each exercise
 - Score the student received for each exercise
 - Latest submission date for each exercise
@@ -22,7 +21,6 @@ Some useful definitions:
 - Performance: The score the student received for each exercise
 - Progress: The progress on the defined competencies
 - Mastery: The mastery of the defined competencies, which is a measure of how well the student has learned the material
-- Judgment of learning (JOL): The student's self-reported judgment of how well they have learned the material
 - Competencies: A competency is a skill or knowledge that a student should have after completing the course,
 and instructors may add lectures and exercises to these competencies.
 - Global average score: The average score of all students for each exercise

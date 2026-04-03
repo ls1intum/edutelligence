@@ -96,8 +96,8 @@ The API will be available at `http://localhost:8000`
 
 **Test the API:**
 ```bash
-# Health check (no auth required)
-curl http://localhost:8000/api/v1/health
+# Health check (no auth required, returns 200 only if Weaviate is usable)
+curl http://localhost:8000/api/v1/health/
 
 # Protected endpoint (requires API key)
 curl -H "Authorization: dev-test-key" \

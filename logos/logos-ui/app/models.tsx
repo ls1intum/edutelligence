@@ -3,6 +3,7 @@ import { ScrollView } from "react-native";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/components/auth-shell";
+import { API_BASE } from "@/components/statistics/constants";
 import { Box } from "@/components/ui/box";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
@@ -37,7 +38,7 @@ export default function Models() {
   const loadModels = async (key: string) => {
     try {
       const response = await fetch(
-        "https://logos.ase.cit.tum.de:8080/logosdb/get_models",
+        `${API_BASE}/logosdb/get_models`,
         {
           method: "POST",
           headers: {
@@ -77,7 +78,7 @@ export default function Models() {
   const loadStats = async (key: string) => {
     try {
       const response = await fetch(
-        "https://logos.ase.cit.tum.de:8080/logosdb/get_general_model_stats",
+        `${API_BASE}/logosdb/get_general_model_stats`,
         {
           method: "POST",
           headers: {

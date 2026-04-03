@@ -109,7 +109,7 @@ class MockWeaviateQuery:
         self.collection_name = collection_name
         self._should_fail_fetch = False
 
-    def fetch_objects(self, filters=None, include_vector=False):
+    def fetch_objects(self, filters=None, include_vector=False, limit=None):
         """Mock fetch objects operation."""
         if self._should_fail_fetch:
             raise Exception("Mock fetch error")
@@ -145,7 +145,7 @@ class MockWeaviateQuery:
                     vector=[0.1, 0.2, 0.3],
                 )
             ]
-        elif self.collection_name == "SEMANTIC_CLUSTER":
+        elif self.collection_name == "SemanticCluster":
             objects = [
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
@@ -157,6 +157,9 @@ class MockWeaviateQuery:
                     vector=[0.1, 0.2, 0.3],
                 )
             ]
+
+        if limit is not None:
+            objects = objects[:limit]
 
         return MockWeaviateQueryResult(objects)
 
@@ -293,7 +296,7 @@ class MockWeaviateCollection:
                     vector=[0.4, 0.5, 0.6],
                 ),
             ]
-        elif self.name == "SEMANTIC_CLUSTER":
+        elif self.name == "SemanticCluster":
             static_objects = [
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
@@ -331,7 +334,7 @@ class MockWeaviateCollections:
     """Mock Weaviate collections manager."""
 
     def __init__(self):
-        self._existing_collections = {"Exercise", "Competency", "SEMANTIC_CLUSTER"}
+        self._existing_collections = {"Exercise", "Competency", "SemanticCluster"}
         self._collection_instances = {}
 
     def get(self, name: str):
@@ -362,6 +365,7 @@ class MockWeaviateClient:
     """Simple mock Weaviate client."""
 
     def __init__(self):
+        self.client = self
         self.collections = MockWeaviateCollections()
         self._is_live = True
         self._closed = False
@@ -372,6 +376,10 @@ class MockWeaviateClient:
         if self._should_fail_is_live:
             raise Exception("Mock connection error")
         return self._is_live and not self._closed
+
+    def is_alive(self) -> bool:
+        """Compatibility wrapper matching the AtlasML WeaviateClient interface."""
+        return self.is_live()
 
     def close(self):
         """Mock close operation."""
@@ -404,6 +412,18 @@ class MockWeaviateClient:
                 }
             )
         return results
+
+    def collection_exists(self, collection_name: str) -> bool:
+        """Mock collection_exists method to match WeaviateClient interface."""
+        return self.collections.exists(collection_name)
+
+    def can_read_collection(self, collection_name: str) -> bool:
+        """Mock lightweight readability check for a collection."""
+        if not self.collections.exists(collection_name):
+            raise Exception(f"Mock collection {collection_name} does not exist")
+        collection = self.collections.get(collection_name)
+        collection.query.fetch_objects(limit=1)
+        return True
 
     def add_embeddings(self, collection_name: str, vector, properties):
         """Mock add_embeddings method."""

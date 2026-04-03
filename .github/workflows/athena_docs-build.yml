@@ -16,12 +16,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: tj-actions/changed-files@v45
+      - uses: tj-actions/changed-files@v47
         id: changed-docs
         with:
           files: athena/docs/**
 
-      - uses: tj-actions/changed-files@v45
+      - uses: tj-actions/changed-files@v47
         id: changed-workflow
         with:
           files: |

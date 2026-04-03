@@ -1,0 +1,30 @@
+meta {
+  name: V1 Chat Completions
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/v1/chat/completions
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{logosKey}}
+  use_profile: {{profileId}}
+}
+
+body:json {
+  {
+    "model": "{{modelName}}",
+    "stream": false,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hello from node lanes."
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+# config.yml — Hardware & tuning settings (managed by Ansible)
+#
+# Credentials are NOT in this file.
+# They come from .env (GitHub secrets): LOGOS_URL, LOGOS_API_KEY
+# The server resolves provider identity from the API key.
+
+worker:
+  gpu_poll_interval: 5
+  lane_port_start: 11436
+  lane_port_end: 11499
+
+logos:
+  enabled: true
+  capabilities_models: []
+  heartbeat_interval_seconds: 5
+  reconnect_backoff_seconds: 3
+
+engines:
+  vllm:
+    metrics_path: /metrics
+    metrics_timeout_seconds: 5
+    flashinfer_loglevel: 0
+    flashinfer_logdest: stderr
+    nccl_debug: WARN
+    nccl_debug_subsys: INIT
+    model_overrides: {}

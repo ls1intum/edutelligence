@@ -207,6 +207,7 @@ export default function PlotlyRequestVolumeChart({
   const hoverHandlerRef = useRef<any>(null);
   const unhoverHandlerRef = useRef<any>(null);
   const [plotlyError, setPlotlyError] = useState<string | null>(null);
+  const [plotlyReady, setPlotlyReady] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("provider");
   const [hoverTooltip, setHoverTooltip] = useState<{
     visible: boolean;
@@ -290,6 +291,7 @@ export default function PlotlyRequestVolumeChart({
       .then((plotly) => {
         if (cancelled) return;
         plotlyRef.current = plotly;
+        setPlotlyReady(true);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -373,7 +375,7 @@ export default function PlotlyRequestVolumeChart({
     let disposed = false;
 
     const renderPlot = async () => {
-      if (!plotRef.current || !plotlyRef.current || !traces.length || !totalLineData.length) {
+      if (!plotlyReady || !plotRef.current || !plotlyRef.current || !traces.length || !totalLineData.length) {
         return;
       }
 
@@ -501,7 +503,7 @@ export default function PlotlyRequestVolumeChart({
     return () => {
       disposed = true;
     };
-  }, [width, chartHeight, traces, totalLineData, buildLayout, config]);
+  }, [width, chartHeight, traces, totalLineData, buildLayout, config, plotlyReady]);
 
   // ── Cleanup ─────────────────────────────────────────────────────────
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 
-import type { RequestEventStats } from "@/components/statistics/types";
+import type { RequestLogStats } from "@/components/statistics/types";
 import { API_BASE } from "@/components/statistics/constants";
 
 export interface VramV2Payload {
@@ -17,7 +17,7 @@ export interface VramV2Payload {
 export interface TimelineInitPayload {
   range?: { start: string; end: string };
   bucketSeconds?: number;
-  stats?: RequestEventStats;
+  stats?: RequestLogStats;
   events?: Array<{
     request_id: string;
     enqueue_ts: string;
