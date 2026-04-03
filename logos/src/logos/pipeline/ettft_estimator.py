@@ -76,13 +76,11 @@ def estimate_ettft_local(
             evicting another lane to free VRAM. Only applied to COLD tier.
 
     Decision tree:
-    1. No lanes → UNAVAILABLE
-    2. All lanes stopped (no error) → UNAVAILABLE
-    3. All lanes in error/stopped but at least one error → COLD (recovery cold-load)
-    4. All lanes cold/starting → COLD (~45s + eviction_cost_ms)
-    5. Best lane sleeping → SLEEPING (~2s wake time)
-    6. Best lane loaded, queue_waiting > 0 → BUSY (TTFT * (1 + queue_depth))
-    7. Best lane loaded, low queue → WARM (measured TTFT or 200ms default)
+    1. No lanes or all stopped/error → UNAVAILABLE
+    2. All lanes cold/starting → COLD (~45s + eviction_cost_ms)
+    3. Best lane sleeping → SLEEPING (~2s wake time)
+    4. Best lane loaded, queue_waiting > 0 → BUSY (TTFT * (1 + queue_depth))
+    5. Best lane loaded, low queue → WARM (measured TTFT or 200ms default)
     """
     if not view.lanes:
         return EttftEstimate(
@@ -95,27 +93,11 @@ def estimate_ettft_local(
     # Check if all lanes are in terminal non-routable states
     active_states = {s.runtime_state for s in view.lanes}
     if active_states <= {"stopped", "error"}:
-        if "error" in active_states:
-            # Error is transient (e.g. OOM crash). The capacity planner can cold-load
-            # a fresh lane — don't return UNAVAILABLE. Treat as COLD so the request
-            # reaches context resolution where prepare_lane_for_request will attempt
-            # recovery. If VRAM is still insufficient the cold-load fails there and
-            # the request gets a 503 only after genuinely exhausting options.
-            ettft_ms = _DEFAULT_COLD_MS + eviction_cost_ms
-            tier, penalty = classify_tier(ettft_ms)
-            return EttftEstimate(
-                ettft_ms=ettft_ms,
-                tier=tier,
-                penalty=penalty,
-                reasoning=f"Lanes in error — cold-load recovery will be attempted (states: {active_states})",
-            )
-        # All lanes intentionally stopped — nothing will recover them without
-        # external intervention; no point queuing.
         return EttftEstimate(
             ettft_ms=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
             penalty=TIER_THRESHOLDS[ReadinessTier.UNAVAILABLE]["penalty"],
-            reasoning=f"All lanes stopped: {active_states}",
+            reasoning=f"All lanes in non-routable states: {active_states}",
         )
 
     best_state = view.best_lane_state

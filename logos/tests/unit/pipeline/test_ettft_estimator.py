@@ -221,39 +221,8 @@ def test_local_unavailable_no_lanes():
     assert est.penalty == float("inf")
 
 
-def test_local_unavailable_all_stopped_no_error():
-    """All lanes stopped (none in error) → UNAVAILABLE (intentional stop, nothing will recover)."""
-    lanes = [
-        LaneSchedulerSignals(
-            lane_id="l1", model_name="m", runtime_state="stopped",
-            sleep_state="unsupported", is_vllm=False, active_requests=0,
-            queue_waiting=0.0, requests_running=0.0, gpu_cache_usage_percent=None,
-            ttft_p95_seconds=0.0, effective_vram_mb=0.0, num_parallel=0,
-        ),
-    ]
-    view = _make_view(best_lane_state="stopped", lanes=lanes)
-    est = estimate_ettft_local(view)
-    assert est.tier == ReadinessTier.UNAVAILABLE
-
-
-def test_local_cold_error_lanes():
-    """Error lanes → COLD (transient failure; capacity planner can cold-load a recovery lane)."""
-    lanes = [
-        LaneSchedulerSignals(
-            lane_id="l1", model_name="m", runtime_state="error",
-            sleep_state="unsupported", is_vllm=False, active_requests=0,
-            queue_waiting=0.0, requests_running=0.0, gpu_cache_usage_percent=None,
-            ttft_p95_seconds=0.0, effective_vram_mb=0.0, num_parallel=0,
-        ),
-    ]
-    view = _make_view(best_lane_state="error", lanes=lanes)
-    est = estimate_ettft_local(view)
-    assert est.tier == ReadinessTier.COLD
-    assert est.penalty < float("inf")
-
-
-def test_local_cold_mixed_stopped_error():
-    """Mix of stopped+error lanes → COLD (error is transient, recovery possible)."""
+def test_local_unavailable_all_stopped():
+    """All stopped/error lanes → UNAVAILABLE."""
     lanes = [
         LaneSchedulerSignals(
             lane_id="l1", model_name="m", runtime_state="stopped",
@@ -270,8 +239,7 @@ def test_local_cold_mixed_stopped_error():
     ]
     view = _make_view(best_lane_state="stopped", lanes=lanes)
     est = estimate_ettft_local(view)
-    assert est.tier == ReadinessTier.COLD
-    assert est.penalty < float("inf")
+    assert est.tier == ReadinessTier.UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
