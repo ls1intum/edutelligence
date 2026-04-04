@@ -9,7 +9,6 @@ certs/
 .pytest_cache/
 research/
 tests/
-tools/
 *.md
 .git/
 docker-compose*.yml

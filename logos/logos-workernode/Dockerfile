@@ -220,6 +220,7 @@ ENV PATH="/opt/venv/bin:/usr/local/cuda/bin:$PATH"
 RUN ldconfig
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
+COPY tools/ /app/tools/
 RUN mkdir -p /app/certs /app/data
 
 # ---------------------------------------------------------------------------
