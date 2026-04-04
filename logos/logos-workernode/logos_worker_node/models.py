@@ -143,6 +143,13 @@ class VllmEngineConfig(BaseModel):
         "can enforce Turing/SM-7.5 workarounds without touching the server.",
     )
 
+    @field_validator("model_overrides", mode="before")
+    @classmethod
+    def _coerce_model_overrides(cls, value: Any) -> dict:
+        if not value:
+            return {}
+        return value
+
     @field_validator("nccl_debug", "nccl_debug_subsys")
     @classmethod
     def _normalize_nccl_debug_fields(cls, value: str) -> str:

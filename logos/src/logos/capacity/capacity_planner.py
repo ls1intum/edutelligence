@@ -598,10 +598,12 @@ class CapacityPlanner:
             getattr(capacity, "total_vram_mb", None),
         )
 
-        # Also check per-GPU availability for tp=1 (unknown placement) models.
+        # Also check per-GPU availability for models with unknown GPU placement.
         # Provider-level VRAM can look fine (aggregate), but if no single GPU has
         # enough room the load will OOM. vLLM places the model on the GPU with
         # the most free memory, so we only need the BEST GPU to have room.
+        # For TP>1, the model is sharded across `tp` GPUs, so each GPU only
+        # needs estimated/tp memory.
         per_gpu_free = self._get_per_gpu_free(provider_id)
         needs_reclaim = available < estimated * self.VRAM_SAFETY_MARGIN
         if not needs_reclaim and per_gpu_free:
@@ -609,15 +611,29 @@ class CapacityPlanner:
                 load_action.params.get("gpu_devices") if load_action.params else None
             )
             if not target_gpu_ids:
-                # tp=1 / unknown placement: check the best available GPU
-                max_gpu_free = max(per_gpu_free.values())
-                if max_gpu_free < estimated * self.VRAM_SAFETY_MARGIN:
+                # No explicit GPU pinning: vLLM selects the `tp` GPUs with the
+                # most free memory. Each of those GPUs must have per_gpu_estimated
+                # free. Check by taking the tp-th largest free value — if that
+                # GPU doesn't have enough room, the load will OOM.
+                tp = 1
+                if profile and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+                    tp = int(profile.tensor_parallel_size)
+                elif profile is not None and capacity is not None:
+                    inferred = self._infer_tensor_parallel(profile, capacity, provider_id)
+                    if inferred and inferred > 1:
+                        tp = inferred
+                per_gpu_estimated = estimated / tp
+                sorted_free = sorted(per_gpu_free.values(), reverse=True)
+                # Need at least `tp` GPUs; the tp-th best is the binding constraint.
+                nth_gpu_free = sorted_free[tp - 1] if len(sorted_free) >= tp else 0.0
+                if nth_gpu_free < per_gpu_estimated * self.VRAM_SAFETY_MARGIN:
                     needs_reclaim = True
                     logger.info(
                         "Cold-load per-GPU check for %s on provider %s: "
-                        "best GPU has %.0f MB free, need %.0f MB — triggering reclaim",
-                        model_name, provider_id, max_gpu_free,
-                        estimated * self.VRAM_SAFETY_MARGIN,
+                        "%d-th best GPU has %.0f MB free, need %.0f MB per GPU "
+                        "(estimated=%.0f MB / tp=%d) — triggering reclaim",
+                        model_name, provider_id, tp, nth_gpu_free,
+                        per_gpu_estimated * self.VRAM_SAFETY_MARGIN, estimated, tp,
                     )
 
         if needs_reclaim:
@@ -918,6 +934,13 @@ class CapacityPlanner:
                 residual_mb = float(lane.effective_vram_mb or 0.0)
                 if residual_mb <= 0 and profile:
                     residual_mb = float(profile.sleeping_residual_mb or 0.0)
+                # Sleeping vLLM lanes underreport GPU usage via --query-compute-apps:
+                # the CUDA allocator keeps model weights in its pool, invisible to
+                # per-process queries.  Use profile base_residency as a floor.
+                if lane.is_vllm and profile is not None:
+                    base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
+                    if base_residency > residual_mb:
+                        residual_mb = base_residency
                 freed_total = residual_mb
             else:
                 continue  # busy, cold, stopped, or starting — not evictable
@@ -1530,6 +1553,10 @@ class CapacityPlanner:
         ranked = self._demand.get_ranked_models()
         profiles = self._safe_get_profiles(provider_id)
         actions: list[CapacityPlanAction] = []
+        try:
+            capabilities = set(self._facade.get_worker_capabilities(provider_id))
+        except Exception:
+            capabilities = set()
 
         lanes_by_model: dict[str, list[LaneSchedulerSignals]] = {}
         for lane in lanes:
@@ -1537,6 +1564,11 @@ class CapacityPlanner:
 
         for model_name, score in ranked:
             if score < self.DRAIN_DEMAND_SCORE_THRESHOLD:
+                continue
+            # Skip models not served by this provider — demand from unknown/
+            # misconfigured model names (e.g. provider-type strings) would
+            # otherwise trigger spurious drain evaluations every cycle.
+            if capabilities and model_name not in capabilities:
                 continue
             model_lanes = lanes_by_model.get(model_name, [])
             has_usable = any(
@@ -2010,23 +2042,31 @@ class CapacityPlanner:
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
                 continue
-            if self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
-                logger.debug(
-                    "Skipping request-time reclaim of lane %s: loaded %.0fs ago (cooldown=%.0fs)",
-                    lane.lane_id,
-                    now - float(self._lane_loaded_at.get(self._lane_key(provider_id, lane.lane_id), now)),
-                    self._load_cooldown_seconds,
-                )
-                continue
+            # Load cooldown blocks stop (prevents thrashing) but not sleep —
+            # sleeping only releases KV-cache memory without evicting the model,
+            # so it is safe to sleep even a recently-loaded idle lane.
+            in_cooldown = self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now)
 
             profile = profiles.get(lane.model_name)
             current_vram = float(lane.effective_vram_mb or 0.0)
             if current_vram <= 0 and profile is not None:
                 current_vram = self._estimate_model_loaded_vram(profile)
+            # For sleeping vLLM lanes, nvidia-smi --query-compute-apps underreports
+            # actual GPU usage: model weights (and freed KV-cache pages held by the
+            # CUDA allocator pool) are invisible to per-process queries.  The profile's
+            # base_residency_mb (measured weights-only footprint) closely matches the
+            # true GPU usage shown by --query-gpu after an L1 sleep, so use it as a
+            # floor to avoid discarding valid stop candidates.
+            if lane.is_vllm and lane.runtime_state == "sleeping" and profile is not None:
+                base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
+                if base_residency > current_vram:
+                    current_vram = base_residency
             residual_vram = float(profile.sleeping_residual_mb or 0.0) if profile is not None else 0.0
 
             if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
                 freed = max(current_vram - residual_vram, 0.0)
+                # Sleep is allowed even within load cooldown (frees KV cache only,
+                # does not evict the model — no thrashing risk).
                 if freed > 0:
                     sleep_candidates.append(
                         (
@@ -2040,7 +2080,9 @@ class CapacityPlanner:
                             ),
                         )
                     )
-                if current_vram > 0:
+                # Stop is blocked during cooldown to prevent immediately evicting
+                # a lane that was just loaded.
+                if current_vram > 0 and not in_cooldown:
                     stop_candidates.append(
                         (
                             current_vram,
@@ -2056,7 +2098,7 @@ class CapacityPlanner:
                     )
                 continue
 
-            if current_vram > 0:
+            if current_vram > 0 and not in_cooldown:
                 stop_candidates.append(
                     (
                         current_vram,
@@ -3298,6 +3340,9 @@ class CapacityPlanner:
                 used_mb = float(dev.get("memory_used_mb", 0) or 0)
                 if total_mb > 0 and used_mb >= 0:
                     free_mb = max(total_mb - used_mb, 0.0)
+            free_mb = self._vram_ledger.get_gpu_effective_available_mb(
+                provider_id, dev_id, free_mb,
+            )
             result[dev_id] = free_mb
         return result if result else None
 
@@ -3384,6 +3429,19 @@ class CapacityPlanner:
         if _lane_gpus is None and action.params:
             _lane_gpus = action.params.get("gpu_devices")
         _per_gpu_free = self._get_per_gpu_free(action.provider_id)
+        # For TP>1 loads with no explicit GPU assignment, infer the target GPU set
+        # so the per-GPU ledger is updated and concurrent loads on the same GPUs
+        # see the committed VRAM.  vLLM selects the top-tp GPUs by free memory,
+        # so we mirror that selection here.
+        if _lane_gpus is None and action.action == "load" and _per_gpu_free:
+            _tp = 1
+            if action.params:
+                _vllm_cfg = action.params.get("vllm_config") or {}
+                if isinstance(_vllm_cfg, dict):
+                    _tp = int(_vllm_cfg.get("tensor_parallel_size") or 1)
+            if _tp > 1 and len(_per_gpu_free) >= _tp:
+                _sorted_gpus = sorted(_per_gpu_free, key=lambda g: _per_gpu_free[g], reverse=True)
+                _lane_gpus = ",".join(str(g) for g in _sorted_gpus[:_tp])
 
         # Sleep/wake are lightweight individual commands.
         # Load/stop use declarative apply_lanes (unless additive loads enabled).
