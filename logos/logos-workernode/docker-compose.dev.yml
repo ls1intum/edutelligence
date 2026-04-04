@@ -28,6 +28,8 @@ services:
       LOGOS_URL: ${LOGOS_URL:-}
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
+      # Set to "1" to skip auto-calibration on startup
+      LOGOS_SKIP_AUTO_CALIBRATION: ${LOGOS_SKIP_AUTO_CALIBRATION:-}
       WORKER_PORT: ${WORKER_PORT:-80}
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data

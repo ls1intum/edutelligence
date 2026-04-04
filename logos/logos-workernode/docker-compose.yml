@@ -18,6 +18,9 @@ services:
       LOGOS_URL: ${LOGOS_URL:-}
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
+      # ── Auto-calibration ───────────────────────────────────────────────
+      # Set to "1" to skip auto-calibration on startup (use manual calibrate.sh instead)
+      LOGOS_SKIP_AUTO_CALIBRATION: ${LOGOS_SKIP_AUTO_CALIBRATION:-}
       # ── Fixed container paths ──────────────────────────────────────────
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
