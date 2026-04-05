@@ -30,7 +30,9 @@ class TestSplitAudioFfmpeg:
                 ["audio_000.mp3", "audio_002.mp3", "audio_001.mp3"],
             ),
         ):
-            result = split_audio_ffmpeg("/fake/audio.mp3", output_dir, chunk_duration=900)
+            result = split_audio_ffmpeg(
+                "/fake/audio.mp3", output_dir, chunk_duration=900
+            )
 
         assert len(result) == 3
         assert all(p.endswith(".mp3") for p in result)
@@ -42,9 +44,13 @@ class TestSplitAudioFfmpeg:
 
         with patch(
             "iris.pipeline.transcription.utils.audio_utils.subprocess.run",
-            side_effect=subprocess.CalledProcessError(1, "ffmpeg", stderr="encoding error"),
+            side_effect=subprocess.CalledProcessError(
+                1, "ffmpeg", stderr="encoding error"
+            ),
         ):
-            with pytest.raises(RuntimeError, match="FFmpeg audio split failed") as exc_info:
+            with pytest.raises(
+                RuntimeError, match="FFmpeg audio split failed"
+            ) as exc_info:
                 split_audio_ffmpeg("/fake/audio.mp3", output_dir)
             assert "encoding error" in str(exc_info.value)
 
@@ -78,9 +84,7 @@ class TestSplitAudioFfmpeg:
 
         with patch(
             "iris.pipeline.transcription.utils.audio_utils.subprocess.run",
-            side_effect=_ffmpeg_creates_chunks(
-                tmp_path / "chunks", ["fresh_000.mp3"]
-            ),
+            side_effect=_ffmpeg_creates_chunks(tmp_path / "chunks", ["fresh_000.mp3"]),
         ):
             result = split_audio_ffmpeg("/fake/audio.mp3", output_dir)
 
@@ -96,9 +100,7 @@ class TestSplitAudioFfmpeg:
 
         with patch(
             "iris.pipeline.transcription.utils.audio_utils.subprocess.run",
-            side_effect=_ffmpeg_creates_chunks(
-                tmp_path / "chunks", ["audio_000.mp3"]
-            ),
+            side_effect=_ffmpeg_creates_chunks(tmp_path / "chunks", ["audio_000.mp3"]),
         ):
             split_audio_ffmpeg("/fake/audio.mp3", output_dir)
 
@@ -110,9 +112,7 @@ class TestSplitAudioFfmpeg:
 
         with patch(
             "iris.pipeline.transcription.utils.audio_utils.subprocess.run",
-            side_effect=_ffmpeg_creates_chunks(
-                tmp_path / "chunks", ["audio_000.mp3"]
-            ),
+            side_effect=_ffmpeg_creates_chunks(tmp_path / "chunks", ["audio_000.mp3"]),
         ) as mock_run:
             split_audio_ffmpeg("/fake/audio.mp3", output_dir, chunk_duration=300)
 
@@ -125,9 +125,7 @@ class TestSplitAudioFfmpeg:
 
         with patch(
             "iris.pipeline.transcription.utils.audio_utils.subprocess.run",
-            side_effect=_ffmpeg_creates_chunks(
-                tmp_path / "chunks", ["audio_000.mp3"]
-            ),
+            side_effect=_ffmpeg_creates_chunks(tmp_path / "chunks", ["audio_000.mp3"]),
         ) as mock_run:
             split_audio_ffmpeg("/fake/audio.mp3", output_dir)
 

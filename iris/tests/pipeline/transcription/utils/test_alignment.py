@@ -4,9 +4,11 @@ from iris.pipeline.transcription.utils.alignment import align_slides_with_segmen
 
 
 class TestAlignSlidesWithSegments:
+    """Tests for segment-to-slide alignment logic."""
+
     def test_empty_segments(self):
         result = align_slides_with_segments([], [(0.0, 1)])
-        assert result == []
+        assert not result
 
     def test_empty_slide_timestamps(self):
         segments = [
@@ -19,7 +21,7 @@ class TestAlignSlidesWithSegments:
 
     def test_both_empty(self):
         result = align_slides_with_segments([], [])
-        assert result == []
+        assert not result
 
     def test_single_slide_all_segments_match(self):
         segments = [

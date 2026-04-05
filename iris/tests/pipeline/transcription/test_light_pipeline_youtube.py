@@ -22,10 +22,12 @@ class TestLightPipelineYouTubePath:
 
     def test_segments_use_artemis_key_names(self):
         """YouTube segments must use startTime/endTime, not start/end."""
-        pipeline = self._make_pipeline([
-            {"start": 0.0, "end": 5.0, "text": "Hello"},
-            {"start": 5.0, "end": 10.0, "text": "World"},
-        ])
+        pipeline = self._make_pipeline(
+            [
+                {"start": 0.0, "end": 5.0, "text": "Hello"},
+                {"start": 5.0, "end": 10.0, "text": "World"},
+            ]
+        )
 
         result = pipeline()
 
@@ -37,9 +39,11 @@ class TestLightPipelineYouTubePath:
             assert "end" not in seg, "Raw 'end' key must not leak to Artemis"
 
     def test_segment_values_are_correct(self):
-        pipeline = self._make_pipeline([
-            {"start": 1.5, "end": 3.5, "text": "Content"},
-        ])
+        pipeline = self._make_pipeline(
+            [
+                {"start": 1.5, "end": 3.5, "text": "Content"},
+            ]
+        )
 
         result = pipeline()
 
@@ -50,20 +54,24 @@ class TestLightPipelineYouTubePath:
         assert seg["slideNumber"] == -1
 
     def test_all_segments_have_slide_number_minus_one(self):
-        pipeline = self._make_pipeline([
-            {"start": 0.0, "end": 5.0, "text": "A"},
-            {"start": 5.0, "end": 10.0, "text": "B"},
-            {"start": 10.0, "end": 15.0, "text": "C"},
-        ])
+        pipeline = self._make_pipeline(
+            [
+                {"start": 0.0, "end": 5.0, "text": "A"},
+                {"start": 5.0, "end": 10.0, "text": "B"},
+                {"start": 10.0, "end": 15.0, "text": "C"},
+            ]
+        )
 
         result = pipeline()
 
         assert all(seg["slideNumber"] == -1 for seg in result)
 
     def test_text_is_stripped(self):
-        pipeline = self._make_pipeline([
-            {"start": 0.0, "end": 5.0, "text": "  spaces  "},
-        ])
+        pipeline = self._make_pipeline(
+            [
+                {"start": 0.0, "end": 5.0, "text": "  spaces  "},
+            ]
+        )
 
         result = pipeline()
 
@@ -71,9 +79,11 @@ class TestLightPipelineYouTubePath:
 
     def test_output_keys_match_artemis_dto(self):
         """Verify exact key set matches PyrisTranscriptionSegmentDTO."""
-        pipeline = self._make_pipeline([
-            {"start": 0.0, "end": 1.0, "text": "x"},
-        ])
+        pipeline = self._make_pipeline(
+            [
+                {"start": 0.0, "end": 1.0, "text": "x"},
+            ]
+        )
 
         result = pipeline()
 
@@ -89,9 +99,11 @@ class TestLightPipelineYouTubePath:
 
     def test_callback_skip_called_twice(self):
         """Two stages (Detecting slides + Aligning) must be skipped."""
-        pipeline = self._make_pipeline([
-            {"start": 0.0, "end": 1.0, "text": "x"},
-        ])
+        pipeline = self._make_pipeline(
+            [
+                {"start": 0.0, "end": 1.0, "text": "x"},
+            ]
+        )
 
         pipeline()
 

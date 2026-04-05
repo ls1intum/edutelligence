@@ -27,6 +27,8 @@ def _mock_ydl(extract_info_return=None, extract_info_side_effect=None):
 
 
 class TestValidateYouTubeVideo:
+    """Tests for YouTube video validation (accessibility, duration limits)."""
+
     @patch("iris.pipeline.transcription.utils.youtube_utils.yt_dlp.YoutubeDL")
     def test_valid_public_video(self, mock_ydl_class):
         mock_ydl_class.return_value = _mock_ydl(
@@ -58,9 +60,7 @@ class TestValidateYouTubeVideo:
 
     @patch("iris.pipeline.transcription.utils.youtube_utils.yt_dlp.YoutubeDL")
     def test_missing_id_defaults_to_unknown(self, mock_ydl_class):
-        mock_ydl_class.return_value = _mock_ydl(
-            extract_info_return={"duration": 300}
-        )
+        mock_ydl_class.return_value = _mock_ydl(extract_info_return={"duration": 300})
 
         info = _validate_youtube_video("https://youtube.com/watch?v=noid")
         assert info["id"] == "unknown"
@@ -110,9 +110,7 @@ class TestValidateYouTubeVideo:
     @patch("iris.pipeline.transcription.utils.youtube_utils.yt_dlp.YoutubeDL")
     def test_unavailable_video_raises(self, mock_ydl_class):
         mock_ydl_class.return_value = _mock_ydl(
-            extract_info_side_effect=yt_dlp.utils.DownloadError(
-                "Video not available"
-            )
+            extract_info_side_effect=yt_dlp.utils.DownloadError("Video not available")
         )
 
         with pytest.raises(YouTubeDownloadError, match="not available"):
@@ -126,7 +124,9 @@ class TestValidateYouTubeVideo:
             )
         )
 
-        with pytest.raises(YouTubeDownloadError, match="Failed to access YouTube video"):
+        with pytest.raises(
+            YouTubeDownloadError, match="Failed to access YouTube video"
+        ):
             _validate_youtube_video("https://youtube.com/watch?v=ERR")
 
     @patch("iris.pipeline.transcription.utils.youtube_utils.yt_dlp.YoutubeDL")
@@ -158,6 +158,8 @@ class TestValidateYouTubeVideo:
 
 
 class TestDownloadYouTubeAudio:
+    """Tests for YouTube audio download with yt-dlp."""
+
     @patch("iris.pipeline.transcription.utils.youtube_utils.yt_dlp.YoutubeDL")
     @patch("iris.pipeline.transcription.utils.youtube_utils._validate_youtube_video")
     def test_successful_download(self, mock_validate, mock_ydl_class, tmp_path):
@@ -182,9 +184,7 @@ class TestDownloadYouTubeAudio:
 
         assert os.path.exists(audio_path)
         # Verify validate was called with the correct URL
-        mock_validate.assert_called_once_with(
-            "https://youtube.com/watch?v=test123"
-        )
+        mock_validate.assert_called_once_with("https://youtube.com/watch?v=test123")
         # Verify yt-dlp received correct options
         ydl_opts = mock_ydl_class.call_args[0][0]
         assert ydl_opts["socket_timeout"] == 600
@@ -212,9 +212,7 @@ class TestDownloadYouTubeAudio:
         mock_ydl_class.return_value = mock_ydl
 
         audio_path = str(tmp_path / "my-uuid.mp3")
-        download_youtube_audio(
-            "https://youtube.com/watch?v=vid456", audio_path
-        )
+        download_youtube_audio("https://youtube.com/watch?v=vid456", audio_path)
 
         ydl_opts = mock_ydl_class.call_args[0][0]
         # Template should use audio_path basename, NOT video_id
@@ -229,9 +227,9 @@ class TestDownloadYouTubeAudio:
         mock_ydl = MagicMock()
         mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)
         mock_ydl.__exit__ = MagicMock(return_value=False)
-        mock_ydl.download.side_effect = lambda urls: (
-            tmp_path / "out.mp3"
-        ).write_bytes(b"data")
+        mock_ydl.download.side_effect = lambda urls: (tmp_path / "out.mp3").write_bytes(
+            b"data"
+        )
         mock_ydl_class.return_value = mock_ydl
 
         download_youtube_audio(
@@ -243,17 +241,13 @@ class TestDownloadYouTubeAudio:
 
     @patch("iris.pipeline.transcription.utils.youtube_utils.yt_dlp.YoutubeDL")
     @patch("iris.pipeline.transcription.utils.youtube_utils._validate_youtube_video")
-    def test_download_failure_raises_runtime_error(
-        self, mock_validate, mock_ydl_class
-    ):
+    def test_download_failure_raises_runtime_error(self, mock_validate, mock_ydl_class):
         mock_validate.return_value = {"id": "fail", "duration": 60}
 
         mock_ydl = MagicMock()
         mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)
         mock_ydl.__exit__ = MagicMock(return_value=False)
-        mock_ydl.download.side_effect = yt_dlp.utils.DownloadError(
-            "Network error"
-        )
+        mock_ydl.download.side_effect = yt_dlp.utils.DownloadError("Network error")
         mock_ydl_class.return_value = mock_ydl
 
         with pytest.raises(RuntimeError, match="Failed to download"):
@@ -310,9 +304,9 @@ class TestDownloadYouTubeAudio:
         mock_ydl = MagicMock()
         mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)
         mock_ydl.__exit__ = MagicMock(return_value=False)
-        mock_ydl.download.side_effect = lambda urls: (
-            tmp_path / "pp.mp3"
-        ).write_bytes(b"data")
+        mock_ydl.download.side_effect = lambda urls: (tmp_path / "pp.mp3").write_bytes(
+            b"data"
+        )
         mock_ydl_class.return_value = mock_ydl
 
         download_youtube_audio(
