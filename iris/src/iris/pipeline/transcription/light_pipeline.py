@@ -83,8 +83,18 @@ class LightTranscriptionPipeline:
             # Skip "Detecting slides" and "Aligning" callback stages
             self.callback.skip("Skipped (YouTube source)")
             self.callback.skip("Skipped (YouTube source)")
-            # Return transcription segments with slideNumber = -1 (unmatched)
-            return [{**seg, "slideNumber": -1} for seg in segments]
+            # Return transcription segments with slideNumber = -1 (unmatched).
+            # Must use startTime/endTime keys to match the Artemis DTO contract
+            # (same transformation as align_slides_with_segments).
+            return [
+                {
+                    "startTime": seg["start"],
+                    "endTime": seg["end"],
+                    "text": seg["text"].strip(),
+                    "slideNumber": -1,
+                }
+                for seg in segments
+            ]
 
         # Stage 4: Detect slide changes
         self.callback.in_progress("Detecting slide changes with GPT Vision...")
