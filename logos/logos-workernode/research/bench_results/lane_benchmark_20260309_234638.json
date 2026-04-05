@@ -1,0 +1,300 @@
+{
+  "timestamp_utc": "2026-03-09T23:49:52.482999+00:00",
+  "controller_url": "http://127.0.0.1:8444",
+  "concurrency": [
+    64,
+    128
+  ],
+  "max_tokens": 200,
+  "warmup": 1,
+  "prompt_mode": "varied_unique_prefix",
+  "temperature": 0.1,
+  "run_plan": [
+    {
+      "run_label": "vllm_prefix_off",
+      "lane_config": {
+        "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        "backend": "vllm",
+        "context_length": 4096,
+        "flash_attention": false,
+        "gpu_devices": "0,1",
+        "vllm": {
+          "vllm_binary": "/home/ge84ciq/logos-workernode-test/edutelligence/logos/logos-workernode/.venv/bin/vllm",
+          "tensor_parallel_size": 2,
+          "max_model_len": 4096,
+          "dtype": "float16",
+          "quantization": "",
+          "gpu_memory_utilization": 0.9,
+          "enforce_eager": true,
+          "enable_prefix_caching": false,
+          "extra_args": []
+        }
+      }
+    },
+    {
+      "run_label": "vllm_prefix_on",
+      "lane_config": {
+        "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        "backend": "vllm",
+        "context_length": 4096,
+        "flash_attention": false,
+        "gpu_devices": "0,1",
+        "vllm": {
+          "vllm_binary": "/home/ge84ciq/logos-workernode-test/edutelligence/logos/logos-workernode/.venv/bin/vllm",
+          "tensor_parallel_size": 2,
+          "max_model_len": 4096,
+          "dtype": "float16",
+          "quantization": "",
+          "gpu_memory_utilization": 0.9,
+          "enforce_eager": true,
+          "enable_prefix_caching": true,
+          "extra_args": []
+        }
+      }
+    }
+  ],
+  "backends": [
+    {
+      "run_label": "vllm_prefix_off",
+      "backend": "vllm",
+      "configured_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "served_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "lane_port": 11436,
+      "prompt_mode": "varied_unique_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-001] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-001] Write three edge-case unit tests for this function. Return JSON with keys test_name and assertion.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-002] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-002] Estimate time and space complexity, then propose one optimization. Max 120 words.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": false,
+      "ollama_num_parallel": null,
+      "results": [
+        {
+          "concurrency": 64,
+          "requests_ok": 64,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 12800,
+          "batch_time_s": 10.42,
+          "aggregate_tok_s": 1228.444,
+          "avg_latency_s": 10.361,
+          "p50_latency_s": 10.366,
+          "p95_latency_s": 10.416,
+          "avg_ttft_ms": 1499.9,
+          "avg_tok_per_req_s": 19.304,
+          "gpu_mem_baseline_total_mb": 30360,
+          "gpu_mem_peak_total_mb": 30364,
+          "gpu_mem_peak_delta_mb": 4,
+          "gpu_mem_peak_per_gpu_mb": [
+            15182,
+            15182
+          ]
+        },
+        {
+          "concurrency": 128,
+          "requests_ok": 128,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 25600,
+          "batch_time_s": 20.756,
+          "aggregate_tok_s": 1233.397,
+          "avg_latency_s": 14.715,
+          "p50_latency_s": 13.057,
+          "p95_latency_s": 20.681,
+          "avg_ttft_ms": 4729.6,
+          "avg_tok_per_req_s": 14.092,
+          "gpu_mem_baseline_total_mb": 30364,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 4,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        }
+      ]
+    },
+    {
+      "run_label": "vllm_prefix_on",
+      "backend": "vllm",
+      "configured_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "served_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "lane_port": 11436,
+      "prompt_mode": "varied_unique_prefix",
+      "payload_samples": [
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-001] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-001] Write three edge-case unit tests for this function. Return JSON with keys test_name and assertion.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        {
+          "model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-002] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-002] Estimate time and space complexity, then propose one optimization. Max 120 words.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": true,
+      "ollama_num_parallel": null,
+      "results": [
+        {
+          "concurrency": 64,
+          "requests_ok": 64,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 12800,
+          "batch_time_s": 10.161,
+          "aggregate_tok_s": 1259.753,
+          "avg_latency_s": 10.083,
+          "p50_latency_s": 10.085,
+          "p95_latency_s": 10.154,
+          "avg_ttft_ms": 1489.7,
+          "avg_tok_per_req_s": 19.836,
+          "gpu_mem_baseline_total_mb": 30360,
+          "gpu_mem_peak_total_mb": 30364,
+          "gpu_mem_peak_delta_mb": 4,
+          "gpu_mem_peak_per_gpu_mb": [
+            15182,
+            15182
+          ]
+        },
+        {
+          "concurrency": 128,
+          "requests_ok": 128,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 25600,
+          "batch_time_s": 20.662,
+          "aggregate_tok_s": 1238.978,
+          "avg_latency_s": 14.672,
+          "p50_latency_s": 13.033,
+          "p95_latency_s": 20.597,
+          "avg_ttft_ms": 4690.2,
+          "avg_tok_per_req_s": 14.129,
+          "gpu_mem_baseline_total_mb": 30364,
+          "gpu_mem_peak_total_mb": 30368,
+          "gpu_mem_peak_delta_mb": 4,
+          "gpu_mem_peak_per_gpu_mb": [
+            15184,
+            15184
+          ]
+        }
+      ]
+    }
+  ],
+  "comparison": [
+    {
+      "concurrency": 64,
+      "vllm_prefix_off_aggregate_tok_s": 1228.444,
+      "vllm_prefix_off_avg_ttft_ms": 1499.9,
+      "vllm_prefix_on_aggregate_tok_s": 1259.753,
+      "vllm_prefix_on_avg_ttft_ms": 1489.7
+    },
+    {
+      "concurrency": 128,
+      "vllm_prefix_off_aggregate_tok_s": 1233.397,
+      "vllm_prefix_off_avg_ttft_ms": 4729.6,
+      "vllm_prefix_on_aggregate_tok_s": 1238.978,
+      "vllm_prefix_on_avg_ttft_ms": 4690.2
+    }
+  ]
+}

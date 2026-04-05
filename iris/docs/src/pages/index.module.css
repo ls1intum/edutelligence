@@ -1,0 +1,23 @@
+.screencastSection {
+  padding: 4rem 1.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.screencastPlaceholder {
+  max-width: 800px;
+  margin: 0 auto;
+  background: var(--ifm-background-surface-color);
+  border: 2px dashed var(--iris-border-color);
+  border-radius: var(--iris-radius);
+  padding: 3rem 2rem;
+  text-align: center;
+  color: var(--iris-label-color);
+  font-size: 1rem;
+}
+
+@media (max-width: 600px) {
+  .screencastSection {
+    padding: 3rem 1rem;
+  }
+}

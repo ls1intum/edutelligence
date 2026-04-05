@@ -1,4 +1,4 @@
--- Migration: Add request_id column to log_entry for direct join with request_events
+-- Migration: Add request_id column to log_entry for request lifecycle correlation
 
 ALTER TABLE log_entry
     ADD COLUMN IF NOT EXISTS request_id TEXT;

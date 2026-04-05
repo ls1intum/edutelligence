@@ -133,7 +133,7 @@ AtlasML requires the centralized Weaviate setup with Traefik and API key authent
 
 2. Follow the complete setup guide in the [Weaviate README](https://github.com/ls1intum/edutelligence/blob/main/weaviate/README.md), which includes:
    - Docker and Traefik configuration
-   - SSL/TLS certificates via Let's Encrypt
+   - SSL/TLS certificates via ACME (HARICA by default in AtlasML)
    - API key authentication setup
    - Production-ready configuration
 
@@ -161,6 +161,15 @@ ATLAS_API_KEYS=your-secure-api-key-here
 WEAVIATE_HOST=https://your-weaviate-domain.com
 WEAVIATE_PORT=443
 WEAVIATE_API_KEY=your-weaviate-api-key
+
+# Public AtlasML hostname used by Traefik routing
+APP_HOSTNAME=atlasml.example.com
+
+# ACME account email used for certificate issuance
+ACME_EMAIL=you@example.com
+
+# Optional Traefik IP allowlist
+ALLOWED_IPS=131.159.89.17/32
 
 # OpenAI Configuration (Azure)
 OPENAI_API_KEY=your-openai-api-key
@@ -216,9 +225,9 @@ atlasml   ghcr.io/ls1intum/edutelligence/atlasml  healthy   0.0.0.0:80->8000/tcp
 
 ```bash
 # Check health endpoint
-curl http://localhost/api/v1/health
+curl https://your-atlasml-domain.com/api/v1/health/
 
-# Should return: []
+# Should return JSON with api/weaviate status information
 
 # Check logs
 docker logs atlasml
@@ -228,6 +237,9 @@ docker logs atlasml
 # INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
+Use `curl -k` only for debugging broken or not-yet-issued TLS certificates. The
+normal verification step should validate the certificate and hostname.
+
 ---
 
 ## Post-Installation
@@ -235,7 +247,7 @@ docker logs atlasml
 ### 1. Configure Firewall
 
 ```bash
-# Allow HTTP/HTTPS (required for Traefik and Let's Encrypt)
+# Allow HTTP/HTTPS (required for Traefik and ACME certificate issuance)
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 
@@ -245,12 +257,12 @@ sudo ufw allow from ARTEMIS_SERVER_IP to any port 443
 
 ### 2. Verify SSL/TLS Certificate
 
-The production setup uses **Traefik** as the reverse proxy with automatic Let's Encrypt SSL certificates. No additional reverse proxy (like Nginx) is needed.
+The production setup uses **Traefik** as the reverse proxy with automatic ACME-managed SSL certificates. No additional reverse proxy (like Nginx) is needed.
 
 **Verify certificate issuance:**
 
 ```bash
-# Wait a few minutes after first deployment for Let's Encrypt
+# Wait a few minutes after first deployment for certificate issuance
 # Then verify HTTPS is working
 curl -v https://your-atlasml-domain.com/api/v1/health
 
@@ -267,7 +279,7 @@ ls -la /opt/atlasml/traefik/acme.json
 # If certificate fails, check:
 # 1. Domain DNS points to server IP
 # 2. Ports 80/443 are open
-# 3. LETSENCRYPT_EMAIL is set correctly
+# 3. ACME_EMAIL is set correctly
 ```
 
 :::tip

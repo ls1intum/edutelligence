@@ -19,6 +19,13 @@ type PlotlyVramChartProps = {
   isVramLoading: boolean;
   vramError: string | null;
   vramDataByProvider: { [url: string]: any[] };
+  providerMetaByName?: {
+    [name: string]: {
+      connected?: boolean;
+      connection_state?: string;
+      runtime_modes?: string[];
+    };
+  };
   vramBaseline: any[];
   vramBucketSizeSec: number;
   vramTotalBuckets: number;
@@ -38,6 +45,8 @@ type ProviderSeries = {
   name: string;
   color: string;
   points: VramPoint[];
+  connected: boolean;
+  runtimeModes: string[];
 };
 
 /* ================================================================== *
@@ -58,6 +67,51 @@ function toNumber(value: unknown): number | null {
 function toGbFromMb(value: unknown): number | null {
   const mb = toNumber(value);
   return mb == null ? null : mb / 1024;
+}
+
+function toGbFromBytes(value: unknown): number | null {
+  const bytes = toNumber(value);
+  return bytes == null ? null : bytes / 1_000_000_000;
+}
+
+function formatLoadedModels(raw: any): string {
+  if (!Array.isArray(raw?.loaded_models)) {
+    const names = Array.isArray(raw?.loaded_model_names) ? raw.loaded_model_names : [];
+    return names.join(", ");
+  }
+
+  return raw.loaded_models
+    .map((model: any) => {
+      const name = model?.name ?? model?.model;
+      if (!name) return null;
+      const sizeGb =
+        toGbFromBytes(model?.size_vram) ??
+        toGbFromMb(model?.size_vram_mb) ??
+        toGbFromBytes(model?.size) ??
+        toGbFromMb(model?.size_mb);
+      return sizeGb != null && sizeGb > 0
+        ? `${name} (${sizeGb.toFixed(2)} GB)`
+        : String(name);
+    })
+    .filter((value: string | null): value is string => Boolean(value))
+    .join(", ");
+}
+
+function withAlpha(color: string, alpha: number): string {
+  if (!color.startsWith("#")) return color;
+  const hex = color.slice(1);
+  const normalized =
+    hex.length === 3
+      ? hex
+          .split("")
+          .map((part) => `${part}${part}`)
+          .join("")
+      : hex;
+  if (normalized.length !== 6) return color;
+  const r = Number.parseInt(normalized.slice(0, 2), 16);
+  const g = Number.parseInt(normalized.slice(2, 4), 16);
+  const b = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function normalizeProviderPoints(rawPoints: any[]): VramPoint[] {
@@ -85,20 +139,14 @@ function normalizeProviderPoints(rawPoints: any[]): VramPoint[] {
       0;
 
     const modelsLoaded = toNumber(raw.models_loaded) ?? 0;
-    const namesFromList = Array.isArray(raw.loaded_model_names)
-      ? raw.loaded_model_names
-      : Array.isArray(raw.loaded_models)
-        ? raw.loaded_models
-            .map((m: any) => m?.name ?? m?.model)
-            .filter((name: string | undefined) => !!name)
-        : [];
+    const modelNames = formatLoadedModels(raw);
 
     points.push({
       ts,
       freeGb,
       usedGb,
       modelsLoaded,
-      modelNames: namesFromList.join(", "),
+      modelNames,
     });
   }
 
@@ -152,6 +200,7 @@ export default function PlotlyVramChart({
   isVramLoading,
   vramError,
   vramDataByProvider,
+  providerMetaByName = {},
   getProviderColor,
   nowMs,
 }: PlotlyVramChartProps) {
@@ -166,6 +215,7 @@ export default function PlotlyVramChart({
   const prevLengthsRef = useRef<number[]>([]);
   const prevYRangeRef = useRef<[number, number] | null>(null);
   const [plotlyError, setPlotlyError] = useState<string | null>(null);
+  const [plotlyReady, setPlotlyReady] = useState(false);
   const isDark = useDarkMode();
 
   /** Live mode: the chart auto-scrolls to follow the latest data, showing
@@ -184,12 +234,21 @@ export default function PlotlyVramChart({
 
   const providerSeries = useMemo<ProviderSeries[]>(
     () =>
-      providers.map((name, idx) => ({
-        name,
-        color: getProviderColor(idx),
-        points: normalizeProviderPoints(vramDataByProvider[name] || []),
-      })),
-    [providers, vramDataByProvider, getProviderColor],
+      providers.map((name, idx) => {
+        const meta = providerMetaByName[name] || {};
+        const connected =
+          meta.connection_state === "offline" || meta.connected === false
+            ? false
+            : true;
+        return {
+          name,
+          color: getProviderColor(idx),
+          points: normalizeProviderPoints(vramDataByProvider[name] || []),
+          connected,
+          runtimeModes: Array.isArray(meta.runtime_modes) ? meta.runtime_modes : [],
+        };
+      }),
+    [providers, providerMetaByName, vramDataByProvider, getProviderColor],
   );
 
   const hasAnyPoints = providerSeries.some((p) => p.points.length > 0);
@@ -238,10 +297,17 @@ export default function PlotlyVramChart({
       providerSeries.map((provider) => ({
         type: "scattergl" as const,
         mode: "lines" as const,
-        name: provider.name,
+        name:
+          provider.runtimeModes.length === 1
+            ? `${provider.name} [${provider.runtimeModes[0]}]${provider.connected ? "" : " (offline)"}`
+            : `${provider.name}${provider.connected ? "" : " (offline)"}`,
         x: provider.points.map((pt) => new Date(pt.ts)),
         y: provider.points.map((pt) => pt.freeGb),
-        line: { color: provider.color, width: 2.8 },
+        line: {
+          color: provider.connected ? provider.color : withAlpha(provider.color, 0.35),
+          width: 2.8,
+        },
+        opacity: provider.connected ? 1 : 0.55,
         connectgaps: false,
         customdata: provider.points.map((pt) => [
           pt.usedGb,
@@ -265,6 +331,7 @@ export default function PlotlyVramChart({
       .then((plotly) => {
         if (cancelled) return;
         plotlyRef.current = plotly;
+        setPlotlyReady(true);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -283,6 +350,7 @@ export default function PlotlyVramChart({
 
     const renderPlot = async () => {
       if (
+        !plotlyReady ||
         !plotRef.current ||
         !plotlyRef.current ||
         !traces.length ||
@@ -352,7 +420,7 @@ export default function PlotlyVramChart({
           tickfont: { color: textMuted, size: 11 },
           rangemode: "tozero",
           title: {
-            text: "Remaining VRAM (GB)",
+            text: "Remaining Memory (GB)",
             font: { color: textMuted, size: 11 },
           },
         },
@@ -580,6 +648,7 @@ export default function PlotlyVramChart({
     liveXRange,
     liveMode,
     isDark,
+    plotlyReady,
   ]);
 
   /* ── Cleanup on unmount ────────────────────────────────────────────── */
@@ -680,7 +749,40 @@ export default function PlotlyVramChart({
     return (
       <View>
         {controls}
-        <EmptyState message="Providers detected, but no VRAM samples available yet." />
+        <View style={{ gap: 12 }}>
+          <EmptyState message="Providers detected, but no live memory samples are available yet." />
+          <View style={{ gap: 8 }}>
+            {providerSeries.map((provider) => (
+              <View
+                key={provider.name}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  opacity: provider.connected ? 1 : 0.5,
+                }}
+              >
+                <View
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 5,
+                    backgroundColor: provider.connected
+                      ? provider.color
+                      : withAlpha(provider.color, 0.35),
+                  }}
+                />
+                <Text className="text-sm text-typography-700">
+                  {provider.name}
+                  {provider.runtimeModes.length === 1
+                    ? ` [${provider.runtimeModes[0]}]`
+                    : ""}
+                  {provider.connected ? "" : " (offline)"}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
       </View>
     );
   }

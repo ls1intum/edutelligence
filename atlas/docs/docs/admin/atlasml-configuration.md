@@ -110,6 +110,7 @@ WEAVIATE_HOST=https://weaviate.example.com
 WEAVIATE_PORT=443
 WEAVIATE_GRPC_PORT=50051
 WEAVIATE_API_KEY=YOUR_WEAVIATE_API_KEY
+APP_HOSTNAME=atlasml.example.com
 ```
 
 :::note
@@ -179,6 +180,44 @@ OPENAI_API_URL=
 ---
 
 ## Optional Environment Variables
+
+### Application Hostname
+
+```bash
+APP_HOSTNAME=atlasml.example.com
+```
+
+**Description**: Public hostname Traefik should match for AtlasML routes.
+
+**Required for Traefik deployments**: Yes
+
+**Example**:
+```bash
+APP_HOSTNAME=atlasml-test1.aet.cit.tum.de
+```
+
+**Notes**:
+- AtlasML's Docker labels use this value in Traefik `Host(...)` rules.
+- Set it per deployment environment so the same compose file works across test and production VMs.
+
+---
+
+### Allowed IPs
+
+```bash
+ALLOWED_IPS=131.159.89.17/32,131.159.89.86/32
+```
+
+**Description**: Optional comma-separated CIDR list used by Traefik IP allowlisting.
+
+**Required**: No
+
+**Notes**:
+- If set, AtlasML enables the `atlasml-ipwhitelist` middleware on the HTTPS router.
+- Use the client IP Traefik actually sees. Requests issued from the VM itself can appear as an internal bridge or gateway address instead of the VM's public IP.
+- `0.0.0.0/0` is suitable only for temporary debugging.
+
+---
 
 ### Environment Name
 

@@ -1,20 +1,21 @@
 # Request Monitoring
 
-Lightweight, on-device monitoring writes one row per `request_id` into `request_events`.
+Lightweight, on-device monitoring writes request lifecycle/performance fields onto the
+existing `log_entry` row, keyed by `request_id`.
 `SchedulingManager` emits `enqueue` and `scheduled` automatically when a `MonitoringRecorder`
 is provided (and uses `scheduled_ts` as the start marker).
 
 ## Schema (db/init.sql)
-- `request_id` (pk)
+- Correlation: `request_id`
 - Context: `model_id`, `provider_id`, `initial_priority`, `priority_when_scheduled`, `timeout_s`
-- Queue: `queue_depth_at_enqueue`, `queue_depth_at_schedule`
-- Timestamps: `enqueue_ts`, `scheduled_ts`, `request_complete_ts`
+- Queue: `queue_depth_at_enqueue`, `queue_depth_at_schedule`, `queue_wait_ms`
+- Timestamps: `timestamp_request`, `timestamp_forwarding`, `timestamp_response`
 - Snapshots: `available_vram_mb`, `azure_rate_remaining_requests`, `azure_rate_remaining_tokens`
-- Outcome: `cold_start`, `result_status` (`success` | `error` | `timeout`), `error_message`
+- Outcome: `was_cold_start`, `result_status` (`success` | `error` | `timeout`), `error_message`
 
 ## Recorder API (src/logos/monitoring/recorder.py)
 - `record_enqueue(request_id, model_id, provider_id, initial_priority, queue_depth, timeout_s=None)`
-- `record_scheduled(request_id, model_id, provider_id, priority_when_scheduled, queue_depth_at_schedule, available_vram_mb=None, azure_rate_remaining_requests=None, azure_rate_remaining_tokens=None)`
+- `record_scheduled(request_id, model_id, provider_id, priority_when_scheduled, queue_depth_at_schedule, provider_metrics=None)`
 - `record_complete(request_id, result_status, cold_start=None, error_message=None)`
 
 Usage:
@@ -29,5 +30,5 @@ pipeline = RequestPipeline(classifier, scheduler, executor, context_resolver, re
 ```
 
 ## Notes
-- Queue wait = `scheduled_ts - enqueue_ts`; duration = `request_complete_ts - scheduled_ts`.
-- TODO: if a future scheduler reassigns requests between models mid-queue, capture the reassignment time and new queue depth before updating the row. Current implementation assumes a fixed model per enqueue.
+- Queue wait = `timestamp_forwarding - timestamp_request`; duration = `timestamp_response - timestamp_forwarding`.
+- The legacy `request_events` table has been retired. Runtime writes land on `log_entry`.

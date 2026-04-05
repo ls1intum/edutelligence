@@ -1,0 +1,30 @@
+name: Logos - Deploy to Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        type: string
+        description: "Image tag to deploy (default: latest)"
+        default: "latest"
+
+jobs:
+  deploy-logos-server:
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
+    with:
+      environment: "Logos - Test"
+      docker-compose-file: "./logos/docker-compose.yaml"
+      main-image-name: ls1intum/edutelligence/logos
+      image-tag: ${{ inputs.image-tag }}
+      deployment-base-path: "/opt/logos"
+    secrets: inherit
+
+  deploy-worker-hochbruegge:
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
+    with:
+      environment: "Logos Worker - Test - hochbruegge"
+      docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
+      main-image-name: ls1intum/edutelligence/logos-workernode-vllm
+      image-tag: ${{ inputs.image-tag }}
+      deployment-base-path: "/opt/logos-workernode"
+    secrets: inherit

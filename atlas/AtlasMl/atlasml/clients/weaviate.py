@@ -252,6 +252,31 @@ class WeaviateClient:
             logger.error(f"❌ Weaviate connection failed: {e}")
             return False
 
+    def collection_exists(self, collection_name: str) -> bool:
+        """Return whether a collection exists, wrapping SDK errors consistently."""
+        try:
+            return self.client.collections.exists(collection_name)
+        except Exception as e:
+            logger.error(f"❌ Failed to check collection {collection_name}: {e}")
+            raise WeaviateOperationError(
+                f"Failed to check collection {collection_name}: {e}"
+            ) from e
+
+    def can_read_collection(self, collection_name: str) -> bool:
+        """Verify a collection is readable with a lightweight bounded query."""
+        try:
+            self._check_if_collection_exists(collection_name)
+            collection = self.client.collections.get(collection_name)
+            collection.query.fetch_objects(limit=1)
+            return True
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Failed to read collection {collection_name}: {e}")
+            raise WeaviateOperationError(
+                f"Failed to read collection {collection_name}: {e}"
+            ) from e
+
     def close(self):
         """Close the underlying Weaviate client connection."""
         self.client.close()

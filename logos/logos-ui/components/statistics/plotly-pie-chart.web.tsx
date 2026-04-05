@@ -24,6 +24,8 @@ type PlotlyPieChartProps = {
   holeSize?: number;
   /** Where the legend is rendered. "bottom" is horizontal below, "right" is vertical beside the pie. */
   legendPosition?: "bottom" | "right";
+  hoverValueSuffix?: string;
+  hoverValueDecimals?: number;
 };
 
 export default function PlotlyPieChart({
@@ -34,11 +36,14 @@ export default function PlotlyPieChart({
   centerText,
   holeSize = 0.55,
   legendPosition = "bottom",
+  hoverValueSuffix = " requests",
+  hoverValueDecimals = 0,
 }: PlotlyPieChartProps) {
   const plotRef = useRef<HTMLDivElement | null>(null);
   const plotlyRef = useRef<any>(null);
   const initializedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [plotlyReady, setPlotlyReady] = useState(false);
   const isDark = useDarkMode();
 
   /* ── load Plotly from CDN ────────────────────────────────── */
@@ -48,6 +53,7 @@ export default function PlotlyPieChart({
       .then((plotly) => {
         if (cancelled) return;
         plotlyRef.current = plotly;
+        setPlotlyReady(true);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -60,7 +66,7 @@ export default function PlotlyPieChart({
 
   /* ── render / update the pie chart ──────────────────────── */
   useEffect(() => {
-    if (!plotRef.current || !plotlyRef.current || !data.length) return;
+    if (!plotlyReady || !plotRef.current || !plotlyRef.current || !data.length) return;
 
     const plotly = plotlyRef.current;
     const graphDiv = plotRef.current;
@@ -115,7 +121,7 @@ export default function PlotlyPieChart({
       textposition: "inside",
       textfont: { color: "#fff", size: 11 },
       hovertemplate:
-        "<b>%{label}</b><br>%{value:.0f} requests · %{percent}<extra></extra>",
+        `<b>%{label}</b><br>%{value:.${hoverValueDecimals}f}${hoverValueSuffix} · %{percent}<extra></extra>`,
       hoverlabel: {
         font: {
           color: "#FFFFFF",
@@ -220,7 +226,19 @@ export default function PlotlyPieChart({
     } else {
       plotly.react(graphDiv, [trace], layout, config);
     }
-  }, [data, width, height, pieScale, centerText, holeSize, legendPosition, isDark]);
+  }, [
+    data,
+    width,
+    height,
+    pieScale,
+    centerText,
+    holeSize,
+    legendPosition,
+    isDark,
+    plotlyReady,
+    hoverValueDecimals,
+    hoverValueSuffix,
+  ]);
 
   /* ── cleanup on unmount ─────────────────────────────────── */
   useEffect(() => {

@@ -49,7 +49,7 @@ tls:
         - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
 
 certificatesResolvers:
-  letsencrypt:
+  harica:
     acme:
       # Email is configured via command-line argument in docker-compose.prod.yml
       storage: acme.json

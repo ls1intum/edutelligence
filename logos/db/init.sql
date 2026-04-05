@@ -23,7 +23,9 @@ DROP TABLE IF EXISTS token_types CASCADE;
 DROP TABLE IF EXISTS usage_tokens CASCADE;
 DROP TABLE IF EXISTS token_prices CASCADE;
 DROP TABLE IF EXISTS jobs CASCADE;
-DROP TABLE IF EXISTS request_events CASCADE;
+DROP TABLE IF EXISTS ollama_provider_snapshots CASCADE;
+DROP TABLE IF EXISTS model_profiles CASCADE;
+DROP TABLE IF EXISTS schema_migrations CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -149,17 +151,28 @@ CREATE TABLE log_entry (
     policy_id INTEGER REFERENCES policies(id) ON DELETE SET NULL,
     classification_statistics JSONB,
 
-    -- SDI: Scheduling and performance metrics
-    request_id TEXT,  -- Links to request_events for scheduler metrics
+    -- Request lifecycle and performance metrics
+    request_id TEXT,
     priority VARCHAR(10) DEFAULT 'medium',
+    initial_priority TEXT,
+    priority_when_scheduled TEXT,
+    queue_depth_at_enqueue INTEGER,
+    queue_depth_at_schedule INTEGER,
+    timeout_s INTEGER,
     queue_depth_at_arrival INTEGER,
     utilization_at_arrival REAL,
     queue_wait_ms REAL,
     was_cold_start BOOLEAN DEFAULT FALSE,
-    load_duration_ms REAL
+    load_duration_ms REAL,
+    available_vram_mb INTEGER,
+    azure_rate_remaining_requests INTEGER,
+    azure_rate_remaining_tokens INTEGER,
+    result_status result_status_enum,
+    error_message TEXT
 );
 
 CREATE INDEX idx_log_entry_request_id ON log_entry(request_id);
+CREATE UNIQUE INDEX idx_log_entry_request_id_unique ON log_entry(request_id) WHERE request_id IS NOT NULL;
 
 CREATE TABLE token_types (
     id SERIAL PRIMARY KEY,
@@ -196,29 +209,94 @@ CREATE TABLE jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Request-level monitoring (one row per request)
-CREATE TABLE request_events (
-    request_id TEXT PRIMARY KEY,
-    model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
-    provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
+-- Time-series snapshots of Ollama provider state from /api/ps endpoint
+CREATE TABLE ollama_provider_snapshots (
+    id SERIAL PRIMARY KEY,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    snapshot_ts TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    initial_priority TEXT,
-    priority_when_scheduled TEXT,
+    -- Aggregate metrics
+    total_models_loaded INTEGER NOT NULL DEFAULT 0,
+    total_vram_used_bytes BIGINT NOT NULL DEFAULT 0,
 
-    queue_depth_at_enqueue INTEGER,
-    queue_depth_at_schedule INTEGER,
+    -- Per-model details (JSONB array containing model name, size_vram, expires_at)
+    loaded_models JSONB NOT NULL DEFAULT '[]'::jsonb,
 
-    timeout_s INTEGER,
+    -- Error tracking
+    poll_success BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message TEXT,
 
-    enqueue_ts TIMESTAMPTZ,
-    scheduled_ts TIMESTAMPTZ,
-    request_complete_ts TIMESTAMPTZ,
+    -- Worker runtime memory fields (from migration 023)
+    total_memory_bytes BIGINT,
+    free_memory_bytes BIGINT,
+    snapshot_source TEXT,
 
-    available_vram_mb INTEGER,
-    azure_rate_remaining_requests INTEGER,
-    azure_rate_remaining_tokens INTEGER,
+    -- Rich runtime payloads and scheduler signals (from migration 024)
+    runtime_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    scheduler_signals JSONB NOT NULL DEFAULT '{}'::jsonb
+);
 
-    cold_start BOOLEAN,
-    result_status result_status_enum,
-    error_message TEXT
+-- Create indexes for efficient time-series queries
+CREATE INDEX idx_provider_snapshots_provider_ts
+    ON ollama_provider_snapshots(provider_id, snapshot_ts DESC);
+CREATE INDEX idx_provider_snapshots_ts
+    ON ollama_provider_snapshots(snapshot_ts DESC);
+CREATE INDEX idx_provider_snapshots_success
+    ON ollama_provider_snapshots(poll_success)
+    WHERE poll_success = FALSE;
+CREATE INDEX idx_provider_snapshots_models
+    ON ollama_provider_snapshots USING GIN (loaded_models);
+
+-- Calibrated model VRAM profiles per provider
+CREATE TABLE model_profiles (
+    id SERIAL PRIMARY KEY,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    model_name TEXT NOT NULL,
+
+    -- VRAM measurements
+    base_residency_mb REAL,            -- model weights + runtime overhead (MB)
+    loaded_vram_mb REAL,               -- total observed VRAM when loaded (weights + KV)
+    sleeping_residual_mb REAL,         -- VRAM while sleeping (L1/L2)
+    kv_budget_mb REAL,                 -- KV cache allocation (MB)
+
+    -- Model metadata
+    disk_size_bytes BIGINT,            -- on-disk weight size (bytes)
+    engine TEXT,                        -- 'vllm' or 'ollama'
+    tensor_parallel_size INTEGER,
+    kv_per_token_bytes INTEGER,        -- KV cache bytes per token (from architecture)
+    max_context_length INTEGER,
+
+    -- Calibration provenance
+    residency_source TEXT,             -- 'measured', 'hf', 'name', 'override', 'cached'
+    measurement_count INTEGER NOT NULL DEFAULT 0,
+    last_measured_at TIMESTAMPTZ,
+
+    -- GPU utilization bounds
+    observed_gpu_memory_utilization REAL,
+    min_gpu_memory_utilization_to_load REAL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(provider_id, model_name)
+);
+
+-- Fast lookups by provider
+CREATE INDEX idx_model_profiles_provider
+    ON model_profiles(provider_id);
+
+-- Find all profiles for a specific model across providers
+CREATE INDEX idx_model_profiles_model_name
+    ON model_profiles(model_name);
+
+-- Filter by source to find models that still need measurement
+CREATE INDEX idx_model_profiles_source
+    ON model_profiles(residency_source)
+    WHERE residency_source != 'measured';
+
+-- Track applied migrations
+CREATE TABLE schema_migrations (
+    id SERIAL PRIMARY KEY,
+    filename TEXT NOT NULL UNIQUE,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

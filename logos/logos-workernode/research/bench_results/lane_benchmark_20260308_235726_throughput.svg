@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="680" viewBox="0 0 1080 680">
+  <rect x="0" y="0" width="1080" height="680" fill="#ffffff"/>
+  <text x="110" y="42" font-family="monospace" font-size="28" fill="#111827">Throughput vs Concurrency (vLLM vs Ollama)</text>
+  <text x="110" y="66" font-family="monospace" font-size="13" fill="#6b7280">source: lane_benchmark_20260308_235726.json  |  timestamp_utc: 2026-03-09T00:05:50.478966+00:00</text>
+
+  <g>
+    <line x1="110" y1="570.00" x2="1010" y2="570.00" stroke="#e5e7eb" stroke-width="1"/><text x="98" y="575.00" font-family="monospace" font-size="14" text-anchor="end" fill="#374151">0</text><line x1="110" y1="490.00" x2="1010" y2="490.00" stroke="#e5e7eb" stroke-width="1"/><text x="98" y="495.00" font-family="monospace" font-size="14" text-anchor="end" fill="#374151">69</text><line x1="110" y1="410.00" x2="1010" y2="410.00" stroke="#e5e7eb" stroke-width="1"/><text x="98" y="415.00" font-family="monospace" font-size="14" text-anchor="end" fill="#374151">138</text><line x1="110" y1="330.00" x2="1010" y2="330.00" stroke="#e5e7eb" stroke-width="1"/><text x="98" y="335.00" font-family="monospace" font-size="14" text-anchor="end" fill="#374151">207</text><line x1="110" y1="250.00" x2="1010" y2="250.00" stroke="#e5e7eb" stroke-width="1"/><text x="98" y="255.00" font-family="monospace" font-size="14" text-anchor="end" fill="#374151">275</text><line x1="110" y1="170.00" x2="1010" y2="170.00" stroke="#e5e7eb" stroke-width="1"/><text x="98" y="175.00" font-family="monospace" font-size="14" text-anchor="end" fill="#374151">344</text><line x1="110" y1="90.00" x2="1010" y2="90.00" stroke="#e5e7eb" stroke-width="1"/><text x="98" y="95.00" font-family="monospace" font-size="14" text-anchor="end" fill="#374151">413</text>
+    <line x1="110.00" y1="90" x2="110.00" y2="570" stroke="#f3f4f6" stroke-width="1"/><text x="110.00" y="604" font-family="monospace" font-size="14" text-anchor="middle" fill="#374151">1</text><line x1="335.00" y1="90" x2="335.00" y2="570" stroke="#f3f4f6" stroke-width="1"/><text x="335.00" y="604" font-family="monospace" font-size="14" text-anchor="middle" fill="#374151">4</text><line x1="560.00" y1="90" x2="560.00" y2="570" stroke="#f3f4f6" stroke-width="1"/><text x="560.00" y="604" font-family="monospace" font-size="14" text-anchor="middle" fill="#374151">8</text><line x1="785.00" y1="90" x2="785.00" y2="570" stroke="#f3f4f6" stroke-width="1"/><text x="785.00" y="604" font-family="monospace" font-size="14" text-anchor="middle" fill="#374151">16</text><line x1="1010.00" y1="90" x2="1010.00" y2="570" stroke="#f3f4f6" stroke-width="1"/><text x="1010.00" y="604" font-family="monospace" font-size="14" text-anchor="middle" fill="#374151">32</text>
+    <line x1="110" y1="570" x2="1010" y2="570" stroke="#111827" stroke-width="2"/>
+    <line x1="110" y1="90" x2="110" y2="570" stroke="#111827" stroke-width="2"/>
+  </g>
+
+  <polyline points="110.00,546.61 335.00,480.43 560.00,486.23 785.00,222.00 1010.00,133.64" fill="none" stroke="#0b84f3" stroke-width="4"/>
+  <polyline points="110.00,550.49 335.00,521.80 560.00,519.90 785.00,519.88 1010.00,519.95" fill="none" stroke="#f97316" stroke-width="4"/>
+
+  <circle cx="110.00" cy="546.61" r="5" fill="#0b84f3"/><circle cx="335.00" cy="480.43" r="5" fill="#0b84f3"/><circle cx="560.00" cy="486.23" r="5" fill="#0b84f3"/><circle cx="785.00" cy="222.00" r="5" fill="#0b84f3"/><circle cx="1010.00" cy="133.64" r="5" fill="#0b84f3"/>
+  <circle cx="110.00" cy="550.49" r="5" fill="#f97316"/><circle cx="335.00" cy="521.80" r="5" fill="#f97316"/><circle cx="560.00" cy="519.90" r="5" fill="#f97316"/><circle cx="785.00" cy="519.88" r="5" fill="#f97316"/><circle cx="1010.00" cy="519.95" r="5" fill="#f97316"/>
+
+  <g>
+    <rect x="760" y="100" width="240" height="72" fill="#f9fafb" stroke="#e5e7eb"/>
+    <line x1="778" y1="124" x2="818" y2="124" stroke="#0b84f3" stroke-width="4"/>
+    <text x="830" y="129" font-family="monospace" font-size="14" fill="#111827">vLLM</text>
+    <line x1="778" y1="152" x2="818" y2="152" stroke="#f97316" stroke-width="4"/>
+    <text x="830" y="157" font-family="monospace" font-size="14" fill="#111827">Ollama</text>
+  </g>
+
+  <text x="560.0" y="646" font-family="monospace" font-size="16" text-anchor="middle" fill="#111827">Concurrency</text>
+  <text x="26" y="330.0" font-family="monospace" font-size="16" text-anchor="middle" transform="rotate(-90 26,330.0)" fill="#111827">Aggregate throughput (tok/s)</text>
+</svg>
