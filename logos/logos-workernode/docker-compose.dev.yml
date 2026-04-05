@@ -54,6 +54,7 @@ services:
       - ./data:/app/data
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
+      - ./logos_worker_node:/app/logos_worker_node:ro
     healthcheck:
       test:
         [

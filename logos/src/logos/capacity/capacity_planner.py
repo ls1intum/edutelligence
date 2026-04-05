@@ -90,7 +90,7 @@ class CapacityPlanner:
     GPU_CACHE_LOW = 40.0
 
     # VRAM safety margin
-    VRAM_SAFETY_MARGIN = 1.1  # 10% margin
+    VRAM_SAFETY_MARGIN = 1.0  # no margin — calibrated profiles include KV, measurements are exact
     # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
     TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
 
@@ -1926,6 +1926,13 @@ class CapacityPlanner:
             provider_ready = available >= needed
             shortfall = max(needed - available, 0.0)
 
+            logger.info(
+                "ensure_capacity provider=%s model=%s action=%s: "
+                "needed=%.0fMB available=%.0fMB(raw=%.0fMB) provider_ready=%s shortfall=%.0fMB",
+                provider_id, target.model_name, target_action.action,
+                needed, available, raw_available, provider_ready, shortfall,
+            )
+
             target_gpu_devices = target.gpu_devices
             if not target_gpu_devices and target_action.params:
                 target_gpu_devices = target_action.params.get("gpu_devices")
@@ -1946,6 +1953,15 @@ class CapacityPlanner:
                     for dev in target_gpu_ids
                 ]
                 per_gpu_ready = all(free_mb >= per_gpu_needed for free_mb in gpu_effective)
+                logger.info(
+                    "ensure_capacity provider=%s model=%s: known-GPU path "
+                    "target_gpus=%s per_gpu_needed=%.0fMB gpu_effective=%s per_gpu_ready=%s",
+                    provider_id, target.model_name,
+                    list(target_gpu_ids),
+                    per_gpu_needed,
+                    [f"{v:.0f}MB" for v in gpu_effective],
+                    per_gpu_ready,
+                )
                 if provider_ready and per_gpu_ready:
                     return True
                 gpu_shortfall = max(
@@ -1953,21 +1969,55 @@ class CapacityPlanner:
                     0.0,
                 ) * len(target_gpu_ids)
                 shortfall = max(shortfall, gpu_shortfall)
-            elif per_gpu_free and not target_gpu_ids:
-                # GPU placement unknown (first load, tp=1 model). The model will
-                # land on the GPU with the most free memory, so check the best
-                # available GPU. If it fits there, allow the load. If not, the
-                # shortfall drives reclaim on the best GPU.
-                max_gpu_effective = max(
-                    self._vram_ledger.get_gpu_effective_available_mb(
-                        provider_id, dev, float(free_mb),
-                    )
-                    for dev, free_mb in per_gpu_free.items()
+                logger.info(
+                    "ensure_capacity provider=%s model=%s: GPU shortfall=%.0fMB → reclaim needed",
+                    provider_id, target.model_name, shortfall,
                 )
-                if max_gpu_effective >= needed:
+            elif per_gpu_free and not target_gpu_ids:
+                # GPU placement unknown — infer TP from profile so TP>1 models
+                # are not incorrectly required to fit on a single GPU.
+                # tp=1: model lands on best GPU → check best GPU against full need.
+                # tp>1: model spreads across tp GPUs → check tp-th best GPU against
+                #        need/tp (same logic as _cold_load_for_request).
+                tp = 1
+                if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+                    tp = int(profile.tensor_parallel_size)
+                elif profile is not None and capacity is not None:
+                    inferred = self._infer_tensor_parallel(profile, capacity, provider_id)
+                    if inferred and inferred > 1:
+                        tp = inferred
+                per_gpu_needed = needed / tp
+                sorted_free = sorted(
+                    (
+                        self._vram_ledger.get_gpu_effective_available_mb(
+                            provider_id, dev, float(free_mb),
+                        )
+                        for dev, free_mb in per_gpu_free.items()
+                    ),
+                    reverse=True,
+                )
+                nth_gpu_free = sorted_free[tp - 1] if len(sorted_free) >= tp else 0.0
+                logger.info(
+                    "ensure_capacity provider=%s model=%s: unknown-GPU path "
+                    "tp=%d per_gpu_needed=%.0fMB sorted_free=%s nth_gpu_free=%.0fMB fits=%s",
+                    provider_id, target.model_name,
+                    tp, per_gpu_needed,
+                    [f"{v:.0f}MB" for v in sorted_free],
+                    nth_gpu_free,
+                    nth_gpu_free >= per_gpu_needed,
+                )
+                if nth_gpu_free >= per_gpu_needed:
                     return True
-                shortfall = max(shortfall, needed - max_gpu_effective)
+                shortfall = max(shortfall, (per_gpu_needed - nth_gpu_free) * tp)
+                logger.info(
+                    "ensure_capacity provider=%s model=%s: per-GPU shortfall → total shortfall=%.0fMB",
+                    provider_id, target.model_name, shortfall,
+                )
             elif provider_ready:
+                logger.info(
+                    "ensure_capacity provider=%s model=%s: no per-GPU data, provider_ready → proceed",
+                    provider_id, target.model_name,
+                )
                 return True
 
             reclaim = self._next_request_reclaim_action(
@@ -2558,36 +2608,44 @@ class CapacityPlanner:
         if base_mb is None:
             return True  # can't estimate, allow
 
-        if kv_cache_bytes_str:
-            kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
-        elif profile is not None:
-            kv_mb = self._estimate_kv_mb(profile)
+        is_calibrated = (profile is not None and
+                         profile.residency_source in ("calibrated", "measured"))
+
+        if is_calibrated:
+            # base_residency_mb already includes KV cache and TP overhead — use directly.
+            minimum_needed = base_mb
+            kv_mb = 0.0
+            tp = 1  # TP cost baked into base_residency; skip per-GPU check overhead
         else:
-            kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
+            if kv_cache_bytes_str:
+                kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
+            elif profile is not None:
+                kv_mb = self._estimate_kv_mb(profile)
+            else:
+                kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
 
-        minimum_needed = base_mb + kv_mb
+            minimum_needed = base_mb + kv_mb
 
-        # Determine TP size for this model
-        tp = 1
-        if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
-            tp = int(profile.tensor_parallel_size)
-        elif provider_id is not None and base_mb is not None:
-            inferred = self._infer_tensor_parallel(profile, capacity, provider_id) if profile else None
-            if inferred and inferred > 1:
-                tp = inferred
+            # Determine TP size for this model
+            tp = 1
+            if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+                tp = int(profile.tensor_parallel_size)
+            elif provider_id is not None and base_mb is not None:
+                inferred = self._infer_tensor_parallel(profile, capacity, provider_id) if profile else None
+                if inferred and inferred > 1:
+                    tp = inferred
 
-        if tp > 1:
-            # Add TP overhead: NCCL buffers, duplicated embedding/output layers
-            minimum_needed *= (1.0 + self.TP_OVERHEAD_RATIO)
+            if tp > 1:
+                # Add TP overhead: NCCL buffers, duplicated embedding/output layers
+                minimum_needed *= (1.0 + self.TP_OVERHEAD_RATIO)
 
         # Total VRAM check
         feasible = available_mb >= minimum_needed * self.VRAM_SAFETY_MARGIN
         if not feasible:
             logger.info(
-                "Feasibility FAILED for %s: need %.0fMB (base=%.0fMB + kv=%.0fMB%s) "
-                "× %.1f margin, have %.0fMB",
-                model_name, minimum_needed, base_mb, kv_mb,
-                f" + {self.TP_OVERHEAD_RATIO:.0%} TP overhead" if tp > 1 else "",
+                "Feasibility FAILED for %s: need %.0fMB%s × %.2f margin, have %.0fMB",
+                model_name, minimum_needed,
+                " (calibrated, KV+TP included)" if is_calibrated else f" (base={base_mb:.0f}MB + kv={kv_mb:.0f}MB)",
                 self.VRAM_SAFETY_MARGIN, available_mb,
             )
             return False
@@ -2918,14 +2976,18 @@ class CapacityPlanner:
     def _estimate_model_loaded_vram(self, profile: ModelProfile) -> float:
         """Total GPU memory (MB) used by a model when fully loaded and awake.
 
-        For vLLM: base_residency (weights + runtime) + KV cache pool.  This is the
-        full footprint vLLM holds while serving requests.  Sleeping releases the KV
-        pool (leaving sleeping_residual_mb), so freed = loaded - sleeping_residual.
+        For calibrated/measured vLLM profiles: base_residency_mb already includes
+        the KV cache — return it directly.
+
+        For uncalibrated vLLM profiles: base_residency is weights only, so add
+        the estimated KV pool on top.
 
         For other engines: use the directly measured loaded_vram_mb from the profile.
         """
         if profile.engine == "vllm":
             base = float(profile.estimate_base_residency_mb() or 0.0)
+            if profile.residency_source in ("calibrated", "measured"):
+                return base  # KV already baked in
             kv = self._estimate_kv_mb(profile)
             return base + kv
         return profile.estimate_vram_mb()
@@ -2947,23 +3009,27 @@ class CapacityPlanner:
         """
         if profile is not None and profile.engine == "vllm":
             base_residency = float(profile.estimate_base_residency_mb() or 0.0)
+            is_calibrated = profile.residency_source in ("calibrated", "measured")
 
-            # Prefer explicit kv_cache_memory_bytes from the action params (set by
-            # _build_load_params), fall back to the common KV estimation chain.
-            params = action.params or {}
-            vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
-            kv_str = vllm_config.get("kv_cache_memory_bytes", "")
-            kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
-            if kv_mb <= 0:
-                kv_mb = self._estimate_kv_mb(profile)
+            if is_calibrated:
+                # base_residency already includes KV cache — use directly.
+                # TP overhead is also baked in from the actual measured run.
+                loaded_vram = base_residency
+            else:
+                # Uncalibrated: base_residency is weights only — add KV estimate.
+                params = action.params or {}
+                vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
+                kv_str = vllm_config.get("kv_cache_memory_bytes", "")
+                kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
+                if kv_mb <= 0:
+                    kv_mb = self._estimate_kv_mb(profile)
+                loaded_vram = base_residency + kv_mb
 
-            loaded_vram = base_residency + kv_mb
-
-            tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
-            if tp <= 0 and profile.tensor_parallel_size:
-                tp = int(profile.tensor_parallel_size)
-            if tp > 1:
-                loaded_vram *= (1.0 + self.TP_OVERHEAD_RATIO)
+                tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
+                if tp <= 0 and profile.tensor_parallel_size:
+                    tp = int(profile.tensor_parallel_size)
+                if tp > 1:
+                    loaded_vram *= (1.0 + self.TP_OVERHEAD_RATIO)
 
             sleeping_residual = float(profile.sleeping_residual_mb or 0.0)
 
@@ -3384,7 +3450,7 @@ class CapacityPlanner:
                     action.provider_id,
                     "sleep_lane",
                     {"lane_id": action.lane_id, "level": 1, "mode": "wait"},
-                    timeout_seconds=15,
+                    timeout_seconds=120,
                 )
             except Exception:
                 logger.warning(
@@ -3396,7 +3462,7 @@ class CapacityPlanner:
                     action.provider_id,
                     "reconfigure_lane",
                     {"lane_id": action.lane_id, **action.params},
-                    timeout_seconds=int(min(timeout_seconds, 30)),
+                    timeout_seconds=int(min(timeout_seconds, 120)),
                 )
             except Exception:
                 logger.exception(
@@ -3476,7 +3542,7 @@ class CapacityPlanner:
             try:
                 await self._registry.send_command(
                     action.provider_id, command_action, command_params,
-                    timeout_seconds=int(min(timeout_seconds, 30)),
+                    timeout_seconds=int(min(timeout_seconds, 120)),
                 )
             except Exception:
                 logger.exception(

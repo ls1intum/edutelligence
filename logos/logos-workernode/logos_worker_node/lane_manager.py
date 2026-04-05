@@ -339,6 +339,13 @@ class LaneManager:
                     removed_snapshots[lid] = (handle, lc, port)
                     try:
                         await self._remove_lane_unlocked(lid)
+                        # Refresh GPU snapshot BEFORE _record_event so the status-push
+                        # triggered by _mark_status_dirty carries post-removal VRAM numbers.
+                        # This mirrors the same pattern in sleep_lane/wake_lane and prevents
+                        # the server from seeing the lane as gone but VRAM still occupied
+                        # (causing the wake VRAM check to be denied on the next request).
+                        if self._gpu_force_poll is not None:
+                            await self._gpu_force_poll()
                         self._record_event(lid, "removed", model=lc.model if lc else "", port=port)
                         actions.append(LaneAction(
                             action="removed", lane_id=lid,

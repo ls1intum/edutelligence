@@ -10,9 +10,13 @@ and persists the results to ``model_profiles.yml``.
 
 VRAM decomposition (exact, no guessing)::
 
-    base_residency_mb    = loaded_vram_mb - kv_cache_sent_mb
+    base_residency_mb    = loaded_vram_mb  (weights + KV cache — full footprint)
     sleeping_residual_mb = measured directly after sleep
-    expected_loaded_vram = base_residency_mb + kv_cache_memory_bytes
+    kv_budget_mb         = kv_cache_sent_mb (stored for auditing only)
+
+The scheduler uses ``base_residency_mb`` directly for calibrated profiles — it
+does NOT add a separate KV estimate on top.  For uncalibrated profiles the
+scheduler falls back to ``base_residency + estimated_kv``.
 """
 from __future__ import annotations
 
@@ -89,7 +93,7 @@ def query_gpu_vram(
             "--format=csv,noheader,nounits",
         ],
         text=True,
-        timeout=10,
+        timeout=30,
     )
     result: dict[int, dict[str, float]] = {}
     for line in raw.strip().splitlines():
@@ -195,12 +199,12 @@ def spawn_vllm(
     # Per-model override for kv cache size (takes precedence over CLI default)
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
 
-    # Match worker behaviour (vllm_process.py): when kv_cache_memory_bytes is set,
-    # pass --gpu-memory-utilization 0.1 to satisfy vLLM's startup memory guard
-    # while letting kv_cache_memory_bytes control actual KV pool allocation.
+    # When kv_cache_memory_bytes is set, omit --gpu-memory-utilization and let
+    # vLLM default to 0.9. kv_cache_memory_bytes controls the KV pool size
+    # directly; adding gpu_memory_utilization=0.1 caps total VRAM to 10% which
+    # prevents the model weights from loading at all.
     # An explicit per-model override takes precedence.
     explicit_gmu = plan.get("gpu_memory_utilization")
-    gmu = explicit_gmu if explicit_gmu is not None else 0.1
 
     cmd = [
         vllm_binary,
@@ -212,14 +216,14 @@ def spawn_vllm(
         str(port),
         "--tensor-parallel-size",
         str(tp),
-        "--gpu-memory-utilization",
-        str(gmu),
         "--dtype",
         dtype,
         "--kv-cache-memory-bytes",
         kv_bytes,
         "--enable-sleep-mode",
     ]
+    if explicit_gmu is not None:
+        cmd.extend(["--gpu-memory-utilization", str(explicit_gmu)])
     if max_model_len:
         cmd.extend(["--max-model-len", str(int(max_model_len))])
     if quant:
@@ -228,8 +232,7 @@ def spawn_vllm(
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
         cmd.append("--disable-custom-all-reduce")
-    if disable_nccl_p2p:
-        cmd.append("--disable-nccl-p2p")
+    # disable_nccl_p2p is applied via NCCL_P2P_DISABLE env var below (not a vLLM CLI flag)
     cmd.extend(extra_args)
 
     env = os.environ.copy()
@@ -237,6 +240,15 @@ def spawn_vllm(
     # Keep venv tools (ninja etc.) visible even outside activated venv
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    # For tensor-parallel calibration runs (tp > 1), mirror the NCCL env vars
+    # used by regular vLLM lanes so calibration matches production behaviour.
+    if tp > 1:
+        env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+        env.setdefault("NCCL_CUMEM_ENABLE", "0")   # unreliable in Docker without NUMA config
+        env.setdefault("NCCL_TIMEOUT", "1800")
+        if disable_nccl_p2p:
+            env.setdefault("NCCL_P2P_DISABLE", "1")    # PCIe GPUs without NVLink hang on P2P init
 
     gpu_devices = str(plan.get("gpu_devices") or "")
     if gpu_devices and gpu_devices.lower() not in ("all", ""):
@@ -332,7 +344,7 @@ class CalibrationResult:
     success: bool
     loaded_vram_mb: float = 0.0  # measured: total GPU delta while awake
     sleeping_residual_mb: float = 0.0  # measured: total GPU delta while sleeping
-    base_residency_mb: float = 0.0  # derived: loaded_vram_mb - kv_cache_sent_mb
+    base_residency_mb: float = 0.0  # = loaded_vram_mb (weights + KV, full footprint)
     calibrated_at: float = 0.0
     error: str = ""
 
@@ -382,12 +394,22 @@ def calibrate_model(
     )
     logger.info("-" * 60)
 
-    # Phase 1 — Baseline: measure before any model process exists
+    # Phase 1 — Baseline: measure before any model process exists.
+    # Retry up to 3 times with a short delay — nvidia-smi can be temporarily
+    # sluggish right after a previous heavy calibration run (GPU driver busy).
     logger.info("  [1/5] Baseline VRAM...")
-    try:
-        baseline_mb = sample_vram_mb(gpu_indices)
-    except Exception as exc:
-        partial.error = f"nvidia-smi baseline failed: {exc}"
+    baseline_mb: float | None = None
+    for _attempt in range(3):
+        try:
+            baseline_mb = sample_vram_mb(gpu_indices)
+            break
+        except Exception as exc:
+            last_exc = exc
+            if _attempt < 2:
+                logger.warning("  nvidia-smi baseline attempt %d failed: %s — retrying in 15s", _attempt + 1, exc)
+                time.sleep(15)
+    if baseline_mb is None:
+        partial.error = f"nvidia-smi baseline failed: {last_exc}"
         logger.warning("  ERROR: %s", partial.error)
         return partial
     logger.info("        baseline = %.0f MB", baseline_mb)
@@ -426,17 +448,18 @@ def calibrate_model(
             logger.warning("  ERROR: %s", partial.error)
             return partial
         loaded_vram_mb = max(awake_total_mb - baseline_mb, 0.0)
-        base_residency_mb = max(loaded_vram_mb - kv_cache_sent_mb, 0.0)
+        # base_residency_mb is the full loaded footprint (weights + KV).
+        # The scheduler uses it directly — no separate KV addition on top.
+        base_residency_mb = loaded_vram_mb
         logger.info(
             "        awake total = %.0f MB  →  loaded delta = %.0f MB",
             awake_total_mb,
             loaded_vram_mb,
         )
         logger.info(
-            "        base_residency = %.0f - %.0f = %.0f MB",
-            loaded_vram_mb,
-            kv_cache_sent_mb,
+            "        base_residency = %.0f MB  (= loaded, includes %.0f MB KV)",
             base_residency_mb,
+            kv_cache_sent_mb,
         )
 
         # Phase 4 — Sleep the model
@@ -445,11 +468,11 @@ def calibrate_model(
             f"{base_url}/sleep?"
             f"{urllib.parse.urlencode({'level': str(sleep_level), 'mode': 'auto'})}"
         )
-        status, _ = _post(sleep_url, timeout_s=30.0)
+        status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
         if status not in (200, 204):
             # Older vLLM: try without mode param
             sleep_url = f"{base_url}/sleep?level={sleep_level}"
-            status, _ = _post(sleep_url, timeout_s=30.0)
+            status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
         if status not in (200, 204):
             partial.error = f"/sleep returned HTTP {status}"
             logger.warning("  ERROR: %s", partial.error)
@@ -481,22 +504,19 @@ def calibrate_model(
 
         logger.info("  Results:")
         logger.info(
-            "    loaded_vram_mb       = %.0f MB  (measured)", loaded_vram_mb
-        )
-        logger.info(
-            "    kv_cache_sent_mb     = %.0f MB  (we set this)", kv_cache_sent_mb
-        )
-        logger.info(
-            "    base_residency_mb    = %.0f MB  (= loaded - kv_cache)",
+            "    base_residency_mb    = %.0f MB  (= full loaded VRAM, weights + KV)",
             base_residency_mb,
+        )
+        logger.info(
+            "    kv_budget_mb         = %.0f MB  (KV portion, for auditing)",
+            kv_cache_sent_mb,
         )
         logger.info(
             "    sleeping_residual_mb = %.0f MB  (measured independently)",
             sleeping_residual_mb,
         )
         logger.info(
-            "    Worker prediction: base(%.0f) + your_kv = total awake VRAM",
-            base_residency_mb,
+            "    Scheduler uses base_residency directly — no KV added on top",
         )
 
         return CalibrationResult(
@@ -527,8 +547,9 @@ def calibrate_model(
 def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
     """Build a profile dict compatible with ``ModelProfileRecord.to_dict()``.
 
-    ``kv_budget_mb`` records the KV cache used during calibration.  The planner
-    uses ``base_residency + kv_budget`` to predict loaded VRAM.
+    ``base_residency_mb`` is the full loaded VRAM (weights + KV cache).
+    The planner uses it directly — no separate KV addition for calibrated profiles.
+    ``kv_budget_mb`` is stored for auditing only.
     """
     return {
         "loaded_vram_mb": round(r.loaded_vram_mb, 1),

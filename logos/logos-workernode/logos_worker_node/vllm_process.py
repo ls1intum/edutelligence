@@ -353,7 +353,7 @@ class VllmProcessHandle:
         params = urllib.parse.urlencode({"level": str(level), "mode": mode})
         url = f"{self._base_url()}/sleep?{params}"
         try:
-            resp = await self._http.post(url, timeout=30.0)
+            resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
             raise RuntimeError(f"[{self.lane_id}] Failed to call vLLM /sleep: {exc}") from exc
 
@@ -448,15 +448,10 @@ class VllmProcessHandle:
         ]
         if vc.gpu_memory_utilization is not None:
             cmd.extend(["--gpu-memory-utilization", str(vc.gpu_memory_utilization)])
-        elif vc.kv_cache_memory_bytes:
-            # When kv_cache_memory_bytes is set, vLLM uses it for KV cache
-            # sizing and ignores gpu_memory_utilization for that purpose.
-            # However, vLLM v1 still has a startup guard in request_memory()
-            # that rejects launch if free VRAM < gpu_memory_utilization * total.
-            # Default is 0.9 which fails on shared GPUs. Pass a minimal value
-            # to satisfy the guard while letting kv_cache_memory_bytes control
-            # actual cache allocation.
-            cmd.extend(["--gpu-memory-utilization", "0.1"])
+        # When kv_cache_memory_bytes is set, omit --gpu-memory-utilization and let
+        # vLLM default to 0.9. kv_cache_memory_bytes controls the KV pool size
+        # directly; adding gpu_memory_utilization=0.1 caps total VRAM to 10% which
+        # prevents the model weights from loading at all.
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
         elif lane_config.context_length > 0:
