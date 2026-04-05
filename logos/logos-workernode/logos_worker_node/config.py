@@ -101,12 +101,57 @@ def _apply_env_overrides(cfg: AppConfig) -> None:
         cfg.logos.allow_insecure_http = True
 
 
+def _parse_kv_to_mb(value: str) -> float:
+    """Convert a KV cache size string to megabytes. e.g. '6G' → 6144.0."""
+    v = (value or "").strip().upper()
+    if v.endswith("G"):
+        return float(v[:-1]) * 1024.0
+    if v.endswith("M"):
+        return float(v[:-1])
+    if v.endswith("K"):
+        return float(v[:-1]) / 1024.0
+    return float(v) / (1024.0 * 1024.0)
+
+
+def _wire_kv_budget(cfg: AppConfig) -> None:
+    """Propagate kv_cache_memory_bytes from capabilities_models into both systems.
+
+    Allows the KV budget to be declared once per model in logos.capabilities_models
+    and automatically applied to:
+      1. The model profile (as kv_budget_mb) — used by the scheduler to predict
+         total VRAM: base_residency_mb + kv_budget_mb = expected loaded VRAM.
+      2. engines.vllm.model_overrides — passed to vLLM as --kv-cache-memory-bytes
+         so the actual allocation matches the scheduler's expectation.
+
+    An explicit value in engines.vllm.model_overrides always wins over the
+    capabilities_models value (capabilities_models is the default, overrides override).
+    """
+    if not cfg.logos or not cfg.logos.capabilities_overrides:
+        return
+
+    for model_name, overrides in cfg.logos.capabilities_overrides.items():
+        kv = (overrides.get("kv_cache_memory_bytes") or "").strip()
+        if not kv:
+            continue
+
+        # 1. Inject into vLLM model_overrides (if not already explicitly set there)
+        model_ov = cfg.engines.vllm.model_overrides.setdefault(model_name, {})
+        if "kv_cache_memory_bytes" not in model_ov:
+            model_ov["kv_cache_memory_bytes"] = kv
+
+        # 2. Convert to kv_budget_mb so the profile registry can use it for
+        #    scheduling VRAM estimation (kv_budget_mb is the profile field name)
+        if "kv_budget_mb" not in overrides:
+            overrides["kv_budget_mb"] = _parse_kv_to_mb(kv)
+
+
 def load_config() -> AppConfig:
     """Load config.yml (hardware/tuning), then apply .env overrides (credentials)."""
     global _config
 
     _config = _load_config_yml()
     _apply_env_overrides(_config)
+    _wire_kv_budget(_config)
 
     # Restore persisted lanes from state file if present
     lanes_path = get_state_dir() / "lanes.json"
