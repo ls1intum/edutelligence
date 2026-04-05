@@ -11,8 +11,8 @@ from iris.domain.transcription.video_transcription_execution_dto import (
     VideoTranscriptionPipelineExecutionDto,
 )
 from iris.pipeline.transcription.utils.video_utils import download_video, extract_audio
-from iris.pipeline.transcription.utils.youtube_utils import download_youtube_audio
 from iris.pipeline.transcription.utils.whisper_client import WhisperClient
+from iris.pipeline.transcription.utils.youtube_utils import download_youtube_audio
 from iris.tracing import observe
 from iris.web.status.video_transcription_callback import VideoTranscriptionCallback
 
@@ -128,9 +128,11 @@ class HeavyTranscriptionPipeline:
                 "[Lecture %d] Stage 1/%d: Video downloaded successfully (%d MB)",
                 self.dto.lecture_unit_id,
                 total_stages,
-                video_path.stat().st_size // (1024 * 1024)
-                if video_path.exists()
-                else 0,
+                (
+                    video_path.stat().st_size // (1024 * 1024)
+                    if video_path.exists()
+                    else 0
+                ),
             )
 
             # Stage 2: Extract audio
@@ -152,9 +154,11 @@ class HeavyTranscriptionPipeline:
                 "[Lecture %d] Stage 2/%d: Audio extracted successfully (%d MB)",
                 self.dto.lecture_unit_id,
                 total_stages,
-                audio_path.stat().st_size // (1024 * 1024)
-                if audio_path.exists()
-                else 0,
+                (
+                    audio_path.stat().st_size // (1024 * 1024)
+                    if audio_path.exists()
+                    else 0
+                ),
             )
 
         # Final stage (both paths): Transcribe

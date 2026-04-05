@@ -12,7 +12,7 @@ from iris.pipeline.transcription.utils.audio_utils import split_audio_ffmpeg
 def _ffmpeg_creates_chunks(tmp_path, filenames):
     """Return a side_effect that simulates FFmpeg creating chunk files."""
 
-    def side_effect(*args, **kwargs):
+    def side_effect(*_args, **_kwargs):
         for name in filenames:
             (tmp_path / name).write_bytes(b"chunk data")
 
@@ -20,6 +20,7 @@ def _ffmpeg_creates_chunks(tmp_path, filenames):
 
 
 class TestSplitAudioFfmpeg:
+    """Tests for FFmpeg audio splitting into chunks."""
     def test_successful_split_returns_sorted_mp3_paths(self, tmp_path):
         output_dir = str(tmp_path / "chunks")
 

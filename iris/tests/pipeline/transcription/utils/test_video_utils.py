@@ -9,6 +9,8 @@ from iris.pipeline.transcription.utils.video_utils import download_video, extrac
 
 
 class TestDownloadVideo:
+    """Tests for FFmpeg video download from HLS streams."""
+
     @patch("iris.pipeline.transcription.utils.video_utils.subprocess.run")
     def test_successful_download(self, mock_run):
         download_video(
@@ -63,6 +65,7 @@ class TestDownloadVideo:
 
 
 class TestExtractAudio:
+    """Tests for FFmpeg audio extraction from video files."""
     @patch("iris.pipeline.transcription.utils.video_utils.subprocess.run")
     def test_successful_extraction(self, mock_run):
         extract_audio(

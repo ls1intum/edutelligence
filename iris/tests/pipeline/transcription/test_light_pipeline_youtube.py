@@ -1,6 +1,6 @@
 """Tests for the light pipeline YouTube path (no video file)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from iris.pipeline.transcription.light_pipeline import LightTranscriptionPipeline
 
@@ -8,7 +8,8 @@ from iris.pipeline.transcription.light_pipeline import LightTranscriptionPipelin
 class TestLightPipelineYouTubePath:
     """Verify the YouTube path produces Artemis-compatible segment format."""
 
-    def _make_pipeline(self, segments):
+    @patch("iris.pipeline.transcription.light_pipeline.ModelVersionRequestHandler")
+    def _make_pipeline(self, segments, mock_request_handler):
         dto = MagicMock()
         dto.lecture_unit_id = 1
         callback = MagicMock()

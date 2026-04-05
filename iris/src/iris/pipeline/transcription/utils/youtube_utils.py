@@ -92,9 +92,7 @@ def download_youtube_audio(
                       the video_utils error interface.
     """
     prefix = (
-        f"[Lecture {lecture_unit_id}]"
-        if lecture_unit_id is not None
-        else "[Lecture ?]"
+        f"[Lecture {lecture_unit_id}]" if lecture_unit_id is not None else "[Lecture ?]"
     )
 
     # Validate before downloading
@@ -145,9 +143,7 @@ def download_youtube_audio(
 
     # yt-dlp writes to {basename}.mp3 which should match audio_path
     if not os.path.exists(audio_path):
-        raise RuntimeError(
-            f"YouTube audio file not found after download: {audio_path}"
-        )
+        raise RuntimeError(f"YouTube audio file not found after download: {audio_path}")
 
     file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
     logger.info(
