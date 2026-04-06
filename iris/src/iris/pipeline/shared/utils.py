@@ -147,14 +147,19 @@ def format_post_discussion(post: PostDTO, include_user_ids: bool = False) -> str
     else:
         discussion = f"Student's question: {post.content}\n"
 
+    redacted_placeholder = "[message hidden – user opted out of AI]"
     if post.answers:
         discussion += "Previous responses:\n"
         for answer in post.answers:
-            if answer.content:
+            if answer.redacted:
+                text = redacted_placeholder
+            else:
+                text = answer.content or ""
+            if text:
                 if include_user_ids:
-                    discussion += f"- {answer.content} by user {answer.user_id}\n"
+                    discussion += f"- {text} by user {answer.user_id}\n"
                 else:
-                    discussion += f"- {answer.content}\n"
+                    discussion += f"- {text}\n"
     else:
         discussion += "No previous responses yet."
 

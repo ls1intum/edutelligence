@@ -43,6 +43,7 @@ class AutonomousTutorPipeline(
     """
 
     DIRECT_POST_CONFIDENCE_THRESHOLD = 0.95
+    REDACTED_PLACEHOLDER = "[message hidden – user opted out of AI]"
 
     def __init__(self):
         super().__init__(implementation_id="autonomous_tutor_pipeline")
@@ -255,7 +256,9 @@ class AutonomousTutorPipeline(
             return ""
         responses = []
         for answer in post.answers:
-            if answer.content:
+            if answer.redacted:
+                responses.append(f"- {self.REDACTED_PLACEHOLDER}")
+            elif answer.content:
                 responses.append(f"- {answer.content}")
         return "\n".join(responses)
 
