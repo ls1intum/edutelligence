@@ -1,0 +1,28 @@
+{
+  "scenario_name": "10m_local2_mistral_deepseek_bursty_2400",
+  "layout": "bursty",
+  "duration_ms": 600000,
+  "total_requests": 2400,
+  "seed": "20260329-10m-mistral-deepseek-bursty-2400",
+  "model_counts": {
+    "solidrust/Mistral-7B-Instruct-v0.3-AWQ": 1277,
+    "casperhansen/deepseek-r1-distill-llama-8b-awq": 1123
+  },
+  "minute_totals": [
+    168,
+    312,
+    216,
+    264,
+    192,
+    336,
+    216,
+    288,
+    192,
+    216
+  ],
+  "burst_size_range": [
+    8,
+    24
+  ],
+  "output_csv": "10m/workload_explicit_local2_mistral_deepseek_bursty_2400_10m.csv"
+}

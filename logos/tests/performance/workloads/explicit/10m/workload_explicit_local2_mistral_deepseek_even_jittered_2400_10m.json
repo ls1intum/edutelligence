@@ -1,0 +1,26 @@
+{
+  "scenario_name": "10m_local2_mistral_deepseek_even_jittered_2400",
+  "layout": "even_jittered",
+  "duration_ms": 600000,
+  "total_requests": 2400,
+  "seed": "20260329-10m-mistral-deepseek-even-jittered-2400",
+  "model_counts": {
+    "solidrust/Mistral-7B-Instruct-v0.3-AWQ": 1200,
+    "casperhansen/deepseek-r1-distill-llama-8b-awq": 1200
+  },
+  "minute_totals": [
+    240,
+    240,
+    240,
+    240,
+    240,
+    240,
+    240,
+    240,
+    240,
+    240
+  ],
+  "slot_ms": 250,
+  "jitter_ms": 60,
+  "output_csv": "10m/workload_explicit_local2_mistral_deepseek_even_jittered_2400_10m.csv"
+}

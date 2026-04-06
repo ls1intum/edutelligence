@@ -39,6 +39,10 @@ explicit-coder7-0001,0,interactive,high,"{""model"":""Qwen/Qwen2.5-Coder-7B-Inst
 - `explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv`
 - `explicit/10m/workload_explicit_local4_no_coder14_bursty_200_10m.csv`
 - `explicit/10m/workload_explicit_local2_mistral_deepseek_bursty_200_10m.csv`
+- `explicit/10m/workload_explicit_local2_mistral_deepseek_bursty_600_10m.csv`
+- `explicit/10m/workload_explicit_local2_mistral_deepseek_bursty_2400_10m.csv`
+- `explicit/10m/workload_explicit_local2_mistral_deepseek_even_jittered_600_10m.csv`
+- `explicit/10m/workload_explicit_local2_mistral_deepseek_even_jittered_2400_10m.csv`
 - `explicit/10m/workload_explicit_local3_even_random_600_10m.csv`
 - `explicit/60m/workload_explicit_local5_skewed_bursty_60m.csv`
 - `resource/10m/workload_resource_local5_skewed_bursty_10m.csv`
@@ -55,6 +59,8 @@ The `explicit/*` workloads:
 - set `"model"` directly
 - skip classification
 - include an alternate `10m` file without `Qwen/Qwen2.5-Coder-14B-Instruct-AWQ` for safer local stress tests
+- include deterministic two-model `600/2400` bursty scenarios aligned to the stored `500/10m` benchmark family
+- include deterministic two-model `600/2400` even-jittered scenarios for time-balanced comparison runs
 - exclude embedding-only models from chat benchmarks because the runner targets `/v1/chat/completions`
 
 The `resource/*` workloads:
@@ -72,8 +78,16 @@ Regenerate them with:
 python3 tests/performance/generate_explicit_model_workloads.py
 ```
 
+Generate only one scenario:
+
+```bash
+python3 tests/performance/generate_explicit_model_workloads.py \
+  --scenario 10m_local2_mistral_deepseek_bursty_600
+```
+
 ## Notes
 
 - Additional CSV columns are ignored by the runner.
 - Use Python `csv` + `json.dumps()` for generation so quoting stays valid.
 - For resource-mode workloads, omit `"model"` from `body_json`. The current explicit benchmark set does not do that.
+- Generated workload CSVs now have a sidecar JSON file with the same stem that records the scenario metadata.

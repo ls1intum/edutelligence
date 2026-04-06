@@ -15,11 +15,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import random
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    from .workload_layouts import build_clustered_offsets, build_random_bursts, build_weighted_minute_loads
+except ImportError:
+    from workload_layouts import build_clustered_offsets, build_random_bursts, build_weighted_minute_loads
 
 
 SEED = 20260329
@@ -277,17 +281,6 @@ MODULES = (
 )
 
 
-def weighted_choice(rng: random.Random, options: list[tuple[str, float]]) -> str:
-    total = sum(weight for _, weight in options)
-    needle = rng.random() * total
-    running = 0.0
-    for value, weight in options:
-        running += weight
-        if needle <= running:
-            return value
-    return options[-1][0]
-
-
 def scaled_counts(total_requests: int) -> dict[str, int]:
     raw = [(archetype.key, archetype.count * total_requests / TOTAL_REQUESTS["60m"]) for archetype in ARCHETYPES]
     counts = {key: int(value) for key, value in raw}
@@ -296,64 +289,6 @@ def scaled_counts(total_requests: int) -> dict[str, int]:
     for key, _ in ranked[:remainder]:
         counts[key] += 1
     return counts
-
-
-def build_minute_loads(total: int, minute_count: int, rng: random.Random) -> list[int]:
-    weights: list[float] = []
-    for minute in range(minute_count):
-        wave = 0.8 + 0.45 * (1.0 + math.sin((minute / max(1, minute_count)) * math.tau * 3.0 + 0.8))
-        burst = rng.choice((0.65, 0.75, 0.9, 1.0, 1.25, 1.6, 2.1, 2.8))
-        weights.append(wave * burst * rng.uniform(0.75, 1.35))
-
-    scaled = [total * weight / sum(weights) for weight in weights]
-    counts = [int(value) for value in scaled]
-    remainder = total - sum(counts)
-    ranked = sorted(
-        enumerate(scaled),
-        key=lambda item: item[1] - int(item[1]),
-        reverse=True,
-    )
-    for idx, _ in ranked[:remainder]:
-        counts[idx] += 1
-    return counts
-
-
-def build_burst_anchors(total_bursts: int, duration_ms: int, rng: random.Random) -> list[int]:
-    minute_count = max(1, duration_ms // 60_000)
-    offsets: list[int] = []
-    for minute, count in enumerate(build_minute_loads(total_bursts, minute_count, rng)):
-        if count == 0:
-            continue
-        cluster_count = min(count, rng.choice((1, 1, 2, 2, 3, 4)))
-        centers = sorted(rng.uniform(2.0, 57.5) for _ in range(cluster_count))
-        for _ in range(count):
-            center = rng.choice(centers)
-            seconds = max(0.0, min(59.95, rng.gauss(center, rng.uniform(0.45, 3.8))))
-            milliseconds = minute * 60_000 + int(seconds * 1000) + rng.randint(0, 999)
-            offsets.append(min(milliseconds, duration_ms - 1))
-
-    offsets.sort()
-    if len(offsets) != total_bursts:
-        raise ValueError(f"Expected {total_bursts} anchors, built {len(offsets)}")
-    return offsets
-
-
-def build_bursts(counts: dict[str, int], rng: random.Random) -> list[tuple[str, int]]:
-    remaining = dict(counts)
-    bursts: list[tuple[str, int]] = []
-    while sum(remaining.values()) > 0:
-        candidates = [(key, float(value)) for key, value in remaining.items() if value > 0]
-        key = weighted_choice(rng, candidates)
-        remaining_for_key = remaining[key]
-        if remaining_for_key <= 3:
-            burst_size = remaining_for_key
-        else:
-            burst_size = min(remaining_for_key, rng.randint(3, 8))
-            if remaining_for_key - burst_size == 1:
-                burst_size -= 1
-        bursts.append((key, burst_size))
-        remaining[key] -= burst_size
-    return bursts
 
 
 def choose_mode(archetype: Archetype, rng: random.Random) -> str:
@@ -410,8 +345,16 @@ def build_requests(duration_key: str, rng: random.Random) -> list[dict[str, str]
     duration_ms = WINDOWS_MS[duration_key]
     archetype_by_key = {archetype.key: archetype for archetype in ARCHETYPES}
     counts = scaled_counts(total_requests)
-    bursts = build_bursts(counts, rng)
-    anchors = build_burst_anchors(len(bursts), duration_ms, rng)
+    bursts = build_random_bursts(counts, rng=rng, min_size=3, max_size=8)
+    anchors = build_clustered_offsets(
+        per_minute_counts=build_weighted_minute_loads(
+            len(bursts),
+            max(1, duration_ms // 60_000),
+            rng,
+        ),
+        duration_ms=duration_ms,
+        rng=rng,
+    )
     counters: Counter[str] = Counter()
     rows: list[dict[str, str]] = []
     for anchor, (label, burst_size) in zip(anchors, bursts, strict=True):

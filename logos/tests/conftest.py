@@ -125,11 +125,14 @@ _make_submodule(_requests_mod, "exceptions", {
 # 5. yaml / PyYAML
 # ---------------------------------------------------------------------------
 
-_make_module("yaml", {
-    "safe_load": _noop,
-    "dump": _noop,
-    "YAMLError": type("YAMLError", (Exception,), {}),
-})
+try:  # Prefer the real package when available.
+    import yaml  # noqa: F401
+except Exception:  # noqa: BLE001
+    _make_module("yaml", {
+        "safe_load": _noop,
+        "dump": _noop,
+        "YAMLError": type("YAMLError", (Exception,), {}),
+    })
 
 # ---------------------------------------------------------------------------
 # 6. torch  (PyTorch — huge, not needed for unit tests)
@@ -202,8 +205,12 @@ _make_module("psycopg2.extras")
 # 9. dateutil  (python-dateutil — date parsing)
 # ---------------------------------------------------------------------------
 
-_du = _make_module("dateutil")
-_make_submodule(_du, "parser", {"isoparse": _noop, "parse": _noop})
+try:  # Prefer the real package when available.
+    import dateutil  # noqa: F401
+    import dateutil.parser  # noqa: F401
+except Exception:  # noqa: BLE001
+    _du = _make_module("dateutil")
+    _make_submodule(_du, "parser", {"isoparse": _noop, "parse": _noop})
 
 # ---------------------------------------------------------------------------
 # 10. aiohttp  (async HTTP for Ollama monitoring)
@@ -220,13 +227,21 @@ _aiohttp = _make_module("aiohttp", {
 # 11. matplotlib  (plotting — only used in test_model_data.py)
 # ---------------------------------------------------------------------------
 
-_mpl = _make_module("matplotlib")
-_make_submodule(_mpl, "pyplot", {
-    "figure": _noop, "show": _noop, "plot": _noop,
-    "xlabel": _noop, "ylabel": _noop, "title": _noop,
-    "legend": _noop, "savefig": _noop, "close": _noop,
-    "bar": _noop, "subplot": _noop, "tight_layout": _noop,
-})
+try:  # Prefer the real package when available.
+    import matplotlib  # noqa: F401
+    import matplotlib.pyplot  # noqa: F401
+except Exception:  # noqa: BLE001
+    _mpl = _make_module("matplotlib", {"use": _noop})
+    _make_submodule(_mpl, "pyplot", {
+        "figure": _noop, "show": _noop, "plot": _noop,
+        "xlabel": _noop, "ylabel": _noop, "title": _noop,
+        "legend": _noop, "savefig": _noop, "close": _noop,
+        "bar": _noop, "subplot": _noop, "tight_layout": _noop,
+    })
+    _make_submodule(_mpl, "ticker", {
+        "MaxNLocator": object,
+        "ScalarFormatter": object,
+    })
 
 # ---------------------------------------------------------------------------
 # 12. huggingface_hub / transformers  (only logging utils are needed in tests)

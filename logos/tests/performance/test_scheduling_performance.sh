@@ -132,6 +132,8 @@ RUN_TIMESTAMP="$(date +"%Y%m%d_%H%M%S")"
 if is_local_api_base "$API_BASE"; then
     log "Syncing local benchmark files into the container..."
     docker compose cp tests/performance/run_api_workload.py "$CONTAINER_NAME":/app/tests/performance/run_api_workload.py >/dev/null
+    docker compose cp tests/performance/reporting.py "$CONTAINER_NAME":/app/tests/performance/reporting.py >/dev/null
+    docker compose cp tests/performance/workload_layouts.py "$CONTAINER_NAME":/app/tests/performance/workload_layouts.py >/dev/null
     docker compose cp tests/performance/workloads/README.md "$CONTAINER_NAME":/app/tests/performance/workloads/README.md >/dev/null
     docker compose cp tests/performance/workloads/explicit "$CONTAINER_NAME":/app/tests/performance/workloads >/dev/null
     docker compose cp tests/performance/workloads/resource "$CONTAINER_NAME":/app/tests/performance/workloads >/dev/null
@@ -174,11 +176,15 @@ if [ $test_exit_code -eq 0 ]; then
     log "  - Folder format: YYYYMMDD_HHMMSS - experiment-name"
     log "  - Summary CSV: summary.csv"
     log "  - Detailed CSV: detailed.csv"
+    log "  - Scenario manifest: scenario_manifest.json"
+    log "  - Full request/response log: request_response.jsonl"
+    log "  - Per-model summary: per_model_summary.csv"
+    log "  - Distribution CSVs: latency_distribution.csv, ttft_distribution.csv"
     log "  - Runtime snapshots: runtime_samples.jsonl"
     log "  - VRAM snapshots: provider_vram.json"
     log "  - Aggregated request stats: request_log_stats.json"
     log "  - Run metadata: run_meta.json"
-    log "  - Charts: detailed*.png"
+    log "  - Charts: detailed*.png plus latency_distribution.(png|svg) and ttft_distribution.(png|svg)"
     printf "\n"
 else
     printf "\n\033[1;31m❌ Failed!\033[0m Performance test failed with exit code: %s\n\n" "$test_exit_code"
