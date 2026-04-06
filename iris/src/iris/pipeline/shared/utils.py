@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 # Standard datetime format used across the codebase for prompt templates
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-REDACTED_ANSWER_PLACEHOLDER = "[message hidden – user opted out of AI]"
+REDACTED_ANSWER_PLACEHOLDER = "[message hidden - user opted out of AI]"
 
 
 def generate_structured_tool_from_function(
