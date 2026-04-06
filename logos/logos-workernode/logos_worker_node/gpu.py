@@ -77,6 +77,20 @@ class GpuMetricsCollector:
             self._task = None
         logger.info("GPU collector stopped")
 
+    async def force_poll(self) -> None:
+        """Force an immediate GPU metrics refresh outside the regular poll schedule.
+
+        Call this after operations that change GPU memory usage (sleep, wake) so
+        the next heartbeat reflects the actual post-operation state rather than
+        the cached pre-operation snapshot.
+        """
+        if not self._available:
+            return
+        try:
+            await self._poll()
+        except Exception:
+            logger.warning("Forced GPU poll failed", exc_info=True)
+
     async def get_snapshot(self) -> DeviceSummary:
         async with self._lock:
             devices = [device.model_copy() for device in self._devices]

@@ -10,7 +10,7 @@ on:
 jobs:
   deploy-logos-server:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
     with:
       environment: "Logos - Prod"
       docker-compose-file: "./logos/docker-compose.yaml"
@@ -21,7 +21,7 @@ jobs:
 
   deploy-worker-deimama:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
     with:
       environment: "Logos Worker - Prod - deimama"
       docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
@@ -32,7 +32,7 @@ jobs:
 
   deploy-worker-deipapa:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
     with:
       environment: "Logos Worker - Prod - deipapa"
       docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
