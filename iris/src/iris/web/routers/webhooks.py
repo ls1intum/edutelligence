@@ -1,3 +1,4 @@
+import signal
 from multiprocessing import Process
 from threading import Semaphore, Thread
 
@@ -37,13 +38,40 @@ ingestion_job_handler = IngestionJobHandler()
 
 
 def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
+    """Run the lecture unit ingestion pipeline in a separate process.
+
+    Includes SIGTERM handling so that container shutdown or process
+    termination notifies Artemis before exiting (Option 3 failure detection).
     """
-    Run the lecture unit ingestion pipeline in a separate thread
-    """
+    # Create callback early so SIGTERM handler can use it
+    callback = None
+
+    def _sigterm_handler(signum, frame):  # pylint: disable=unused-argument
+        logger.warning(
+            "[Lecture %d] Received SIGTERM, notifying Artemis",
+            dto.lecture_unit.lecture_unit_id,
+        )
+        if callback is not None:
+            try:
+                callback.error("Process terminated (SIGTERM)")
+            except Exception:  # nosec B110
+                logger.debug("Failed to send SIGTERM error callback")
+        raise SystemExit(1)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
     with semaphore:
-        lecture_ingestion_update_pipeline = LectureIngestionUpdatePipeline(dto)
-        lecture_ingestion_update_pipeline()
-        semaphore.release()
+        try:
+            pipeline = LectureIngestionUpdatePipeline(dto)
+            pipeline()
+        except Exception as e:
+            logger.error(
+                "[Lecture %d] Worker failed: %s",
+                dto.lecture_unit.lecture_unit_id,
+                e,
+                exc_info=True,
+            )
+            capture_exception(e)
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
