@@ -1,15 +1,53 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 
-import type { RequestLogStats } from "@/components/statistics/types";
+import type { RequestLogStats, DeviceInfo, LaneSignalData } from "@/components/statistics/types";
 import { API_BASE } from "@/components/statistics/constants";
 
+export interface VramV2Sample {
+  snapshot_id?: number;
+  timestamp: string;
+  vram_mb?: number;
+  used_vram_mb?: number;
+  remaining_vram_mb?: number;
+  total_vram_mb?: number;
+  loaded_models?: Array<any>;
+  scheduler_signals?: {
+    provider?: {
+      device_mode?: string;
+      nvidia_smi_available?: boolean;
+      device_count?: number;
+      total_memory_mb?: number;
+      used_memory_mb?: number;
+      free_memory_mb?: number;
+      lane_count?: number;
+      active_requests?: number;
+      loaded_lane_count?: number;
+      sleeping_lane_count?: number;
+      cold_lane_count?: number;
+      total_effective_vram_mb?: number;
+      devices?: DeviceInfo[];
+    };
+    lanes?: Record<string, LaneSignalData>;
+    models?: Record<string, any>;
+  };
+}
+
+export interface VramV2Provider {
+  provider_id: number;
+  name: string;
+  connected?: boolean;
+  connection_state?: string;
+  provider_type?: string;
+  runtime_modes?: string[];
+  transport_connected?: boolean;
+  last_heartbeat?: string | null;
+  devices?: DeviceInfo[];
+  data: VramV2Sample[];
+}
+
 export interface VramV2Payload {
-  providers?: Array<{
-    provider_id: number;
-    name: string;
-    data: Array<any>;
-  }>;
+  providers?: VramV2Provider[];
   last_snapshot_id?: number;
   error?: string;
 }
