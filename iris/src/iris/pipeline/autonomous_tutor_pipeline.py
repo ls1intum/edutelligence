@@ -13,6 +13,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AgentPipelineExecutionState,
 )
 from iris.pipeline.shared.utils import (
+    REDACTED_ANSWER_PLACEHOLDER,
     format_post_discussion,
     get_current_utc_datetime_string,
 )
@@ -43,7 +44,6 @@ class AutonomousTutorPipeline(
     """
 
     DIRECT_POST_CONFIDENCE_THRESHOLD = 0.95
-    REDACTED_PLACEHOLDER = "[message hidden – user opted out of AI]"
 
     def __init__(self):
         super().__init__(implementation_id="autonomous_tutor_pipeline")
@@ -257,7 +257,7 @@ class AutonomousTutorPipeline(
         responses = []
         for answer in post.answers:
             if answer.redacted:
-                responses.append(f"- {self.REDACTED_PLACEHOLDER}")
+                responses.append(f"- {REDACTED_ANSWER_PLACEHOLDER}")
             elif answer.content:
                 responses.append(f"- {answer.content}")
         return "\n".join(responses)
