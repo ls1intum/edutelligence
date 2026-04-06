@@ -42,7 +42,7 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
   const isVllm = lane.vllm;
 
   return (
-    <View className="mb-2 rounded-xl border border-outline-200 bg-background-50 p-3 dark:border-outline-700 dark:bg-background-900">
+    <View className="mb-2 rounded-xl border border-outline-200 bg-background-50 p-3">
       <HStack className="mb-2 items-start justify-between gap-2">
         <HStack className="min-w-0 flex-1 items-center gap-2">
           {/* State indicator dot */}
@@ -52,12 +52,12 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
           />
           <VStack className="min-w-0 flex-1">
             <Text
-              className="text-sm font-medium text-typography-900 dark:text-typography-50"
+              className="text-sm font-medium text-typography-900"
               numberOfLines={1}
             >
               {laneId}
             </Text>
-            <Text className="text-xs text-typography-500 dark:text-typography-400" numberOfLines={1}>
+            <Text className="text-xs text-typography-500" numberOfLines={1}>
               {lane.model}
             </Text>
           </VStack>
@@ -93,7 +93,7 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
                   {kvPct.toFixed(1)}%
                 </Text>
               </HStack>
-              <View className="h-2 w-full overflow-hidden rounded-full bg-background-300 dark:bg-background-700">
+              <View className="h-2 w-full overflow-hidden rounded-full bg-background-300">
                 <View
                   className="h-full rounded-full"
                   style={{
@@ -124,12 +124,12 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
             )}
             {lane.queue_waiting !== null && lane.queue_waiting !== undefined && (
               <Text className="text-xs text-typography-500">
-                Queue: <Text className="text-typography-700 dark:text-typography-300">{lane.queue_waiting}</Text>
+                Queue: <Text className="text-typography-700">{lane.queue_waiting}</Text>
               </Text>
             )}
             {lane.requests_running !== null && lane.requests_running !== undefined && (
               <Text className="text-xs text-typography-500">
-                Running: <Text className="text-typography-700 dark:text-typography-300">{lane.requests_running}</Text>
+                Running: <Text className="text-typography-700">{lane.requests_running}</Text>
               </Text>
             )}
           </HStack>
@@ -137,7 +137,7 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
       ) : (
         <HStack className="flex-wrap gap-3">
           <Text className="text-xs text-typography-500">
-            Active: <Text className="text-typography-700 dark:text-typography-300">{lane.active_requests}</Text>
+            Active: <Text className="text-typography-700">{lane.active_requests}</Text>
           </Text>
           <Text className="text-xs text-typography-400">KV/TTFT: N/A (Ollama)</Text>
         </HStack>

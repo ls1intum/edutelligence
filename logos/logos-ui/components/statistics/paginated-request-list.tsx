@@ -118,7 +118,7 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
           <View className="rounded-md bg-blue-500/10 px-2 py-0.5">
             <Text className="text-xs font-semibold text-blue-500">RUNNING</Text>
           </View>
-          <Text className="text-sm font-medium text-typography-700 dark:text-typography-300">
+          <Text className="text-sm font-medium text-typography-700 ">
             {formatElapsed(elapsed)}
           </Text>
         </HStack>
@@ -149,7 +149,7 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
           {/* Left */}
           <VStack className="min-w-0 flex-1">
             <HStack className="items-center gap-2">
-              <Text className="text-base font-medium text-typography-900 dark:text-typography-50" numberOfLines={1}>
+              <Text className="text-base font-medium text-typography-900 " numberOfLines={1}>
                 {item.model_name}
               </Text>
               <Text className="text-xs text-typography-400">{timeAgo}</Text>
@@ -188,7 +188,7 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
                     </Text>
                   </View>
                 )}
-                <Text className="text-base font-semibold text-typography-900 dark:text-typography-50">
+                <Text className="text-base font-semibold text-typography-900 ">
                   {totalTimeLabel()}
                 </Text>
               </HStack>
@@ -270,7 +270,7 @@ async function fetchPage(
   return resp.json();
 }
 
-const PER_PAGE = 20;
+const PER_PAGE = 7;
 
 type PaginatedRequestListProps = {
   liveRequests: RequestItem[];
@@ -350,7 +350,7 @@ export default function PaginatedRequestList({
     <VStack className="w-full py-2">
       {/* Header */}
       <HStack className="mb-2 items-center justify-between">
-        <Text className="text-lg font-bold text-typography-900 dark:text-typography-50">
+        <Text className="text-lg font-bold text-typography-900 ">
           Requests
         </Text>
         {total > 0 && (
@@ -398,13 +398,13 @@ export default function PaginatedRequestList({
             variant="outline"
             isDisabled={page <= 1 || loading}
             onPress={() => load(page - 1)}
-            className="rounded-lg border-outline-200 dark:border-outline-700"
+            className="rounded-lg border-outline-200 "
           >
-            <ButtonText className="text-typography-700 dark:text-typography-300">← Prev</ButtonText>
+            <ButtonText className="text-typography-700 ">← Prev</ButtonText>
           </Button>
 
           <VStack className="items-center">
-            <Text className="text-sm text-typography-600 dark:text-typography-400">
+            <Text className="text-sm text-typography-600 ">
               Page {page} of {totalPages}
             </Text>
             {loading && (
@@ -417,9 +417,9 @@ export default function PaginatedRequestList({
             variant="outline"
             isDisabled={page >= totalPages || loading}
             onPress={() => load(page + 1)}
-            className="rounded-lg border-outline-200 dark:border-outline-700"
+            className="rounded-lg border-outline-200 "
           >
-            <ButtonText className="text-typography-700 dark:text-typography-300">Next →</ButtonText>
+            <ButtonText className="text-typography-700 ">Next →</ButtonText>
           </Button>
         </HStack>
       )}

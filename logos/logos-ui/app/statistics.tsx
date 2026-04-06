@@ -563,7 +563,7 @@ function StatisticsPageSkeleton() {
       {/* Summary header cards skeleton */}
       <HStack className="w-full flex-wrap gap-3">
         {[1, 2, 3].map((i) => (
-          <View key={i} className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4 dark:bg-secondary-800">
+          <View key={i} className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4">
             <Skeleton variant="rounded" startColor={SKELETON_START_COLOR} className="mb-2 h-3 w-24" />
             <Skeleton variant="rounded" startColor={SKELETON_START_COLOR} className="h-8 w-16" />
           </View>
@@ -586,7 +586,7 @@ function StatisticsPageSkeleton() {
       <View className="mt-5 h-[1px] w-full bg-outline-200" />
 
       {/* Lane health skeleton */}
-      <View className="rounded-2xl bg-secondary-200 p-4 shadow-hard-2 dark:bg-secondary-800">
+      <View className="rounded-2xl bg-secondary-200 p-4 shadow-hard-2">
         <Skeleton variant="rounded" startColor={SKELETON_START_COLOR} className="mb-4 h-8 w-40" />
         {[1, 2].map((i) => (
           <View key={i} className="mb-2 rounded-xl border border-outline-200 p-3">
@@ -1835,29 +1835,29 @@ export default function Statistics() {
           <VStack space="md">
             {/* Summary Header Cards */}
             <HStack className="w-full flex-wrap gap-3">
-              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4 dark:bg-secondary-800">
-                <Text className="text-xs font-medium text-typography-500 dark:text-typography-400">
+              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4">
+                <Text className="text-xs font-medium text-typography-600">
                   Total Requests
                 </Text>
-                <Text className="text-2xl font-bold text-typography-900 dark:text-typography-50">
+                <Text className="text-2xl font-bold text-typography-900">
                   {stats.totals.requests}
                 </Text>
               </View>
-              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4 dark:bg-secondary-800">
-                <Text className="text-xs font-medium text-typography-500 dark:text-typography-400">
+              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4">
+                <Text className="text-xs font-medium text-typography-600">
                   Avg Latency
                 </Text>
-                <Text className="text-2xl font-bold text-typography-900 dark:text-typography-50">
+                <Text className="text-2xl font-bold text-typography-900">
                   {stats.totals.avgRunSeconds != null
                     ? `${stats.totals.avgRunSeconds.toFixed(2)}s`
                     : "—"}
                 </Text>
               </View>
-              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4 dark:bg-secondary-800">
-                <Text className="text-xs font-medium text-typography-500 dark:text-typography-400">
+              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4">
+                <Text className="text-xs font-medium text-typography-600">
                   Active Lanes
                 </Text>
-                <Text className="text-2xl font-bold text-typography-900 dark:text-typography-50">
+                <Text className="text-2xl font-bold text-typography-900">
                   {derivedActiveLanes}
                 </Text>
               </View>
@@ -1969,13 +1969,13 @@ export default function Statistics() {
                             toggleFocusOnPress
                             centerLabelComponent={() => (
                               <View className="items-center">
-                                <Text className="text-xs text-typography-500 dark:text-typography-400">
+                                <Text className="text-xs text-typography-500">
                                   Free
                                 </Text>
-                                <Text className="text-xl font-semibold text-typography-900 dark:text-typography-50">
+                                <Text className="text-xl font-semibold text-typography-900">
                                   {vramSummary.freePct}%
                                 </Text>
-                                <Text className="text-xs text-typography-500 dark:text-typography-400">
+                                <Text className="text-xs text-typography-500">
                                   of {vramSummary.totalGb.toFixed(1)} GB
                                 </Text>
                               </View>
@@ -1993,7 +1993,7 @@ export default function Statistics() {
                                   backgroundColor: d.color,
                                 }}
                               />
-                              <Text className="text-xs text-typography-700 dark:text-typography-300">
+                              <Text className="text-xs text-typography-700">
                                 {d.text}: {d.value.toFixed(1)} GB
                               </Text>
                             </HStack>

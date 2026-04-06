@@ -44,14 +44,18 @@ export default function LaneVramPie({
       return a.model.localeCompare(b.model);
     });
 
-    for (const [laneId, lane] of sortedLanes) {
+    for (const [, lane] of sortedLanes) {
       const vramMb = lane.effective_vram_mb ?? 0;
       if (vramMb <= 0) continue;
       allocatedMb += vramMb;
+      // Shorten model name to last path segment for legend readability
+      const shortModel = lane.model.includes("/")
+        ? lane.model.split("/").pop()!
+        : lane.model;
       result.push({
         value: Number((vramMb / 1024).toFixed(3)),
         color: getLaneStateColor(lane.runtime_state),
-        text: `${laneId} · ${lane.model} [${lane.runtime_state}]`,
+        text: `${shortModel} [${lane.runtime_state}]`,
       });
     }
 
@@ -86,9 +90,9 @@ export default function LaneVramPie({
     <PlotlyPieChart
       data={slices}
       width={width}
-      height={280}
+      height={320}
       pieScale={0.85}
-      legendPosition="right"
+      legendPosition="bottom"
       hoverValueSuffix=" GB"
       hoverValueDecimals={2}
       centerText={{

@@ -37,14 +37,15 @@ services:
       # ── GPU / CUDA (only relevant when INSTALL_VLLM=1) ───────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
-    gpus: all
-    pid: host
-    ipc: host # Required for NCCL shared-memory transport in tensor-parallel vLLM
-    shm_size: "16g" # Default 64 MB is insufficient; NCCL hangs without adequate /dev/shm
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1 # Unlimited locked memory — needed for NCCL pinned buffers
+    # GPU settings — uncomment on GPU machines with nvidia-container-runtime
+    # gpus: all
+    # pid: host
+    # ipc: host
+    # shm_size: "16g"
+    # ulimits:
+    #   memlock:
+    #     soft: -1
+    #     hard: -1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
