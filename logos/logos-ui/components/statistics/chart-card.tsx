@@ -20,7 +20,7 @@ export default function ChartCard({
 
   return (
     <View
-      className={`my-2 rounded-2xl bg-secondary-200 p-4 shadow-hard-2 ${
+      className={`my-1.5 rounded-2xl bg-secondary-200 p-3 shadow-hard-2 ${
         className || ""
       }`}
       onLayout={(e) => {
@@ -28,8 +28,8 @@ export default function ChartCard({
         if (Math.abs(w - layoutWidth) > 1) setLayoutWidth(w);
       }}
     >
-      <View className="mb-4">
-        <Text className="text-lg font-semibold text-typography-900">
+      <View className="mb-2">
+        <Text className="text-base font-semibold text-typography-900">
           {title}
         </Text>
         {subtitle && (

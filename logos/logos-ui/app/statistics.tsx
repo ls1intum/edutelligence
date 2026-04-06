@@ -1833,39 +1833,9 @@ export default function Statistics() {
           <StatisticsPageSkeleton />
         ) : stats ? (
           <VStack space="md">
-            {/* Summary Header Cards */}
-            <HStack className="w-full flex-wrap gap-3">
-              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4">
-                <Text className="text-xs font-medium text-typography-600">
-                  Total Requests
-                </Text>
-                <Text className="text-2xl font-bold text-typography-900">
-                  {stats.totals.requests}
-                </Text>
-              </View>
-              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4">
-                <Text className="text-xs font-medium text-typography-600">
-                  Avg Latency
-                </Text>
-                <Text className="text-2xl font-bold text-typography-900">
-                  {stats.totals.avgRunSeconds != null
-                    ? `${stats.totals.avgRunSeconds.toFixed(2)}s`
-                    : "—"}
-                </Text>
-              </View>
-              <View className="min-w-[140px] flex-1 rounded-xl bg-secondary-200 p-4">
-                <Text className="text-xs font-medium text-typography-600">
-                  Active Lanes
-                </Text>
-                <Text className="text-2xl font-bold text-typography-900">
-                  {derivedActiveLanes}
-                </Text>
-              </View>
-            </HStack>
-
             {/* Requests + GPU Panel */}
-            <View className="w-full flex-col gap-3 xl:flex-row xl:items-start xl:gap-6">
-              <View className="w-full xl:flex-1">
+            <View className="w-full flex-col gap-2 xl:flex-row xl:items-stretch xl:gap-4">
+              <View className="w-full xl:flex-[2]">
                 <PaginatedRequestList
                   liveRequests={latestRequests}
                   apiKey={apiKey}
@@ -1873,63 +1843,47 @@ export default function Statistics() {
                 />
               </View>
               <View className="mx-4 hidden w-px self-stretch bg-outline-200 xl:flex" />
-              <View className="w-full xl:flex-1">
-                {/* GPU Panel */}
+              <View className="w-full flex-col xl:flex-[3]">
+                {/* GPU Overview + VRAM Allocation combined */}
                 <ChartCard
                   title="GPU Overview"
-                  subtitle="Per-GPU hardware metrics from nvidia-smi"
-                >
-                  {() => (
-                    <WorkerGpuPanel
-                      providerLatestSamples={latestSampleByProvider}
-                      providerDevices={devicesByProvider}
-                      providerMeta={vramProviderMetaByName}
-                      lanesByProvider={lanesByProvider}
-                    />
-                  )}
-                </ChartCard>
-
-                {/* Lane VRAM Pie */}
-                <ChartCard
-                  title="VRAM Allocation"
-                  subtitle="Per-lane memory split for the selected provider"
+                  subtitle="VRAM allocation and per-GPU hardware metrics"
                 >
                   {(width) => {
+                    const pieWidth = Math.floor(width * 0.45);
                     const hasLanes = Object.keys(selectedProviderLanes).length > 0;
-                    if (usePlotlyWeb && hasLanes) {
-                      return (
-                        <LaneVramPie
-                          width={width}
-                          lanes={selectedProviderLanes}
-                          totalVramMb={selectedProviderTotalVramMb}
-                          freeVramMb={selectedProviderFreeVramMb}
-                        />
-                      );
-                    }
 
-                    // Fallback to existing pie chart
-                    if (!vramPieData.length) {
-                      return (
-                        <EmptyState
-                          message={
-                            selectedVramProviderMeta?.connection_state ===
-                              "offline" || selectedVramProviderMeta?.connected === false
-                              ? `No live memory telemetry: ${selectedVramProvider} is offline.`
-                              : "No memory data for the selected provider yet."
-                          }
-                        />
-                      );
-                    }
-
-                    if (usePlotlyWeb) {
-                      return (
-                        <View style={{ alignItems: "center" }}>
+                    const pieContent = (() => {
+                      if (usePlotlyWeb && hasLanes) {
+                        return (
+                          <LaneVramPie
+                            width={pieWidth}
+                            lanes={selectedProviderLanes}
+                            totalVramMb={selectedProviderTotalVramMb}
+                            freeVramMb={selectedProviderFreeVramMb}
+                          />
+                        );
+                      }
+                      if (!vramPieData.length) {
+                        return (
+                          <EmptyState
+                            message={
+                              selectedVramProviderMeta?.connection_state === "offline" ||
+                              selectedVramProviderMeta?.connected === false
+                                ? `${selectedVramProvider} is offline.`
+                                : "No memory data yet."
+                            }
+                          />
+                        );
+                      }
+                      if (usePlotlyWeb) {
+                        return (
                           <PlotlyPieChart
                             data={vramPieData}
-                            width={width}
-                            height={260}
+                            width={pieWidth}
+                            height={240}
                             pieScale={0.85}
-                            legendPosition="right"
+                            legendPosition="bottom"
                             hoverValueSuffix=" GB"
                             hoverValueDecimals={2}
                             centerText={{
@@ -1938,89 +1892,87 @@ export default function Statistics() {
                               bottom: `of ${vramSummary.totalGb.toFixed(1)} GB`,
                             }}
                           />
+                        );
+                      }
+                      const { radius, innerRadius } = getPieSizing(pieWidth, 0.85);
+                      return (
+                        <View style={{ alignItems: "center" }}>
+                          <View style={{ alignItems: "center", justifyContent: "center" }}>
+                            <View
+                              pointerEvents="none"
+                              className="absolute rounded-full bg-secondary-200"
+                              style={{ width: innerRadius * 2, height: innerRadius * 2 }}
+                            />
+                            <PieChart
+                              data={vramPieData}
+                              donut
+                              innerRadius={innerRadius}
+                              radius={radius}
+                              isAnimated={false}
+                              focusOnPress
+                              toggleFocusOnPress
+                              centerLabelComponent={() => (
+                                <View className="items-center">
+                                  <Text className="text-xs text-typography-500">Free</Text>
+                                  <Text className="text-xl font-semibold text-typography-900">
+                                    {vramSummary.freePct}%
+                                  </Text>
+                                  <Text className="text-xs text-typography-500">
+                                    of {vramSummary.totalGb.toFixed(1)} GB
+                                  </Text>
+                                </View>
+                              )}
+                            />
+                          </View>
+                          <VStack className="mt-3 space-y-1">
+                            {vramPieData.map((d, i) => (
+                              <HStack key={i} space="xs" className="items-center">
+                                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: d.color }} />
+                                <Text className="text-xs text-typography-700">
+                                  {d.text}: {d.value.toFixed(1)} GB
+                                </Text>
+                              </HStack>
+                            ))}
+                          </VStack>
                         </View>
                       );
-                    }
+                    })();
 
-                    const { radius, innerRadius } = getPieSizing(width, 0.85);
                     return (
-                      <View style={{ alignItems: "center" }}>
-                        <View
-                          style={{
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <View
-                            pointerEvents="none"
-                            className="absolute rounded-full bg-secondary-200"
-                            style={{
-                              width: innerRadius * 2,
-                              height: innerRadius * 2,
-                            }}
-                          />
-                          <PieChart
-                            data={vramPieData}
-                            donut
-                            innerRadius={innerRadius}
-                            radius={radius}
-                            isAnimated={false}
-                            focusOnPress
-                            toggleFocusOnPress
-                            centerLabelComponent={() => (
-                              <View className="items-center">
-                                <Text className="text-xs text-typography-500">
-                                  Free
-                                </Text>
-                                <Text className="text-xl font-semibold text-typography-900">
-                                  {vramSummary.freePct}%
-                                </Text>
-                                <Text className="text-xs text-typography-500">
-                                  of {vramSummary.totalGb.toFixed(1)} GB
-                                </Text>
-                              </View>
-                            )}
+                      <View style={{ flexDirection: "row", gap: 12, alignItems: "flex-start" }}>
+                        <View style={{ width: pieWidth }}>
+                          <Text className="mb-1 text-xs font-medium text-typography-400">VRAM</Text>
+                          {pieContent}
+                        </View>
+                        <View style={{ width: 1, alignSelf: "stretch", backgroundColor: "#e2e8f0" }} />
+                        <View style={{ flex: 1 }}>
+                          <WorkerGpuPanel
+                            providerLatestSamples={latestSampleByProvider}
+                            providerDevices={devicesByProvider}
+                            providerMeta={vramProviderMetaByName}
+                            lanesByProvider={lanesByProvider}
                           />
                         </View>
-                        <VStack className="mt-4 space-y-1">
-                          {vramPieData.map((d, i) => (
-                            <HStack key={i} space="xs" className="items-center">
-                              <View
-                                style={{
-                                  width: 10,
-                                  height: 10,
-                                  borderRadius: 5,
-                                  backgroundColor: d.color,
-                                }}
-                              />
-                              <Text className="text-xs text-typography-700">
-                                {d.text}: {d.value.toFixed(1)} GB
-                              </Text>
-                            </HStack>
-                          ))}
-                        </VStack>
                       </View>
                     );
                   }}
                 </ChartCard>
+
+                {/* Lane Health Panel */}
+                <ChartCard
+                  title="Lane Health"
+                  subtitle="Per-lane KV cache, TTFT, and runtime state"
+                >
+                  {() => (
+                    <LaneMetricsPanel
+                      lanesByProvider={lanesByProvider}
+                      providerMeta={vramProviderMetaByName}
+                      selectedProvider={selectedVramProvider}
+                    />
+                  )}
+                </ChartCard>
               </View>
             </View>
-
-            <View className="mt-5 h-[1px] w-full bg-outline-200" />
-
-            {/* Lane Health Panel */}
-            <ChartCard
-              title="Lane Health"
-              subtitle="Per-lane KV cache, TTFT, and runtime state"
-            >
-              {() => (
-                <LaneMetricsPanel
-                  lanesByProvider={lanesByProvider}
-                  providerMeta={vramProviderMetaByName}
-                  selectedProvider={selectedVramProvider}
-                />
-              )}
-            </ChartCard>
 
             <View className="h-[1px] w-full bg-outline-200" />
 

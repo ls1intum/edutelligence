@@ -330,7 +330,8 @@ class VllmProcessHandle:
                     metrics["queue_waiting"] = value
                 elif metric_name.endswith("num_requests_running"):
                     metrics["requests_running"] = value
-                elif metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent"):
+                elif (metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent")
+                      or metric_name.endswith("kv_cache_usage_perc") or metric_name.endswith("kv_cache_usage_percent")):
                     metrics["gpu_cache_usage_percent"] = value * 100.0
                 elif metric_name.endswith("prefix_cache_hit_rate"):
                     metrics["prefix_cache_hit_rate"] = value
