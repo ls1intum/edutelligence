@@ -206,6 +206,7 @@ class LaneManager:
         gpu_device_count: Callable[[], int] | None = None,
         per_gpu_vram_mb: Callable[[], float] | None = None,
         gpu_snapshot: Callable[[], Awaitable[DeviceSummary]] | None = None,
+        gpu_force_poll: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
@@ -213,6 +214,7 @@ class LaneManager:
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
         self._gpu_snapshot = gpu_snapshot
+        self._gpu_force_poll = gpu_force_poll
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -337,6 +339,13 @@ class LaneManager:
                     removed_snapshots[lid] = (handle, lc, port)
                     try:
                         await self._remove_lane_unlocked(lid)
+                        # Refresh GPU snapshot BEFORE _record_event so the status-push
+                        # triggered by _mark_status_dirty carries post-removal VRAM numbers.
+                        # This mirrors the same pattern in sleep_lane/wake_lane and prevents
+                        # the server from seeing the lane as gone but VRAM still occupied
+                        # (causing the wake VRAM check to be denied on the next request).
+                        if self._gpu_force_poll is not None:
+                            await self._gpu_force_poll()
                         self._record_event(lid, "removed", model=lc.model if lc else "", port=port)
                         actions.append(LaneAction(
                             action="removed", lane_id=lid,
@@ -484,6 +493,12 @@ class LaneManager:
             if lc is None or not lc.vllm:
                 raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
             await handle.sleep(level=level, mode=mode)
+            # Refresh GPU snapshot BEFORE _record_event so that the status-push
+            # triggered by _mark_status_dirty carries post-sleep GPU numbers.
+            # Without this, _status_refresh_loop would race ahead with stale data,
+            # causing the server to see the lane as sleeping but VRAM still full.
+            if self._gpu_force_poll is not None:
+                await self._gpu_force_poll()
             prom.LANE_TRANSITIONS_TOTAL.labels(action="sleep").inc()
             self._record_event(
                 lane_id,
@@ -537,6 +552,11 @@ class LaneManager:
                 else:
                     cleanup = (handle, handle.port, str(exc))
             else:
+                # Refresh GPU snapshot before _record_event for the same reason
+                # as in sleep_lane: wake allocates VRAM and _status_refresh_loop
+                # must carry post-wake numbers in the heartbeat it sends.
+                if self._gpu_force_poll is not None:
+                    await self._gpu_force_poll()
                 prom.LANE_TRANSITIONS_TOTAL.labels(action="wake").inc()
                 self._record_event(
                     lane_id,

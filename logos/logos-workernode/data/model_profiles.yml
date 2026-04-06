@@ -1,0 +1,46 @@
+model_profiles:
+  Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
+    base_residency_mb: 15675.053585716178
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 4096.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1775271138.3142645
+    loaded_vram_mb: 19771.05358571618
+    max_context_length: null
+    measurement_count: 27
+    min_gpu_memory_utilization_to_load: null
+    observed_gpu_memory_utilization: null
+    residency_source: measured
+    sleeping_residual_mb: 1427.9593873224535
+    tensor_parallel_size: 2
+  Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
+    base_residency_mb: 6431.202151241959
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 4096.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1775271138.361804
+    loaded_vram_mb: 10527.202151241958
+    max_context_length: null
+    measurement_count: 12
+    min_gpu_memory_utilization_to_load: null
+    observed_gpu_memory_utilization: null
+    residency_source: measured
+    sleeping_residual_mb: 771.0915582029512
+    tensor_parallel_size: 1
+  qwen3-embedding:8b:
+    base_residency_mb: null
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: null
+    kv_per_token_bytes: null
+    last_measured_epoch: 0.0
+    loaded_vram_mb: null
+    max_context_length: null
+    measurement_count: 0
+    min_gpu_memory_utilization_to_load: null
+    observed_gpu_memory_utilization: null
+    residency_source: cached
+    sleeping_residual_mb: null
+    tensor_parallel_size: null
