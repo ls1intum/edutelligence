@@ -30,31 +30,37 @@ _PREPARING_MESSAGES = [
 ]
 
 
+_MAX_MCQ_COUNT = 10
+
+
 def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
     """Detect MCQ generation intent from user message.
+
+    Only triggers on phrasing that clearly requests question *generation*,
+    not on messages merely mentioning quizzes (e.g. "When is the quiz?").
 
     Returns:
         Tuple of (is_mcq_intent, question_count). Count defaults to 1.
     """
     message_lower = user_message.lower()
 
-    # Check for explicit count patterns (e.g., "5 questions", "another 3")
+    # Check for explicit count + generation-intent patterns
     count_patterns = [
-        r"(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)",
-        r"(?:another|more|give me|generate|create)\s+(\d+)",
+        r"(?:generate|create|give\s+me|make|prepare)\s+(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)",
+        r"(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)\s+(?:about|on|for|from|regarding)",
+        r"(?:another|more)\s+(\d+)\s*(?:question|mcq|quiz)",
     ]
     for pattern in count_patterns:
         match = re.search(pattern, message_lower)
         if match:
-            return True, int(match.group(1))
+            count = max(1, min(int(match.group(1)), _MAX_MCQ_COUNT))
+            return True, count
 
-    # Then check keyword phrases
+    # Keyword phrases that unambiguously request question generation
     mcq_keywords = [
-        "quiz",
-        "mcq",
+        "quiz me",
         "multiple choice",
         "test me",
-        "quiz me",
         "test my knowledge",
         "generate a question",
         "generate questions",
