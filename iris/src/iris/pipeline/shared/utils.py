@@ -14,6 +14,8 @@ logger = get_logger(__name__)
 # Standard datetime format used across the codebase for prompt templates
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+REDACTED_ANSWER_PLACEHOLDER = "[message hidden – user opted out of AI]"
+
 
 def generate_structured_tool_from_function(
     tool_function: Callable,
@@ -147,12 +149,11 @@ def format_post_discussion(post: PostDTO, include_user_ids: bool = False) -> str
     else:
         discussion = f"Student's question: {post.content}\n"
 
-    redacted_placeholder = "[message hidden – user opted out of AI]"
     if post.answers:
         discussion += "Previous responses:\n"
         for answer in post.answers:
             if answer.redacted:
-                text = redacted_placeholder
+                text = REDACTED_ANSWER_PLACEHOLDER
             else:
                 text = answer.content or ""
             if text:
