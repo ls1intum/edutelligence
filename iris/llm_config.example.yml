@@ -57,6 +57,23 @@
   name: Embedding Small
   type: openai_embedding
 
+# ── Whisper transcription models ─────────────────────────────────────────────
+- api_key:
+  description: Whisper 1 (OpenAI)
+  id: whisper-1
+  model: whisper-1
+  name: Whisper 1
+  type: openai_whisper
+- api_key:
+  api_version: "2024-06-01"
+  azure_deployment: whisper
+  description: Whisper 1 on Azure
+  endpoint: "<your-endpoint>"
+  id: whisper-1
+  model: whisper-1
+  name: Whisper 1 (Azure)
+  type: azure_whisper
+
 # ── Reranker ─────────────────────────────────────────────────────────────────
 - api_key:
   description: Cohere V2 client

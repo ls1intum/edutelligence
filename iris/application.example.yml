@@ -16,5 +16,18 @@ langfuse:
   secret_key: "sk-lf-..." # Your LangFuse secret key  # pragma: allowlist secret
   host: "https://cloud.langfuse.com" # Or your self-hosted instance URL
 
+transcription:
+  enabled: false # Set to true to enable video transcription
+  temp_dir: "tmp/transcription" # Temporary directory for video/audio files
+  chunk_duration_seconds: 900 # Audio chunk size in seconds for Whisper
+  whisper_model: "whisper" # Model ID in llm_config.yml
+  whisper_max_workers: 2 # Parallel Whisper API requests per job
+  whisper_request_timeout_seconds: 300 # Timeout per Whisper request
+  whisper_max_retries: 6 # Max retries per chunk on failure
+  max_concurrent_jobs: 2 # Max concurrent transcription jobs
+  download_timeout_seconds: 3600 # Video download timeout
+  extract_audio_timeout_seconds: 600 # Audio extraction timeout
+  no_speech_filter_threshold: 0.8 # Filter silent segments (0.0-1.0)
+
 env_vars:
   SOME: "value"
