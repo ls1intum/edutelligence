@@ -1,9 +1,10 @@
 """Tool for retrieving FAQ content using RAG."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
+from ..pipeline.shared.citation_utils import build_faq_citation_id
 from ..retrieval.faq_retrieval import FaqRetrieval
-from ..retrieval.faq_retrieval_utils import format_faqs
+from ..vector_database.faq_schema import FaqSchema
 from ..web.status.status_update import StatusCallback
 
 
@@ -16,6 +17,7 @@ def create_tool_faq_content_retrieval(
     query_text: str,
     history: List[Any],
     faq_storage: Dict[str, Any],
+    citation_counter: Optional[Dict[str, int]] = None,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves FAQ content using RAG.
@@ -29,6 +31,7 @@ def create_tool_faq_content_retrieval(
         query_text: The student's query text.
         history: Chat history messages.
         faq_storage: Storage for retrieved FAQs.
+        citation_counter: Shared counter for citation sequence numbers (optional, creates local if not provided).
 
     Returns:
         Callable[[], str]: Function that returns formatted FAQ content.
@@ -49,6 +52,11 @@ def create_tool_faq_content_retrieval(
         Returns:
             str: Formatted string containing relevant FAQ answers.
         """
+        # Use provided citation_counter or create local one if not provided
+        nonlocal citation_counter
+        if citation_counter is None:
+            citation_counter = {"next": 1}
+
         callback.in_progress("Retrieving faq content ...")
         retrieved_faqs = faq_retriever(
             chat_history=history,
@@ -59,10 +67,39 @@ def create_tool_faq_content_retrieval(
             base_url=base_url,
         )
 
-        # Store the retrieved FAQs for later use (e.g., citation pipeline)
-        faq_storage["faqs"] = retrieved_faqs
+        # Build citation content map with citation IDs created at retrieval time
+        citation_content_map = {}
 
-        result = format_faqs(retrieved_faqs)
+        for faq in retrieved_faqs:
+            faq_props = faq.get("properties", {})
+            faq_id = faq_props.get(FaqSchema.FAQ_ID.value)
+            question = faq_props.get(FaqSchema.QUESTION_TITLE.value) or ""
+            answer = faq_props.get(FaqSchema.QUESTION_ANSWER.value) or ""
+            if not question and not answer:
+                continue
+            if not faq_id:
+                continue
+            seq_num = citation_counter.setdefault("next", 1)
+            citation_counter["next"] += 1
+            citation_id = build_faq_citation_id(faq_id, seq_num)
+            citation_content_map[seq_num] = {
+                "content": f"Q: {question}\nA: {answer}",
+                "citation_id": citation_id,
+                "type": "faq",
+                "faq_id": faq_id,
+            }
+
+        # Store citation map (merge with existing to preserve prior citations in case tool is called several times)
+        existing_map = faq_storage.get("citation_content_map", {})
+        existing_map.update(citation_content_map)
+        faq_storage["citation_content_map"] = existing_map
+
+        # Format result string with simplified citation IDs for LLM
+        # Full citation IDs are stored in citation_content_map for later restoration
+        result = "FAQ content:\n"
+        for seq_num, citation_data in sorted(citation_content_map.items()):
+            result += f'[cite:{seq_num}]\nContent:\n{citation_data["content"]}\n\n'
+
         return result
 
     return faq_content_retrieval
