@@ -125,24 +125,30 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN set -e \
+    && pip install --no-cache-dir -r requirements.txt \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
          # 1. Install vLLM (pins torch to its required version from PyPI)
-         pip install --no-cache-dir $VLLM_PIP_SPEC; \
+         pip install --no-cache-dir $VLLM_PIP_SPEC \
+         # Free disk space before reinstalling torch: strip tests, caches, temp files
+         && (find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + || true) \
+         && (find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
+              -path '*/torch/*' -exec rm -rf {} + || true) \
+         && rm -rf /tmp/pip-* /root/.cache \
          # 2. Reinstall torch from CUDA wheel index (same version, GPU-enabled)
-         if [ -n "$TORCH_INDEX_URL" ]; then \
-           torch_ver=$(python3 -c "import importlib.metadata as m; print(m.version('torch'))"); \
-           echo "Reinstalling torch==${torch_ver} from ${TORCH_INDEX_URL}"; \
-           pip install --no-cache-dir --force-reinstall --no-deps \
-               --extra-index-url "$TORCH_INDEX_URL" \
-               "torch==${torch_ver}"; \
-         fi; \
+         && if [ -n "$TORCH_INDEX_URL" ]; then \
+              torch_ver=$(python3 -c "import importlib.metadata as m; print(m.version('torch'))") \
+              && echo "Reinstalling torch==${torch_ver} from ${TORCH_INDEX_URL}" \
+              && pip install --no-cache-dir --force-reinstall --no-deps \
+                  --extra-index-url "$TORCH_INDEX_URL" \
+                  "torch==${torch_ver}"; \
+            fi \
          # 3. Optional: override NCCL version
-         if [ -n "$NCCL_PIP_SPEC" ]; then \
-           pip install --no-cache-dir --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
-         fi; \
+         && if [ -n "$NCCL_PIP_SPEC" ]; then \
+              pip install --no-cache-dir --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
+            fi \
          # 4. FlashInfer (install AFTER torch so it picks up the correct version)
-         pip install --no-cache-dir --no-deps flashinfer-python; \
+         && pip install --no-cache-dir --no-deps flashinfer-python; \
        fi
 
 # ---------------------------------------------------------------------------
