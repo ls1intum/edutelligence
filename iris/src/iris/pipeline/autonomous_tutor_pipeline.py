@@ -13,6 +13,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AgentPipelineExecutionState,
 )
 from iris.pipeline.shared.utils import (
+    REDACTED_ANSWER_PLACEHOLDER,
     format_post_discussion,
     get_current_utc_datetime_string,
 )
@@ -268,7 +269,9 @@ class AutonomousTutorPipeline(
             return ""
         responses = []
         for answer in post.answers:
-            if answer.content:
+            if answer.redacted:
+                responses.append(f"- {REDACTED_ANSWER_PLACEHOLDER}")
+            elif answer.content:
                 responses.append(f"- {answer.content}")
         return "\n".join(responses)
 
