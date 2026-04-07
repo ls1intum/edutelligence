@@ -16,12 +16,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: tj-actions/changed-files@v45
+      - uses: tj-actions/changed-files@v47
         id: changed-docs
         with:
           files: athena/docs/**
 
-      - uses: tj-actions/changed-files@v45
+      - uses: tj-actions/changed-files@v47
         id: changed-workflow
         with:
           files: |
@@ -44,7 +44,7 @@ jobs:
 
       - name: Restore Athena docs from cache
         id: cache-athena
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: athena/docs/build
           key: athena-docs-${{ hashFiles('athena/docs/**') }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Save Athena docs to cache
         if: needs.detect-changes.outputs.changed == 'true' || steps.cache-athena.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: athena/docs/build
           key: athena-docs-${{ hashFiles('athena/docs/**') }}

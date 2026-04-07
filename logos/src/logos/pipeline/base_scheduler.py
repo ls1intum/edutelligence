@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict
 
 from logos.queue.priority_queue import PriorityQueueManager, Priority
-from logos.sdi.ollama_facade import OllamaSchedulingDataFacade
+from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 
 from .scheduler_interface import SchedulerInterface, SchedulingResult
@@ -26,12 +26,12 @@ class BaseScheduler(SchedulerInterface):
     def __init__(
         self,
         queue_manager: PriorityQueueManager,
-        ollama_facade: OllamaSchedulingDataFacade,
+        logosnode_facade: LogosNodeSchedulingDataFacade,
         azure_facade: AzureSchedulingDataFacade,
         model_registry: Dict[tuple[int, int], str] | None = None,
     ):
         self._queue_mgr = queue_manager
-        self._ollama = ollama_facade
+        self._logosnode = logosnode_facade
         self._azure = azure_facade
         self._model_registry = model_registry or {}
         self._logger = logging.getLogger(__name__)
@@ -52,20 +52,20 @@ class BaseScheduler(SchedulerInterface):
         priority_str = Priority.from_int(priority_int).name.lower()
         is_cold_start = False
 
-        if provider_type == 'ollama':
+        if provider_type == 'logosnode':
             priority = Priority.from_int(priority_int)
             queue_state = self._queue_mgr.get_state(model_id, provider_id)
             queue_depth = queue_state.total
 
             try:
-                status = self._ollama.get_model_status(model_id, provider_id)
+                status = self._logosnode.get_model_status(model_id, provider_id)
                 utilization = float(status.active_requests)
                 is_cold_start = not status.is_loaded
             except ValueError:
                 utilization = 0.0
                 is_cold_start = True
 
-            self._ollama.on_request_start(
+            self._logosnode.on_request_start(
                 request_id,
                 model_id=model_id,
                 provider_id=provider_id,
@@ -74,7 +74,7 @@ class BaseScheduler(SchedulerInterface):
 
             if not was_queued:
                 try:
-                    self._ollama.on_request_begin_processing(
+                    self._logosnode.on_request_begin_processing(
                         request_id,
                         increment_active=False,
                         provider_id=provider_id,
@@ -84,9 +84,9 @@ class BaseScheduler(SchedulerInterface):
 
         provider_metrics = {}
 
-        if provider_type == 'ollama':
+        if provider_type == 'logosnode':
             try:
-                cap = self._ollama.get_capacity_info(provider_id)
+                cap = self._logosnode.get_capacity_info(provider_id)
                 provider_metrics['available_vram_mb'] = cap.available_vram_mb
             except Exception:
                 pass
@@ -141,9 +141,9 @@ class BaseScheduler(SchedulerInterface):
 
         has_waiters = next_task is not None
 
-        if provider_type == 'ollama':
+        if provider_type == 'logosnode':
             try:
-                self._ollama.on_request_complete(
+                self._logosnode.on_request_complete(
                     request_id,
                     was_cold_start=False,
                     duration_ms=0,
@@ -167,15 +167,15 @@ class BaseScheduler(SchedulerInterface):
                 provider_metrics = {}
                 is_cold_start = None
 
-                if provider_type == 'ollama':
+                if provider_type == 'logosnode':
                     try:
-                        status = self._ollama.get_model_status(model_id, provider_id)
+                        status = self._logosnode.get_model_status(model_id, provider_id)
                         is_cold_start = not status.is_loaded
                     except ValueError:
                         is_cold_start = None
 
                     try:
-                        cap = self._ollama.get_capacity_info(provider_id)
+                        cap = self._logosnode.get_capacity_info(provider_id)
                         provider_metrics['available_vram_mb'] = cap.available_vram_mb
                     except Exception:
                         pass
@@ -230,7 +230,7 @@ class BaseScheduler(SchedulerInterface):
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider-specific statistics (e.g., rate limits) from response headers.
-        Currently only Azure uses response headers for rate-limits; Ollama is no-op.
+        Currently only Azure uses response headers for rate-limits; logosnode is no-op.
         """
         provider_type = self._model_registry.get((model_id, provider_id))
         if not provider_type:
@@ -242,11 +242,64 @@ class BaseScheduler(SchedulerInterface):
             except Exception:
                 logger.debug("Failed to update Azure rate limits for model %s", model_id, exc_info=False)
 
-# TODO: fix that
-    # def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
-    #     """
-    #     Update provider statistics (e.g. rate limits) from response headers.
-    #     """
-    #     provider_type = self._model_registry.get(model_id)
-    #     if provider_type == 'azure':
-    #         self._azure.update_model_rate_limits(model_id, headers)
+    def reevaluate_model_queues(self, model_name: str) -> None:
+        """Reevaluate queued requests for a model after state change (load/wake).
+
+        When a provider state changes (e.g. a new lane becomes available),
+        queued futures for that model may be resolvable immediately.
+        """
+        # Find all (model_id, provider_id) pairs for this model name
+        for (model_id, provider_id), ptype in self._model_registry.items():
+            if ptype != "logosnode":
+                continue
+            # Check if this provider now has capacity for the model
+            try:
+                status = self._logosnode.get_model_status(model_id, provider_id)
+            except (ValueError, KeyError):
+                continue
+            if not status.is_loaded:
+                continue
+
+            # Try to dequeue and resolve waiting futures
+            while True:
+                task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
+                if task is None:
+                    break
+                if not isinstance(task, asyncio.Future):
+                    break
+                if task.done():
+                    continue
+
+                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
+                queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
+
+                provider_metrics = {}
+                try:
+                    cap = self._logosnode.get_capacity_info(provider_id)
+                    provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                except Exception:
+                    pass
+
+                result = SchedulingResult(
+                    model_id=model_id,
+                    provider_id=provider_id,
+                    provider_type="logosnode",
+                    queue_entry_id=None,
+                    was_queued=True,
+                    queue_depth_at_schedule=queue_depth,
+                    queue_depth_at_arrival=queue_depth,
+                    priority_when_scheduled=priority_str,
+                    is_cold_start=False,
+                    provider_metrics=provider_metrics,
+                    available_vram_mb=provider_metrics.get('available_vram_mb'),
+                )
+
+                logger.info(
+                    "Reevaluation: resolving queued request for model %s (provider=%s) after state change",
+                    model_name, provider_id,
+                )
+                task.get_loop().call_soon_threadsafe(task.set_result, result)
+                break  # One at a time to avoid overwhelming the newly loaded lane
+
+    def update_model_registry(self, model_registry: Dict[tuple[int, int], str]) -> None:
+        self._model_registry = dict(model_registry or {})

@@ -11,6 +11,9 @@ from pathlib import Path
 from starlette.requests import Request
 
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.types import normalize_provider_type
+
+logger = logging.getLogger(__name__)
 
 
 def get_client_ip(request: Request) -> str:
@@ -136,20 +139,37 @@ def request_setup(headers: dict, logos_key: str, profile_id: Optional[int] = Non
     with DBManager() as db:
         # Get available models for this key
         if profile_id is not None:
-            # Explicit profile-based filtering (new preferred path)
-            # TODO: change for the get_deployments_by_profile once available
             deployments = db.get_deployments_by_profile(logos_key, profile_id)
         else:
-            # Fallback: all models for key (for admin endpoints that don't need profile isolation)
-            # TODO: change for the get_deployments_by_key once available
             deployments = db.get_all_deployments()
 
-    if not deployments:
+        provider_cache: Dict[int, Dict[str, Any]] = {}
+        normalized_deployments = []
+        for deployment in deployments:
+            provider_id = deployment["provider_id"]
+            if provider_id not in provider_cache:
+                provider_cache[provider_id] = db.get_provider(provider_id) or {}
+            provider_info = provider_cache[provider_id]
+            normalized_deployments.append(
+                {
+                    **deployment,
+                    "type": normalize_provider_type(
+                        deployment.get("type"),
+                        provider_name=provider_info.get("name"),
+                        base_url=provider_info.get("base_url"),
+                    ),
+                }
+            )
+
+    if not normalized_deployments:
         return list()
     else:
         # Return ids of all available models
-        logging.info(f"Found deployments {deployments} for classification")
-        return deployments
+        logger.debug(
+            "Found %d deployments for classification",
+            len(normalized_deployments),
+        )
+        return normalized_deployments
 
 
 def proxy_behaviour(headers: dict, providers: list, path: str):
@@ -245,13 +265,15 @@ def extract_token_usage(usage: dict) -> dict:
         usage_tokens[name] = usage[name]
 
     # Extract prompt token details
-    if "prompt_tokens_details" in usage:
-        for name in usage["prompt_tokens_details"]:
-            usage_tokens["prompt_" + name] = usage["prompt_tokens_details"][name]
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        for name in prompt_details:
+            usage_tokens["prompt_" + name] = prompt_details[name]
 
     # Extract completion token details
-    if "completion_tokens_details" in usage:
-        for name in usage["completion_tokens_details"]:
-            usage_tokens["completion_" + name] = usage["completion_tokens_details"][name]
+    completion_details = usage.get("completion_tokens_details")
+    if isinstance(completion_details, dict):
+        for name in completion_details:
+            usage_tokens["completion_" + name] = completion_details[name]
 
     return usage_tokens

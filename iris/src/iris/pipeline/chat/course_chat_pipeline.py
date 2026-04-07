@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
@@ -12,14 +11,12 @@ from iris.pipeline.session_title_generation_pipeline import (
 )
 from iris.tracing import observe
 
-from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.variant.course_chat_variant import CourseChatVariant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
@@ -27,6 +24,7 @@ from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...tools import (
     create_tool_faq_content_retrieval,
+    create_tool_generate_mcq_questions,
     create_tool_get_competency_list,
     create_tool_get_course_details,
     create_tool_get_exercise_list,
@@ -42,12 +40,20 @@ from ..abstract_agent_pipeline import (
     AgentPipelineExecutionState,
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.mcq_generation_pipeline import McqGenerationPipeline
 from ..shared.utils import (
     datetime_to_string,
     format_custom_instructions,
 )
 from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
+)
+from .mcq_chat_mixin import (
+    detect_mcq_intent,
+    mcq_execute_agent,
+    mcq_post_agent_hook,
+    mcq_pre_agent_hook,
+    retrieve_lecture_content_for_mcq,
 )
 
 logger = get_logger(__name__)
@@ -67,18 +73,12 @@ class CourseChatPipeline(
     faq_retriever: Optional[FaqRetrieval]
     jinja_env: Environment
     system_prompt_template: Any
-    event: Optional[str]
 
-    def __init__(self, event: Optional[str] = None, local: bool = False):
+    def __init__(self, local: bool = False):
         """
         Initialize the course chat pipeline.
-
-        Args:
-            event: Optional event type
         """
         super().__init__(implementation_id="course_chat_pipeline")
-
-        self.event = event
 
         # Initialize retrievers and pipelines (db will be created in abstract pipeline)
         self.lecture_retriever = None
@@ -88,6 +88,7 @@ class CourseChatPipeline(
             variant="course", local=local
         )
         self.citation_pipeline = CitationPipeline(local=local)
+        self.mcq_pipeline = McqGenerationPipeline(local=local)
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -102,10 +103,10 @@ class CourseChatPipeline(
         )
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(event={self.event})"
+        return f"{self.__class__.__name__}()"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(event={self.event})"
+        return f"{self.__class__.__name__}()"
 
     # ========================================
     # === MUST override (abstract methods) ===
@@ -195,6 +196,11 @@ class CourseChatPipeline(
                 )
             )
 
+        # When MCQ parallel mode is active the agent only needs to write a
+        # short intro — no tools required.
+        if getattr(state, "mcq_parallel", False):
+            return []
+
         if allow_lecture_tool:
             is_local = state.dto.settings is not None and state.dto.settings.is_local()
             self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
@@ -238,6 +244,26 @@ class CourseChatPipeline(
                 )
             )
 
+        # MCQ generation tool (non-parallel fallback)
+        if not hasattr(state, "mcq_result_storage"):
+            setattr(state, "mcq_result_storage", {})
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+        lecture_content, _ = retrieve_lecture_content_for_mcq(
+            state.db, state.dto.course.id
+        )
+        tool_list.append(
+            create_tool_generate_mcq_questions(
+                self.mcq_pipeline,
+                state.dto.chat_history,
+                callback,
+                getattr(state, "mcq_result_storage", {}),
+                user_language,
+                lecture_content=lecture_content,
+            )
+        )
+
         return tool_list
 
     def build_system_message(
@@ -249,9 +275,19 @@ class CourseChatPipeline(
         """
         Return a system message for the chat prompt.
 
+        Also detects MCQ intent and sets flags on state BEFORE get_tools() runs,
+        since the abstract pipeline calls build_system_message before get_tools.
+
         Returns:
             str: The system message content
         """
+        # Detect MCQ intent early — flags must be set before get_tools() runs
+        user_message = self.get_text_of_latest_user_message(state)
+        is_mcq, count = detect_mcq_intent(user_message)
+        if is_mcq:
+            setattr(state, "mcq_parallel", True)
+            setattr(state, "mcq_count", count)
+
         # Extract user language with fallback
         user_language = "en"
         if state.dto.user and state.dto.user.lang_key:
@@ -290,43 +326,14 @@ class CourseChatPipeline(
             "allow_memiris_tool": allow_memiris_tool,
             "metrics_enabled": metrics_enabled,
             "has_chat_history": bool(state.message_history),
-            "event": self.event,
             "custom_instructions": custom_instructions_formatted,
             "course_name": (
                 state.dto.course.name
                 if state.dto.course and state.dto.course.name
                 else "the course"
             ),
+            "mcq_parallel": getattr(state, "mcq_parallel", False),
         }
-
-        # Handle JOL event specific data
-        if self.event == "jol" and state.dto.event_payload:
-            event_payload = CompetencyJolDTO.model_validate(
-                state.dto.event_payload.event
-            )
-            comp = next(
-                (
-                    c
-                    for c in state.dto.course.competencies
-                    if c.id == event_payload.competency_id
-                ),
-                None,
-            )
-
-            # Handle potential None values for competency progress and confidence
-            competency_progress = event_payload.competency_progress or 0.0
-            competency_confidence = event_payload.competency_confidence or 0.0
-
-            template_context["jol"] = json.dumps(
-                {
-                    "value": event_payload.jol_value,
-                    "competency_mastery": get_mastery(
-                        competency_progress,
-                        competency_confidence,
-                    ),
-                }
-            )
-            template_context["competency"] = comp.model_dump_json() if comp else "{}"
 
         # Render the complete system prompt
         complete_system_prompt = self.system_prompt_template.render(template_context)
@@ -384,6 +391,28 @@ class CourseChatPipeline(
     # === CAN override (optional methods) ===
     # ========================================
 
+    def pre_agent_hook(
+        self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
+    ) -> None:
+        """Spawn parallel MCQ generation thread if intent was detected."""
+        mcq_pre_agent_hook(
+            state=state,
+            mcq_pipeline=self.mcq_pipeline,
+            get_text_of_latest_user_message=self.get_text_of_latest_user_message,
+            db=state.db,
+            course_id=state.dto.course.id,
+            chat_history=state.dto.chat_history,
+        )
+
+    def execute_agent(self, state):
+        """Use a direct LLM call when MCQ parallel is active, else default agent."""
+        if getattr(state, "mcq_parallel", False):
+            return mcq_execute_agent(state)
+        return super().execute_agent(state)
+
     def on_agent_step(
         self,
         state: AgentPipelineExecutionState[
@@ -399,7 +428,7 @@ class CourseChatPipeline(
             step: The current step information.
         """
         # Update progress
-        if step.get("intermediate_steps"):
+        if step.get("intermediate_steps") or step.get("intermediate_step"):
             state.callback.in_progress("Thinking ...")
 
     def post_agent_hook(
@@ -408,12 +437,14 @@ class CourseChatPipeline(
             CourseChatPipelineExecutionDTO, CourseChatVariant
         ],
     ) -> str:
-        """
-        Post-processing after agent execution including citations and suggestions.
+        """Post-processing after agent execution including citations, MCQ, and suggestions."""
+        # Handle non-parallel MCQ placeholder and parallel MCQ thread joining
+        mcq_post_agent_hook(
+            state=state,
+            mcq_pipeline=self.mcq_pipeline,
+            track_tokens=self._track_tokens,
+        )
 
-        Returns:
-            str: The final result
-        """
         # Process citations if we have them
         if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
             state.result = self._process_citations(
@@ -428,7 +459,7 @@ class CourseChatPipeline(
         # Generate title
         session_title = self._generate_session_title(state, state.result, state.dto)
 
-        # Send the result first so the user sees the message immediately
+        # Send the complete response (text + MCQ integrated)
         state.callback.done(
             "Response created",
             final_result=state.result,
@@ -441,10 +472,6 @@ class CourseChatPipeline(
         self._generate_suggestions(state, state.result, state.dto)
 
         return state.result
-
-    # ========================================
-    # === Private helper methods ===
-    # ========================================
 
     def _process_citations(
         self,
