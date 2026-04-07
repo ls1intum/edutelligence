@@ -110,7 +110,7 @@ jobs:
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
           command_timeout: 30m
           script: |
-            docker login ${{ vars.HARBOR_REGISTRY_BASE }} -u ${{ vars.HARBOR_ROBOT_USERNAME }} -p ${{ secrets.HARBOR_ROBOT_TOKEN }}
+            docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u ${{ vars.LOGOS_HARBOR_USER }} -p ${{ secrets.LOGOS_HARBOR_PASSWORD }}
             docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env pull
 
       - name: Deploy with docker compose
