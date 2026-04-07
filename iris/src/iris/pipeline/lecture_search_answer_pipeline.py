@@ -12,7 +12,7 @@ from iris.domain.search.lecture_search_dto import (
     LectureSearchAskResponseDTO,
     LectureSearchResultDTO,
 )
-from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.prompts.lecture_search_prompts import (
     answer_system_prompt,
@@ -55,11 +55,11 @@ class LectureSearchAnswerPipeline(SubPipeline):
             temperature=0.3, response_format="JSON"
         )
         self.hyde_llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version=hyde_model),
+            request_handler=LlmRequestHandler(model_id=hyde_model),
             completion_args=hyde_completion_args,
         )
         self.answer_llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version=answer_model),
+            request_handler=LlmRequestHandler(model_id=answer_model),
             completion_args=answer_completion_args,
         )
         self.hyde_pipeline = self.hyde_llm | StrOutputParser()

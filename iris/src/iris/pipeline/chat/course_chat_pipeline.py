@@ -409,9 +409,7 @@ class CourseChatPipeline(
 
     def pre_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
+        state: AgentPipelineExecutionState[CourseChatPipelineExecutionDTO, Variant],
     ) -> None:
         """Spawn parallel MCQ generation thread if intent was detected."""
         mcq_pre_agent_hook(

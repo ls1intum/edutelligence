@@ -10,9 +10,7 @@ from iris.domain.search.lecture_search_dto import (
     LectureSearchResultDTO,
     LectureUnitInfo,
 )
-from iris.llm.request_handler.model_version_request_handler import (
-    ModelVersionRequestHandler,
-)
+from iris.llm import LlmRequestHandler
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
@@ -33,7 +31,7 @@ class LectureGlobalSearchRetrieval:
     """Retrieves lecture unit segments from Weaviate using hybrid search and maps them to search result DTOs."""
 
     def __init__(self, client: WeaviateClient):
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = LlmRequestHandler(model_id="text-embedding-3-small")
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
 

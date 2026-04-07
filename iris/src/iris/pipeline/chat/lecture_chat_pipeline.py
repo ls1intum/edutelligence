@@ -310,9 +310,7 @@ class LectureChatPipeline(
 
     def pre_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
     ) -> None:
         """Spawn parallel MCQ generation thread if intent was detected."""
         mcq_pre_agent_hook(
