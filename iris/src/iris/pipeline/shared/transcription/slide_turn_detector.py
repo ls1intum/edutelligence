@@ -175,7 +175,7 @@ class SlideTurnDetector:
                 return []
 
             logger.info(
-                "[Job %s] SlideTurnDetector start: segments=%d, anchor_stride=%d, min_stride=%d",
+                "[Lecture %s] SlideTurnDetector start: segments=%d, anchor_stride=%d, min_stride=%d",
                 self.job_id,
                 len(self.segments),
                 self.anchor_stride,
@@ -183,7 +183,7 @@ class SlideTurnDetector:
             )
 
             anchor_indices = self._build_anchor_indices()
-            logger.debug("[Job %s] Anchors: %s", self.job_id, anchor_indices)
+            logger.debug("[Lecture %s] Anchors: %s", self.job_id, anchor_indices)
 
             for idx in anchor_indices:
                 if self.labels[idx] is None:
@@ -196,7 +196,7 @@ class SlideTurnDetector:
             change_points = self._to_change_points()
 
             logger.info(
-                "[Job %s] SlideTurnDetector done: change_points=%d, gpt_calls=%d",
+                "[Lecture %s] SlideTurnDetector done: change_points=%d, gpt_calls=%d",
                 self.job_id,
                 len(change_points),
                 self.gpt_calls,
@@ -216,7 +216,9 @@ class SlideTurnDetector:
         frame_b64 = self.frame_cache.get(idx)
         if frame_b64 is None:
             return None
-        logger.debug("[Job %s] GPT Vision query for segment idx=%d", self.job_id, idx)
+        logger.debug(
+            "[Lecture %s] GPT Vision query for segment idx=%d", self.job_id, idx
+        )
         slide_num = self._ask_gpt_for_slide_number(frame_b64)
         self.gpt_calls += 1
         self._log_progress(f"label resolved for idx={idx}")
@@ -256,7 +258,7 @@ class SlideTurnDetector:
             return int(match.group(0)) if match else None
 
         except Exception as e:
-            logger.warning("[Job %s] GPT Vision failed: %s", self.job_id, e)
+            logger.warning("[Lecture %s] GPT Vision failed: %s", self.job_id, e)
             return None
 
     def _resolve_interval(self, idx_left: int, idx_right: int) -> None:
@@ -316,8 +318,8 @@ class SlideTurnDetector:
         total = len(self.labels)
         filled = sum(1 for lbl in self.labels if lbl is not None)
         percent = (filled / total * 100) if total else 100.0
-        logger.info(
-            "[Job %s] %s | labeled %d/%d (%.1f%%)",
+        logger.debug(
+            "[Lecture %s] %s | labeled %d/%d (%.1f%%)",
             self.job_id,
             context,
             filled,

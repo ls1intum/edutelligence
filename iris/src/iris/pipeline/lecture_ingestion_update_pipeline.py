@@ -207,7 +207,9 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         from iris.pipeline.shared.transcription.temp_storage import (
             TranscriptionTempStorage,
         )
-        from iris.pipeline.shared.transcription.video_utils import download_video
+        from iris.pipeline.shared.transcription.video_utils import (
+            download_video,
+        )
 
         lecture_unit_id = self.dto.lecture_unit.lecture_unit_id
         video_url = self.dto.lecture_unit.video_link
@@ -389,10 +391,10 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             language=language,
             segments=[
                 TranscriptionSegmentDTO(
-                    start_time=seg["startTime"],
-                    end_time=seg["endTime"],
+                    startTime=seg["startTime"],
+                    endTime=seg["endTime"],
                     text=seg["text"],
-                    slide_number=seg["slideNumber"],
+                    slideNumber=seg["slideNumber"],
                 )
                 for seg in aligned_segments
             ],

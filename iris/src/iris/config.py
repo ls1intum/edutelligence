@@ -71,10 +71,6 @@ class TranscriptionSettings(BaseModel):
         default=6,
         description="Max retry attempts per chunk on transient failures",
     )
-    max_concurrent_jobs: int = Field(
-        default=2,
-        description="Max concurrent video transcription jobs (semaphore slots)",
-    )
     download_timeout_seconds: int = Field(
         default=3600,
         description="Timeout for video download via FFmpeg (default: 1 hour)",
