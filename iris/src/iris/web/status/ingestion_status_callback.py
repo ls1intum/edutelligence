@@ -2,6 +2,8 @@ import time
 from typing import List, Optional
 
 import requests as http_requests
+from sentry_sdk import capture_exception as sentry_capture
+from sentry_sdk import capture_message
 
 from iris.common.logging_config import get_logger
 
@@ -117,6 +119,18 @@ class IngestionStatusCallback(StatusCallback):
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
 
+    def _post_status(self, timeout: int) -> http_requests.Response:
+        """Send the current status payload to Artemis."""
+        return http_requests.post(
+            self.url,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.run_id}",
+            },
+            json=self.status.model_dump(by_alias=True),
+            timeout=timeout,
+        )
+
     def on_status_update(self):
         """Send a status update to Artemis with retry for transient failures.
 
@@ -127,15 +141,13 @@ class IngestionStatusCallback(StatusCallback):
         last_error = None
         for attempt in range(_CALLBACK_MAX_RETRIES):
             try:
-                http_requests.post(
+                resp = self._post_status(timeout=200)
+                logger.info(
+                    "Status callback to %s returned %d",
                     self.url,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {self.run_id}",
-                    },
-                    json=self.status.model_dump(by_alias=True),
-                    timeout=200,
-                ).raise_for_status()
+                    resp.status_code,
+                )
+                resp.raise_for_status()
                 return
             except http_requests.exceptions.RequestException as e:
                 last_error = e
@@ -154,3 +166,57 @@ class IngestionStatusCallback(StatusCallback):
             _CALLBACK_MAX_RETRIES,
             last_error,
         )
+        raise RuntimeError(
+            f"Artemis callback failed after {_CALLBACK_MAX_RETRIES} attempts: {last_error}"
+        ) from last_error
+
+    def on_status_update_best_effort(self) -> None:
+        """Best-effort status update that never raises.
+
+        Used by error() so the error callback itself doesn't cause
+        another exception when Artemis is unreachable.
+        """
+        try:
+            resp = self._post_status(timeout=30)
+            logger.info("Error callback to %s returned %d", self.url, resp.status_code)
+        except http_requests.exceptions.RequestException as e:
+            logger.warning("Error callback also failed (best-effort): %s", e)
+
+    def error(
+        self,
+        message: str,
+        exception=None,
+        tokens=None,
+    ):
+        """Send error status to Artemis (best-effort, never raises).
+
+        Overrides base class to use best-effort delivery so that a callback
+        failure during error reporting doesn't mask the original error.
+        """
+        self.stage.state = StageStateEnum.ERROR
+        self.stage.message = message
+        self.status.result = None
+        if hasattr(self.status, "suggestions"):
+            self.status.suggestions = None
+        self.status.tokens = tokens or self.status.tokens
+
+        rest_of_index = self.current_stage_index + 1
+        for stage in self.status.stages[rest_of_index:]:
+            stage.state = StageStateEnum.SKIPPED
+            stage.message = "Skipped due to previous error"
+
+        self.stage = self.status.stages[-1]
+        self.on_status_update_best_effort()
+
+        logger.error(
+            "Error occurred in job %s in stage %s: %s",
+            self.run_id,
+            self.stage.name,
+            message,
+        )
+        if exception:
+            sentry_capture(exception)
+        else:
+            capture_message(
+                f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
+            )

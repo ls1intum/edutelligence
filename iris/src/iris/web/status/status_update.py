@@ -79,7 +79,7 @@ class StatusCallback(ABC):
     def on_status_update(self):
         """Send a status update to the Artemis API."""
         try:
-            requests.post(
+            resp = requests.post(
                 self.url,
                 headers={
                     "Content-Type": "application/json",
@@ -87,7 +87,9 @@ class StatusCallback(ABC):
                 },
                 json=self.status.model_dump(by_alias=True),
                 timeout=200,
-            ).raise_for_status()
+            )
+            logger.info("Status callback to %s returned %d", self.url, resp.status_code)
+            resp.raise_for_status()
         except requests.exceptions.RequestException as e:
             logger.error("Error sending status update: %s", e)
             capture_exception(e)

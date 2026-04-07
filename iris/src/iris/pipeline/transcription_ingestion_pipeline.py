@@ -81,8 +81,6 @@ class TranscriptionIngestionPipeline(SubPipeline):
             chunks = self.chunk_transcription(self.dto.lecture_unit)
             self.callback.done("Chunked transcription")
 
-            logger.info("chunked data")
-
             self.callback.in_progress("Summarizing transcription")
             chunks = self.summarize_chunks(chunks)
             self.callback.done("Summarized transcription")
@@ -99,7 +97,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 exception=e,
                 tokens=self.tokens,
             )
-            return "", []
+            raise
 
     def delete_existing_transcription_data(self, transcription: LectureUnitPageDTO):
         self.collection.data.delete_many(
