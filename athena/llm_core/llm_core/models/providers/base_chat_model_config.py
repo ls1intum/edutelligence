@@ -134,7 +134,8 @@ decreasing the model's likelihood to repeat the same line verbatim.
         kwargs = tmpl.__dict__.copy()
         secrets = {s: getattr(tmpl, s) for s in getattr(tmpl, "lc_secrets", {})}
         kwargs.update(secrets)
-        model_kwargs = kwargs.setdefault("model_kwargs", {})
+        model_kwargs = kwargs.get("model_kwargs") or {}
+        kwargs["model_kwargs"] = model_kwargs
 
         for attr, value in self.dict().items():
             if attr in ("provider", "model_name"):
