@@ -85,8 +85,7 @@ def clean_text(
     if bullets:
         text = _BULLET_PATTERN.sub("", text)
     if extra_whitespace:
-        text = re.sub(r"[\xa0\n]", " ", text)
-        text = re.sub(r" {2,}", " ", text).strip()
+        text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
