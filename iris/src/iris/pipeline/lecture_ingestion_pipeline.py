@@ -240,10 +240,15 @@ class LectureUnitPageIngestionPipeline(
         This method is thread-safe and can only be executed by one thread at a time.
         Weaviate limitation.
         """
+        total = len(chunks)
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
-                    for _, chunk in enumerate(chunks):
+                    for i, chunk in enumerate(chunks):
+                        if i % 10 == 0:
+                            self.callback.in_progress(
+                                f"Ingesting lecture chunk {i + 1}/{total} into database..."
+                            )
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
@@ -277,6 +282,9 @@ class LectureUnitPageIngestionPipeline(
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
         for page_num in range(doc.page_count):
+            self.callback.in_progress(
+                f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
+            )
             page = doc.load_page(page_num)
             page_text = page.get_text()
             if page.get_images(full=False):

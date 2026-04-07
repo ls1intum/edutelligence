@@ -14,7 +14,7 @@ from __future__ import annotations
 import base64
 import re
 from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 
@@ -136,6 +136,7 @@ class SlideTurnDetector:
         cache_size: int = 16,
         job_id: Optional[str] = None,
         capture_offset_ratio: float = 0.2,
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ):
         """
         Args:
@@ -154,6 +155,7 @@ class SlideTurnDetector:
         self.anchor_stride = max(1, anchor_stride)
         self.min_stride = max(1, min_stride)
         self.job_id = job_id
+        self.on_progress = on_progress
         self.labels: List[Optional[int]] = [None] * len(segments)
         self.frame_cache = _FrameCache(
             video_path,
@@ -330,6 +332,8 @@ class SlideTurnDetector:
             total,
             percent,
         )
+        if self.on_progress is not None:
+            self.on_progress(filled, total)
 
 
 def detect_slide_timestamps(
@@ -339,6 +343,7 @@ def detect_slide_timestamps(
     anchor_stride: int = 50,
     min_stride: int = 1,
     job_id: Optional[str] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> List[Tuple[float, int]]:
     """Detect slide change timestamps using minimal GPT Vision calls.
 
@@ -360,5 +365,6 @@ def detect_slide_timestamps(
         anchor_stride=anchor_stride,
         min_stride=min_stride,
         job_id=job_id,
+        on_progress=on_progress,
     )
     return detector.detect()

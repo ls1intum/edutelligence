@@ -1,3 +1,5 @@
+from typing import Optional
+
 from weaviate.classes.query import Filter
 
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
@@ -15,6 +17,7 @@ from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+from iris.web.status.status_update import StatusCallback
 
 
 class LectureUnitPipeline(SubPipeline):
@@ -22,19 +25,23 @@ class LectureUnitPipeline(SubPipeline):
     then updating the vector database with the processed lecture unit information.
     """
 
-    def __init__(self, local: bool = False):
+    def __init__(self, local: bool = False, callback: Optional[StatusCallback] = None):
         super().__init__(implementation_id="lecture_unit_pipeline")
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.local = local
+        self.callback = callback
 
     @observe(name="Lecture Unit Pipeline")
     def __call__(self, lecture_unit: LectureUnitDTO):
         lecture_unit_segment_summaries, token_unit_segment_summary = (
             LectureUnitSegmentSummaryPipeline(
-                self.weaviate_client, lecture_unit, local=self.local
+                self.weaviate_client,
+                lecture_unit,
+                local=self.local,
+                callback=self.callback,
             )()
         )
         lecture_unit.lecture_unit_summary, tokens_unit_summary = (

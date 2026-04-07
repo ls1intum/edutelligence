@@ -122,10 +122,15 @@ class TranscriptionIngestionPipeline(SubPipeline):
         )
 
     def batch_insert(self, chunks):
+        total = len(chunks)
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:
-                    for chunk in chunks:
+                    for i, chunk in enumerate(chunks):
+                        if i % 5 == 0:
+                            self.callback.in_progress(
+                                f"Ingesting transcription chunk {i + 1}/{total} into database..."
+                            )
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
                         )
@@ -268,13 +273,17 @@ class TranscriptionIngestionPipeline(SubPipeline):
         chunks_with_summaries = []
         total = len(chunks)
         for i, chunk in enumerate(chunks):
+            slide = chunk.get(LectureTranscriptionSchema.PAGE_NUMBER.value, "?")
             logger.info(
                 "[%s / %s] Summarizing chunk %d/%d (slide %s)",
                 self.dto.lecture_unit.lecture_name,
                 self.dto.lecture_unit.lecture_unit_name,
                 i + 1,
                 total,
-                chunk.get(LectureTranscriptionSchema.PAGE_NUMBER.value, "?"),
+                slide,
+            )
+            self.callback.in_progress(
+                f"Summarizing transcription chunk {i + 1}/{total} (slide {slide})"
             )
             self.prompt = ChatPromptTemplate.from_messages(
                 [

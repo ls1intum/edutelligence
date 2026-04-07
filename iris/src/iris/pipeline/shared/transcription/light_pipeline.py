@@ -80,7 +80,16 @@ class LightTranscriptionPipeline:
             ]
 
         # Stage: Detect slide changes
-        self.callback.in_progress("Detecting slide changes with GPT Vision...")
+        total_segments = len(segments)
+        self.callback.in_progress(
+            f"Detecting slide changes with GPT Vision (0/{total_segments} segments labeled)..."
+        )
+
+        def _on_slide_detection_progress(labeled: int, total: int) -> None:
+            self.callback.in_progress(
+                f"Detecting slide changes with GPT Vision ({labeled}/{total} segments labeled)..."
+            )
+
         slide_timestamps = detect_slide_timestamps(
             video_path=self.video_path,
             segments=segments,
@@ -88,6 +97,7 @@ class LightTranscriptionPipeline:
             anchor_stride=50,
             min_stride=1,
             job_id=str(lecture_unit_id),
+            on_progress=_on_slide_detection_progress,
         )
         self.callback.done(f"Detected {len(slide_timestamps)} slide changes")
         logger.info(
