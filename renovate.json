@@ -6,43 +6,43 @@
   "packageRules": [
     {
       "groupName": "athena",
-      "matchPaths": ["athena/**"],
-      "prTitlePrefix": "`Athena`: "
+      "matchFileNames": ["athena/**"],
+      "commitMessagePrefix": "`Athena`:"
     },
     {
       "groupName": "atlas",
-      "matchPaths": ["atlas/**"],
-      "prTitlePrefix": "`Atlas`: "
+      "matchFileNames": ["atlas/**"],
+      "commitMessagePrefix": "`Atlas`:"
     },
     {
       "groupName": "hyperion",
-      "matchPaths": ["hyperion/**"],
-      "prTitlePrefix": "`Hyperion`: "
+      "matchFileNames": ["hyperion/**"],
+      "commitMessagePrefix": "`Hyperion`:"
     },
     {
       "groupName": "iris",
-      "matchPaths": ["iris/**"],
-      "prTitlePrefix": "`Iris`: "
+      "matchFileNames": ["iris/**"],
+      "commitMessagePrefix": "`Iris`:"
     },
     {
       "groupName": "logos",
-      "matchPaths": ["logos/**"],
-      "prTitlePrefix": "`Logos`: "
+      "matchFileNames": ["logos/**"],
+      "commitMessagePrefix": "`Logos`:"
     },
     {
       "groupName": "memiris",
-      "matchPaths": ["memiris/**"],
-      "prTitlePrefix": "`Memiris`: "
+      "matchFileNames": ["memiris/**"],
+      "commitMessagePrefix": "`Memiris`:"
     },
     {
       "groupName": "nebula",
-      "matchPaths": ["nebula/**"],
-      "prTitlePrefix": "`Nebula`: "
+      "matchFileNames": ["nebula/**"],
+      "commitMessagePrefix": "`Nebula`:"
     },
     {
       "groupName": "shared",
-      "matchPaths": ["shared/**"],
-      "prTitlePrefix": "`Shared`: "
+      "matchFileNames": ["shared/**"],
+      "commitMessagePrefix": "`Shared`:"
     }
   ],
   "timezone": "Europe/Berlin",
