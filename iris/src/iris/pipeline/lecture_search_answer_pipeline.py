@@ -14,6 +14,7 @@ from iris.domain.search.lecture_search_dto import (
 )
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.lecture_search_prompts import (
     answer_system_prompt,
     hyde_system_prompt,
@@ -45,10 +46,11 @@ class LectureSearchAnswerPipeline(SubPipeline):
     def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_search_answer_pipeline")
         self.tokens = []
-        self.retriever = LectureGlobalSearchRetrieval(client)
+        self.retriever = LectureGlobalSearchRetrieval(client, local=local)
 
-        hyde_model = "gpt-oss:120b" if local else "gpt-4.1-nano"
-        answer_model = "gpt-oss:120b" if local else "gpt-4.1-mini"
+        pipeline_id = "lecture_search_answer_pipeline"
+        hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
+        answer_model = resolve_model(pipeline_id, "default", "answer", local=local)
 
         hyde_completion_args = CompletionArguments(temperature=0.7)
         answer_completion_args = CompletionArguments(

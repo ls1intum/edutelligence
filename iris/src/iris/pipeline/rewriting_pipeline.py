@@ -187,8 +187,12 @@ class RewritingPipeline(Pipeline):
 
 
 def parse_faq_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
-    parsed_inconsistencies = [
-        f"FAQ ID: {entry["faq_id"]}, Title: {entry["faq_question_title"]}, Answer: {entry["faq_question_answer"]}"
-        for entry in inconsistencies
-    ]
+    parsed_inconsistencies = []
+    for entry in inconsistencies:
+        faq_id = entry.get("faq_id", "")
+        title = entry.get("faq_question_title", "")
+        answer = entry.get("faq_question_answer", "")
+        parsed_inconsistencies.append(
+            f"FAQ ID: {faq_id}, Title: {title}, Answer: {answer}"
+        )
     return parsed_inconsistencies

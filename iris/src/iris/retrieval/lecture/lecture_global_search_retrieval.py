@@ -11,6 +11,7 @@ from iris.domain.search.lecture_search_dto import (
     LectureUnitInfo,
 )
 from iris.llm import LlmRequestHandler
+from iris.llm.llm_configuration import resolve_model
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
@@ -30,8 +31,11 @@ _EMPTY_SEGMENT_PREFIX = "There is no content"
 class LectureGlobalSearchRetrieval:
     """Retrieves lecture unit segments from Weaviate using hybrid search and maps them to search result DTOs."""
 
-    def __init__(self, client: WeaviateClient):
-        self.llm_embedding = LlmRequestHandler(model_id="text-embedding-3-small")
+    def __init__(self, client: WeaviateClient, local: bool = False):
+        embedding_model = resolve_model(
+            "lecture_search_answer_pipeline", "default", "embedding", local=local
+        )
+        self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
 

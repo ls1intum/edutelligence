@@ -113,8 +113,11 @@ class CitationPipeline(SubPipeline):
         self.pipelines["advanced"] = advanced_llm | StrOutputParser()
 
         # RequestHandler for keyword/summary (small models, separate instance per thread)
+        keyword_model = resolve_model(
+            pipeline_id, "default", "keyword_summary", local=local
+        )
         self._keyword_summary_request_handler = LlmRequestHandler(
-            model_id="gemma3:27b" if local else "gpt-5-nano"
+            model_id=keyword_model
         )
         self._keyword_summary_completion_args = CompletionArguments(temperature=0)
 
