@@ -1,5 +1,4 @@
 import json
-import logging
 from typing import Dict, List, Literal, Optional
 
 from langchain.output_parsers import PydanticOutputParser
@@ -7,12 +6,14 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
+from iris.domain.variant.rewriting_variant import RewritingVariant
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -22,18 +23,17 @@ from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
     system_prompt_problem_statement,
 )
+from iris.tracing import observe
 from iris.web.status.status_update import RewritingCallback
 
-from ..domain import FeatureDTO
-from ..llm.external.model import LanguageModel
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..vector_database.database import VectorDatabase
 from .prompts.faq_consistency_prompt import faq_consistency_prompt
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-class RewritingPipeline(Pipeline):
+class RewritingPipeline(Pipeline[RewritingVariant]):
     """RewritingPipeline processes text rewriting requests by interfacing with a language model via a capability
      request handler.
 
@@ -50,15 +50,19 @@ class RewritingPipeline(Pipeline):
         self,
         callback: RewritingCallback,
         variant: Literal["faq", "problem_statement"],
+        local: bool = False,
     ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
         self.db = VectorDatabase()
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
+        self.request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5.2"
+        )
         self.tokens = []
         self.variant = variant
-        self.faq_retriever = FaqRetrieval(self.db.client)
+        self.faq_retriever = FaqRetrieval(self.db.client, local=local)
 
+    @observe(name="Rewriting Pipeline")
     def __call__(
         self,
         dto: RewritingPipelineExecutionDTO,
@@ -105,7 +109,7 @@ class RewritingPipeline(Pipeline):
             consistency_result = self.check_faq_consistency(faqs, final_result)
             faq_type = consistency_result.get("type", "").lower()
             if "inconsistent" in faq_type:
-                logging.warning("Detected inconsistencies in FAQ retrieval.")
+                logger.warning("Detected inconsistencies in FAQ retrieval.")
                 inconsistencies = parse_faq_inconsistencies(
                     consistency_result.get("faqs", [])
                 )
@@ -121,6 +125,7 @@ class RewritingPipeline(Pipeline):
             suggestions=suggestions,
         )
 
+    @observe(name="FAQ Consistency Check")
     def check_faq_consistency(
         self, faqs: List[dict], final_result: str
     ) -> Dict[str, str]:
@@ -168,26 +173,29 @@ class RewritingPipeline(Pipeline):
         return result_dict
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[RewritingVariant]:
         """
-        Returns available variants for the FaqIngestionPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the RewritingPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of RewritingVariant objects representing available variants
         """
         return [
-            FeatureDTO(
-                id="faq",
+            RewritingVariant(
+                variant_id="faq",
                 name="Default FAQ Variant",
                 description="Default FAQ rewriting variant.",
+                cloud_rewriting_model="gpt-5.2",
+                cloud_consistency_model="gpt-5.2",
+                local_rewriting_model="gpt-oss:120b",
+                local_consistency_model="gpt-oss:120b",
             ),
-            FeatureDTO(
-                id="problem_statement",
+            RewritingVariant(
+                variant_id="problem_statement",
                 name="Default Variant",
                 description="Default Problem statement rewriting variant.",
+                cloud_rewriting_model="gpt-5.2",
+                local_rewriting_model="gpt-oss:120b",
             ),
         ]
 

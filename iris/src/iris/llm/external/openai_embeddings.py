@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Literal
+from typing import Literal
 
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
@@ -10,6 +10,8 @@ from openai import (
     InternalServerError,
     RateLimitError,
 )
+
+from iris.tracing import observe
 
 from ...llm.external.model import EmbeddingModel
 
@@ -23,6 +25,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     api_key: str
     _client: OpenAIEmbeddings
 
+    @observe(name="OpenAI Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:
         retries = 5
         backoff_factor = 2
@@ -68,7 +71,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
 class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     type: Literal["openai_embedding"]
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = OpenAIEmbeddings(api_key=self.api_key)
 
     def __str__(self):
@@ -86,7 +89,7 @@ class AzureOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     azure_deployment: str
     api_version: str
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = AzureOpenAIEmbeddings(
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,

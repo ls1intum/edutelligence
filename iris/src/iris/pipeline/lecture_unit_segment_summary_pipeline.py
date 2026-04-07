@@ -13,10 +13,11 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -31,7 +32,7 @@ from iris.vector_database.lecture_unit_segment_schema import (
 )
 
 
-class LectureUnitSegmentSummaryPipeline(Pipeline):
+class LectureUnitSegmentSummaryPipeline(SubPipeline):
     """LectureUnitSegmentSummaryPipeline processes lecture unit segments by summarizing the transcription and slide
      content.
 
@@ -47,6 +48,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         self,
         client: WeaviateClient,
         lecture_unit_dto: LectureUnitDTO,
+        local: bool = False,
     ) -> None:
         super().__init__()
         self.weaviate_client = client
@@ -62,14 +64,17 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
 
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-mini"
+        )
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+    @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
         slide_number_start, slide_number_end = self._get_slide_range()
 
@@ -80,7 +85,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
             self._upsert_lecture_object(slide_index, summary)
-        return summaries
+        return summaries, self.tokens
 
     def _get_transcriptions(self, slide_number: int):
         transcription_filter = self._get_lecture_transcription_filter()

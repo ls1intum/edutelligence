@@ -1,9 +1,8 @@
-from asyncio.log import logger
-
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureTranscriptionRetrievalDTO,
     LectureUnitRetrievalDTO,
@@ -18,7 +17,8 @@ from iris.llm.request_handler.model_version_request_handler import (
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
-from iris.pipeline import Pipeline
+from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -28,15 +28,19 @@ from iris.vector_database.lecture_unit_schema import (
     init_lecture_unit_schema,
 )
 
+logger = get_logger(__name__)
 
-class LectureTranscriptionRetrieval(Pipeline):
+
+class LectureTranscriptionRetrieval(SubPipeline):
     """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
     and processing the transcription segments."""
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-mini"
+        )
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -47,6 +51,7 @@ class LectureTranscriptionRetrieval(Pipeline):
         self.cohere_client = RerankRequestHandler("cohere")
         self.tokens = []
 
+    @observe(name="Lecture Transcription Retrieval")
     def __call__(
         self,
         student_query: str,
@@ -88,6 +93,7 @@ class LectureTranscriptionRetrieval(Pipeline):
 
         return reranked_answers
 
+    @observe(name="Lecture Transcription: Search in DB")
     def search_in_db(
         self,
         lecture_unit_dto: LectureUnitRetrievalDTO,
@@ -174,9 +180,7 @@ class LectureTranscriptionRetrieval(Pipeline):
                 lecture_unit_name=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_NAME.value
                 ],
-                lecture_unit_link=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value
-                ],
+                video_link=lecture_unit[LectureUnitSchema.VIDEO_LINK.value],
                 language=lecture_transcription_segment[
                     LectureTranscriptionSchema.LANGUAGE.value
                 ],

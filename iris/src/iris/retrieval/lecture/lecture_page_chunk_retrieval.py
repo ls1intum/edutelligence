@@ -1,11 +1,10 @@
-from asyncio.log import logger
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -23,7 +22,8 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
-from iris.pipeline import Pipeline
+from iris.pipeline.sub_pipeline import SubPipeline
+from iris.tracing import observe
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
@@ -32,6 +32,8 @@ from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+
+logger = get_logger(__name__)
 
 
 def _add_last_four_messages_to_prompt(
@@ -55,17 +57,19 @@ def _add_last_four_messages_to_prompt(
     return prompt
 
 
-class LecturePageChunkRetrieval(Pipeline):
+class LecturePageChunkRetrieval(SubPipeline):
     """
     Class for retrieving lecture data from the database.
     """
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-mini"
+        )
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -80,7 +84,7 @@ class LecturePageChunkRetrieval(Pipeline):
 
         self.tokens = []
 
-    @traceable(name="Full Lecture Retrieval")
+    @observe(name="Full Lecture Retrieval")
     def __call__(
         self,
         student_query: str,
@@ -129,7 +133,7 @@ class LecturePageChunkRetrieval(Pipeline):
         )
         return reranked_page_chunks
 
-    @traceable(name="Retrieval: Search in DB")
+    @observe(name="Retrieval: Search in DB")
     def search_in_db(
         self,
         query: str,
@@ -204,7 +208,7 @@ class LecturePageChunkRetrieval(Pipeline):
                 ],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
                 lecture_unit_id=lecture_page_chunk[
-                    LectureUnitPageChunkSchema.LECTURE_ID.value
+                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                 ],
                 lecture_unit_name=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_NAME.value

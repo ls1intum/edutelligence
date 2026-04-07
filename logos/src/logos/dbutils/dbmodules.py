@@ -1,5 +1,6 @@
+import datetime
 from sqlalchemy import Column, Integer, String, Enum, Text, ForeignKey, JSON, TIMESTAMP, \
-    Numeric, CheckConstraint
+    Numeric, CheckConstraint, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 import enum
@@ -18,6 +19,12 @@ class ThresholdLevel(enum.Enum):
 class LoggingLevel(enum.Enum):
     BILLING = 'BILLING'
     FULL = 'FULL'
+
+
+class ResultStatus(enum.Enum):
+    SUCCESS = 'success'
+    ERROR = 'error'
+    TIMEOUT = 'timeout'
 
 
 class User(Base):
@@ -60,8 +67,6 @@ class Model(Base):
     __tablename__ = 'models'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    endpoint = Column(Text)
-    api_id = Column(Integer, ForeignKey("model_api_keys.id", ondelete="SET NULL"))
     weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
@@ -82,6 +87,7 @@ class Provider(Base):
     base_url = Column(Text, nullable=False)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
+    api_key = Column(Text, nullable=True)
 
 
 class ModelProvider(Base):
@@ -97,11 +103,12 @@ class ModelProvider(Base):
 class ModelApiKey(Base):
     __tablename__ = 'model_api_keys'
     id = Column(Integer, primary_key=True)
-    profile_id = Column(Integer, ForeignKey('profiles.id', ondelete="SET NULL"))
+    model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
     provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
     api_key = Column(Text, nullable=False)
+    endpoint = Column(Text, nullable=False, default='')
 
-    profile = relationship("Profile")
+    model = relationship("Model")
     provider = relationship("Provider")
 
 
@@ -153,6 +160,23 @@ class LogEntry(Base):
     policy_id = Column(Integer, ForeignKey('policies.id', ondelete="SET NULL"))
 
     classification_statistics = Column(JSON)
+    request_id = Column(Text)
+    priority = Column(String(10), default='medium')
+    initial_priority = Column(Text)
+    priority_when_scheduled = Column(Text)
+    queue_depth_at_enqueue = Column(Integer)
+    queue_depth_at_schedule = Column(Integer)
+    timeout_s = Column(Integer)
+    queue_depth_at_arrival = Column(Integer)
+    utilization_at_arrival = Column(Numeric)
+    queue_wait_ms = Column(Numeric)
+    was_cold_start = Column(Boolean, default=False)
+    load_duration_ms = Column(Numeric)
+    available_vram_mb = Column(Integer)
+    azure_rate_remaining_requests = Column(Integer)
+    azure_rate_remaining_tokens = Column(Integer)
+    result_status = Column(Enum(ResultStatus, name="result_status_enum"))
+    error_message = Column(Text)
 
     usage_tokens = relationship("UsageTokens")
 
@@ -183,3 +207,26 @@ class TokenPrice(Base):
     price_per_k_token = Column(Numeric(10, 6), nullable=False)
 
     token_type = relationship("TokenTypes")
+
+
+class JobStatus(enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+class Job(Base):
+    __tablename__ = 'jobs'
+
+    id = Column(Integer, primary_key=True)
+    status = Column(Enum(JobStatus), nullable=False, default=JobStatus.PENDING)
+    process_id = Column(Integer, ForeignKey("process.id", ondelete="CASCADE"), nullable=False)
+    request_payload = Column(JSON, nullable=False)
+    result_payload = Column(JSON)
+    error_message = Column(Text)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False,
+                        default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False,
+                        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))

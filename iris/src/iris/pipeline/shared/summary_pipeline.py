@@ -1,4 +1,3 @@
-import logging
 import os
 
 from langchain_core.output_parsers import StrOutputParser
@@ -8,14 +7,17 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
+from iris.common.logging_config import get_logger
+
 from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
-from ...pipeline import Pipeline
+from ...tracing import observe
+from ..sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-class SummaryPipeline(Pipeline):
+class SummaryPipeline(SubPipeline):
     """A generic summary pipeline that can be used to summarize any text"""
 
     llm: IrisLangchainCompletionModel
@@ -23,13 +25,13 @@ class SummaryPipeline(Pipeline):
     prompt_str: str
     prompt: ChatPromptTemplate
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         super().__init__(implementation_id="summary_pipeline")
         # Set the langchain chat model
-        request_handler = ModelVersionRequestHandler(version="gpt-3.5-turbo")
-        self.llm = IrisLangchainCompletionModel(
-            request_handler=request_handler, max_tokens=1000
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-nano"
         )
+        self.llm = IrisLangchainCompletionModel(request_handler=request_handler)
         # Load the prompt from a file
         dirname = os.path.dirname(__file__)
         with open(
@@ -55,6 +57,7 @@ class SummaryPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @observe(name="Summary Pipeline")
     def __call__(self, query: str, **kwargs) -> str:
         """
         Runs the pipeline
@@ -66,5 +69,5 @@ class SummaryPipeline(Pipeline):
             raise ValueError("Query must not be None")
         logger.info("Running summary pipeline...")
         response: str = self.pipeline.invoke({"text": query})
-        logger.info("Response from summary pipeline: %s...", response[:20])
+        logger.info("Summary pipeline completed | response_length=%d", len(response))
         return response

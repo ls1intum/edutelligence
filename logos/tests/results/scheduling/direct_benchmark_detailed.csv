@@ -1,0 +1,1734 @@
+log_id,request_id,mode,priority,http_status,client_duration_ms,provider_name,model_name,ttft_ms,tpot_ms,tokens,total_latency_ms,response_text,error
+150,req-1,batch,low,200,7128.07,openwebui,qwen3:30b-a3b,1470.38,6.03,918,6999.37,"Certainly! Let's break down the difference between **O(n log n)** and **O(n²)** time complexity using a practical sorting example.
+
+---
+
+### 🔍 **Time Complexity Overview**
+
+- **O(n²)**: Quadratic time — the running time grows quadratically with the input size.
+- **O(n log n)**: Linearithmic time — grows faster than linear but much slower than quadratic.
+
+---
+
+### 📌 **Practical Example: Sorting Algorithms**
+
+Let’s compare two common sorting algorithms:
+
+1. **Bubble Sort** → **O(n²)**
+2. **Merge Sort** → **O(n log n)**
+
+---
+
+### ✅ **Example: Sorting 1,000 Elements**
+
+| Algorithm | Time Complexity | Estimated Operations (n = 1,000) |
+|---------|------------------|-------------------------------|
+| Bubble Sort | O(n²) | 1,000² = **1,000,000** operations |
+| Merge Sort | O(n log n) | 1,000 × log₂(1,000) ≈ 1,000 × 10 = **10,000** operations |
+
+➡️ **Merge Sort is ~100 times faster** than Bubble Sort for 1,000 elements!
+
+---
+
+### 🔁 **How They Work (Briefly)**
+
+#### 🔴 **Bubble Sort (O(n²))**
+- Compares adjacent elements and swaps them if they're in the wrong order.
+- Repeats this process for all elements, passing through the list multiple times.
+- **Worst case**: Every element is out of order → n passes, each doing ~n comparisons → **n × n = n²**.
+
+> ⚠️ **Not efficient** for large datasets.
+
+#### 🟢 **Merge Sort (O(n log n))**
+- Uses **divide-and-conquer**:
+  1. Split the array in half.
+  2. Recursively sort both halves.
+  3. Merge the sorted halves.
+- Each split takes log₂(n) levels, and merging at each level takes O(n) time.
+- Total: **n log n** operations.
+
+> ✅ **Efficient** for large datasets.
+
+---
+
+### 📈 **Growth Comparison (n = 1,000 vs n = 1,000,000)**
+
+| n       | O(n²)         | O(n log n)       |
+|---------|---------------|------------------|
+| 1,000   | 1,000,000     | ~10,000          |
+| 1,000,000 | 10¹² (1 trillion) | ~20,000,000 (20 million) |
+
+➡️ At **n = 1 million**, O(n²) is **50,000 times slower** than O(n log n).
+
+---
+
+### 🎯 **When Does It Matter?**
+
+- **Small data (n < 100)**: O(n²) might be acceptable (e.g., Bubble Sort, Insertion Sort).
+- **Large data (n > 1,000)**: O(n log n) is essential (e.g., Quick Sort, Merge Sort, Heap Sort).
+
+> 💡 Modern programming languages use **O(n log n)** algorithms (like Timsort in Python or Java’s Arrays.sort) for sorting large datasets.
+
+---
+
+### ✅ **Summary**
+
+| Feature               | O(n²) (e.g., Bubble Sort)     | O(n log n) (e.g., Merge Sort) |
+|-----------------------|-------------------------------|-------------------------------|
+| Efficiency            | Slow for large n              | Fast for large n              |
+| Real-world use        | Rare (only small data)        | Common (standard sorting)     |
+| Scalability           | Poor                          | Excellent                     |
+
+> 📌 **Bottom line**: O(n log n) is significantly more scalable than O(n²). For sorting large datasets, always prefer algorithms with O(n log n) complexity.
+
+--- 
+
+🧠 **Remember**: When sorting big data, **O(n log n) is the gold standard** — it's the reason your phone's contacts or a spreadsheet can sort thousands of entries in milliseconds.",
+151,req-2,batch,low,200,26539.11,openwebui,qwen3:30b-a3b,7136.52,6.91,2802,26484.40,"# Comprehensive Tutorial on Linked Lists: Singly and Doubly Linked Lists
+
+## Introduction to Linked Lists
+
+A **linked list** is a linear data structure where elements (called *nodes*) are not stored in contiguous memory locations. Instead, each node contains:
+- The data value
+- A reference (pointer) to the next node in the sequence
+
+This structure allows dynamic memory allocation and efficient insertions/deletions at any position.
+
+---
+
+## Why Use Linked Lists?
+
+### Advantages:
+- **Dynamic size**: No need to pre-allocate memory
+- **Efficient insertions/deletions**: O(1) at head/tail with proper pointers
+- **No memory waste**: Only allocate what you need
+- **Easy resizing**: Add/remove elements without shifting
+
+### Disadvantages:
+- **No random access**: Must traverse from beginning
+- **Extra memory**: Each node needs pointer(s)
+- **Cache inefficiency**: Poor locality of reference
+
+---
+
+## Node Structure
+
+Before diving into implementations, let's define the basic node structure:
+
+```python
+class Node:
+    def __init__(self, data):
+        self.data = data
+        self.next = None  # For singly linked lists
+```
+
+For doubly linked lists, we add a `prev` pointer:
+
+```python
+class Node:
+    def __init__(self, data):
+        self.data = data
+        self.next = None
+        self.prev = None  # For doubly linked lists
+```
+
+---
+
+## Singly Linked List
+
+### Structure
+Each node points only to the next node. The last node points to `None`.
+
+```
+[Data1] → [Data2] → [Data3] → [Data4] → None
+```
+
+### Implementation
+
+```python
+class SinglyLinkedList:
+    def __init__(self):
+        self.head = None
+        self.size = 0
+    
+    # Insert at beginning
+    def insert_at_head(self, data):
+        new_node = Node(data)
+        new_node.next = self.head
+        self.head = new_node
+        self.size += 1
+    
+    # Insert at end
+    def insert_at_tail(self, data):
+        new_node = Node(data)
+        
+        if not self.head:
+            self.head = new_node
+            self.size += 1
+            return
+        
+        current = self.head
+        while current.next:
+            current = current.next
+        current.next = new_node
+        self.size += 1
+    
+    # Insert at specific position
+    def insert_at_position(self, data, position):
+        if position < 0 or position > self.size:
+            raise IndexError(""Position out of bounds"")
+        
+        if position == 0:
+            self.insert_at_head(data)
+            return
+        
+        new_node = Node(data)
+        current = self.head
+        for _ in range(position - 1):
+            current = current.next
+        
+        new_node.next = current.next
+        current.next = new_node
+        self.size += 1
+    
+    # Delete by value
+    def delete_by_value(self, data):
+        if not self.head:
+            return False
+        
+        # Delete head
+        if self.head.data == data:
+            self.head = self.head.next
+            self.size -= 1
+            return True
+        
+        current = self.head
+        while current.next:
+            if current.next.data == data:
+                current.next = current.next.next
+                self.size -= 1
+                return True
+            current = current.next
+        
+        return False  # Not found
+    
+    # Delete by position
+    def delete_at_position(self, position):
+        if position < 0 or position >= self.size:
+            raise IndexError(""Position out of bounds"")
+        
+        if position == 0:
+            removed_data = self.head.data
+            self.head = self.head.next
+            self.size -= 1
+            return removed_data
+        
+        current = self.head
+        for _ in range(position - 1):
+            current = current.next
+        
+        removed_data = current.next.data
+        current.next = current.next.next
+        self.size -= 1
+        return removed_data
+    
+    # Search for value
+    def search(self, data):
+        current = self.head
+        position = 0
+        while current:
+            if current.data == data:
+                return position
+            current = current.next
+            position += 1
+        return -1  # Not found
+    
+    # Get size
+    def get_size(self):
+        return self.size
+    
+    # Check if empty
+    def is_empty(self):
+        return self.head is None
+    
+    # Display list
+    def display(self):
+        elements = []
+        current = self.head
+        while current:
+            elements.append(current.data)
+            current = current.next
+        return "" → "".join(map(str, elements)) + "" → None""
+```
+
+### Time Complexities (Singly Linked List)
+| Operation | Time Complexity |
+|---------|----------------|
+| Insert at head | O(1) |
+| Insert at tail | O(n) |
+| Insert at position | O(n) |
+| Delete by value | O(n) |
+| Delete at position | O(n) |
+| Search | O(n) |
+| Access by index | O(n) |
+
+---
+
+## Doubly Linked List
+
+### Structure
+Each node has pointers to both the next and previous nodes. The first node's `prev` is `None`, and the last node's `next` is `None`.
+
+```
+None ← [Data1] ↔ [Data2] ↔ [Data3] ↔ [Data4] → None
+```
+
+### Implementation
+
+```python
+class DoublyLinkedList:
+    def __init__(self):
+        self.head = None
+        self.tail = None
+        self.size = 0
+    
+    # Insert at beginning
+    def insert_at_head(self, data):
+        new_node = Node(data)
+        
+        if not self.head:
+            self.head = self.tail = new_node
+        else:
+            new_node.next = self.head
+            self.head.prev = new_node
+            self.head = new_node
+        
+        self.size += 1
+    
+    # Insert at end
+    def insert_at_tail(self, data):
+        new_node = Node(data)
+        
+        if not self.tail:
+            self.head = self.tail = new_node
+        else:
+            new_node.prev = self.tail
+            self.tail.next = new_node
+            self.tail = new_node
+        
+        self.size += 1
+    
+    # Insert at specific position
+    def insert_at_position(self, data, position):
+        if position < 0 or position > self.size:
+            raise IndexError(""Position out of bounds"")
+        
+        if position == 0:
+            self.insert_at_head(data)
+            return
+        
+        if position == self.size:
+            self.insert_at_tail(data)
+            return
+        
+        new_node = Node(data)
+        current = self.head
+        
+        # Traverse to position
+        for _ in range(position):
+            current = current.next
+        
+        # Insert between current.prev and current
+        new_node.prev = current.prev
+        new_node.next = current
+        current.prev.next = new_node
+        current.prev = new_node
+        
+        self.size += 1
+    
+    # Delete by value
+    def delete_by_value(self, data):
+        current = self.head
+        
+        while current:
+            if current.data == data:
+                # Delete head
+                if current == self.head:
+                    self.head = current.next
+                    if self.head:
+                        self.head.prev = None
+                    else:
+                        self.tail = None
+                # Delete tail
+                elif current == self.tail:
+                    self.tail = current.prev
+                    self.tail.next = None
+                # Delete middle
+                else:
+                    current.prev.next = current.next
+                    current.next.prev = current.prev
+                
+                self.size -= 1
+                return True
+            
+            current = current.next
+        
+        return False  # Not found
+    
+    # Delete by position
+    def delete_at_position(self, position):
+        if position < 0 or position >= self.size:
+            raise IndexError(""Position out of bounds"")
+        
+        if position == 0:
+            removed_data = self.head.data
+            self.head = self.head.next
+            if self.head:
+                self.head.prev = None
+            else:
+                self.tail = None
+            self.size -= 1
+            return removed_data
+        
+        if position == self.size - 1:
+            removed_data = self.tail.data
+            self.tail = self.tail.prev
+            self.tail.next = None
+            self.size -= 1
+            return removed_data
+        
+        # Find node at position
+        current = self.head
+        for _ in range(position):
+            current = current.next
+        
+        removed_data = current.data
+        current.prev.next = current.next
+        current.next.prev = current.prev
+        self.size -= 1
+        return removed_data
+    
+    # Search for value
+    def search(self, data):
+        current = self.head
+        position = 0
+        while current:
+            if current.data == data:
+                return position
+            current = current.next
+            position += 1
+        return -1  # Not found
+    
+    # Get size
+    def get_size(self):
+        return self.size
+    
+    # Check if empty
+    def is_empty(self):
+        return self.head is None
+    
+    # Display forward
+    def display_forward(self):
+        elements = []
+        current = self.head
+        while current:
+            elements.append(current.data)
+            current = current.next
+        return "" ↔ "".join(map(str, elements)) + "" → None""
+    
+    # Display backward
+    def display_backward(self):
+        elements = []
+        current = self.tail
+        while current:
+            elements.append(current.data)
+            current = current.prev
+        return "" ↔ "".join(map(str, elements)) + "" ← None""
+```
+
+### Time Complexities (Doubly Linked List)
+| Operation | Time Complexity |
+|---------|----------------|
+| Insert at head | O(1) |
+| Insert at tail | O(1) |
+| Insert at position | O(n) |
+| Delete by value | O(n) |
+| Delete at position | O(n) |
+| Search | O(n) |
+| Access by index | O(n) |
+
+**Note**: Insertion and deletion at head/tail are O(1) compared to O(n) in singly linked lists.
+
+---
+
+## Comparison: Singly vs Doubly Linked Lists
+
+| Feature | Singly Linked List | Doubly Linked List |
+|-------|-------------------|-------------------|
+| Memory Usage | Lower (one pointer) | Higher (two pointers) |
+| Insert at Tail | O(n) | O(1) |
+| Delete at Tail | O(n) | O(1) |
+| Bidirectional Traversal | Not possible | Possible |
+| Complexity | Simpler | More complex |
+| Use Cases | Memory-constrained, unidirectional | Frequent bidirectional access |
+
+---
+
+## Practical Applications
+
+### Singly Linked Lists:
+- Implementing stacks and queues
+- Memory management (free lists)
+- Sparse matrices
+- Undo/redo functionality (with additional tracking)
+
+### Doubly Linked Lists:
+- Browser history (back/forward navigation)
+- Music playlists (previous/next track)
+- Undo/redo operations with bidirectional access
+- Implementing dequeues (double-ended queues)
+
+---
+
+## Best Practices
+
+1. **Always handle edge cases**: Empty lists, single nodes, head/tail deletions
+2. **Use sentinel nodes** for complex operations (though beyond basic tutorial)
+3. **Track size** to avoid unnecessary traversal
+4. **Validate input** for position-based operations
+5. **Use defensive programming**: Check for `None` before dereferencing
+6. **Consider memory management** in languages without garbage collection
+
+---
+
+## Common Pitfalls to Avoid
+
+1. **Infinite loops**: Ensure `next` pointers eventually reach `None`
+2. **Memory leaks**: Don't forget to free/delete nodes
+3. **Dangling pointers**: Avoid accessing deleted nodes
+4. **Off-by-one errors**: Be careful with position calculations
+5. **Not updating both pointers**: In doubly linked lists, always update both `prev` and `next`
+
+---
+
+## Example Usage
+
+```python
+# Singly Linked List Example
+sll = SinglyLinkedList()
+sll.insert_at_head(10)
+sll.insert_at_tail(20)
+sll.insert_at_position(15, 1)
+print(sll.display())  # 10 → 15 → 20 → None
+
+# Doubly Linked List Example
+dll = DoublyLinkedList()
+dll.insert_at_head(1)
+dll.insert_at_tail(3)
+dll.insert_at_position(2, 1)
+print(dll.display_forward())    # 1 ↔ 2 ↔ 3 → None
+print(dll.display_backward())   # 3 ↔ 2 ↔ 1 ← None
+```
+
+---
+
+## Conclusion
+
+Linked lists are fundamental data structures that provide dynamic memory management and efficient insertion/deletion operations. While they sacrifice random access speed, their flexibility makes them invaluable in many applications.
+
+- Use **singly linked lists** when memory is constrained and you only need forward traversal.
+- Use **doubly linked lists** when you need bidirectional traversal or frequent insertions/deletions at both ends.
+
+Understanding both variants gives you powerful tools for solving real-world programming problems efficiently.
+
+> **Pro Tip**: Always consider the trade-offs between time complexity, space complexity, and implementation complexity when choosing a data structure!",
+152,req-3,batch,mid,200,32615.01,openwebui,gemma3:27b,4030.48,22.46,1272,32580.71,"Okay, here are 20 quiz questions covering computer networking fundamentals, with answers provided at the end. I've included a mix of difficulty levels, covering concepts like the OSI model, TCP/IP, network topologies, and common protocols.
+
+**Instructions:**  Choose the best answer for each question.
+
+---
+
+**Quiz Questions:**
+
+1.  **What is the primary purpose of a network?**
+    a) To provide entertainment
+    b) To share resources (data, hardware, etc.)
+    c) To play video games
+    d) To browse the internet
+
+2.  **Which of the following is NOT a common network topology?**
+    a) Bus
+    b) Star
+    c) Triangle
+    d) Ring
+
+3.  **The OSI model has how many layers?**
+    a) 5
+    b) 7
+    c) 10
+    d) 3
+
+4.  **At which OSI layer does the TCP protocol operate?**
+    a) Physical Layer
+    b) Data Link Layer
+    c) Transport Layer
+    d) Application Layer
+
+5.  **What is an IP address used for?**
+    a) Physical identification of a network device
+    b) Logical identification of a network device and routing of data
+    c) Securing network communication
+    d) Displaying network statistics
+
+6.  **What does the acronym DNS stand for?**
+    a) Digital Network System
+    b) Domain Name System
+    c) Data Network Security
+    d) Dynamic Network Solution
+
+7.  **Which protocol is primarily used for sending emails?**
+    a) FTP
+    b) HTTP
+    c) SMTP
+    d) TCP
+
+8.  **What is a MAC address?**
+    a) A logical address assigned by the network administrator
+    b) A physical address hardcoded into the network interface card
+    c) A temporary address used for routing
+    d) An IP address format
+
+9.  **What is the purpose of a subnet mask?**
+    a) To encrypt network traffic
+    b) To divide a network into smaller, manageable segments
+    c) To block unwanted network traffic
+    d) To compress data for faster transmission
+
+10. **Which of the following is a connectionless protocol?**
+    a) TCP
+    b) UDP
+    c) HTTP
+    d) FTP
+
+11. **What is the difference between a hub, a switch, and a router?**
+    a) They all perform the same function, but with different speeds.
+    b) A hub broadcasts data to all devices, a switch directs data to specific devices, and a router connects different networks.
+    c) A switch broadcasts data, a router directs data, and a hub connects networks.
+    d) A router broadcasts data, a hub directs data, and a switch connects networks.
+
+12. **What is the purpose of a firewall?**
+    a) To speed up network connections
+    b) To prevent unauthorized access to a network
+    c) To provide wireless connectivity
+    d) To manage IP addresses
+
+13. **What does the term ""bandwidth"" refer to?**
+    a) The physical width of a network cable
+    b) The amount of data that can be transmitted over a network connection in a given amount of time
+    c) The distance a network signal can travel
+    d) The number of devices connected to a network
+
+14. **What is the function of DHCP?**
+    a) To encrypt network traffic
+    b) To automatically assign IP addresses to devices on a network
+    c) To translate domain names to IP addresses
+    d) To filter network traffic
+
+15. **What is the purpose of a default gateway?**
+    a) To provide a backup network connection
+    b) To allow devices on a network to communicate with devices on other networks
+    c) To encrypt network traffic
+    d) To manage network security
+
+16. **Which layer of the OSI model is responsible for error detection and correction?**
+    a) Physical Layer
+    b) Data Link Layer
+    c) Network Layer
+    d) Transport Layer
+
+17. **What is NAT (Network Address Translation) used for?**
+    a) Encrypting network traffic
+    b) Translating domain names to IP addresses
+    c) Allowing multiple devices on a private network to share a single public IP address
+    d) Preventing viruses from spreading
+
+18. **What is the main difference between IPv4 and IPv6?**
+    a) IPv6 is faster than IPv4
+    b) IPv6 uses a larger address space than IPv4
+    c) IPv4 is more secure than IPv6
+    d) IPv6 requires more bandwidth
+
+19. **What is a VLAN?**
+    a) A type of network cable
+    b) A virtual LAN that logically segments a network
+    c) A firewall protocol
+    d) A wireless security protocol
+
+20. **What is the purpose of the ping command?**
+    a) To trace the route of a packet
+    b) To test the connectivity to a network host
+    c) To configure network settings
+    d) To scan for network vulnerabilities
+
+---
+
+**Answer Key:**
+
+1.  b
+2.  c
+3.  b
+4.  c
+5.  b
+6.  b
+7.  c
+8.  b
+9.  b
+10. b
+11. b
+12. b
+13. b
+14. b
+15. b
+16. b
+17. c
+18. b
+19. b
+20. b
+
+---
+
+I hope you find this quiz helpful for assessing your understanding of networking fundamentals!  Let me know if you'd like more questions or quizzes on specific networking topics.",
+153,req-4,batch,mid,200,37432.47,openwebui,qwen3:30b-a3b,25721.30,6.62,1765,37393.59,"**Lecture: Compiler Design Phases – Lexical Analysis, Parsing, and Code Generation**
+
+---
+
+### **Introduction to Compiler Design**
+
+A **compiler** is a software tool that translates high-level programming language code (source code) into machine code or an intermediate representation that a computer can execute. The compilation process is divided into several well-defined phases, each responsible for a specific transformation of the source code.
+
+Today, we will explore three fundamental phases of a compiler:
+1. **Lexical Analysis**
+2. **Parsing (Syntax Analysis)**
+3. **Code Generation**
+
+These phases form the backbone of any modern compiler and are essential for understanding how programming languages are processed and executed.
+
+---
+
+### **1. Lexical Analysis: Breaking Code into Tokens**
+
+#### **What is Lexical Analysis?**
+The first phase of compilation, **lexical analysis**, reads the source code character by character and groups them into meaningful units called **tokens**.
+
+#### **Key Concepts:**
+- **Token**: A sequence of characters that represents a single unit of meaning. Examples:
+  - Keywords: `if`, `while`, `return`
+  - Identifiers: `x`, `myVariable`
+  - Operators: `+`, `==`, `>`
+  - Literals: `42`, `""hello""`
+  - Punctuation: `;`, `{`, `}`
+- **Lexeme**: The actual character sequence that forms a token (e.g., the lexeme `""if""` corresponds to the token `KEYWORD_IF`).
+- **Scanner (Tokenizer)**: The program that performs lexical analysis.
+
+#### **Example:**
+```c
+if (x > 5) {
+    y = x + 1;
+}
+```
+
+**Tokens produced:**
+1. `if` → KEYWORD
+2. `(` → PUNCTUATION
+3. `x` → IDENTIFIER
+4. `>` → OPERATOR
+5. `5` → LITERAL
+6. `)` → PUNCTUATION
+7. `{` → PUNCTUATION
+8. `y` → IDENTIFIER
+9. `=` → OPERATOR
+10. `x` → IDENTIFIER
+11. `+` → OPERATOR
+12. `1` → LITERAL
+13. `;` → PUNCTUATION
+14. `}` → PUNCTUATION
+
+#### **Role of the Lexical Analyzer:**
+- Removes whitespace and comments.
+- Detects lexical errors (e.g., invalid characters like `@` in C).
+- Outputs a stream of tokens for the next phase.
+
+#### **Tools:**
+- Regular expressions are used to define token patterns.
+- Tools like **Lex** (or **Flex**) automate the generation of lexical analyzers.
+
+---
+
+### **2. Parsing (Syntax Analysis): Building the Structure**
+
+#### **What is Parsing?**
+The second phase, **parsing**, takes the stream of tokens from the lexical analyzer and checks whether they conform to the **grammar** of the programming language. It builds a **parse tree** (or syntax tree) representing the hierarchical structure of the program.
+
+#### **Key Concepts:**
+- **Context-Free Grammar (CFG)**: A formal way to define the syntax of a language using production rules.
+  - Example: `S → if (E) S | while (E) S | { S* }`
+- **Parse Tree (Syntax Tree)**: A tree representation of how the input tokens fit into the grammar rules.
+- **Ambiguity**: A grammar that allows multiple parse trees for the same input. Resolved via precedence and associativity rules.
+
+#### **Example:**
+Given the token stream:
+`if (x > 5) { y = x + 1; }`
+
+A parser constructs a parse tree like:
+```
+    if
+   /  \
+  (    S
+ / \   \
+x   >   {
+     / \
+    5   y = x + 1;
+```
+
+#### **Types of Parsers:**
+- **Top-down parsers** (e.g., Recursive Descent, LL parsers): Start from the root and expand non-terminals.
+- **Bottom-up parsers** (e.g., LR, LALR parsers): Start from terminals and reduce to non-terminals.
+
+#### **Error Handling:**
+- Detects syntax errors (e.g., missing `}` or unmatched parentheses).
+- Attempts **error recovery** (e.g., skipping tokens to resume parsing).
+
+#### **Tools:**
+- **Yacc** (or **Bison**) for generating parsers from CFGs.
+
+---
+
+### **3. Code Generation: Producing Executable Output**
+
+#### **What is Code Generation?**
+The final phase, **code generation**, translates the intermediate representation (IR) of the program—often a syntax tree or three-address code—into **target machine code** (e.g., assembly language or binary).
+
+#### **Key Concepts:**
+- **Intermediate Representation (IR)**: A simplified, language-independent form of the code (e.g., three-address code, abstract syntax tree).
+  - Example: `t1 = x + 1; y = t1;`
+- **Target Architecture**: The specific CPU (e.g., x86, ARM) and instruction set.
+- **Register Allocation**: Assigning variables to CPU registers to optimize performance.
+- **Instruction Selection**: Choosing appropriate machine instructions for IR operations.
+
+#### **Example:**
+Three-address code:
+```
+t1 = x + 1
+y = t1
+```
+
+Generated x86 Assembly:
+```asm
+mov eax, [x]    ; Load x into register eax
+add eax, 1      ; Add 1
+mov [y], eax    ; Store result in y
+```
+
+#### **Optimizations (Optional but Common):**
+- Constant folding: `3 + 4` → `7`
+- Dead code elimination: Remove unused variables
+- Common subexpression elimination
+
+#### **Output:**
+- Assembly code (to be passed to an assembler)
+- Machine code (directly executable)
+- Bytecode (for virtual machines like JVM)
+
+---
+
+### **Summary: The Flow of Compilation**
+
+| Phase | Input | Output | Purpose |
+|------|-------|--------|--------|
+| **Lexical Analysis** | Source code (characters) | Token stream | Breaks code into meaningful units |
+| **Parsing** | Token stream | Parse tree / AST | Checks grammar and builds structure |
+| **Code Generation** | AST / IR | Target code (assembly/machine code) | Produces executable instructions |
+
+---
+
+### **Why These Phases Matter**
+
+- **Modularity**: Each phase can be developed, tested, and optimized independently.
+- **Error Reporting**: Errors are detected early and reported with precise context.
+- **Portability**: A compiler can target multiple architectures by modifying only the code generation phase.
+- **Optimization**: Intermediate representations enable powerful optimizations across phases.
+
+---
+
+### **Real-World Example: Compiling a C Program**
+```c
+int main() {
+    int x = 5;
+    return x + 1;
+}
+```
+
+**Phases:**
+1. **Lexical**: Tokens: `int`, `main`, `(`, `)`, `{`, `int`, `x`, `=`, `5`, `;`, `return`, `x`, `+`, `1`, `;`, `}`
+2. **Parsing**: Builds AST showing function structure, variable declaration, return statement.
+3. **Code Generation**: Produces assembly code that loads `5` into a register, adds `1`, returns the result.
+
+---
+
+### **Conclusion**
+
+Understanding the three core phases—**lexical analysis**, **parsing**, and **code generation**—is essential for mastering compiler design. These phases transform human-readable code into machine-executable instructions, forming the bridge between programming languages and hardware.
+
+As we move forward, we'll explore additional phases like **semantic analysis**, **optimization**, and **symbol table management**, but these three remain the foundation of every compiler.
+
+---
+
+### **Further Reading & Tools**
+- *Compilers: Principles, Techniques, and Tools* (Aho, Lam, Sethi, Ullman) – “The Dragon Book”
+- **Flex** and **Bison** – for lexical and syntactic analysis
+- **LLVM** – modern compiler infrastructure with advanced optimization and code generation
+
+---
+
+**Q&A Session**  
+Let’s open the floor for questions on any of these phases—how they work, tools used, or real-world applications.
+
+---  
+*End of Lecture*",
+154,req-5,batch,low,200,423.76,openwebui,deepseek-r1:70b,388.06,,,389.25,,
+155,req-6,batch,mid,200,47547.54,openwebui,qwen3:30b-a3b,36624.34,6.59,1652,47505.30,"Certainly! Here are **10 practice problems** to help you understand **Big O notation** — from basic to intermediate levels — along with **detailed solutions** and explanations.
+
+---
+
+### 🔹 **Problem 1: Simple Loop**
+What is the time complexity of the following code?
+
+```python
+def print_numbers(n):
+    for i in range(n):
+        print(i)
+```
+
+**Solution:**
+- The loop runs `n` times.
+- Each iteration performs a constant-time operation (`print(i)`).
+- **Time Complexity: O(n)**
+
+> ✅ **Big O: O(n)** — Linear time.
+
+---
+
+### 🔹 **Problem 2: Nested Loops (Same Size)**
+What is the time complexity of the following code?
+
+```python
+def print_pairs(n):
+    for i in range(n):
+        for j in range(n):
+            print(i, j)
+```
+
+**Solution:**
+- Outer loop: runs `n` times.
+- Inner loop: runs `n` times for each outer loop iteration.
+- Total operations: `n × n = n²`.
+- **Time Complexity: O(n²)**
+
+> ✅ **Big O: O(n²)** — Quadratic time.
+
+---
+
+### 🔹 **Problem 3: Nested Loops (Different Sizes)**
+What is the time complexity of the following code?
+
+```python
+def print_pairs_different(m, n):
+    for i in range(m):
+        for j in range(n):
+            print(i, j)
+```
+
+**Solution:**
+- Outer loop: runs `m` times.
+- Inner loop: runs `n` times for each outer loop.
+- Total operations: `m × n`.
+- If `m` and `n` are independent, we write **O(m × n)**.
+- If `m = n`, then it becomes O(n²), but generally: **O(mn)**
+
+> ✅ **Big O: O(mn)** — Multiplicative time.
+
+---
+
+### 🔹 **Problem 4: Constant Time Operation**
+What is the time complexity of the following code?
+
+```python
+def get_first_element(arr):
+    return arr[0]
+```
+
+**Solution:**
+- Accessing the first element of an array is a single operation.
+- Does not depend on the size of the array.
+- **Time Complexity: O(1)**
+
+> ✅ **Big O: O(1)** — Constant time.
+
+---
+
+### 🔹 **Problem 5: Logarithmic Time**
+What is the time complexity of the following code?
+
+```python
+def binary_search(arr, target):
+    left = 0
+    right = len(arr) - 1
+    while left <= right:
+        mid = (left + right) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+    return -1
+```
+
+**Solution:**
+- At each step, the search space is halved.
+- Number of steps needed to reduce the problem size to 1 is log₂(n).
+- **Time Complexity: O(log n)**
+
+> ✅ **Big O: O(log n)** — Logarithmic time.
+
+---
+
+### 🔹 **Problem 6: Two Independent Loops**
+What is the time complexity of the following code?
+
+```python
+def print_two_sequences(n):
+    for i in range(n):
+        print(i)
+    for j in range(n):
+        print(j)
+```
+
+**Solution:**
+- First loop: O(n)
+- Second loop: O(n)
+- Total: O(n) + O(n) = O(2n) → drop constants → **O(n)**
+
+> ✅ **Big O: O(n)** — Linear time (even with two loops).
+
+---
+
+### 🔹 **Problem 7: Loop with Exponential Growth**
+What is the time complexity of the following code?
+
+```python
+def print_exponential(n):
+    i = 1
+    while i < n:
+        print(i)
+        i *= 2
+```
+
+**Solution:**
+- `i` starts at 1 and doubles each time: 1, 2, 4, 8, ..., until `i >= n`.
+- Number of iterations: how many times can you double 1 before reaching `n`?
+- That’s log₂(n).
+- **Time Complexity: O(log n)**
+
+> ✅ **Big O: O(log n)** — Logarithmic time.
+
+---
+
+### 🔹 **Problem 8: Recursive Function (Simple)**
+What is the time complexity of the following recursive function?
+
+```python
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+```
+
+**Solution:**
+- Each call reduces `n` by 1.
+- Recursion depth: `n` calls (from `n` down to 1).
+- Each call does constant work.
+- **Time Complexity: O(n)**
+
+> ✅ **Big O: O(n)** — Linear time.
+
+---
+
+### 🔹 **Problem 9: Recursive Function (Divide and Conquer)**
+What is the time complexity of the following recursive function?
+
+```python
+def merge_sort(arr):
+    if len(arr) <= 1:
+        return arr
+    mid = len(arr) // 2
+    left = merge_sort(arr[:mid])
+    right = merge_sort(arr[mid:])
+    return merge(left, right)
+```
+
+**Solution:**
+- Divides array into two halves → O(log n) levels of recursion.
+- At each level, merging takes O(n) time.
+- Total: O(n) × O(log n) = **O(n log n)**
+
+> ✅ **Big O: O(n log n)** — Common for efficient sorting algorithms.
+
+---
+
+### 🔹 **Problem 10: Nested Loops with Conditional Break**
+What is the time complexity of the following code?
+
+```python
+def find_pair_sum(arr, target):
+    for i in range(len(arr)):
+        for j in range(i + 1, len(arr)):
+            if arr[i] + arr[j] == target:
+                return True
+    return False
+```
+
+**Solution:**
+- Outer loop: `n` iterations.
+- Inner loop: starts at `i+1`, so it runs `n-1`, `n-2`, ..., `1` times.
+- Total iterations: (n-1) + (n-2) + ... + 1 = n(n-1)/2 ≈ n²/2.
+- Drop constants and lower-order terms → **O(n²)**
+
+> ✅ **Big O: O(n²)** — Quadratic time (even though inner loop is smaller, it's still quadratic).
+
+---
+
+## 📌 Summary of Common Big O Notations (in increasing order):
+
+| Notation | Name | Example |
+|--------|------|--------|
+| O(1) | Constant | Array access |
+| O(log n) | Logarithmic | Binary search |
+| O(n) | Linear | Single loop |
+| O(n log n) | Linearithmic | Merge sort |
+| O(n²) | Quadratic | Nested loops |
+| O(2ⁿ) | Exponential | Recursive Fibonacci |
+| O(n!) | Factorial | Generating permutations |
+
+---
+
+## ✅ Tips for Mastering Big O:
+1. **Ignore constants** (e.g., O(2n) → O(n)).
+2. **Ignore lower-order terms** (e.g., O(n² + n) → O(n²)).
+3. **Focus on worst-case** behavior.
+4. **Count operations**, not lines of code.
+5. **Look for loops and recursion depth.**
+
+---
+
+Let me know if you’d like **visual diagrams, quiz-style questions, or a cheat sheet** for Big O! 🚀",
+156,req-7,batch,low,200,82136.75,openwebui,gemma3:27b,32529.28,24.10,2058,82094.71,"## Software Testing Methodologies: Unit, Integration, and System Testing - Lecture Notes
+
+These notes cover the core concepts of Unit, Integration, and System testing, forming the foundation of a robust software testing strategy.  We'll explore definitions, goals, techniques, and important considerations for each.
+
+**I. Introduction to Software Testing**
+
+* **Why Test?**
+    * **Detect Defects:** Identify errors in code before release.
+    * **Ensure Quality:** Verify the software meets specified requirements and user expectations.
+    * **Reduce Costs:**  Finding and fixing bugs early is significantly cheaper than fixing them in production.
+    * **Build Confidence:**  Testing provides stakeholders with confidence in the software's reliability.
+    * **Improve User Experience:**  Testing identifies usability issues.
+* **Testing Principles:**
+    * **Testing shows presence of defects, not absence.** (You can't prove a program is bug-free, only that you haven't found any bugs *yet*).
+    * **Exhaustive testing is impossible.** Focus on risk-based testing.
+    * **Early testing saves time and money.** Shift-left testing philosophy.
+    * **Defect clustering:** Bugs tend to concentrate in certain areas of the code.
+    * **Pareto Principle (80/20 rule):** 80% of defects are usually found in 20% of the code.
+    * **Testing is context-dependent:**  Different types of software require different testing approaches.
+* **Testing Levels:** The focus of these notes: Unit, Integration, System.  Other levels exist (Acceptance, Regression, Performance, Security, etc.).
+
+
+
+**II. Unit Testing**
+
+* **Definition:** Unit testing involves testing individual units or components of the software in isolation.  A ""unit"" can be a function, method, class, module, or any identifiable section of code.
+* **Goal:**  Verify that each unit of code works correctly on its own, independent of other parts of the system.
+* **Who Performs It?** Primarily developers.  Emphasis on Test-Driven Development (TDD) where tests are written *before* the code.
+* **Techniques:**
+    * **Black Box Testing:**  Testing the unit based on its specification without knowing its internal implementation. (Focus on inputs/outputs).
+    * **White Box Testing:**  Testing the unit based on its internal structure and logic. (Focus on code coverage - ensuring all lines of code are executed by tests).
+    * **Test Cases:** Carefully designed inputs and expected outputs for the unit under test.  Consider:
+        * **Valid Inputs:**  Typical scenarios.
+        * **Invalid Inputs:**  Boundary values, edge cases, error conditions.
+        * **Boundary Value Analysis (BVA):** Test values at the edges of input domains.
+        * **Equivalence Partitioning:** Divide inputs into groups that should be treated similarly.
+    * **Mocking/Stubbing:** Replacing dependencies with controlled simulations to isolate the unit being tested. (Essential for complex dependencies).
+* **Tools:**
+    * **JUnit (Java):**  Popular testing framework for Java.
+    * **NUnit (.NET):**  Testing framework for .NET languages.
+    * **pytest (Python):** Widely used testing framework for Python.
+    * **PHPUnit (PHP):** Testing framework for PHP.
+* **Benefits:**
+    * **Early Defect Detection:**  Find and fix bugs quickly during development.
+    * **Code Quality Improvement:** Encourages modular and well-designed code.
+    * **Easier Debugging:** Isolates the source of problems.
+    * **Facilitates Refactoring:**  Provides confidence when modifying code.
+* **Limitations:**
+    * **Doesn't catch integration issues:** Only tests individual units, not how they interact.
+    * **Can be time-consuming:**  Requires writing and maintaining tests.
+
+
+
+
+**III. Integration Testing**
+
+* **Definition:** Integration testing focuses on verifying the interaction between different units or components of the software.  The goal is to ensure that these units work together correctly.
+* **Goal:** Detect defects that arise when integrated units interact, such as data transfer errors, interface mismatches, or communication problems.
+* **Who Performs It?**  Often testers or developers, sometimes a dedicated integration testing team.
+* **Approaches:**
+    * **Top-Down Integration:** Start with the highest-level components and gradually integrate lower-level components.  Requires *stubs* to simulate missing lower-level components.
+    * **Bottom-Up Integration:** Start with the lowest-level components and gradually integrate higher-level components. Requires *drivers* to simulate calling components.
+    * **Big Bang Integration:**  Integrate all components at once.  Risky and difficult to debug. (Not recommended for complex systems).
+    * **Sandwich Integration:**  Combines top-down and bottom-up approaches.
+* **Types of Integration Testing:**
+    * **Component Integration Testing:**  Testing the interaction between two or more components.
+    * **System Integration Testing:**  Testing the interaction between the entire system and external systems (databases, APIs, etc.).
+* **Techniques:**
+    * **Interface Testing:** Verify that the interfaces between components are correctly defined and implemented. (Data types, parameters, return values).
+    * **Data Flow Testing:** Verify that data is correctly transferred between components.
+    * **API Testing:**  Testing the APIs that facilitate communication between components.
+* **Tools:**
+    * **Postman/Insomnia:** For API testing.
+    * **SoapUI:** For testing SOAP web services.
+    * **Mockito/EasyMock (Java):**  For creating mocks and stubs.
+* **Benefits:**
+    * **Detects interface defects:** Finds issues related to data exchange and communication.
+    * **Verifies system functionality:** Confirms that integrated components work as expected.
+    * **Reduces risk of system failures:** Identifies potential problems before deployment.
+* **Limitations:**
+    * **Can be complex:**  Requires careful planning and coordination.
+    * **Doesn't test the overall system behavior:** Focuses on component interaction, not end-to-end functionality.
+
+
+
+**IV. System Testing**
+
+* **Definition:** System testing involves testing the entire software system as a whole.  It verifies that the system meets all specified requirements, including functional, performance, security, and usability requirements.
+* **Goal:**  Evaluate the end-to-end behavior of the system and ensure it meets the needs of the user.
+* **Who Performs It?**  Dedicated test team (independent of development) is ideal.
+* **Types of System Testing:**
+    * **Functional Testing:**  Verifies that the system functions correctly according to the requirements.
+    * **Performance Testing:**  Evaluates the system's responsiveness, stability, and scalability under different load conditions.
+    * **Security Testing:**  Identifies vulnerabilities and ensures the system is protected against threats.
+    * **Usability Testing:**  Evaluates how easy the system is to use and learn.
+    * **Regression Testing:**  Ensures that new code changes haven't introduced new defects or broken existing functionality.
+    * **Acceptance Testing (Often considered a later stage, but closely related):**  Performed by end-users or stakeholders to verify that the system meets their needs and is ready for deployment.
+* **Techniques:**
+    * **Black Box Testing:**  Testing the system based on its specifications without knowing its internal implementation.
+    * **End-to-End Testing:**  Testing the entire system workflow from start to finish.
+    * **Scenario Testing:**  Testing the system using real-world scenarios.
+    * **Exploratory Testing:**  Unscripted testing where testers explore the system to find defects.
+* **Tools:**
+    * **Selenium:** For automating web browser testing.
+    * **JMeter:** For performance and load testing.
+    * **Burp Suite:** For security testing.
+    * **TestRail/Zephyr:** Test case management tools.
+* **Benefits:**
+    * **Verifies end-to-end functionality:** Confirms that the system works as expected from the user's perspective.
+    * **Identifies system-level defects:**  Finds issues that may not be apparent at the unit or integration level.
+    * **Ensures quality and reliability:**  Increases confidence in the software's overall performance and stability.
+* **Limitations:**
+    * **Can be expensive and time-consuming:**  Requires significant resources and effort.
+    * **May not catch all defects:**  Impossible to test all possible scenarios.
+
+
+
+
+**V.  Relationships & Best Practices**
+
+* **Testing Pyramid:**  A visual guide advocating for a larger number of unit tests, fewer integration tests, and even fewer system tests.  This promotes early defect detection and reduces testing costs.
+* **Shift-Left Testing:**  Performing testing activities earlier in the development lifecycle.  This helps identify and fix defects earlier, reducing costs and improving quality.
+* **Continuous Integration/Continuous Delivery (CI/CD):**  Automating the build, test, and deployment process.  This enables faster feedback and quicker releases.
+
+
+
+**Conclusion:**
+
+Unit, Integration, and System testing are crucial components of a robust software testing strategy. Each level plays a vital role in ensuring the quality, reliability, and usability of the software.  Understanding the goals, techniques, and limitations of each level is essential for building a successful testing process.  Remember to adapt these methodologies to the specific needs of your project and leverage automation tools to improve efficiency and effectiveness.",
+157,req-8,batch,mid,200,444.90,openwebui,deepseek-r1:70b,355.54,,,356.97,,
+158,req-9,batch,low,200,66288.50,openwebui,qwen3:30b-a3b,45962.32,6.93,2926,66241.32,"# **REST API Design Principles: A Comprehensive Tutorial with Detailed Examples**
+
+---
+
+## **Introduction to REST APIs**
+
+Representational State Transfer (REST) is an architectural style for designing networked applications. RESTful APIs use standard HTTP methods to perform operations on resources, making them simple, scalable, and stateless.
+
+### ✅ What is a REST API?
+A REST API is a set of rules and conventions for building and interacting with web services. It uses:
+- **HTTP methods** (GET, POST, PUT, DELETE, PATCH)
+- **Resource-based URLs**
+- **Stateless interactions**
+- **Standardized data formats** (JSON, XML)
+
+---
+
+## **Core Principles of REST API Design**
+
+### 1. **Statelessness**
+Each request from a client to the server must contain all the information needed to understand and process it.
+
+> 🚫 **Bad Example (Stateful):**
+```http
+GET /user/123
+```
+*Server remembers the user's session state.*
+
+> ✅ **Good Example (Stateless):**
+```http
+GET /users/123
+```
+*Include authentication token in headers:*
+```http
+Authorization: Bearer <token>
+```
+
+---
+
+### 2. **Resource-Oriented Design**
+Treat everything as a **resource** (e.g., user, product, order). Use nouns, not verbs, in URLs.
+
+> ❌ **Bad:**
+```http
+GET /getUsers
+GET /deleteUser/123
+```
+
+> ✅ **Good:**
+```http
+GET /users
+DELETE /users/123
+POST /users
+PUT /users/123
+```
+
+---
+
+### 3. **Use Standard HTTP Methods Correctly**
+
+| Method | Purpose | Idempotent? | Safe? |
+|-------|--------|-------------|-------|
+| `GET` | Retrieve resource | ✅ Yes | ✅ Yes |
+| `POST` | Create new resource | ❌ No | ❌ No |
+| `PUT` | Update entire resource | ✅ Yes | ❌ No |
+| `PATCH` | Partial update | ❌ No | ❌ No |
+| `DELETE` | Remove resource | ✅ Yes | ❌ No |
+
+> 📌 **Example: User Management**
+```http
+GET    /users               # List all users
+GET    /users/123           # Get user by ID
+POST   /users               # Create new user
+PUT    /users/123           # Replace user (full update)
+PATCH  /users/123           # Update specific fields (partial)
+DELETE /users/123           # Delete user
+```
+
+---
+
+### 4. **Use Proper HTTP Status Codes**
+
+Always return appropriate status codes:
+
+| Code | Meaning | Use Case |
+|------|--------|---------|
+| `200 OK` | Success | GET, PUT, PATCH |
+| `201 Created` | Resource created | POST |
+| `204 No Content` | Success, no response body | DELETE |
+| `400 Bad Request` | Invalid input | Malformed JSON, missing fields |
+| `401 Unauthorized` | Authentication missing | No token |
+| `403 Forbidden` | Authenticated but not allowed | User lacks permission |
+| `404 Not Found` | Resource doesn’t exist | Wrong ID |
+| `409 Conflict` | Resource already exists | Duplicate email |
+| `422 Unprocessable Entity` | Validation failed | Invalid email format |
+
+> ✅ **Example: Creating a User**
+```http
+POST /users
+Content-Type: application/json
+
+{
+  ""name"": ""Alice"",
+  ""email"": ""alice@example.com""
+}
+```
+
+**Response:**
+```http
+HTTP/1.1 201 Created
+Location: /users/456
+Content-Type: application/json
+
+{
+  ""id"": 456,
+  ""name"": ""Alice"",
+  ""email"": ""alice@example.com"",
+  ""created_at"": ""2025-04-05T10:00:00Z""
+}
+```
+
+---
+
+### 5. **Versioning**
+Avoid breaking changes. Use versioning in URLs or headers.
+
+> ✅ **URL Versioning (Recommended):**
+```http
+GET /v1/users
+GET /v2/users
+```
+
+> ✅ **Header Versioning (Alternative):**
+```http
+Accept: application/vnd.myapi.v2+json
+```
+
+> 🚫 **Avoid:** Changing API behavior without versioning.
+
+---
+
+### 6. **Consistent and Predictable URL Structure**
+
+Use consistent pluralization and hierarchy.
+
+> ✅ **Good:**
+```http
+/users/123/orders
+/users/123/orders/456
+/products/789/reviews
+```
+
+> ❌ **Bad:**
+```http
+/user/123/order
+/product/789/review
+```
+
+---
+
+### 7. **Use Query Parameters for Filtering, Sorting, and Pagination**
+
+Don’t overload the URL path. Use query parameters for flexibility.
+
+> ✅ **Example: Filtering & Pagination**
+```http
+GET /users?role=admin&status=active&page=2&limit=10&sort=name&order=asc
+```
+
+**Response (Paginated):**
+```json
+{
+  ""data"": [
+    { ""id"": 123, ""name"": ""Alice"", ""role"": ""admin"" }
+  ],
+  ""pagination"": {
+    ""page"": 2,
+    ""limit"": 10,
+    ""total"": 150,
+    ""pages"": 15
+  }
+}
+```
+
+---
+
+### 8. **Use JSON as the Primary Data Format**
+
+JSON is lightweight, human-readable, and widely supported.
+
+> ✅ **Request Body (JSON):**
+```json
+{
+  ""name"": ""Bob"",
+  ""email"": ""bob@example.com"",
+  ""preferences"": {
+    ""theme"": ""dark"",
+    ""notifications"": true
+  }
+}
+```
+
+> ✅ **Response Body (JSON):**
+```json
+{
+  ""id"": 789,
+  ""name"": ""Bob"",
+  ""email"": ""bob@example.com"",
+  ""created_at"": ""2025-04-05T10:00:00Z"",
+  ""updated_at"": ""2025-04-05T10:05:00Z""
+}
+```
+
+---
+
+### 9. **Provide Meaningful Error Responses**
+
+Always return structured error messages.
+
+> ✅ **Error Response:**
+```json
+{
+  ""error"": {
+    ""code"": ""VALIDATION_FAILED"",
+    ""message"": ""Email is invalid"",
+    ""details"": [
+      {
+        ""field"": ""email"",
+        ""message"": ""Must be a valid email address""
+      }
+    ]
+  }
+}
+```
+
+> ❌ **Avoid:**
+```json
+{ ""error"": ""Invalid email"" }
+```
+
+---
+
+### 10. **Include Metadata and HATEOAS (Optional but Powerful)**
+
+Hypermedia As The Engine Of Application State (HATEOAS) makes APIs self-descriptive.
+
+> ✅ **Example with Links:**
+```json
+{
+  ""id"": 123,
+  ""name"": ""Alice"",
+  ""email"": ""alice@example.com"",
+  ""links"": {
+    ""self"": ""/users/123"",
+    ""orders"": ""/users/123/orders"",
+    ""update"": ""/users/123"",
+    ""delete"": ""/users/123""
+  }
+}
+```
+
+---
+
+## **Full Example: Blog API**
+
+Let’s build a simple REST API for a blog.
+
+### 📌 Resources:
+- `posts` (articles)
+- `users` (authors)
+- `comments` (on posts)
+
+### ✅ API Endpoints
+
+| Method | Endpoint | Description |
+|--------|---------|------------|
+| `GET` | `/v1/posts` | List all posts (with pagination) |
+| `GET` | `/v1/posts/1` | Get a specific post |
+| `POST` | `/v1/posts` | Create a new post |
+| `PUT` | `/v1/posts/1` | Update a post (full) |
+| `PATCH` | `/v1/posts/1` | Update a post (partial) |
+| `DELETE` | `/v1/posts/1` | Delete a post |
+| `GET` | `/v1/posts/1/comments` | Get all comments on a post |
+| `POST` | `/v1/posts/1/comments` | Add a comment to a post |
+
+---
+
+### 🔧 Example Requests & Responses
+
+#### 1. **Get All Posts (with filtering and pagination)**
+```http
+GET /v1/posts?author=alice&published=true&page=1&limit=5
+```
+
+**Response:**
+```json
+{
+  ""data"": [
+    {
+      ""id"": 1,
+      ""title"": ""Getting Started with REST"",
+      ""author"": ""alice"",
+      ""published"": true,
+      ""created_at"": ""2025-04-01T08:00:00Z"",
+      ""links"": {
+        ""self"": ""/v1/posts/1"",
+        ""comments"": ""/v1/posts/1/comments""
+      }
+    }
+  ],
+  ""pagination"": {
+    ""page"": 1,
+    ""limit"": 5,
+    ""total"": 12,
+    ""pages"": 3
+  }
+}
+```
+
+#### 2. **Create a New Post**
+```http
+POST /v1/posts
+Content-Type: application/json
+
+{
+  ""title"": ""Building REST APIs"",
+  ""body"": ""Learn the principles..."",
+  ""author_id"": 123,
+  ""published"": true
+}
+```
+
+**Response:**
+```http
+HTTP/1.1 201 Created
+Location: /v1/posts/2
+Content-Type: application/json
+
+{
+  ""id"": 2,
+  ""title"": ""Building REST APIs"",
+  ""author_id"": 123,
+  ""published"": true,
+  ""created_at"": ""2025-04-05T10:00:00Z"",
+  ""links"": {
+    ""self"": ""/v1/posts/2"",
+    ""comments"": ""/v1/posts/2/comments""
+  }
+}
+```
+
+#### 3. **Update a Post (Partial)**
+```http
+PATCH /v1/posts/2
+Content-Type: application/json
+
+{
+  ""title"": ""Advanced REST API Design""
+}
+```
+
+**Response:**
+```json
+{
+  ""id"": 2,
+  ""title"": ""Advanced REST API Design"",
+  ""author_id"": 123,
+  ""published"": true,
+  ""updated_at"": ""2025-04-05T10:10:00Z"",
+  ""links"": {
+    ""self"": ""/v1/posts/2""
+  }
+}
+```
+
+#### 4. **Delete a Post**
+```http
+DELETE /v1/posts/2
+```
+
+**Response:**
+```http
+HTTP/1.1 204 No Content
+```
+
+#### 5. **Add a Comment**
+```http
+POST /v1/posts/1/comments
+Content-Type: application/json
+
+{
+  ""author"": ""Charlie"",
+  ""body"": ""Great article!""
+}
+```
+
+**Response:**
+```json
+{
+  ""id"": 5,
+  ""post_id"": 1,
+  ""author"": ""Charlie"",
+  ""body"": ""Great article!"",
+  ""created_at"": ""2025-04-05T11:00:00Z""
+}
+```
+
+---
+
+## **Best Practices Summary**
+
+| Principle | Do This |
+|--------|--------|
+| **URLs** | Use plural nouns, hyphens for readability |
+| **Authentication** | Use JWT or OAuth2, send in `Authorization` header |
+| **Error Handling** | Return structured errors with codes and messages |
+| **Caching** | Use `ETag`, `Cache-Control`, and `Last-Modified` headers |
+| **Documentation** | Use OpenAPI/Swagger for clear, interactive docs |
+| **Rate Limiting** | Protect endpoints with rate limits (e.g., 1000 req/hour) |
+
+---
+
+## **Tools to Help You Design REST APIs**
+
+- **[Swagger (OpenAPI)](https://swagger.io/)** – Design, document, and test APIs
+- **[Postman](https://www.postman.com/)** – Test and share API requests
+- **[Insomnia](https://insomnia.rest/)** – API client with version control
+- **[JSON Schema](https://json-schema.org/)** – Validate API request/response formats
+
+---
+
+## **Conclusion**
+
+Designing a well-structured REST API is about **consistency, clarity, and scalability**. Follow these principles to create APIs that are:
+- Easy to use
+- Easy to maintain
+- Easy to scale
+- Well-documented
+
+> 🎯 **Final Tip**: Always design with the client in mind. Ask: “Would a developer understand this API intuitively?”
+
+---
+
+## ✅ Bonus: Quick Checklist
+
+- [ ] Use plural resource names
+- [ ] Use standard HTTP methods
+- [ ] Return proper status codes
+- [ ] Use versioning
+- [ ] Support pagination and filtering
+- [ ] Use JSON
+- [ ] Handle errors gracefully
+- [ ] Document everything (use OpenAPI)
+- [ ] Test with tools like Postman
+
+---
+
+**Now go build something amazing!** 🚀  
+*Your API is the new frontier of web development.*",
+159,req-10,batch,mid,0,60193.08,openwebui,gemma3:27b,60194.37,,,60195.93,,
+160,req-11,batch,low,0,60235.98,openwebui,qwen3:30b-a3b,60248.25,,,60249.58,,
+161,req-12,batch,mid,200,460.30,openwebui,deepseek-r1:70b,402.45,,,403.91,,
+162,req-13,batch,low,0,60194.13,openwebui,gemma3:27b,60189.37,,,60190.56,,
+163,req-14,batch,mid,0,60234.29,openwebui,qwen3:30b-a3b,60248.37,,,60249.77,,
+164,req-15,batch,low,200,793.18,openwebui,deepseek-r1:70b,749.56,,,750.58,,
+165,req-16,batch,mid,0,60227.15,openwebui,gemma3:27b,60240.35,,,60241.87,,
+166,req-17,batch,low,0,60256.05,openwebui,qwen3:30b-a3b,60262.49,,,60264.15,,
+167,req-18,batch,mid,200,373.41,openwebui,deepseek-r1:70b,329.24,,,330.57,,
+168,req-19,batch,low,0,60231.21,openwebui,gemma3:27b,60239.56,,,60240.80,,
+169,req-20,batch,mid,0,60262.27,openwebui,qwen3:30b-a3b,60266.07,,,60267.55,,

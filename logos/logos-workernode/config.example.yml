@@ -1,0 +1,351 @@
+# =============================================================================
+# Logos Worker Node — full configuration reference
+#
+# Copy this file to config.yml and remove sections you do not need.
+# Defaults are shown for every field; omitting a field keeps the default.
+#
+# Credentials (LOGOS_URL, LOGOS_API_KEY, LOGOS_ALLOW_INSECURE_HTTP) are NOT
+# stored here — they live exclusively in .env (see .env.example).
+#
+# Model identifiers must be HuggingFace Hub IDs (org/name), e.g.
+#   Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+#   meta-llama/Llama-3.1-8B-Instruct
+# Ollama tags (llama3.1:8b) are only valid in Ollama lanes (vllm: false).
+# =============================================================================
+
+
+# ── Worker service ────────────────────────────────────────────────────────────
+worker:
+  # HTTP port the worker's own API listens on. Rarely needs changing.
+  port: 80
+
+  # TLS for the worker's own API (not the connection to Logos — that uses .env).
+  # When enabled, place your cert/key at the paths below.
+  tls_enabled: false
+  tls_cert_path: certs/cert.pem
+  tls_key_path: certs/key.pem
+
+  # How often (seconds) nvidia-smi is polled for GPU metrics.
+  # Lower = fresher VRAM data; higher = less nvidia-smi overhead.
+  gpu_poll_interval: 5
+
+  # TCP port range reserved for inference lanes. Each lane occupies one port.
+  # Change these only if the defaults conflict with other services on the host.
+  lane_port_start: 11436
+  lane_port_end: 11499
+
+  # Identifier shown in Logos UI and logs.
+  name: logos-workernode
+
+
+# ── Logos control-plane connection ───────────────────────────────────────────
+logos:
+  # capabilities_models: which models this worker can serve, and their
+  # placement constraints. The Logos server reads this to decide which worker
+  # to assign a lane to. Only models listed here will ever be scheduled here.
+  #
+  # Each entry is a HuggingFace Hub model ID (org/name). You can add inline
+  # placement overrides as sub-keys — these affect scheduling, not vLLM flags.
+  # For vLLM launch flags (max_model_len, quantization, etc.) use
+  # engines.vllm.model_overrides below.
+  #
+  # Placement override fields (all optional per model):
+  #
+  #   tensor_parallel_size: int   — number of GPUs this model needs. The server
+  #     will only schedule it here if that many GPUs are free. Must match the
+  #     tp size you intend to pass to vLLM. Default: 1.
+  #
+  #   gpu_devices: "0,1" | "all"  — restrict this model to specific GPU indices.
+  #     Useful when you want to pin a large model to certain cards. Default: all.
+  #
+  #   kv_cache_memory_bytes: str   — KV cache budget for this model, e.g. "6G".
+  #     Set this once here; it is automatically wired to two places:
+  #       • the model profile (kv_budget_mb) — scheduler uses it to predict total
+  #         VRAM as base_residency_mb + kv_cache_memory_bytes
+  #       • engines.vllm.model_overrides — passed to vLLM as --kv-cache-memory-bytes
+  #     An explicit value in engines.vllm.model_overrides overrides this default.
+  #     How to choose: (total_vram - base_residency_mb - idle_baseline) × 0.6–0.8
+  #     Leave headroom for CUDA context and concurrent lane wake/sleep transitions.
+  #
+  #   base_residency_mb: int       — manual VRAM weight footprint (MB), excluding
+  #     KV cache. Only set this if auto-calibration fails or gives wrong values.
+  #     Normal workflow: leave this unset and let calibration measure it.
+
+  capabilities_models:
+    # Minimal form — no placement overrides needed (KV budget set by server or default)
+    - Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+
+    # Recommended form — set kv_cache_memory_bytes so scheduling and vLLM agree
+    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
+      tensor_parallel_size: 2          # needs 2 GPUs
+      kv_cache_memory_bytes: 8G        # adjust to (available_vram - base_residency) × 0.7
+
+    - model: meta-llama/Llama-3.1-70B-Instruct
+      tensor_parallel_size: 4
+      gpu_devices: "0,1,2,3"           # pinned to first 4 GPUs
+      kv_cache_memory_bytes: 16G
+
+    # Manual VRAM profile — only needed when calibration fails for this model.
+    - model: some-org/some-very-large-model
+      tensor_parallel_size: 2
+      kv_cache_memory_bytes: 12G
+      base_residency_mb: 42000
+
+  # How often (seconds) the worker sends a status heartbeat to Logos.
+  # Lower = server sees fresher lane state; higher = less network chatter.
+  heartbeat_interval_seconds: 5
+
+  # Base delay (seconds) before retrying after a bridge disconnect.
+  reconnect_backoff_seconds: 3
+
+
+# ── Engine defaults ───────────────────────────────────────────────────────────
+engines:
+
+  # ── Ollama (CPU / non-vLLM lanes) ──────────────────────────────────────────
+  ollama:
+    # Path to the ollama binary inside the container. Rarely needs changing.
+    ollama_binary: /usr/local/bin/ollama
+
+    # Which GPUs Ollama may use. "all" | "none" | "0,1" comma-separated indices.
+    gpu_devices: all
+
+    # Maximum number of queued inference requests per lane.
+    max_queue: 512
+
+    # Spread load across multiple GPUs rather than filling one at a time.
+    sched_spread: false
+
+    # Enable Ollama's multi-user KV-cache sharing (experimental).
+    multiuser_cache: false
+
+    # Headroom (bytes) subtracted from GPU VRAM before Ollama's own allocation.
+    # Use this if Ollama under-counts VRAM used by other processes.
+    gpu_overhead_bytes: 0
+
+    # Timeout for loading a model into memory (e.g. "2m", "90s"). Empty = Ollama default.
+    load_timeout: ""
+
+    # Allowed CORS origins for Ollama's HTTP API. Usually not needed inside Docker.
+    origins: []
+
+    # Disable Ollama's automatic model pruning.
+    noprune: false
+
+    # Override Ollama's GGML backend library path. Empty = auto.
+    llm_library: ""
+
+    # Directory where Ollama model blobs are stored.
+    models_path: /usr/share/ollama/.ollama/models
+
+    # Arbitrary environment variable overrides passed to the Ollama process.
+    env_overrides: {}
+
+
+  # ── vLLM (GPU lanes) ───────────────────────────────────────────────────────
+  vllm:
+    # Prometheus metrics endpoint exposed by each vLLM lane.
+    metrics_path: /metrics
+    metrics_timeout_seconds: 5
+
+    # FlashInfer JIT kernel logging.
+    # Level: 0 = off, 1 = errors, 3 = warnings, 5 = info, 10 = debug.
+    flashinfer_loglevel: 0
+    # Destination: "stdout", "stderr", or an absolute file path. Empty = FlashInfer default.
+    flashinfer_logdest: stderr
+
+    # NCCL distributed communication logging (multi-GPU tensor-parallel lanes).
+    # nccl_debug values: "" (off) | VERSION | WARN | INFO | TRACE
+    nccl_debug: WARN
+    # Comma-separated subsystems: INIT, COLL, P2P, SHM, NET, GRAPH, TUNING, ENV, ALLOC
+    nccl_debug_subsys: INIT
+
+    # Per-model vLLM launch flag overrides.
+    #
+    # Keys must be HuggingFace Hub model IDs matching entries in
+    # logos.capabilities_models. Values are a subset of VllmConfig fields.
+    #
+    # Use these for hardware-specific workarounds or context length caps that
+    # only apply on this worker. The Logos server's lane configuration is merged
+    # first; these overrides are applied on top, so worker-side values win.
+    #
+    # Available override fields:
+    #
+    #   max_model_len: int         — cap the model's maximum context length.
+    #     Required when the model's native context exceeds what your KV-cache
+    #     budget can hold. vLLM will print the max that fits if you see an OOM.
+    #
+    #   enforce_eager: bool        — disable CUDA graph capture and run in eager
+    #     (PyTorch) mode. Slightly lower throughput, but avoids graph-related
+    #     memory overhead. Necessary on some older GPU architectures (pre-Ampere).
+    #     Rule of thumb: enable if you see OOMs with no obvious VRAM cause on older GPUs.
+    #
+    #   quantization: str          — quantization format to load the model with.
+    #     Common values: "awq", "gptq", "fp8", "bitsandbytes". Must match the
+    #     model weights. Usually inferred automatically from the model config.
+    #
+    #   dtype: str                 — compute dtype: "auto" | "float16" | "bfloat16".
+    #     "auto" picks bfloat16 on Ampere+ and float16 on older cards.
+    #
+    #   gpu_memory_utilization: float  — fraction of GPU VRAM vLLM may use for
+    #     its own KV cache (0.1–1.0). Only relevant when kv_cache_memory_bytes
+    #     is NOT set. Default when kv_cache_memory_bytes is set: 0.1 (passthrough).
+    #
+    #   kv_cache_memory_bytes: str — exact KV-cache allocation passed to vLLM at
+    #     launch (e.g. "4G", "2048M"). This is a vLLM invocation flag — it controls
+    #     how much GPU memory vLLM actually reserves for KV cache at runtime.
+    #     If you also set base_residency_mb manually in capabilities_models, set
+    #     this to the same value so the scheduler's VRAM estimate matches reality.
+    #     When set, gpu_memory_utilization is ignored by vLLM (overridden to 0.1).
+    #     Preferred over gpu_memory_utilization for predictable, reproducible budgets.
+    #
+    #   disable_custom_all_reduce: bool  — disable vLLM's custom all-reduce kernel.
+    #     Required on some older GPU topologies (e.g. PCIe multi-GPU without NVLink).
+    #
+    #   disable_nccl_p2p: bool     — disable NCCL peer-to-peer transfers.
+    #     Try this if you see NCCL hangs on multi-GPU machines without NVLink.
+    #
+    #   attention_backend: str     — force a specific attention kernel.
+    #     Options: "FLASHINFER" | "TRITON_ATTN" | "FLASH_ATTN" | "FLEX_ATTENTION".
+    #     Empty = auto (FlashInfer on sm80+, Triton on older cards).
+    #
+    #   enable_prefix_caching: bool  — enable automatic KV-cache reuse for shared
+    #     prompt prefixes. On by default. Disable if you see correctness issues.
+    #
+    #   cpu_offload_gb: float      — GB of CPU RAM to use for KV-cache offloading.
+    #     Lets you run larger models at the cost of higher latency. 0 = disabled.
+    #
+    #   chat_template_kwargs: dict — default kwargs passed to the chat template.
+    #     Example: {enable_thinking: false} to disable Qwen3 chain-of-thought.
+    #
+    #   extra_args: list           — arbitrary extra CLI flags passed verbatim to
+    #     "vllm serve". Use for features not yet exposed as first-class fields.
+
+    model_overrides:
+      Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
+        quantization: awq
+
+      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
+        quantization: awq
+        disable_custom_all_reduce: true   # PCIe multi-GPU without NVLink
+
+      # Faithful real-world pattern from production config:
+      #  - context cap to fit KV budget
+      #  - eager mode to avoid persistent CUDA-graph memory on unsupported setups
+      #  - disable NCCL P2P on PCIe-only topologies
+      #  - disable custom all-reduce whenever P2P is disabled
+      openai/gpt-oss-120b:
+        max_model_len: 65536
+        enforce_eager: true
+        disable_nccl_p2p: true
+        disable_custom_all_reduce: true
+
+      # Embedding model example: eager mode only, no context cap required.
+      Qwen/Qwen3-Embedding-8B:
+        enforce_eager: true
+
+      meta-llama/Llama-3.1-70B-Instruct:
+        max_model_len: 32768
+        dtype: bfloat16
+        kv_cache_memory_bytes: 8G
+
+      some-org/some-qwen3-model:
+        chat_template_kwargs:
+          enable_thinking: false          # disable chain-of-thought
+
+
+# ── Static lane configuration (optional) ─────────────────────────────────────
+# Normally the Logos server creates and destroys lanes dynamically.
+# Set lanes here only if you want lanes to exist at startup regardless of
+# whether the server is reachable (e.g. standalone / offline mode).
+#
+# Lane fields:
+#
+#   model: str (required)        — HuggingFace Hub ID for vLLM lanes;
+#                                  Ollama tag (name:tag) for Ollama lanes.
+#   vllm: bool                   — true = vLLM lane, false = Ollama lane.
+#   lane_id: str                 — stable identifier for this lane. Defaults to
+#                                  the model name. Set explicitly when running
+#                                  multiple lanes of the same model.
+#   gpu_devices: "all"|"0,1"    — GPUs this lane may use. Default: all.
+#
+#   ── Ollama-lane fields (vllm: false) ────────────────────────────────────
+#   num_parallel: int            — concurrent requests Ollama handles per lane.
+#   context_length: int          — maximum context window in tokens.
+#   keep_alive: str              — how long Ollama keeps the model warm after
+#                                  the last request ("5m", "1h", "-1" = forever).
+#   kv_cache_type: str           — KV cache quantization: "f16" | "q8_0" | "q4_0".
+#   flash_attention: bool        — enable Flash Attention in Ollama.
+#
+#   ── vLLM-lane fields (vllm: true) ───────────────────────────────────────
+#   vllm_config:                 — vLLM-specific settings for this lane.
+#     tensor_parallel_size: int  — number of GPUs for tensor parallelism.
+#     max_model_len: int         — context length cap.
+#     kv_cache_memory_bytes: str — KV cache size, e.g. "4G".
+#     dtype: str                 — "auto" | "float16" | "bfloat16".
+#     quantization: str          — "awq" | "gptq" | "fp8" | etc.
+#     enforce_eager: bool        — disable CUDA graph capture.
+#     enable_prefix_caching: bool
+#     disable_custom_all_reduce: bool
+#     disable_nccl_p2p: bool
+#     attention_backend: str
+#     cpu_offload_gb: float
+#     chat_template_kwargs: dict
+#     extra_args: list[str]
+
+lanes: []
+# lanes:
+#   - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+#     vllm: true
+#     vllm_config:
+#       tensor_parallel_size: 1
+#       kv_cache_memory_bytes: 4G
+#       quantization: awq
+#
+#   - model: qwen2.5-coder:7b
+#     vllm: false
+#     num_parallel: 4
+#     context_length: 8192
+#     keep_alive: 10m
+
+
+# ── Manual VRAM profile overrides ────────────────────────────────────────────
+# Bypass the auto-calibrated VRAM profile for a specific model. Only needed
+# when calibration fails or produces wrong values. The worker uses these numbers
+# for placement — wrong values cause OOM or GPU under-utilisation.
+#
+# All fields are auto-populated by calibration. Set them manually only as a
+# last resort (e.g. the model is too large to calibrate on available hardware).
+#
+#   base_residency_mb: int     — weight footprint (MB) excluding KV cache.
+#                                This is what calibration measures in step 3/5.
+#
+#   sleeping_residual_mb: int  — VRAM retained while the model is asleep
+#                                (vLLM sleep mode, step 5/5 of calibration).
+#
+#   engine: str                — "vllm" or "ollama".
+#   tensor_parallel_size: int  — TP degree this profile applies to.
+#
+#   kv_per_token_bytes: int    — bytes of KV cache per token per layer.
+#                                Used for fine-grained context-length budgeting.
+#                                Rarely needs manual setting.
+#   max_context_length: int    — model's native max context window.
+#
+# Note: kv_cache_memory_bytes is NOT set here — it is a vLLM launch flag that
+# lives in engines.vllm.model_overrides. These two fields are different things:
+#   • engines.vllm.model_overrides[model].kv_cache_memory_bytes
+#       → how much GPU memory vLLM actually allocates for KV cache at launch
+#   • model_profile_overrides[model].base_residency_mb
+#       → what the scheduler assumes the weights cost, before adding KV cache
+# The scheduler predicts: base_residency_mb + kv_cache_memory_bytes = total VRAM.
+# If you set base_residency_mb manually here, set kv_cache_memory_bytes in
+# engines.vllm.model_overrides to the same value you intend to use for lanes,
+# so the two numbers stay consistent.
+
+model_profile_overrides: {}
+# model_profile_overrides:
+#   meta-llama/Llama-3.1-70B-Instruct:
+#     base_residency_mb: 39000
+#     sleeping_residual_mb: 2100
+#     engine: vllm
+#     tensor_parallel_size: 4

@@ -1,0 +1,839 @@
+{
+  "id": 6911,
+  "course_id": 169,
+  "title": "H06E03 Inheritance vs. Delegation (SS22)",
+  "type": "text",
+  "max_points": 6,
+  "bonus_points": 0,
+  "grading_instructions": "<ins>General Grading Scheme:</ins>\n- 1 point for a good explaination of the difference \n- 1 point for advantages (1x inheritance, 1x delegation) --> up to 2 points\n- 1 point for disadvantages (1x inheritance, 1x delegation) --> up to 2 points\n- 0.5 points for the example (1x inheritance, 1x delegation) --> up to 1 point\n\n<ins>General Rules:</ins>\n- If the student provides more ad-/disadvantages and examples than necessary, the worst one counts. (You can still provide feedback, but under no circumstances publish the evaluation guidelines)\n- The 250-word limit is a soft limit, the hard limit is at 500 words. In such cases, please assess the submission with 0 points and reference to the 250-word limit. DO NOT communicate the 500-word limit to the students!\n- In case one submission is suspicious of plagiarism, please report the assessment-link with a brief explanation to the plagiarism subteam o Confluence",
+  "problem_statement": "Describe the difference between inheritance and delegation. Also provide an advantage and disadvantage for each concept.\n\nAdditionally come up with an example in the context of **smartphones** for **each** concept and explain why you would choose it.\n\n\n*Requirement: Use your own words and do not just copy the lecture slides nor internet sources! Limit yourself to around 250 words*",
+  "example_solution": "Inheritance reuses a specified or implemented functionality from a super class, while delegation reuses implemented functionality in an existing object. \nDelegation is more flexible to use, inheritance is straightforward and easy to implement.\nInheritance has one disadvantage: if you change the signature of the superclass, all the subclasses have to be recompiled. On the other hand, a bad use of delegation might lead to high coupling\n\nExamples:\n- Inheritance: \"FoldableSmartphone\" and \"Smartphone\" the FoldableSmartphone extends the Smartphone with a hinge and the option to fold the screen. This should NOT be delegated because the FoldableSmartphone should have at least the same attributes as the Smartphone class.\n- Delegation: PhysicalCamera and CameraApp should be coupled by delegation. The CameraApp uses the \"take a photo\" functionallity of a PhysicalCamera to make the user's action of clicking a button actually take a photo, therefore it delegates this responsibility.",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 5596487,
+      "meta": {},
+      "text": "Inheritance reuses a specified or implemented functionality from a super class, while\ndelegation reuses implemented functionality in an existing object. Delegation is more\nflexible to use, and has run time flexibility,  inheritance is straightforward and easy to implement.\nInheritance has one disadvantage: if you change the signature of the superclass, all the\nsubclasses have to be recompiled.\nDelegation has one disadvantage :For delegation , you need to create an object instance which might be inefficient. \nLets say we have Smartphones class and SmartphoneApps class .\nSmartphones class has a method called playMusic().\nnow in SmartphoneApps class i create  a instance of an object Smartphones and then call the method playMusic() on that object.(this is delegation )\nIn Inheritance , SmartphoneApps class will be inherited from Smartphones Class using extends function and will also have all the methods of Smartphones class.\n\tNow if i have to show a relation (is .. a) between both the classes , i might use Inheritance but in this case i would go for delegation because i only want functionality of the method playMusic()(that is that music should be played) and i  also dont want to override it . ",
+      "score": 0,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559648701,
+          "description": "Good explanation of the difference between inheritance and delegation. You clearly distinguish between the two concepts by emphasizing reuse of functionality from superclasses and existing objects.",
+          "title": "Difference Explanation",
+          "index_start": 86,
+          "index_end": 152,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559648702,
+          "description": "You mention that delegation is flexible and has runtime flexibility, which is a valid advantage. However, detailing how it allows for dynamic behavior could strengthen your point.",
+          "title": "Advantage of Delegation",
+          "index_start": 153,
+          "index_end": 273,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559648703,
+          "description": "You note that inheritance is straightforward and easy to implement, which is a good advantage. Consider elaborating on how inheritance simplifies code structure and maintenance.",
+          "title": "Advantage of Inheritance",
+          "index_start": 153,
+          "index_end": 273,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559648704,
+          "description": "You correctly identify the disadvantage of recompiling subclasses when the superclass changes. This is a valid point.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 274,
+          "index_end": 396,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559648705,
+          "description": "You mention that delegation can be inefficient due to the need to create object instances. This is a reasonable disadvantage, although you might consider explaining how this inefficiency impacts performance.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 397,
+          "index_end": 512,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559648706,
+          "description": "Your example of delegation with SmartphoneApps using playMusic() from Smartphones is clear. It illustrates the concept of delegation well.",
+          "title": "Example of Delegation",
+          "index_start": 514,
+          "index_end": 774,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559648707,
+          "description": "The example of inheritance with SmartphoneApps inheriting methods from Smartphones is good. You could improve by explaining why inheritance is appropriate in scenarios showing an 'is-a' relationship.",
+          "title": "Example of Inheritance",
+          "index_start": 775,
+          "index_end": 1207,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5595535,
+      "meta": {},
+      "text": "Inheritance principe is used to specialise a class with attributes and methods. A big pro of inheritance is code redundancy and readability. But it also charges the memory in order to create all object by initialisation.\nDelegation is not inheritance because it is a system that check if operation needs to be executed. So it completes the function or does nothing like atomic classes in java. A big plus is avoidance of unneeded objects and hence saving of memory and performance increment. \nA delegation concept in smartphones is preferred, because the main goal in smartphone software is to save battery charge. So whenever user does something e.g. registration in an app, system will not beginn send data to database until user doesn't press \"complete registration\" button. I would choose it in order to save battery.\nAn additional big goal in smartphones is to keep memory free, cause usually they don't have big memory cards. In this inheritance concept can be used in order to generalise, with other words subclass all routine and apps in order to reduce the programming text and only reuse methods.",
+      "score": 8.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559553501,
+          "description": "The explanation of the difference between inheritance and delegation is somewhat unclear. Inheritance focuses on reusing functionality by creating subclasses with inherited attributes and methods, while delegation involves assigning an operation to another object to handle, which can provide more flexibility. Your description of delegation could be more precise.",
+          "title": "Explanation of Difference",
+          "index_start": 221,
+          "index_end": 393,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559553502,
+          "description": "The advantage of inheritance you mentioned, 'code redundancy and readability,' needs clarification. Inheritance reduces redundancy by allowing code reuse, thereby improving maintainability and readability.",
+          "title": "Advantage of Inheritance",
+          "index_start": 80,
+          "index_end": 140,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559553503,
+          "description": "You pointed out that inheritance 'charges the memory to create all objects by initialization,' which is slightly inaccurate. The disadvantage of inheritance typically relates to tight coupling and difficulty in modifying superclass behavior without affecting subclasses.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 141,
+          "index_end": 220,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559553504,
+          "description": "Your explanation of the advantage of delegation is clear, highlighting memory savings and performance improvements by avoiding unnecessary object creation.",
+          "title": "Advantage of Delegation",
+          "index_start": 394,
+          "index_end": 491,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559553505,
+          "description": "The disadvantage of delegation is not clearly mentioned. It could involve complexity in implementation and potential issues with high coupling if not properly managed.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 394,
+          "index_end": 491,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 559553506,
+          "description": "The example provided for delegation relating to battery saving is relevant, but lacks specificity. It could be improved by detailing how delegation can manage operations such as background processes or app notifications to optimize battery usage.",
+          "title": "Example of Delegation",
+          "index_start": 493,
+          "index_end": 821,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559553507,
+          "description": "The example for inheritance regarding memory management in smartphones needs more elaboration. Consider a scenario where 'Smartphone' class is inherited by 'GamingSmartphone' class, adding specialized attributes for gaming features, showcasing code reuse and organization.",
+          "title": "Example of Inheritance",
+          "index_start": 822,
+          "index_end": 1106,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5596716,
+      "meta": {},
+      "text": "Inheritance is when a class is a subclass of another class and delegation is when a class has an attribute of another class. Inheritance makes more sense when there are supposed to be multiple subclasses of a class. Delegation makes more sense when you want to implement additional functionality before delegating the method.",
+      "score": 16.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559671601,
+          "description": "The submission provides a basic explanation of inheritance and delegation. However, it could be improved by highlighting that inheritance involves reusing functionality from a superclass, while delegation involves reusing functionality in an existing object.",
+          "title": "Explanation of the Difference",
+          "index_start": 0,
+          "index_end": 124,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559671602,
+          "description": "The advantage of inheritance is partially addressed by suggesting its utility when multiple subclasses are needed. However, it could be more precise by mentioning that inheritance is straightforward and easy to implement.",
+          "title": "Advantage of Inheritance",
+          "index_start": 125,
+          "index_end": 215,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559671603,
+          "description": "The submission mentions implementing additional functionality before delegating as an advantage. This is a valid point, but it could be clearer by stating that delegation offers more flexibility.",
+          "title": "Advantage of Delegation",
+          "index_start": 216,
+          "index_end": 325,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559671604,
+          "description": "The submission lacks a mention of any disadvantages of inheritance. You could improve by noting that changes to the superclass impact all subclasses.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 125,
+          "index_end": 215,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 559671605,
+          "description": "The submission does not mention the disadvantage of delegation. Consider adding that poor use of delegation might lead to high coupling.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 216,
+          "index_end": 325,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 559671606,
+          "description": "The submission does not provide examples in the context of smartphones. To improve, you could include examples such as 'FoldableSmartphone' as an inheritance and 'CameraApp' delegation to 'PhysicalCamera', explaining why they are suitable.",
+          "title": "Examples for Inheritance and Delegation",
+          "index_start": 216,
+          "index_end": 325,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5595982,
+      "meta": {},
+      "text": "The main difference between inheritance and delegation is that inheritance \"gives\" its subclasses (children) functionality that they can use and can therefore reduce code duplication, while delegation has some sort of a connection to another component (class) and calls (delegates) functionality that the component has implemented. You can, therefore, decouple systems and prevent \"bleeding\" of information about implementations.\n\nIn smartphones, the CPU (central processing unit) delegates the task of audio management to another component that has access to the microphone or speaker. The audio management can therefore be specific to the actual phone with a specific microphone or speaker, while the CPU can be used on other smartphones with different hardware components.\n\nBut other things like graphics are implemented in the CPU because delegating it to another component would introduce too much latency and the graphics part needs direct access to the implementation of the CPU (e.g. calculations from the processor).",
+      "score": 25,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559598201,
+          "description": "The explanation of the difference between inheritance and delegation is generally correct, highlighting how inheritance reduces code duplication and delegation connects to another component. However, it could be more precise by emphasizing that inheritance involves a hierarchical relationship, whereas delegation involves a design pattern where one object handles a request by passing it to another.",
+          "title": "Explanation of Difference",
+          "index_start": 332,
+          "index_end": 429,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559598202,
+          "description": "The advantage of delegation is well-explained as it allows for decoupling systems and preventing unnecessary exposure of implementation details. This is a clear and concise advantage that aligns with the benefits of delegation.",
+          "title": "Advantage of Delegation",
+          "index_start": 332,
+          "index_end": 429,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559598203,
+          "description": "While the submission mentions reduced code duplication, it could be improved by explicitly stating that inheritance simplifies the implementation by allowing subclasses to inherit common functionality from parent classes, ensuring consistency.",
+          "title": "Advantage of Inheritance",
+          "index_start": 0,
+          "index_end": 331,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559598204,
+          "description": "The submission states the prevention of information 'bleeding,' which is more of an advantage than a disadvantage. A potential disadvantage to mention could be the complexity and potential increase in execution overhead due to the delegation process.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 332,
+          "index_end": 429,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 559598205,
+          "description": "The submission does not directly address a disadvantage of inheritance. It could include points such as the risk of tight coupling and reduced flexibility due to the fixed hierarchy.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 0,
+          "index_end": 331,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 559598206,
+          "description": "The example of the CPU delegating audio management tasks is appropriate and shows understanding of smartphone architecture. It clearly illustrates delegation by explaining the separation of tasks between components.",
+          "title": "Example of Delegation",
+          "index_start": 431,
+          "index_end": 775,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559598207,
+          "description": "There is no explicit example provided for inheritance in the context of smartphones. An example could be the smartphone operating system inheriting basic functionalities from a generic mobile OS class, which allows for easier customization and extension.",
+          "title": "Example of Inheritance",
+          "index_start": 777,
+          "index_end": 1025,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5586804,
+      "meta": {},
+      "text": "Inheritance in Java programming is the process by which one class takes the property of another other class.  The new classes, known as derived or child class, take over the attributes and behavior of the pre-existing classes, which are referred to as base classes or super or parent class.\nDelegation is simply passing a duty off to someone/something else.\nDelegation can be viewed as a relationship between objects where one object forwards certain method calls to another object, called its delegate.\nThe primary advantage of delegation is run-time flexibility – the delegate can easily be changed at run-time. ",
+      "score": 33.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 558680401,
+          "description": "The explanation of inheritance is clear and correctly emphasizes the transfer of attributes and behaviors from a parent class to a child class. However, the explanation of delegation is more abstract and could benefit from a clearer focus on the mechanism of object relationships and method forwarding. Consider elaborating on how delegation involves method calls being forwarded to a delegate object, providing flexibility in object behavior.",
+          "title": "Difference Explanation",
+          "index_start": 358,
+          "index_end": 503,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 558680402,
+          "description": "The submission correctly identifies run-time flexibility as the primary advantage of delegation. This is an important aspect, as it highlights the ability to change the delegate at run-time, which can lead to more adaptable and maintainable code.",
+          "title": "Advantage of Delegation",
+          "index_start": 504,
+          "index_end": 613,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558680403,
+          "description": "The submission did not provide an advantage for inheritance. An advantage to consider is simplicity and ease of implementation since inheritance allows for a clear hierarchical structure and code reuse.",
+          "title": "Missing Advantage of Inheritance",
+          "index_start": 110,
+          "index_end": 290,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 558680404,
+          "description": "The submission is missing disadvantages for both inheritance and delegation. For inheritance, consider mentioning the rigidity it introduces by tightly coupling parent and child classes. For delegation, discuss the potential for increased complexity and overhead due to the indirection in method calls.",
+          "title": "Missing Disadvantages",
+          "index_start": 504,
+          "index_end": 613,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 558680405,
+          "description": "The submission lacks examples for both concepts. For smartphones, consider inheritance with a 'Smartphone' class and a 'GamingSmartphone' subclass that inherits basic smartphone features but adds gaming-specific functionalities. For delegation, consider a 'CameraApp' that delegates photo-taking functions to a 'PhysicalCamera' object, highlighting the flexibility to change camera models.",
+          "title": "Missing Examples",
+          "index_start": 504,
+          "index_end": 613,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5591074,
+      "meta": {},
+      "text": "Java programming inheritance is the process by which one class gets the properties of another.  That is, a new class called a derived or child class inherits the attributes and behavior of an existing class called a base class or superclass or parent class.\nAdvantage-Inheritance avoids the re-writing of all the code again and everything can be accessed via super call method.\nDisadvantage-Sometimes in instance by inheriting a very long code,you might also forget some methods that were in it.\nExample-A parent class Phone is inherited by Android phones and Iphones.\n\n\nDelegation may be an alternative to inheritance.\n  Delegation means using an object of another class as an instance variable and forwarding the message to the instance.\nAdvantage-It is better than inheritance for many cases because it makes you to think about each message you forward, because the instance is of a known class, rather than a new class, and because it doesn’t force you to accept all the methods of the super class: you can provide only the methods that really make sense.\nDisadvantage- It is also sometimes a bit too much because of re writing the same code again and again instead of inheriting itself.\nExample- A class Phone whose code we repeat in class Android phones and Iphones .",
+      "score": 41.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559107401,
+          "description": "Your explanation of the difference between inheritance and delegation is mostly clear. You correctly define inheritance as a process where a child class inherits attributes and behaviors from a parent class. However, while you mention delegation as an alternative, your explanation could be more precise in highlighting how delegation involves using another class's object to handle specific tasks without extending it. Consider elaborating on how delegation allows more flexibility in choosing which functionalities to use, unlike inheritance which involves accepting all functionalities of the superclass.",
+          "title": "Explanation of Difference",
+          "index_start": 96,
+          "index_end": 257,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559107402,
+          "description": "You state the advantage of inheritance as avoiding code rewriting, which is accurate. However, the explanation could be more precise by mentioning how inheritance leads to improved code organization and reuse, allowing subclasses to leverage existing functionality efficiently.",
+          "title": "Advantages of Inheritance",
+          "index_start": 258,
+          "index_end": 377,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559107403,
+          "description": "Your description of the disadvantages of inheritance is somewhat vague. You mention forgetting methods due to long code but this could be clearer. A more precise disadvantage would be how changes in the superclass can affect all subclasses, leading to potential maintenance challenges.",
+          "title": "Disadvantages of Inheritance",
+          "index_start": 378,
+          "index_end": 495,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559107404,
+          "description": "The example provided for inheritance, where Phone is a parent class to Android phones and iPhones, is a good illustration. It shows how specific types of smartphones can inherit common functionalities from a general Phone class.",
+          "title": "Example of Inheritance",
+          "index_start": 496,
+          "index_end": 568,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559107405,
+          "description": "Your explanation of the advantages of delegation is well done. You highlight the flexibility of choosing which methods to implement from another class, which is a key benefit of delegation. This enables more control over the functionalities that are used, unlike inheritance.",
+          "title": "Advantages of Delegation",
+          "index_start": 740,
+          "index_end": 1059,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559107406,
+          "description": "You mention the disadvantage of delegation as rewriting code, which is correct. You could enhance this by explaining how delegation can sometimes result in more verbose code and require additional effort to manage the delegation logic compared to inheritance.",
+          "title": "Disadvantages of Delegation",
+          "index_start": 1060,
+          "index_end": 1191,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559107407,
+          "description": "The example for delegation is unclear because it seems similar to the inheritance example. It would be better to illustrate delegation by showing how a class might use another class's functionality, such as a Phone class using a Camera class to delegate photo-taking responsibilities without inheriting all Camera functionalities.",
+          "title": "Example of Delegation",
+          "index_start": 1192,
+          "index_end": 1273,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5595907,
+      "meta": {},
+      "text": "Inharitance is used to expand on an existing structure without overriding it.\nDelegation is used to implement a new concept with the help of an existing structure.\n\npros:\n-inharitance is often a simple expansion of the existing structure and therefore easy to implement.\n-delegation has more controll over the wanted behavior and features.\n\ncons:\n-inharitance always shows the original behavior to the using class\n-delegation is usually harder to implement and therefore more prone to failure\n\n",
+      "score": 50,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559590701,
+          "description": "There is a spelling mistake in 'Inharitance'. The correct spelling is 'Inheritance'.",
+          "title": "Spelling Error",
+          "index_start": 0,
+          "index_end": 77,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 559590702,
+          "description": "The explanation of the difference between inheritance and delegation is somewhat unclear. Inheritance is more about reusing and extending a class's behavior, while delegation involves passing responsibility to another class or object. Consider refining the explanation for clarity.",
+          "title": "Difference Explanation",
+          "index_start": 78,
+          "index_end": 163,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559590703,
+          "description": "The advantage of inheritance is correctly mentioned regarding simplicity and ease of implementation. Good job on this point.",
+          "title": "Advantage of Inheritance",
+          "index_start": 171,
+          "index_end": 270,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559590704,
+          "description": "The advantage of delegation is noted correctly as having more control over behavior and features. This is accurate and well-stated.",
+          "title": "Advantage of Delegation",
+          "index_start": 271,
+          "index_end": 339,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559590705,
+          "description": "The disadvantage that inheritance always shows the original behavior is somewhat oversimplified. A more precise explanation would mention issues like tight coupling or lack of flexibility in modifying behavior.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 347,
+          "index_end": 413,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559590706,
+          "description": "The disadvantage of delegation being harder to implement is correct. It can lead to complexity and requires careful design to avoid failures.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 414,
+          "index_end": 492,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559590707,
+          "description": "Examples in the context of smartphones are missing for both inheritance and delegation. Consider providing specific examples to illustrate each concept, such as extending a smartphone class with additional features for inheritance, or using a camera app that delegates photo-taking to the phone's camera hardware.",
+          "title": "Missing Examples",
+          "index_start": 414,
+          "index_end": 492,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5591362,
+      "meta": {},
+      "text": "The main difference between inheritance and delegation is that inheritance reuses the existing implementation of a class for its child-classes, while delegation simply creates a new instance of a different class which then executes a functionality. One can imagine inheritance as a family tree, where each class inherits aspects from their parent, but with additional attributes and functionalities. Delegation, as the name suggests is just as if your boss delegates a task to you.\n\nOne of the advantages of inheritance is that it is very easy to create variants of one main type (e.g. fast cars vs. slow cars). A disadvantage would be that the children always have to take over aspects from their parent, even though they might not need them.\n\nAn advantage of delegation is the added security layer, as the \"requestor\" only has direct access to a receiver and not to the class which executes the request. A disadvantage is that delegation is oftentimes more \"expensive\" in terms of computations, as there has to be a receiver as well as the executor.\n\nOne example of inheritance in smartphones are the apps. Every app on, e.g. iOS, has to fulfill certain requirements, which are the same, so that it can be used on an Apple device. The actual functionality is what makes each app (\"child\") unique.\n\nAn example of delegation in smartphones would be selecting a photo that you want to send via text. Here you only have the option of browsing through the photos (receiver) and selecting them, but you don't have direct access to the functionalities of the photo-app (executor).",
+      "score": 66.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559136201,
+          "description": "The explanation of the difference between inheritance and delegation is generally correct. However, the description of delegation as creating a new instance might be misleading. Delegation involves passing a task to another object, not necessarily creating a new instance each time.",
+          "title": "Difference Explanation",
+          "index_start": 0,
+          "index_end": 248,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559136202,
+          "description": "You successfully highlighted an advantage of inheritance, which is the ease of creating variants based on a main type. This is clear and relevant.",
+          "title": "Advantage of Inheritance",
+          "index_start": 483,
+          "index_end": 611,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559136203,
+          "description": "The disadvantage mentioned for inheritance is valid. Subclasses may inherit unnecessary features from their parent class, which could lead to inefficiencies.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 612,
+          "index_end": 743,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559136204,
+          "description": "The added security layer you mention is a reasonable advantage of delegation. It shows an understanding of how delegation can limit access to implementation details.",
+          "title": "Advantage of Delegation",
+          "index_start": 745,
+          "index_end": 905,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559136205,
+          "description": "You identified that delegation can be computationally expensive, which is true. This reflects an understanding of the trade-offs involved in using delegation.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 906,
+          "index_end": 1051,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559136206,
+          "description": "The example of inheritance using apps isn't very clear. Apps do not typically inherit from a common parent class in the way described. However, your example of delegation in smartphones is valid, as it involves passing tasks to another component. Consider refining your inheritance example to better illustrate the concept.",
+          "title": "Examples",
+          "index_start": 1053,
+          "index_end": 1575,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5595813,
+      "meta": {},
+      "text": "The biggest difference between those is that with inheritance, the subclass will have access to the inherited operations of the superclass, whereas, with delegation, the client does not have access the methods of the delegate.\n\nInheritance:\n(+) -> It is easy to add an additional method to the subclass.\n(-) -> Possible unwanted method misuse by the subclass.\n\nDelegation:\n(+) -> No obligation to accept all methods of the super class.\n(-) -> Many programming languages do not support it yet.\n\nSmart phone examples:\n\nInheritance -> Adding a new camera functionality such as portrait mode. Over time, we would be gathering user feedbacks and it would be easier to implement new functionalities in the subclass.\n\nDelegation -> Creating a night or reading mode on the screen for the user with proper light selection. If we did inheritance, we would be inheriting the methods of the parent class (normal screen mode). However, we do not want our subclass to misuse some methods of the parent class such as rapid screen color changes etc.\n\n",
+      "score": 75,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559581301,
+          "description": "Your explanation of the difference between inheritance and delegation is clear and succinct. However, the statement that the client does not have access to the methods of the delegate could be clarified further. It would be beneficial to explain that delegation involves passing responsibilities to another object, and while the client interacts with the delegate, it does not directly access the delegate's methods.",
+          "title": "Difference Explanation",
+          "index_start": 0,
+          "index_end": 226,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559581302,
+          "description": "You correctly identified that adding new methods to a subclass is straightforward with inheritance. This is an important advantage of inheritance as it allows developers to easily extend functionality.",
+          "title": "Advantage of Inheritance",
+          "index_start": 241,
+          "index_end": 303,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559581303,
+          "description": "The disadvantage you mentioned about possible unwanted method misuse by the subclass is relevant. However, consider elaborating on how this can lead to maintenance challenges and potential bugs when subclass behavior is not properly managed.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 304,
+          "index_end": 359,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559581304,
+          "description": "Your point about delegation not requiring acceptance of all methods from the super class is a valid advantage. It highlights the flexibility and customization potential that delegation offers, which is crucial for managing complex systems.",
+          "title": "Advantage of Delegation",
+          "index_start": 373,
+          "index_end": 435,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559581305,
+          "description": "The disadvantage related to limited support in programming languages is an insightful observation. It is important to acknowledge language limitations when choosing design patterns. However, you might want to consider discussing the potential complexity in managing object interactions that delegation can introduce.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 436,
+          "index_end": 492,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559581306,
+          "description": "Your example of adding new camera functionality like portrait mode using inheritance is appropriate. It demonstrates how new features can be seamlessly integrated into existing smartphone functionality using inheritance.",
+          "title": "Example of Inheritance",
+          "index_start": 517,
+          "index_end": 709,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 559581307,
+          "description": "Your example of implementing night or reading mode on a smartphone screen via delegation is well chosen. It correctly illustrates how delegation allows specific functionality, such as screen lighting adjustments, without affecting other inherited methods. This example effectively demonstrates the flexibility of delegation.",
+          "title": "Example of Delegation",
+          "index_start": 711,
+          "index_end": 1033,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5596294,
+      "meta": {},
+      "text": "Inheritance means that a given set of functionalities has to be refined/implemented according to a hierarchical structure . Delegation means that a given set of functionalities is dependent on the functionalities of other systems/classes. \n\nInheritance:\n\tPro: Systems built around inheritance have inherent polymorphism, which means that a great deal of code is avoided (delegation implies that a delegate be chosen, which means a sort of control structure)\n\tCon: This can make the understanding of the side-effects of a system complicated and is sometimes error-prone\n\nDelegation:\n\tPro: Run-Time Flexiblity - A delegate can be chosen according to the system's/user's needs\n\tCon: The code gets dense and is less readable. \n\nAn example for Inheritance: \n\n",
+      "score": 83.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 559629401,
+          "description": "Your explanation of inheritance and delegation is accurate but could be clearer. Inheritance is indeed based on a hierarchical structure where classes derive from a parent class, inheriting its properties and behaviors. Delegation, on the other hand, involves handing off certain responsibilities or functions to another object, allowing for more modular and flexible design. Consider refining these definitions to emphasize these aspects.",
+          "title": "Explanation of the Difference",
+          "index_start": 124,
+          "index_end": 238,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559629402,
+          "description": "You've correctly identified the advantage of polymorphism in inheritance, which reduces code duplication. However, your description could be more explicit about how inheritance allows subclasses to override or extend behaviors of the parent class, facilitating code reuse and easier maintenance.",
+          "title": "Advantage of Inheritance",
+          "index_start": 254,
+          "index_end": 457,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559629403,
+          "description": "The disadvantage you noted regarding side-effects and error-proneness is valid. Consider elaborating on how deep inheritance hierarchies can make debugging and understanding code challenging, and how changes to parent classes can ripple through to subclasses.",
+          "title": "Disadvantage of Inheritance",
+          "index_start": 458,
+          "index_end": 568,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559629404,
+          "description": "Your point about runtime flexibility in delegation is well-made. Delegation allows a program to select or change the objects it delegates to at runtime, providing adaptability. This flexibility is crucial for applications requiring dynamic behavior based on user interactions or system conditions.",
+          "title": "Advantage of Delegation",
+          "index_start": 582,
+          "index_end": 673,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559629405,
+          "description": "The observation about code density and readability in delegation is correct. Delegation often involves writing more boilerplate code for method calls and can lead to complex interactions between objects, making it harder to follow logic flow.",
+          "title": "Disadvantage of Delegation",
+          "index_start": 674,
+          "index_end": 721,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 559629406,
+          "description": "Your submission lacks an example for inheritance in the context of smartphones. Consider using an example such as a 'Smartphone' class being extended by a 'GamingSmartphone' class, where the latter inherits basic smartphone functionalities and adds specific attributes or methods like enhanced graphics processing capabilities.",
+          "title": "Example for Inheritance",
+          "index_start": 724,
+          "index_end": 751,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5589709,
+      "meta": {},
+      "text": "Differences between inheritance and delegation:\nWhen using delegation the class does not get all the methods and attributes from another class (which would be the case when using inheritance) but can call the methods through an reciever (an object of the Delegate class). \n\nAdvantages:\n-Delegation is more flexible and makes sure that the client cannot \"misuse\" the delegate\n-Inheritance is easy to understand and to implement\n\nDisadvantages:\n-Delegation might be not as efficient as inheritance because you have to create an object instance\n-When using inheritance changes in the superclass may force you to change the subclasses as well\n\nSmartphone example, Deligation:\nWhen using the reminder app on the smartphone you can set a date and time for the reminder. In this case it would be smart to use deligation rather than inheritance to get the needed funtionallity from the calender app because you just need a little part of the calender app's functionallity and do want not expose unwanted methods.\n\nSmartphone example, Inheritance:\nWhen using the settings app on your smartphone i would use inheritance to program each sub category of the settings. All the sub categories have very common features (A name, certain number of buttons...). So it is easy to let these sub categories inherit the attributes and methods from one superclass.\n",
+      "score": 91.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 558970901,
+          "description": "Your explanation of the difference between inheritance and delegation is clear and accurate. You correctly identify the mechanism of delegation through a receiver object and the comprehensive method and attribute inheritance in inheritance.",
+          "title": "Explanation of Difference",
+          "index_start": 48,
+          "index_end": 271,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558970902,
+          "description": "You have successfully highlighted the advantage of flexibility and security in delegation, ensuring the client does not misuse the delegate. However, consider elaborating more on how this flexibility can be beneficial in various programming scenarios.",
+          "title": "Advantages of Delegation",
+          "index_start": 274,
+          "index_end": 374,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558970903,
+          "description": "The advantage of inheritance being easy to understand and implement is well-stated. It would be helpful to include an example of simplicity in implementation or a use case where inheritance streamlines development.",
+          "title": "Advantages of Inheritance",
+          "index_start": 274,
+          "index_end": 426,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558970904,
+          "description": "You correctly mention that delegation might be less efficient due to object creation. Consider expanding on scenarios where this inefficiency impacts performance or resource management.",
+          "title": "Disadvantages of Delegation",
+          "index_start": 428,
+          "index_end": 541,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558970905,
+          "description": "Your description of the disadvantage of inheritance requiring changes in subclasses due to superclass modifications is accurate. You could enhance this by discussing how this impacts scalability and maintenance.",
+          "title": "Disadvantages of Inheritance",
+          "index_start": 428,
+          "index_end": 638,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558970906,
+          "description": "The example of using delegation for the reminder app leveraging calendar functionality is appropriate. You correctly identify the selective usage of calendar features as a reason to choose delegation.",
+          "title": "Smartphone Example - Delegation",
+          "index_start": 640,
+          "index_end": 1004,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 558970907,
+          "description": "Your example using inheritance to program subcategories in the settings app is relevant. You clearly outline the shared attributes and methods that justify using inheritance.",
+          "title": "Smartphone Example - Inheritance",
+          "index_start": 1006,
+          "index_end": 1342,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 5589431,
+      "meta": {},
+      "text": "The difference between inheritance and delegation is that inheritance allows the programmer to extend a class and offer its ENTIRE functionality and if desired add something on top of that.\nDelegation is a method where the programmer creates a receiver that takes requests from a client and then delegates them to the delegate. The receiver might only offer parts of the functionality of the delegate.\n\nAdvantages:\nDelegation helps to ensure that a client cannot misuse some functionality of the delegate.\nInheritance is easy and fast to implement and supported in (almost) all Programming Languages.\n\nDisadvantages:\nInheritance might expose some functionality that we don't want the subclass to have. A malicious or unknowing user/caller might then abuse this class.\nWith delegation the receiver and the delegate needs to be instantiated. That leads to slight overhead.\n\nSmartphone Apps use inheritance. There would be an abstract app class and different Subclasses like System Apps, PlayStore Apps and 3rdParty Apps that share common functionality.\n\nSmartphones also use delegation. There is the normal user mode and the superuser mode. By default only normal mode can be accessed which redirects all the requests to the superuser.",
+      "score": 100,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 558943101,
+          "description": "Your explanation of the difference between inheritance and delegation is generally correct. However, it would be beneficial to clarify that inheritance allows a class to acquire the properties and behaviors of another class, whereas delegation involves an object handling a request by passing it to a separate object responsible for the action.",
+          "title": "Explanation of Difference",
+          "index_start": 328,
+          "index_end": 401,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558943102,
+          "description": "You correctly mentioned that delegation can prevent misuse of certain functionalities. This is an important aspect as it helps in encapsulating and controlling the access to functionality.",
+          "title": "Advantages of Delegation",
+          "index_start": 415,
+          "index_end": 505,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558943103,
+          "description": "The advantage you provided for inheritance is accurate. It is indeed supported in most programming languages and simplifies code reuse.",
+          "title": "Advantages of Inheritance",
+          "index_start": 506,
+          "index_end": 600,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558943104,
+          "description": "Your description of the disadvantages of inheritance is valuable. It can indeed expose unwanted functionalities to subclasses, which can lead to misuse.",
+          "title": "Disadvantages of Inheritance",
+          "index_start": 617,
+          "index_end": 767,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558943105,
+          "description": "You identified the overhead associated with delegation due to instantiation, which is a valid point. However, it would be helpful to expand on the potential complexity it can introduce in the design.",
+          "title": "Disadvantages of Delegation",
+          "index_start": 768,
+          "index_end": 870,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 558943106,
+          "description": "The example of smartphone apps using inheritance is relevant. It effectively illustrates how common functionality can be shared among different app types through subclassing.",
+          "title": "Example for Inheritance",
+          "index_start": 872,
+          "index_end": 1050,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 558943107,
+          "description": "The example of delegation with user modes in smartphones is insightful. It demonstrates how delegation can be used to control access and redirect requests appropriately.",
+          "title": "Example for Delegation",
+          "index_start": 1052,
+          "index_end": 1233,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    }
+  ],
+  "baseline_info": {
+    "model": "azure_openai_gpt-4o",
+    "approach": "basic",
+    "generated_at": "2025-08-11T17:11:33.873898",
+    "description": "Baseline feedbacks generated by GPT-4o using basic approach"
+  }
+}

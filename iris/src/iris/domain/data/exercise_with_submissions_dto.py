@@ -2,17 +2,28 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from iris.domain.data.simple_submission_dto import SimpleSubmissionDTO
 
 
 class ExerciseType(str, Enum):
+    """The type of an exercise (e.g., programming, quiz, text)."""
+
     PROGRAMMING = "PROGRAMMING"
     QUIZ = "QUIZ"
     MODELING = "MODELING"
     TEXT = "TEXT"
     FILE_UPLOAD = "FILE_UPLOAD"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            upper_value = value.upper()
+            for member in cls:
+                if member.value == upper_value:
+                    return member
+        return None
 
 
 class ExerciseMode(str, Enum):
@@ -59,3 +70,10 @@ class ExerciseWithSubmissionsDTO(BaseModel):
 
     class Config:
         require_by_default = False
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v):
+        if isinstance(v, str):
+            return v.upper().replace("-", "_")
+        return v

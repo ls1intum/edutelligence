@@ -1,31 +1,28 @@
-import logging
 import os
 from typing import Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 from pydantic import BaseModel
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.tracing import observe
 
 from ...common.pyris_message import PyrisMessage
-from ...domain import FeatureDTO
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
-from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
-from ..shared.utils import filter_variants_by_available_models
+from ..sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FileSelectionDTO(BaseModel):
@@ -40,7 +37,7 @@ class FileSelectionDTO(BaseModel):
         )
 
 
-class CodeFeedbackPipeline(Pipeline):
+class CodeFeedbackPipeline(SubPipeline):
     """Code feedback pipeline that produces issues from student code."""
 
     llm: IrisLangchainChatModel
@@ -52,21 +49,28 @@ class CodeFeedbackPipeline(Pipeline):
     variant: str
 
     def __init__(
-        self, callback: Optional[StatusCallback] = None, variant: str = "default"
+        self,
+        callback: Optional[StatusCallback] = None,
+        variant: str = "default",
+        local: bool = False,
     ):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
         self.callback = callback
         self.variant = variant
 
         # Set up the language model
-        completion_args = CompletionArguments(
-            temperature=0, max_tokens=1024, response_format="text"
-        )
+        completion_args = CompletionArguments(temperature=0, response_format="TEXT")
 
-        if variant == "advanced":
-            model = "gpt-4.1"
+        if local:
+            if variant == "advanced":
+                model = "gpt-oss:120b"
+            else:
+                model = "gpt-oss:120b"
         else:
-            model = "gpt-4.1-mini"
+            if variant == "advanced":
+                model = "gpt-5.2"
+            else:
+                model = "gpt-5-mini"
 
         request_handler = ModelVersionRequestHandler(version=model)
         self.llm = IrisLangchainChatModel(
@@ -91,32 +95,7 @@ class CodeFeedbackPipeline(Pipeline):
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
-    @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        variant_specs = [
-            (
-                ["gpt-4.1-mini"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                ),
-            ),
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                ),
-            ),
-        ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="CodeFeedbackPipeline"
-        )
-
-    @traceable(name="Code Feedback Pipeline")
+    @observe(name="Code Feedback Pipeline")
     def __call__(
         self,
         repository: Dict[str, str],

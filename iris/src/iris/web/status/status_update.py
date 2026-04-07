@@ -1,11 +1,16 @@
-import logging
 from abc import ABC
 from typing import List, Optional
 
 import requests
+from memiris import Memory
+from memiris.api.memory_dto import MemoryDTO
 from sentry_sdk import capture_exception, capture_message
 
+from iris.common.logging_config import get_logger
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_status_update_dto import (
+    AutonomousTutorPipelineStatusUpdateDTO,
+)
 from iris.domain.chat.course_chat.course_chat_status_update_dto import (
     CourseChatStatusUpdateDTO,
 )
@@ -34,7 +39,14 @@ from iris.domain.status.text_exercise_chat_status_update_dto import (
     TextExerciseChatStatusUpdateDTO,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Stage weight constants for progress bar visualization.
+# Weights represent relative proportions of the progress bar, not absolute time.
+STAGE_WEIGHT_THINKING_PRIMARY = 40  # Main thinking stage for complex pipelines
+STAGE_WEIGHT_THINKING = 30  # Standard thinking/processing stage
+STAGE_WEIGHT_RESPONDING = 20  # Response generation stage
+STAGE_WEIGHT_SECONDARY = 10  # Secondary stages (suggestions, memory extraction, etc.)
 
 
 class StatusCallback(ABC):
@@ -48,7 +60,7 @@ class StatusCallback(ABC):
     stage: StageDTO
     current_stage_index: Optional[int]
 
-    api_url: str = "api/iris/public/pyris/pipelines"
+    api_url: str = "api/iris/internal/pipelines"
 
     def __init__(
         self,
@@ -64,10 +76,13 @@ class StatusCallback(ABC):
         self.stage = stage
         self.current_stage_index = current_stage_index
 
-    def on_status_update(self):
-        """Send a status update to the Artemis API."""
+    def on_status_update(self) -> bool:
+        """Send a status update to the Artemis API.
+
+        Returns:
+            True if the status update was sent successfully, False otherwise.
+        """
         try:
-            print(self.status.dict(by_alias=True))
             requests.post(
                 self.url,
                 headers={
@@ -75,11 +90,13 @@ class StatusCallback(ABC):
                     "Authorization": f"Bearer {self.run_id}",
                 },
                 json=self.status.model_dump(by_alias=True),
-                timeout=5,
+                timeout=200,
             ).raise_for_status()
+            return True
         except requests.exceptions.RequestException as e:
             logger.error("Error sending status update: %s", e)
             capture_exception(e)
+            return False
 
     def get_next_stage(self):
         """Return the next stage in the status, or None if there are no more stages."""
@@ -93,14 +110,22 @@ class StatusCallback(ABC):
         # Return the next stage
         return self.status.stages[self.current_stage_index]
 
-    def in_progress(self, message: Optional[str] = None):
+    def in_progress(
+        self,
+        message: Optional[str] = None,
+        chat_message: Optional[str] = None,
+    ):
         """Transition the current stage to IN_PROGRESS and update the status."""
         if self.stage.state == StageStateEnum.NOT_STARTED:
             self.stage.state = StageStateEnum.IN_PROGRESS
             self.stage.message = message
+            if chat_message is not None:
+                self.stage.chat_message = chat_message
             self.on_status_update()
         elif self.stage.state == StageStateEnum.IN_PROGRESS:
             self.stage.message = message
+            if chat_message is not None:
+                self.stage.chat_message = chat_message
             self.on_status_update()
         else:
             raise ValueError(
@@ -112,12 +137,18 @@ class StatusCallback(ABC):
         self,
         message: Optional[str] = None,
         final_result: Optional[str] = None,
+        session_title: Optional[str] = None,
         suggestions: Optional[List[str]] = None,
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
         start_next_stage: bool = True,
         inconsistencies: Optional[List[str]] = None,
         improvement: Optional[str] = None,
+        accessed_memories: Optional[List[Memory]] = None,
+        created_memories: Optional[List[Memory]] = None,
+        artifact: Optional[str] = None,
+        confidence: Optional[float] = None,
+        should_post_directly: Optional[bool] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -126,28 +157,64 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.DONE
         self.stage.message = message
-        self.status.result = final_result
+        self.stage.chat_message = None
         self.status.tokens = tokens or self.status.tokens
+        self.status.result = final_result
+        if hasattr(self.status, "session_title"):
+            self.status.session_title = session_title
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = suggestions
-
         if hasattr(self.status, "inconsistencies"):
             self.status.inconsistencies = inconsistencies
         if hasattr(self.status, "improvement"):
             self.status.improvement = improvement
+        if hasattr(self.status, "accessed_memories"):
+            self.status.accessed_memories = (
+                [MemoryDTO.from_memory(memory) for memory in accessed_memories]
+                if accessed_memories
+                else []
+            )
+        if hasattr(self.status, "created_memories"):
+            self.status.created_memories = (
+                [MemoryDTO.from_memory(memory) for memory in created_memories]
+                if created_memories
+                else []
+            )
+        if hasattr(self.status, "artifact"):
+            self.status.artifact = artifact
+        if hasattr(self.status, "confidence"):
+            self.status.confidence = confidence
+        if hasattr(self.status, "should_post_directly"):
+            self.status.should_post_directly = should_post_directly
         next_stage = self.get_next_stage()
+
         if next_stage is not None:
             self.stage = next_stage
             if next_stage_message:
                 self.stage.message = next_stage_message
             if start_next_stage:
                 self.stage.state = StageStateEnum.IN_PROGRESS
-        self.on_status_update()
-        self.status.result = None
-        if hasattr(self.status, "suggestions"):
-            self.status.suggestions = None
-        if hasattr(self.status, "inconsistencies"):
-            self.status.inconsistencies = None
+
+        success = self.on_status_update()
+
+        # Only clear transient fields if the update was delivered successfully.
+        # If the POST failed, keep the result so it can be retried on the next update.
+        if success:
+            self.status.result = None
+            if hasattr(self.status, "session_title"):
+                self.status.session_title = None
+            if hasattr(self.status, "suggestions"):
+                self.status.suggestions = None
+            if hasattr(self.status, "inconsistencies"):
+                self.status.inconsistencies = None
+            if hasattr(self.status, "accessed_memories"):
+                self.status.accessed_memories = None
+            if hasattr(self.status, "created_memories"):
+                self.status.created_memories = None
+            if hasattr(self.status, "confidence"):
+                self.status.confidence = None
+            if hasattr(self.status, "should_post_directly"):
+                self.status.should_post_directly = False
 
     def error(
         self,
@@ -218,13 +285,22 @@ class CourseChatStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=40,
+                weight=STAGE_WEIGHT_THINKING_PRIMARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
-            # StageDTO(
-            #     weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
-            # ),
+            StageDTO(
+                weight=STAGE_WEIGHT_SECONDARY,
+                state=StageStateEnum.NOT_STARTED,
+                name="Creating suggestions",
+                internal=True,
+            ),
+            StageDTO(
+                weight=STAGE_WEIGHT_SECONDARY,
+                state=StageStateEnum.NOT_STARTED,
+                name="Extracting memories",
+                internal=True,
+            ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
@@ -244,12 +320,15 @@ class ExerciseChatStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Checking available information",
             ),
             StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+                weight=STAGE_WEIGHT_SECONDARY,
+                state=StageStateEnum.NOT_STARTED,
+                name="Creating suggestions",
+                internal=True,
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
@@ -270,7 +349,7 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Generating response",
             ),
@@ -294,12 +373,12 @@ class TextExerciseChatCallback(StatusCallback):
         stage = len(stages)
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
             StageDTO(
-                weight=20,
+                weight=STAGE_WEIGHT_RESPONDING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Responding",
             ),
@@ -326,7 +405,7 @@ class CompetencyExtractionCallback(StatusCallback):
         stages = initial_stages or []
         stages.append(
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Generating Competencies",
             )
@@ -349,7 +428,7 @@ class RewritingCallback(StatusCallback):
         stages = initial_stages or []
         stages.append(
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Generating Rewritting",
             )
@@ -372,7 +451,7 @@ class InconsistencyCheckCallback(StatusCallback):
         stages = initial_stages or []
         stages.append(
             StageDTO(
-                weight=10,
+                weight=STAGE_WEIGHT_SECONDARY,
                 state=StageStateEnum.NOT_STARTED,
                 name="Checking for inconsistencies",
             )
@@ -396,15 +475,22 @@ class LectureChatCallback(StatusCallback):
         stage = len(stages)
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
+            ),
+            StageDTO(
+                weight=STAGE_WEIGHT_SECONDARY,
+                state=StageStateEnum.NOT_STARTED,
+                name="Extracting memories",
+                internal=True,
             ),
         ]
         super().__init__(
             url,
             run_id,
-            LectureChatStatusUpdateDTO(stages=stages, result=""),
+            # result should not be "" by default since empty done messages are sent but should not be shown as message
+            LectureChatStatusUpdateDTO(stages=stages),
             stages[stage],
             stage,
         )
@@ -424,7 +510,7 @@ class TutorSuggestionCallback(StatusCallback):
         stage = len(stages)
         stages += [
             StageDTO(
-                weight=30,
+                weight=STAGE_WEIGHT_THINKING,
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
@@ -437,15 +523,30 @@ class TutorSuggestionCallback(StatusCallback):
             stage,
         )
 
-    def done(
+
+class AutonomousTutorCallback(StatusCallback):
+    """Status callback for autonomous tutor pipeline."""
+
+    def __init__(
         self,
-        message: Optional[str] = None,
-        final_result: Optional[str] = None,
-        suggestions: Optional[List[str]] = None,
-        tokens: Optional[List[TokenUsageDTO]] = None,
-        next_stage_message: Optional[str] = None,
-        start_next_stage: bool = True,
-        artifact: Optional[str] = None,
+        run_id: str,
+        base_url: str,
+        initial_stages: List[StageDTO],
     ):
-        self.status.artifact = artifact
-        super().done(message=message, final_result=final_result, tokens=tokens)
+        url = f"{base_url}/{self.api_url}/autonomous-tutor/runs/{run_id}/status"
+        stages = initial_stages or []
+        stage = len(stages)
+        stages += [
+            StageDTO(
+                weight=STAGE_WEIGHT_THINKING,
+                state=StageStateEnum.NOT_STARTED,
+                name="Thinking",
+            ),
+        ]
+        super().__init__(
+            url,
+            run_id,
+            AutonomousTutorPipelineStatusUpdateDTO(stages=stages),
+            stages[stage],
+            stage,
+        )

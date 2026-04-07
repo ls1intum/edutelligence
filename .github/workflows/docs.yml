@@ -1,0 +1,209 @@
+name: Documentation
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-athena:
+    uses: ./.github/workflows/athena_docs-build.yml
+    secrets: inherit
+
+  build-atlas:
+    uses: ./.github/workflows/atlas_docs-build.yml
+    secrets: inherit
+
+  build-iris:
+    uses: ./.github/workflows/iris_docs-build.yml
+    secrets: inherit
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: [build-athena, build-atlas, build-iris]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: https://ls1intum.github.io/edutelligence
+    steps:
+      - name: Download Athena docs
+        uses: actions/download-artifact@v4
+        with:
+          name: athena-docs
+          path: site/athena
+
+      - name: Download Atlas docs
+        uses: actions/download-artifact@v4
+        with:
+          name: atlas-docs
+          path: site/atlas
+
+      - name: Download Iris docs
+        uses: actions/download-artifact@v4
+        with:
+          name: iris-docs
+          path: site/iris
+
+      - name: Create landing page
+        run: |
+          cat > site/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Edutelligence Documentation</title>
+              <style>
+                  * {
+                      margin: 0;
+                      padding: 0;
+                      box-sizing: border-box;
+                  }
+                  body {
+                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                      line-height: 1.6;
+                      color: #333;
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      min-height: 100vh;
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                      padding: 20px;
+                  }
+                  .container {
+                      max-width: 1200px;
+                      width: 100%;
+                  }
+                  header {
+                      text-align: center;
+                      margin-bottom: 60px;
+                      color: white;
+                  }
+                  h1 {
+                      font-size: 3.5rem;
+                      font-weight: 700;
+                      margin-bottom: 20px;
+                      text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+                  }
+                  .subtitle {
+                      font-size: 1.3rem;
+                      opacity: 0.95;
+                      font-weight: 300;
+                  }
+                  .projects {
+                      display: grid;
+                      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                      gap: 30px;
+                      margin-bottom: 40px;
+                  }
+                  .card {
+                      background: white;
+                      border-radius: 12px;
+                      padding: 40px;
+                      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                      transition: transform 0.3s ease, box-shadow 0.3s ease;
+                      text-decoration: none;
+                      color: inherit;
+                      display: block;
+                  }
+                  .card:hover {
+                      transform: translateY(-5px);
+                      box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+                  }
+                  .card h2 {
+                      font-size: 2rem;
+                      margin-bottom: 15px;
+                      color: #667eea;
+                  }
+                  .card p {
+                      color: #666;
+                      font-size: 1.1rem;
+                      margin-bottom: 20px;
+                  }
+                  .card .btn {
+                      display: inline-block;
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      color: white;
+                      padding: 12px 30px;
+                      border-radius: 6px;
+                      text-decoration: none;
+                      font-weight: 600;
+                      transition: opacity 0.3s ease;
+                  }
+                  .card .btn:hover {
+                      opacity: 0.9;
+                  }
+                  footer {
+                      text-align: center;
+                      color: white;
+                      margin-top: 60px;
+                      opacity: 0.9;
+                  }
+                  footer a {
+                      color: white;
+                      text-decoration: none;
+                      font-weight: 600;
+                  }
+                  footer a:hover {
+                      text-decoration: underline;
+                  }
+                  @media (max-width: 768px) {
+                      h1 {
+                          font-size: 2.5rem;
+                      }
+                      .subtitle {
+                          font-size: 1.1rem;
+                      }
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <header>
+                      <h1>Edutelligence</h1>
+                      <p class="subtitle">Intelligent Education Technology Platform</p>
+                  </header>
+
+                  <div class="projects">
+                      <a href="/edutelligence/athena/" class="card">
+                          <h2>Athena</h2>
+                          <p>AI-powered assessment and feedback system for educational environments</p>
+                          <span class="btn">View Documentation →</span>
+                      </a>
+
+                      <a href="/edutelligence/atlas/" class="card">
+                          <h2>Atlas</h2>
+                          <p>Competency-based learning management system</p>
+                          <span class="btn">View Documentation →</span>
+                      </a>
+
+                      <a href="/edutelligence/iris/" class="card">
+                          <h2>Iris</h2>
+                          <p>AI-powered virtual tutor for context-aware, scaffolded learning support</p>
+                          <span class="btn">View Documentation →</span>
+                      </a>
+                  </div>
+
+                  <footer>
+                      <p>
+                          &copy; 2025 Technical University of Munich, Applied Education Technologies<br>
+                          <a href="https://github.com/ls1intum/edutelligence" target="_blank">View on GitHub</a>
+                      </p>
+                  </footer>
+              </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload combined site to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

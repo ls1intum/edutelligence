@@ -4,7 +4,7 @@ import type { ManualRating } from "@/model/manual_rating";
 import { useEffect, useState } from "react";
 import { Allotment } from "allotment";
 
-import { useFetchAndUnzip } from "@/helpers/fetch_and_unzip";
+import { useFetchFilemap } from "@/helpers/fetch_repository";
 
 import FileTree from "./file_tree";
 import FileEditor from "./file_editor";
@@ -30,23 +30,19 @@ export default function CodeEditor({
 }: CodeEditorProps) {
   const {
     isError,
-    zip: repositoryZip,
+    filesMap,
     tree,
-  } = useFetchAndUnzip(repositoryUrl);
+  } = useFetchFilemap(repositoryUrl);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined
   );
   const [fileContent, setFileContent] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (selectedFile && repositoryZip) {
-      repositoryZip
-        .file(selectedFile)
-        ?.async("string")
-        .then(setFileContent)
-        .catch(console.error);
+    if (selectedFile && filesMap) {
+      setFileContent(filesMap[selectedFile] || undefined);
     }
-  }, [selectedFile, repositoryZip]);
+  }, [selectedFile, filesMap]);
 
   if (isError) {
     return (

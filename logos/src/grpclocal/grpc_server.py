@@ -1,24 +1,26 @@
-import json, traceback, httpx, grpc, datetime
+import json
+import traceback
+import grpc
+import logging
 
 from grpclocal import model_pb2, model_pb2_grpc
-from logos.dbutils.dbmanager import DBManager
-from logos.responses import request_setup, get_client_ip_address_from_context, proxy_behaviour, resource_behaviour, \
-    get_client_ip
-from logos.scheduling.scheduling_fcfs import FCFSScheduler
-from logos.scheduling.scheduling_manager import SchedulingManager
+from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
 
 
 class LogosServicer(model_pb2_grpc.LogosServicer):
+    def __init__(self, pipeline: RequestPipeline):
+        self.pipeline = pipeline
+
     async def Generate(self, request, context):
         # Metadata (aka Header in REST)
         meta = dict()
         for k, v in request.metadata.items():
             meta[k] = v
+        
         if "logos_key" not in meta:
             context.set_code(grpc.StatusCode.UNAUTHENTICATED)
             context.set_details("Missing logos_key")
             return
-        path = request.path
 
         # Parse JSON body
         try:
@@ -28,127 +30,51 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
             context.set_details("Invalid JSON payload")
             return
 
-        with DBManager() as db:
-            r, c = db.get_process_id(meta["logos_key"])
-            if c != 200:
-                print("Error while logging a request: ", r)
-                usage_id = None
-            else:
-                r, c = db.log_usage(int(r["result"]), get_client_ip_address_from_context(request), data, meta)
-                if c != 200:
-                    usage_id = None
-                else:
-                    usage_id = int(r["log-id"])
+        # Create Pipeline Request
+        # We treat gRPC requests as streaming by default if not specified
+        if "stream" not in data:
+            data["stream"] = True
 
-        models = request_setup(meta, meta["logos_key"])
-        if not models:
-            with DBManager() as db:
-                # Get available providers for this key
-                providers = db.get_providers(meta["logos_key"])
-            # Find most suitable provider
-            out = proxy_behaviour(meta, providers, path)
-            if isinstance(out[0], dict) and "error" in out[0]:
-                context.set_code(grpc.StatusCode.UNAVAILABLE)
-                context.set_details(f"Upstream error: {out[0]["error"]}")
-                return
-            proxy_headers, forward_url, provider_id = out
-            model_id, model_name = None, None
-            policy_id = -1
-            classified = dict()
-        else:
-            out = resource_behaviour(meta["logos_key"], meta, data, models)
-            if isinstance(out[0], dict) and "error" in out[0]:
-                context.set_code(grpc.StatusCode.UNAVAILABLE)
-                context.set_details(f"Upstream error: {out[0]["error"]}")
-                return
-            proxy_headers, forward_url, model_id, model_name, provider_id, _, policy_id, classified = out
+        pipeline_req = PipelineRequest(
+            payload=data,
+            headers=meta,
+            logos_key=meta.get("logos_key", "unknown")
+        )
 
-        # Standard request setup
-
-        with DBManager() as db:
-            if usage_id is not None:
-                db.set_forward_timestamp(usage_id)
-
-        full_text = ""
-        data["stream"] = True
-        data["stream_options"] = {"include_usage": True}
-        last_blob = None
-        ttft = None
         try:
-            # Try streaming first, fall back to standard response on failure
-            for _ in range(2):
-                try:
-                    async with httpx.AsyncClient(timeout=None) as client:
-                        async with client.stream("POST", forward_url, headers=proxy_headers, json=data) as resp:
-                            async for raw_line in resp.aiter_lines():
-                                if not raw_line:
-                                    continue
+            # Process request through pipeline
+            result = await self.pipeline.process(pipeline_req)
+            
+            if not result.success:
+                await context.abort(grpc.StatusCode.UNAVAILABLE, result.error or "Pipeline processing failed")
+                return
 
-                                # Parse Data-Chunk
-                                if raw_line.startswith("data: "):
-                                    payload = raw_line.removeprefix("data: ").strip()
-                                    if ttft is None and usage_id is not None:
-                                        ttft = datetime.datetime.now(datetime.timezone.utc)
-                                        with DBManager() as db:
-                                            db.set_time_at_first_token(usage_id)
-                                    if payload == "[DONE]":
-                                        break
-                                    try:
-                                        blob = json.loads(payload)
-                                        choices = blob.get("choices", [])
-                                        if choices and "delta" in choices[0]:
-                                            content = choices[0]["delta"].get("content")
-                                            if content:
-                                                full_text += content
-                                        last_blob = blob
-                                    except Exception:
-                                        pass
+            # Determine streaming mode
+            is_streaming = data.get("stream", False)
+            
+            # Execute
+            if is_streaming:
+                async for chunk in self.pipeline._executor.execute_ressource_streaming(result.execution_context, data):
+                    yield model_pb2.GenerationResponse(text=chunk.decode())
+            else:
+                exec_result = await self.pipeline._executor.execute_ressource_sync(result.execution_context, data)
+                if not exec_result.success:
+                    await context.abort(grpc.StatusCode.INTERNAL, exec_result.error or "Execution failed")
+                yield model_pb2.GenerationResponse(text=json.dumps(exec_result.response))
+                
+            self.pipeline.record_completion(
+                request_id=result.scheduling_stats.get("request_id"),
+                result_status="SUCCESS"
+            )
 
-                                # Yield to gRPC-Client
-                                yield model_pb2.GenerateResponse(chunk=(raw_line + "\n").encode())
-                    break
-                except:
-                    traceback.print_exc()
-                    print("Falling back to Standard Request")
-                    data["stream"] = False
         except Exception as e:
+            # Try to record error if we have a request ID (might be None if pipeline failed early)
+            # But here we are inside the try block where result might not be defined if process() failed
+            # However, if process() fails, we abort above. So if we are here, result is defined.
+            # Wait, if process() raises exception, result is undefined.
+            # We should wrap the whole thing or check locals.
+            
+            # Simplified: just log error and abort
+            logging.error(f"gRPC Execution Error: {e}")
             traceback.print_exc()
-            context.set_code(grpc.StatusCode.UNAVAILABLE)
-            context.set_details(f"Upstream error: {e}")
-            return
-
-        if ttft is None and usage_id is not None:
-            db.set_time_at_first_token(usage_id)
-
-        # Usage-Logging
-        if usage_id is not None:
-            try:
-                response_for_log = last_blob
-                if response_for_log:
-                    response_for_log["choices"][0]["delta"]["content"] = full_text
-
-                    usage = response_for_log["usage"] if response_for_log is not None else dict()
-                    usage_tokens = dict()
-                    for name in usage:
-                        if "tokens_details" in name:
-                            continue
-                        usage_tokens[name] = usage[name]
-                    if "prompt_tokens_details" in usage:
-                        for name in usage["prompt_tokens_details"]:
-                            usage_tokens[name] = usage["prompt_tokens_details"][name]
-                    if "completion_tokens_details" in usage:
-                        for name in usage["completion_tokens_details"]:
-                            usage_tokens[name] = usage["completion_tokens_details"][name]
-                    response_for_log["usage"] = response_for_log["usage"]
-                else:
-                    response_for_log = {"full_text": full_text}
-                    usage_tokens = dict()
-
-                with DBManager() as db:
-                    db.set_response_payload(usage_id, response_for_log, provider_id, model_id, usage_tokens, policy_id, classified)
-            except Exception:
-                traceback.print_exc()
-
-        if model_id is not None:
-            sm = SchedulingManager(FCFSScheduler())
-            sm.set_free(model_id)
+            await context.abort(grpc.StatusCode.INTERNAL, str(e))

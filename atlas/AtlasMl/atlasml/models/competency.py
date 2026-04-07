@@ -1,37 +1,34 @@
+from pydantic import BaseModel
+from typing import Optional
 from enum import Enum
 
-from pydantic import BaseModel
 
-
-class CompetencyTaxonomy(str, Enum):
-    REMEMBER = "R"
-    UNDERSTAND = "U"
-    APPLY = "Y"
-    ANALYZE = "A"
-    EVALUATE = "E"
-    CREATE = "C"
+class OperationType(str, Enum):
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
 
 
 class Competency(BaseModel):
-    # id
+    id: int
+    title: str
+    description: Optional[str] = None
+    course_id: int
+
+
+class ExerciseWithCompetencies(BaseModel):
+    id: int
     title: str
     description: str
-    taxonomy: CompetencyTaxonomy
+    competencies: Optional[list[int]] = None
+    course_id: int
 
-
-class CompetencyRelationType(str, Enum):  # TOBE DETERMINED LATER
-    SUPERSET = "SUPERSET"
-    SUBSET = "SUBSET"
-
-
-class CompetencyRelation(BaseModel):
-    tail_competency_id: str
-    head_competency_id: str
-    relation_type: CompetencyRelationType
-
+class SemanticCluster(BaseModel):
+    cluster_id: str
+    course_id: int
+    vector_embedding: list[float]
 
 class GenerateCompetencyRequest(BaseModel):
-    id: str
+    id: int
     description: str
 
 
@@ -41,7 +38,6 @@ class GenerateCompetencyRequestBatch(BaseModel):
 
 class GenerateCompetencyResponse(BaseModel):
     competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
 
 
 class GenerateEmbeddingsResponse(BaseModel):
@@ -49,22 +45,39 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 
 class SuggestCompetencyRequest(BaseModel):
-    id: str
     description: str
+    course_id: int
 
 
 class SuggestCompetencyResponse(BaseModel):
     competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
 
 
 class SaveCompetencyRequest(BaseModel):
-    id: str
-    description: str
-    competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
+    competencies: Optional[list[Competency]] = None
+    exercise: Optional[ExerciseWithCompetencies] = None
+    operation_type: OperationType
+
+class RelationType(str, Enum):
+    MATCH = "MATCHES"
+    EXTEND = "EXTENDS"
+    REQUIRES = "REQUIRES"
+
+class CompetencyRelation(BaseModel):
+    tail_id: int
+    head_id: int
+    relation_type: RelationType
 
 
-class SaveCompetencyResponse(BaseModel):
-    competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
+class CompetencyRelationSuggestionResponse(BaseModel):
+    relations: list[CompetencyRelation]
+
+
+class MapNewCompetencyToExerciseRequest(BaseModel):
+    exercise_id: int
+    competency_id: int
+
+
+class MapCompetencyToCompetencyRequest(BaseModel):
+    source_competency_id: int
+    target_competency_id: int

@@ -1,5 +1,3 @@
-import concurrent.futures
-import logging
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -8,25 +6,26 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.tracing import TracedThreadPoolExecutor, observe
 
 from ..common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
 from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
-from ..pipeline import Pipeline
+from ..pipeline.sub_pipeline import SubPipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def merge_retrieved_chunks(
@@ -68,7 +67,7 @@ def _add_last_four_messages_to_prompt(
     return prompt
 
 
-class BaseRetrieval(Pipeline, ABC):
+class BaseRetrieval(SubPipeline, ABC):
     """
     Base class for retrieval pipelines.
     """
@@ -79,12 +78,16 @@ class BaseRetrieval(Pipeline, ABC):
     def __call__(self, *args, **kwargs):
         """Muss in der konkreten Implementierung überschrieben werden"""
 
-    def __init__(self, client: WeaviateClient, schema_init_func, **kwargs):
+    def __init__(
+        self, client: WeaviateClient, schema_init_func, local: bool = False, **kwargs
+    ):
         super().__init__(
             implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
         )
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-mini"
+        )
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -93,7 +96,7 @@ class BaseRetrieval(Pipeline, ABC):
         self.collection = schema_init_func(client)
         self.tokens = []
 
-    @traceable(name="Retrieval: Question Assessment")
+    @observe(name="Retrieval: Question Assessment")
     def assess_question(
         self,
         chat_history: list[PyrisMessage],
@@ -107,9 +110,11 @@ class BaseRetrieval(Pipeline, ABC):
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
+        # Escape curly braces in student_query for LangChain template compatibility
+        safe_query = student_query.replace("{", "{{").replace("}", "}}")
         prompt += ChatPromptTemplate.from_messages(
             [
-                ("user", student_query),
+                ("user", safe_query),
             ]
         )
         prompt += ChatPromptTemplate.from_messages(
@@ -120,12 +125,12 @@ class BaseRetrieval(Pipeline, ABC):
 
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info("Response from assessment pipeline: %s", response)
+            logger.debug("Assessment completed | result=%s", response)
             return response == "YES"
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Student Query")
+    @observe(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
         chat_history: list[PyrisMessage],
@@ -161,7 +166,7 @@ class BaseRetrieval(Pipeline, ABC):
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Search in DB")
+    @observe(name="Retrieval: Search in DB")
     def search_in_db(
         self,
         query: str,
@@ -194,7 +199,7 @@ class BaseRetrieval(Pipeline, ABC):
             filters=filter_weaviate,
         )
 
-    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
+    @observe(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(
         self,
         chat_history: list[PyrisMessage],
@@ -214,7 +219,7 @@ class BaseRetrieval(Pipeline, ABC):
         """
         Run the rewrite tasks in parallel.
         """
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             rewritten_query_future = executor.submit(
                 self.rewrite_student_query,
                 chat_history,
@@ -239,7 +244,7 @@ class BaseRetrieval(Pipeline, ABC):
             rewritten_query = rewritten_query_future.result()
             hypothetical_answer_query = hypothetical_answer_query_future.result()
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             response_future = executor.submit(
                 self.search_in_db,
                 query=rewritten_query,

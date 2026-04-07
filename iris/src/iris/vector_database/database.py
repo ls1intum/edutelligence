@@ -1,9 +1,10 @@
-import logging
+import atexit
 import threading
 
 import weaviate
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.config import settings
 
 from .faq_schema import init_faq_schema
@@ -12,7 +13,7 @@ from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
 from .lecture_unit_schema import init_lecture_unit_schema
 from .lecture_unit_segment_schema import init_lecture_unit_segment_schema
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 batch_update_lock = threading.Lock()
 
 
@@ -22,18 +23,19 @@ class VectorDatabase:
     """
 
     _lock = threading.Lock()
-    _client_instance = None
+    static_client_instance = None
 
     def __init__(self):
         with VectorDatabase._lock:
-            if not VectorDatabase._client_instance:
-                VectorDatabase._client_instance = weaviate.connect_to_local(
+            if not VectorDatabase.static_client_instance:
+                VectorDatabase.static_client_instance = weaviate.connect_to_local(
                     host=settings.weaviate.host,
                     port=settings.weaviate.port,
                     grpc_port=settings.weaviate.grpc_port,
                 )
+                atexit.register(VectorDatabase.static_client_instance.close)
                 logger.info("Weaviate client initialized")
-        self.client = VectorDatabase._client_instance
+        self.client = VectorDatabase.static_client_instance
         self.lectures = init_lecture_unit_page_chunk_schema(self.client)
         self.transcriptions = init_lecture_transcription_schema(self.client)
         self.lecture_segments = init_lecture_unit_segment_schema(self.client)

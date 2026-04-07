@@ -9,7 +9,15 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 | Artemis Version | EduTelligence Version | Status    |
 | --------------- | --------------------- | --------- |
 | 8.0.x           | 1.0.x                 | ✅ Stable |
-| 8.1.x           | 1.1.x                 | ✅ Stable |
+| 8.1.0 - 8.2.4   | 1.1.x                 | ✅ Stable |
+| 8.3.0 - 8.3.4   | 1.3.x                 | ✅ Stable |
+| 8.4.0 - 8.4.4   | 1.4.x                 | ✅ Stable |
+| 8.5.x           | 1.5.x                 | ✅ Stable |
+| 8.6.0 - 8.6.1   | 1.6.0                 | ✅ Stable |
+| 8.6.2 - 8.6.4   | 1.6.2                 | ✅ Stable |
+| 8.7.0 - 8.7.1   | 1.7.0                 | ✅ Stable |
+| 8.7.2 - 8.7.4   | 1.7.2                 | ✅ Stable |
+| 8.8.x           | 1.8.0                 | ✅ Stable |
 
 > **Note:** Always ensure you're using compatible versions for optimal integration and functionality.
 
@@ -27,18 +35,6 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 
 **Technology Stack:** Python 3.12, Poetry, FastAPI, Weaviate (Vector DB)
 
-### ⚡ [Hyperion](./hyperion/) - AI Exercise Creation Assistant
-
-AI-driven programming exercise creation assistance that illuminates the process of creating engaging, effective programming exercises. Designed to support instructors in refining and perfecting their educational content through intelligent analysis and enhancement.
-
-**Key Features:**
-
-- **Consistency Checking**: Analyzes programming exercises for conflicts between problem statements, solution code, and template code to ensure instructional coherence
-- **Problem Statement Rewriting**: AI-powered improvement and refinement of exercise descriptions for enhanced clarity and pedagogical value
-- **8-Step Workflow Support**: Designed to assist with the complete exercise creation process (Steps 1-7 in development)
-
-**Technology Stack:** Python 3.13, Poetry, FastAPI, Docker
-
 ### 🏛️ [Athena](./athena/) - Automated Assessment System
 
 A sophisticated system designed to provide (semi-)automated assessments for various types of academic exercises.
@@ -51,7 +47,7 @@ A sophisticated system designed to provide (semi-)automated assessments for vari
 
 **Technology Stack:** Python, Docker Compose, PostgreSQL
 
-**Documentation:** [ls1intum.github.io/Athena/](https://ls1intum.github.io/Athena)
+**Documentation:** [https://ls1intum.github.io/edutelligence/athena/](https://ls1intum.github.io/edutelligence/athena/)
 
 ### 🗺️ [Atlas](./atlas/) - Adaptive Competency-Based Learning
 
@@ -79,6 +75,8 @@ A comprehensive LLM Engineering Platform that provides centralized management an
 - **Scheduling & Monitoring**: Advanced scheduling and real-time monitoring
 
 **Technology Stack:** Python 3.13, Poetry, FastAPI, Docker
+
+[More information](https://logos.ase.cit.tum.de/)
 
 ### 🌌 [Nebula](./nebula/) - [In Development]
 

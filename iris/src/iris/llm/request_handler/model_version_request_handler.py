@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
+from iris.common.logging_config import get_logger
 from iris.common.pyris_message import PyrisMessage
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.external.model import (
@@ -13,6 +14,8 @@ from iris.llm.external.model import (
 )
 from iris.llm.llm_manager import LlmManager
 from iris.llm.request_handler.request_handler_interface import RequestHandler
+
+logger = get_logger(__name__)
 
 
 class ModelVersionRequestHandler(RequestHandler):
@@ -60,6 +63,24 @@ class ModelVersionRequestHandler(RequestHandler):
         llm = self._select_model(EmbeddingModel)
         return llm.embed(text)
 
+    def split_text_semantically(
+        self,
+        text: str,
+        breakpoint_threshold_type: Literal[
+            "percentile", "standard_deviation", "interquartile", "gradient"
+        ] = "gradient",
+        breakpoint_threshold_amount: float = 95.0,
+        min_chunk_size: int = 512,
+    ):
+        llm = self._select_model(EmbeddingModel)
+
+        return llm.split_text_semantically(
+            text,
+            breakpoint_threshold_type,
+            breakpoint_threshold_amount,
+            min_chunk_size,
+        )
+
     def _select_model(self, type_filter: type) -> LanguageModel:
         """Select the first model that matches the requested version"""
         # Get all LLMs from the manager
@@ -80,8 +101,7 @@ class ModelVersionRequestHandler(RequestHandler):
         # Select the first matching LLM
         llm = matching_llms[0]
 
-        # Print the selected model for the logs
-        print(f"Selected {llm.description}")
+        logger.debug("Selected model | model=%s", llm.description)
         return llm
 
     def bind_tools(
@@ -115,21 +135,3 @@ class ModelVersionRequestHandler(RequestHandler):
 
         llm.bind_tools(tools)
         return llm
-
-    def split_text_semantically(
-        self,
-        text: str,
-        breakpoint_threshold_type: Literal[
-            "percentile", "standard_deviation", "interquartile", "gradient"
-        ] = "gradient",
-        breakpoint_threshold_amount: float = 95.0,
-        min_chunk_size: int = 512,
-    ):
-        llm = self._select_model(EmbeddingModel)
-
-        return llm.split_text_semantically(
-            text,
-            breakpoint_threshold_type,
-            breakpoint_threshold_amount,
-            min_chunk_size,
-        )

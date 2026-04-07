@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { loadDBConfig } from "./db_config.mjs";
 
-import { text, programming, findExerciseIds, evaluationOutputDirPath } from "./utils.mjs";
+import { text, programming, findExerciseIds, evaluationOutputDirPath, modeling } from "./utils.mjs";
 
 /**
  * Exports exercises of a certain type from the Artemis database to JSON files for the playground.
@@ -78,8 +78,10 @@ async function exportAllExercises(config) {
     choices: [{
       name: "Text exercises",
       value: "text",
-    },
-    {
+    }, {
+      name: "Modeling exercises",
+      value: "modeling",
+    }, {
       name: "Programming exercises",
       value: "programming",
     }],
@@ -98,6 +100,16 @@ async function exportAllExercises(config) {
         text.queryPath,
         text.inputDataPath,
         text.exerciseType
+      );
+    }
+
+    if (exerciseTypes.includes("modeling")) {
+      // Export modeling exercises
+      await exportExercises(
+        connection,
+        modeling.queryPath,
+        modeling.inputDataPath,
+        modeling.exerciseType
       );
     }
 

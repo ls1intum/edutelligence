@@ -6,11 +6,14 @@ from iris.vector_database.faq_schema import FaqSchema
 
 def should_allow_faq_tool(db: VectorDatabase, course_id: int) -> bool:
     """
-    Checks if there are indexed faqs for the given course
+    Check if there are indexed FAQs for the given course.
 
-    :param db: The vector database on which the faqs are indexed
-    :param course_id: The course ID
-    :return: True if there are indexed faqs for the course, False otherwise
+    Args:
+        db (VectorDatabase): The vector database instance.
+        course_id (int): The course ID.
+
+    Returns:
+        bool: True if there are indexed FAQs for the course, False otherwise.
     """
     if course_id:
         # Fetch the first object that matches the course ID with the language property
@@ -25,10 +28,13 @@ def should_allow_faq_tool(db: VectorDatabase, course_id: int) -> bool:
 
 def format_faqs(retrieved_faqs):
     """
-    Formatiert die abgerufenen FAQs in einen String.
+    Format retrieved FAQs into a string.
 
-    :param retrieved_faqs: Liste der abgerufenen FAQs
-    :return: Formatierter String mit den FAQ-Daten
+    Args:
+        retrieved_faqs (List[dict]): List of retrieved FAQs.
+
+    Returns:
+        str: Formatted FAQ string.
     """
     result = ""
     for faq in retrieved_faqs:

@@ -1,5 +1,4 @@
 import json
-import logging
 import time
 from datetime import datetime
 from typing import (
@@ -15,21 +14,23 @@ from typing import (
 
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langfuse.openai import AzureOpenAI, OpenAI
+from openai import APIConnectionError  # Added for retry logic
 from openai import (
     APIError,
     APITimeoutError,
     ContentFilterFinishReasonError,
-    OpenAI,
     RateLimitError,
 )
-from openai.lib.azure import AzureOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
 from pydantic import BaseModel
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.tracing import observe
 
+from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage
 from ...common.token_usage_dto import TokenUsageDTO
@@ -39,6 +40,8 @@ from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel
+
+logger = get_logger(__name__)
 
 
 def convert_content_to_openai_format(content):
@@ -217,6 +220,7 @@ class OpenAIChatModel(ChatModel):
 
     api_key: str
 
+    @observe(name="OpenAI Chat Completion")
     def chat(
         self,
         messages: list[PyrisMessage],
@@ -230,70 +234,86 @@ class OpenAIChatModel(ChatModel):
         backoff_factor = 2
         initial_delay = 1
         client = self.get_client()
-        # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
+        try:
+            # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
 
-        for message in messages:
-            if message.sender == "SYSTEM":
-                print("SYSTEM MESSAGE: " + message.contents[0].text_content)
-                break
+            messages = convert_to_open_ai_messages(messages)
 
-        messages = convert_to_open_ai_messages(messages)
+            for attempt in range(retries):
+                try:
+                    params = {"model": self.model, "messages": messages}
 
-        for attempt in range(retries):
-            try:
-                params = {"model": self.model, "messages": messages}
-
-                if arguments.temperature is not None:
-                    params["temperature"] = arguments.temperature
-
-                if arguments.max_tokens is not None:
-                    params["max_tokens"] = arguments.max_tokens
-
-                if arguments.response_format == "JSON":
-                    params["response_format"] = ResponseFormatJSONObject(
-                        type="json_object"
+                    # GPT-5 reasoning models do not support temperature,
+                    # top_p, or max_tokens.  Skip these for the entire
+                    # GPT-5/o-series family to be safe.
+                    model_lower = self.model.lower()
+                    is_reasoning_model = (
+                        model_lower.startswith("gpt-5")
+                        or model_lower.startswith("gpt-o")
+                        or model_lower.startswith("o1")
+                        or model_lower.startswith("o3")
+                        or model_lower.startswith("o4")
                     )
 
-                if tools:
-                    params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
-                    logging.info("Using tools: %s", tools)
+                    if arguments.temperature is not None and not is_reasoning_model:
+                        params["temperature"] = arguments.temperature
 
-                response = client.chat.completions.create(**params)
-                choice = response.choices[0]
-                usage = response.usage
-                if choice.finish_reason == "content_filter":
-                    # I figured that an openai error would be automatically raised if the content filter activated,
-                    # but it seems that that is not the case.
-                    # We don't want to retry because the same message will likely be rejected again.
-                    # Raise an exception to trigger the global error handler and report a fatal error to the client.
-                    raise ContentFilterFinishReasonError()
+                    if arguments.response_format == "JSON":
+                        params["response_format"] = ResponseFormatJSONObject(
+                            type="json_object"
+                        )
 
-                if (
-                    choice.message is None
-                    or choice.message.content is None
-                    or len(choice.message.content) == 0
-                ):
-                    logging.error("Model returned an empty message")
-                    logging.error("Finish reason: %s", choice.finish_reason)
+                    if tools:
+                        params["tools"] = [
+                            convert_to_openai_tool(tool) for tool in tools
+                        ]
+                        logger.debug("Using tools: %s", [t.name for t in tools])
+
+                    response = client.chat.completions.create(**params)
+                    choice = response.choices[0]
+                    usage = response.usage
+                    if choice.finish_reason == "content_filter":
+                        # I figured that an openai error would be automatically raised if the content filter activated,
+                        # but it seems that that is not the case.
+                        # We don't want to retry because the same message will likely be rejected again.
+                        # Raise an exception to trigger the global error handler and report a fatal error to the client.
+                        raise ContentFilterFinishReasonError()
+
                     if (
-                        choice.message is not None
-                        and choice.message.refusal is not None
+                        choice.message is None
+                        or choice.message.content is None
+                        or len(choice.message.content) == 0
                     ):
-                        logging.error("Refusal: %s", choice.message.refusal)
+                        logger.error("Model returned an empty message")
+                        logger.error("Finish reason: %s", choice.finish_reason)
+                        if (
+                            choice.message is not None
+                            and choice.message.refusal is not None
+                        ):
+                            logger.error("Refusal: %s", choice.message.refusal)
 
-                return convert_to_iris_message(choice.message, usage, self.model)
-            except (
-                APIError,
-                APITimeoutError,
-                RateLimitError,
-            ):
-                wait_time = initial_delay * (backoff_factor**attempt)
-                logging.exception("OpenAI error on attempt %s:", attempt + 1)
-                logging.info("Retrying in %s seconds...", wait_time)
-                time.sleep(wait_time)
-        raise RuntimeError(
-            f"Failed to get response from OpenAI after {retries} retries"
-        )
+                    return convert_to_iris_message(choice.message, usage, self.model)
+                except (
+                    APIError,
+                    APITimeoutError,
+                    APIConnectionError,  # Added to retry on connection errors
+                    RateLimitError,
+                ):
+                    wait_time = initial_delay * (backoff_factor**attempt)
+                    logger.exception("OpenAI error on attempt %s:", attempt + 1)
+                    logger.info("Retrying in %s seconds...", wait_time)
+                    time.sleep(wait_time)
+            raise RuntimeError(
+                f"Failed to get response from OpenAI after {retries} retries"
+            )
+        finally:
+            # Ensure HTTP resources are released to avoid ResourceWarning on shutdown
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.debug("Failed to close OpenAI client", exc_info=True)
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):

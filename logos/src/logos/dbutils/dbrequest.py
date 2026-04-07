@@ -1,6 +1,6 @@
-from typing import Union
+from typing import Any, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LogosKeyModel(BaseModel):
@@ -10,6 +10,7 @@ class LogosKeyModel(BaseModel):
 class LogosSetupRequest(BaseModel):
     base_url: str
     provider_name: str
+    provider_type: str
 
 
 class SetLogRequest(LogosKeyModel):
@@ -20,6 +21,7 @@ class SetLogRequest(LogosKeyModel):
 class AddServiceProxyRequest(LogosKeyModel):
     base_url: str
     provider_name: str
+    provider_type: str
 
 
 class AddProviderRequest(LogosKeyModel):
@@ -28,11 +30,21 @@ class AddProviderRequest(LogosKeyModel):
     api_key: str
     auth_name: str
     auth_format: str
+    provider_type: str
 
 
 class AddProfileRequest(LogosKeyModel):
     profile_name: str
     process_id: int
+
+
+class UpdateProviderSdiConfigRequest(LogosKeyModel):
+    provider_id: int
+    ollama_admin_url: str | None = None
+    total_vram_mb: int | None = None
+    parallel_capacity: int | None = None
+    keep_alive_seconds: int | None = None
+    max_loaded_models: int | None = None
 
 
 class GetRole(LogosKeyModel):
@@ -41,7 +53,7 @@ class GetRole(LogosKeyModel):
 
 class ConnectProcessProviderRequest(LogosKeyModel):
     profile_id: int
-    api_id: int
+    provider_id: int
 
 
 class ConnectProcessModelRequest(LogosKeyModel):
@@ -66,18 +78,17 @@ class ConnectModelProviderRequest(LogosKeyModel):
 
 class ConnectModelApiRequest(LogosKeyModel):
     model_id: int
-    api_id: int
+    provider_id: int
+    api_key: str
+    endpoint: str = ""
 
 
 class AddModelRequest(LogosKeyModel):
     name: str
-    endpoint: str
 
 
 class AddFullModelRequest(LogosKeyModel):
     name: str
-    endpoint: str
-    api_id: int
     weight_privacy: str
     worse_accuracy: Union[int, None]
     worse_quality: Union[int, None]
@@ -145,10 +156,6 @@ class GetProcessIdRequest(LogosKeyModel):
     pass
 
 
-class GetAPIIdRequest(LogosKeyModel):
-    api_key: str
-
-
 class GetImportDataRequest(LogosKeyModel):
     json_data: dict
 
@@ -157,3 +164,45 @@ class AddBillingRequest(LogosKeyModel):
     type_name: str
     type_cost: float
     valid_from: str
+
+
+class LogosNodeAuthRequest(BaseModel):
+    shared_key: str
+    capabilities_models: list[str] = Field(default_factory=list)
+
+
+class LogosNodeRegisterRequest(LogosKeyModel):
+    provider_name: str
+    base_url: str = ""
+
+
+class LogosNodeStatusRequest(LogosKeyModel):
+    provider_id: int
+
+
+class LogosNodeApplyLanesRequest(LogosKeyModel):
+    provider_id: int
+    lanes: list[dict[str, Any]]
+
+
+class LogosNodeSleepLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+    level: int = 1
+    mode: str = "wait"
+
+
+class LogosNodeWakeLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+
+
+class LogosNodeDeleteLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+
+
+class LogosNodeReconfigureLaneRequest(LogosKeyModel):
+    provider_id: int
+    lane_id: str
+    updates: dict[str, Any]

@@ -8,18 +8,21 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.13"
 fastapi = "^0.115.5"
+uvicorn = "^0.32.1"
 weaviate-client = "^4.0"
 datasets = "^3.5.0"
 sentence-transformers = "^4.0.2"
 pydantic-settings = "^2.8.1"
 matplotlib = "^3.10.1"
 scipy = "^1.15.2"
-apscheduler = "^3.10.4"
+apscheduler = "^3.11.2"
 openai = "==1.93.0"
+sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
+markdown = "^3.8.2"
+bs4 = "^0.0.2"
 
 
 [tool.poetry.group.dev.dependencies]
-uvicorn = "^0.32.1"
 pytest = "^8.3.5"
 pytest-cov = "^6.0.0"
 ruff = "^0.3.0"
@@ -88,3 +91,7 @@ max-complexity = 10
 [tool.black]
 line-length = 88
 target-version = ["py312"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

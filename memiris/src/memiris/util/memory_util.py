@@ -1,60 +1,60 @@
 from typing import List
 
+from memiris.dlo.memory_creation_dlo import MemoryCreationDLO
+from memiris.dlo.memory_main_dlo import MemoryDLO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
-from memiris.dto.memory_creation_dto import MemoryCreationDto
-from memiris.dto.memory_main_dto import MemoryDto
 
 
-def creation_dto_to_memory(
-    memory_dto: MemoryCreationDto, learnings: List[Learning]
+def creation_dlo_to_memory(
+    memory_dlo: MemoryCreationDLO, learnings: List[Learning]
 ) -> Memory:
     """
-    Convert a MemoryCreationDto to a Memory object.
+    Convert a MemoryCreationDLO to a Memory object.
     """
     return Memory(
-        title=memory_dto.title,
-        content=memory_dto.content,
+        title=memory_dlo.title,
+        content=memory_dlo.content,
         learnings=[
             id
-            for id in memory_dto.learnings
+            for id in memory_dlo.learnings
             if id in [learning.id for learning in learnings]
         ],
     )
 
 
-def memory_to_creation_dto(memory: Memory) -> MemoryCreationDto:
+def memory_to_creation_dlo(memory: Memory) -> MemoryCreationDLO:
     """
-    Convert a Memory object to a MemoryCreationDto.
+    Convert a Memory object to a MemoryCreationDLO.
     """
-    return MemoryCreationDto(
+    return MemoryCreationDLO(
         title=memory.title,
         content=memory.content,
         learnings=memory.learnings,
     )
 
 
-def dto_to_memory(memory_dto: MemoryDto, learnings: List[Learning]) -> Memory:
+def dlo_to_memory(memory_dlo: MemoryDLO, learnings: List[Learning]) -> Memory:
     """
-    Convert a MemoryDto to a Memory object.
+    Convert a MemoryDLO to a Memory object.
     """
     return Memory(
-        uid=memory_dto.id,
-        title=memory_dto.title,
-        content=memory_dto.content,
+        uid=memory_dlo.id,
+        title=memory_dlo.title,
+        content=memory_dlo.content,
         learnings=[
             id
-            for id in memory_dto.learnings
+            for id in memory_dlo.learnings
             if id in [learning.id for learning in learnings]
         ],
     )
 
 
-def memory_to_dto(memory: Memory) -> MemoryDto:
+def memory_to_dlo(memory: Memory) -> MemoryDLO:
     """
-    Convert a Memory object to a MemoryDto.
+    Convert a Memory object to a MemoryDLO.
     """
-    return MemoryDto(
+    return MemoryDLO(
         id=memory.id,  # type: ignore
         title=memory.title,
         content=memory.content,

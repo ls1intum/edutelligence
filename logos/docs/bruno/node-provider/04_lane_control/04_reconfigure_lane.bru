@@ -1,0 +1,26 @@
+meta {
+  name: Reconfigure Lane
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/logosdb/providers/logosnode/lanes/reconfigure
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}",
+    "provider_id": "{{providerId}}",
+    "lane_id": "{{laneId}}",
+    "updates": {
+      "num_parallel": 6
+    }
+  }
+}

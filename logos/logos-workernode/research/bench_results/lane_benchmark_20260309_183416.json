@@ -1,0 +1,697 @@
+{
+  "timestamp_utc": "2026-03-09T18:53:49.304658+00:00",
+  "controller_url": "http://127.0.0.1:8444",
+  "concurrency": [
+    1,
+    4,
+    8,
+    16,
+    32
+  ],
+  "max_tokens": 200,
+  "warmup": 1,
+  "prompt_mode": "varied_unique_prefix",
+  "temperature": 0.1,
+  "run_plan": [
+    {
+      "run_label": "vllm_prefix_off",
+      "lane_config": {
+        "model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+        "backend": "vllm",
+        "context_length": 4096,
+        "flash_attention": false,
+        "gpu_devices": "0,1",
+        "vllm": {
+          "vllm_binary": "/home/ge84ciq/logos-workernode-test/edutelligence/logos/logos-workernode/.venv/bin/vllm",
+          "tensor_parallel_size": 2,
+          "max_model_len": 4096,
+          "dtype": "float16",
+          "quantization": "awq",
+          "gpu_memory_utilization": 0.9,
+          "enforce_eager": true,
+          "enable_prefix_caching": false,
+          "extra_args": []
+        }
+      }
+    },
+    {
+      "run_label": "vllm_prefix_on",
+      "lane_config": {
+        "model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+        "backend": "vllm",
+        "context_length": 4096,
+        "flash_attention": false,
+        "gpu_devices": "0,1",
+        "vllm": {
+          "vllm_binary": "/home/ge84ciq/logos-workernode-test/edutelligence/logos/logos-workernode/.venv/bin/vllm",
+          "tensor_parallel_size": 2,
+          "max_model_len": 4096,
+          "dtype": "float16",
+          "quantization": "awq",
+          "gpu_memory_utilization": 0.9,
+          "enforce_eager": true,
+          "enable_prefix_caching": true,
+          "extra_args": []
+        }
+      }
+    },
+    {
+      "run_label": "ollama_np2",
+      "lane_config": {
+        "model": "qwen2.5-coder:32b",
+        "backend": "ollama",
+        "num_parallel": 2,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    },
+    {
+      "run_label": "ollama_np4",
+      "lane_config": {
+        "model": "qwen2.5-coder:32b",
+        "backend": "ollama",
+        "num_parallel": 4,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    },
+    {
+      "run_label": "ollama_np8",
+      "lane_config": {
+        "model": "qwen2.5-coder:32b",
+        "backend": "ollama",
+        "num_parallel": 8,
+        "context_length": 4096,
+        "keep_alive": "10m",
+        "kv_cache_type": "q8_0",
+        "flash_attention": true,
+        "gpu_devices": "0,1"
+      }
+    }
+  ],
+  "backends": [
+    {
+      "run_label": "vllm_prefix_off",
+      "backend": "vllm",
+      "configured_model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+      "served_model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+      "lane_port": 11436,
+      "prompt_mode": "varied_unique_prefix",
+      "payload_samples": [
+        {
+          "model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": false,
+      "ollama_num_parallel": null,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 79,
+          "batch_time_s": 4.713,
+          "aggregate_tok_s": 16.761,
+          "avg_latency_s": 4.713,
+          "p50_latency_s": 4.713,
+          "p95_latency_s": 4.713,
+          "avg_ttft_ms": 430.6,
+          "avg_tok_per_req_s": 16.762
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 717,
+          "batch_time_s": 11.5,
+          "aggregate_tok_s": 62.35,
+          "avg_latency_s": 10.396,
+          "p50_latency_s": 11.189,
+          "p95_latency_s": 11.498,
+          "avg_ttft_ms": 905.9,
+          "avg_tok_per_req_s": 17.181
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1249,
+          "batch_time_s": 11.92,
+          "aggregate_tok_s": 104.782,
+          "avg_latency_s": 9.609,
+          "p50_latency_s": 10.01,
+          "p95_latency_s": 11.919,
+          "avg_ttft_ms": 1314.8,
+          "avg_tok_per_req_s": 16.058
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 2422,
+          "batch_time_s": 12.984,
+          "aggregate_tok_s": 186.543,
+          "avg_latency_s": 10.394,
+          "p50_latency_s": 9.689,
+          "p95_latency_s": 12.982,
+          "avg_ttft_ms": 2051.3,
+          "avg_tok_per_req_s": 14.336
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 4958,
+          "batch_time_s": 18.966,
+          "aggregate_tok_s": 261.419,
+          "avg_latency_s": 16.217,
+          "p50_latency_s": 16.915,
+          "p95_latency_s": 18.956,
+          "avg_ttft_ms": 3225.7,
+          "avg_tok_per_req_s": 9.35
+        }
+      ]
+    },
+    {
+      "run_label": "vllm_prefix_on",
+      "backend": "vllm",
+      "configured_model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+      "served_model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+      "lane_port": 11436,
+      "prompt_mode": "varied_unique_prefix",
+      "payload_samples": [
+        {
+          "model": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": true,
+      "ollama_num_parallel": null,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 79,
+          "batch_time_s": 4.935,
+          "aggregate_tok_s": 16.008,
+          "avg_latency_s": 4.935,
+          "p50_latency_s": 4.935,
+          "p95_latency_s": 4.935,
+          "avg_ttft_ms": 413.4,
+          "avg_tok_per_req_s": 16.009
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 717,
+          "batch_time_s": 12.695,
+          "aggregate_tok_s": 56.479,
+          "avg_latency_s": 11.464,
+          "p50_latency_s": 12.355,
+          "p95_latency_s": 12.694,
+          "avg_ttft_ms": 915.7,
+          "avg_tok_per_req_s": 15.585
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1237,
+          "batch_time_s": 12.795,
+          "aggregate_tok_s": 96.68,
+          "avg_latency_s": 10.194,
+          "p50_latency_s": 10.603,
+          "p95_latency_s": 12.794,
+          "avg_ttft_ms": 1334.3,
+          "avg_tok_per_req_s": 14.989
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 2419,
+          "batch_time_s": 14.686,
+          "aggregate_tok_s": 164.717,
+          "avg_latency_s": 11.636,
+          "p50_latency_s": 10.742,
+          "p95_latency_s": 14.681,
+          "avg_ttft_ms": 2072.8,
+          "avg_tok_per_req_s": 12.806
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 5012,
+          "batch_time_s": 18.96,
+          "aggregate_tok_s": 264.35,
+          "avg_latency_s": 16.379,
+          "p50_latency_s": 16.967,
+          "p95_latency_s": 18.95,
+          "avg_ttft_ms": 3245.8,
+          "avg_tok_per_req_s": 9.382
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np2",
+      "backend": "ollama",
+      "configured_model": "qwen2.5-coder:32b",
+      "served_model": "qwen2.5-coder:32b",
+      "lane_port": 11436,
+      "prompt_mode": "varied_unique_prefix",
+      "payload_samples": [
+        {
+          "model": "qwen2.5-coder:32b",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 2,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 188,
+          "batch_time_s": 11.335,
+          "aggregate_tok_s": 16.586,
+          "avg_latency_s": 11.334,
+          "p50_latency_s": 11.334,
+          "p95_latency_s": 11.334,
+          "avg_ttft_ms": 713.8,
+          "avg_tok_per_req_s": 16.587
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 742,
+          "batch_time_s": 26.254,
+          "aggregate_tok_s": 28.263,
+          "avg_latency_s": 19.068,
+          "p50_latency_s": 18.301,
+          "p95_latency_s": 26.253,
+          "avg_ttft_ms": 7545.5,
+          "avg_tok_per_req_s": 10.865
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1270,
+          "batch_time_s": 43.429,
+          "aggregate_tok_s": 29.243,
+          "avg_latency_s": 28.328,
+          "p50_latency_s": 29.57,
+          "p95_latency_s": 43.427,
+          "avg_ttft_ms": 18308.0,
+          "avg_tok_per_req_s": 7.196
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 2460,
+          "batch_time_s": 84.055,
+          "aggregate_tok_s": 29.267,
+          "avg_latency_s": 47.39,
+          "p50_latency_s": 46.24,
+          "p95_latency_s": 84.051,
+          "avg_ttft_ms": 37694.0,
+          "avg_tok_per_req_s": 4.838
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 4932,
+          "batch_time_s": 216.512,
+          "aggregate_tok_s": 22.779,
+          "avg_latency_s": 105.038,
+          "p50_latency_s": 102.503,
+          "p95_latency_s": 213.582,
+          "avg_ttft_ms": 92113.7,
+          "avg_tok_per_req_s": 2.916
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np4",
+      "backend": "ollama",
+      "configured_model": "qwen2.5-coder:32b",
+      "served_model": "qwen2.5-coder:32b",
+      "lane_port": 11436,
+      "prompt_mode": "varied_unique_prefix",
+      "payload_samples": [
+        {
+          "model": "qwen2.5-coder:32b",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 4,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 76,
+          "batch_time_s": 4.889,
+          "aggregate_tok_s": 15.544,
+          "avg_latency_s": 4.889,
+          "p50_latency_s": 4.889,
+          "p95_latency_s": 4.889,
+          "avg_ttft_ms": 655.4,
+          "avg_tok_per_req_s": 15.545
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 741,
+          "batch_time_s": 20.268,
+          "aggregate_tok_s": 36.561,
+          "avg_latency_s": 18.829,
+          "p50_latency_s": 20.171,
+          "p95_latency_s": 20.266,
+          "avg_ttft_ms": 1636.0,
+          "avg_tok_per_req_s": 9.821
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1241,
+          "batch_time_s": 36.599,
+          "aggregate_tok_s": 33.908,
+          "avg_latency_s": 24.354,
+          "p50_latency_s": 21.74,
+          "p95_latency_s": 36.597,
+          "avg_ttft_ms": 9878.2,
+          "avg_tok_per_req_s": 7.034
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 2488,
+          "batch_time_s": 73.28,
+          "aggregate_tok_s": 33.952,
+          "avg_latency_s": 43.251,
+          "p50_latency_s": 45.342,
+          "p95_latency_s": 73.275,
+          "avg_ttft_ms": 27273.9,
+          "avg_tok_per_req_s": 4.81
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 4961,
+          "batch_time_s": 130.29,
+          "aggregate_tok_s": 38.076,
+          "avg_latency_s": 68.929,
+          "p50_latency_s": 69.105,
+          "p95_latency_s": 123.789,
+          "avg_ttft_ms": 54230.6,
+          "avg_tok_per_req_s": 3.407
+        }
+      ]
+    },
+    {
+      "run_label": "ollama_np8",
+      "backend": "ollama",
+      "configured_model": "qwen2.5-coder:32b",
+      "served_model": "qwen2.5-coder:32b",
+      "lane_port": 11436,
+      "prompt_mode": "varied_unique_prefix",
+      "payload_samples": [
+        {
+          "model": "qwen2.5-coder:32b",
+          "messages": [
+            {
+              "role": "system",
+              "content": "[bench-000-000] You are a strict senior code reviewer. Be concise, factual, and directly actionable."
+            },
+            {
+              "role": "user",
+              "content": "[bench-000-000] Find one correctness bug and one style issue in this function. Output exactly two bullets.\n\nReview this Python function for correctness and style. Give 3 concrete improvements with line references.\n\n```python\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    fib = [0, 1]\n    for i in range(2, n):\n        fib.append(fib[i-1] + fib[i-2])\n    return fib\n```\n"
+            }
+          ],
+          "max_tokens": 200,
+          "temperature": 0.1,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      ],
+      "vllm_prefix_caching": null,
+      "ollama_num_parallel": 8,
+      "results": [
+        {
+          "concurrency": 1,
+          "requests_ok": 1,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 76,
+          "batch_time_s": 4.97,
+          "aggregate_tok_s": 15.291,
+          "avg_latency_s": 4.97,
+          "p50_latency_s": 4.97,
+          "p95_latency_s": 4.97,
+          "avg_ttft_ms": 719.6,
+          "avg_tok_per_req_s": 15.292
+        },
+        {
+          "concurrency": 4,
+          "requests_ok": 4,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 743,
+          "batch_time_s": 18.957,
+          "aggregate_tok_s": 39.193,
+          "avg_latency_s": 17.864,
+          "p50_latency_s": 18.956,
+          "p95_latency_s": 18.956,
+          "avg_ttft_ms": 1591.3,
+          "avg_tok_per_req_s": 10.364
+        },
+        {
+          "concurrency": 8,
+          "requests_ok": 8,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 1260,
+          "batch_time_s": 31.537,
+          "aggregate_tok_s": 39.953,
+          "avg_latency_s": 26.55,
+          "p50_latency_s": 28.2,
+          "p95_latency_s": 31.535,
+          "avg_ttft_ms": 2608.8,
+          "avg_tok_per_req_s": 5.808
+        },
+        {
+          "concurrency": 16,
+          "requests_ok": 16,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 2377,
+          "batch_time_s": 59.516,
+          "aggregate_tok_s": 39.939,
+          "avg_latency_s": 40.888,
+          "p50_latency_s": 39.131,
+          "p95_latency_s": 59.511,
+          "avg_ttft_ms": 17390.2,
+          "avg_tok_per_req_s": 3.849
+        },
+        {
+          "concurrency": 32,
+          "requests_ok": 32,
+          "errors": 0,
+          "error_rate": 0.0,
+          "total_tokens": 4960,
+          "batch_time_s": 125.671,
+          "aggregate_tok_s": 39.468,
+          "avg_latency_s": 73.442,
+          "p50_latency_s": 76.967,
+          "p95_latency_s": 125.66,
+          "avg_ttft_ms": 45237.3,
+          "avg_tok_per_req_s": 2.729
+        }
+      ]
+    }
+  ],
+  "comparison": [
+    {
+      "concurrency": 1,
+      "vllm_prefix_off_aggregate_tok_s": 16.761,
+      "vllm_prefix_off_avg_ttft_ms": 430.6,
+      "vllm_prefix_on_aggregate_tok_s": 16.008,
+      "vllm_prefix_on_avg_ttft_ms": 413.4,
+      "ollama_np2_aggregate_tok_s": 16.586,
+      "ollama_np2_avg_ttft_ms": 713.8,
+      "ollama_np4_aggregate_tok_s": 15.544,
+      "ollama_np4_avg_ttft_ms": 655.4,
+      "ollama_np8_aggregate_tok_s": 15.291,
+      "ollama_np8_avg_ttft_ms": 719.6,
+      "speedup_vllm_prefix_off_over_ollama_np2": 1.011,
+      "speedup_vllm_prefix_off_over_ollama_np4": 1.078,
+      "speedup_vllm_prefix_off_over_ollama_np8": 1.096
+    },
+    {
+      "concurrency": 4,
+      "vllm_prefix_off_aggregate_tok_s": 62.35,
+      "vllm_prefix_off_avg_ttft_ms": 905.9,
+      "vllm_prefix_on_aggregate_tok_s": 56.479,
+      "vllm_prefix_on_avg_ttft_ms": 915.7,
+      "ollama_np2_aggregate_tok_s": 28.263,
+      "ollama_np2_avg_ttft_ms": 7545.5,
+      "ollama_np4_aggregate_tok_s": 36.561,
+      "ollama_np4_avg_ttft_ms": 1636.0,
+      "ollama_np8_aggregate_tok_s": 39.193,
+      "ollama_np8_avg_ttft_ms": 1591.3,
+      "speedup_vllm_prefix_off_over_ollama_np2": 2.206,
+      "speedup_vllm_prefix_off_over_ollama_np4": 1.705,
+      "speedup_vllm_prefix_off_over_ollama_np8": 1.591
+    },
+    {
+      "concurrency": 8,
+      "vllm_prefix_off_aggregate_tok_s": 104.782,
+      "vllm_prefix_off_avg_ttft_ms": 1314.8,
+      "vllm_prefix_on_aggregate_tok_s": 96.68,
+      "vllm_prefix_on_avg_ttft_ms": 1334.3,
+      "ollama_np2_aggregate_tok_s": 29.243,
+      "ollama_np2_avg_ttft_ms": 18308.0,
+      "ollama_np4_aggregate_tok_s": 33.908,
+      "ollama_np4_avg_ttft_ms": 9878.2,
+      "ollama_np8_aggregate_tok_s": 39.953,
+      "ollama_np8_avg_ttft_ms": 2608.8,
+      "speedup_vllm_prefix_off_over_ollama_np2": 3.583,
+      "speedup_vllm_prefix_off_over_ollama_np4": 3.09,
+      "speedup_vllm_prefix_off_over_ollama_np8": 2.623
+    },
+    {
+      "concurrency": 16,
+      "vllm_prefix_off_aggregate_tok_s": 186.543,
+      "vllm_prefix_off_avg_ttft_ms": 2051.3,
+      "vllm_prefix_on_aggregate_tok_s": 164.717,
+      "vllm_prefix_on_avg_ttft_ms": 2072.8,
+      "ollama_np2_aggregate_tok_s": 29.267,
+      "ollama_np2_avg_ttft_ms": 37694.0,
+      "ollama_np4_aggregate_tok_s": 33.952,
+      "ollama_np4_avg_ttft_ms": 27273.9,
+      "ollama_np8_aggregate_tok_s": 39.939,
+      "ollama_np8_avg_ttft_ms": 17390.2,
+      "speedup_vllm_prefix_off_over_ollama_np2": 6.374,
+      "speedup_vllm_prefix_off_over_ollama_np4": 5.494,
+      "speedup_vllm_prefix_off_over_ollama_np8": 4.671
+    },
+    {
+      "concurrency": 32,
+      "vllm_prefix_off_aggregate_tok_s": 261.419,
+      "vllm_prefix_off_avg_ttft_ms": 3225.7,
+      "vllm_prefix_on_aggregate_tok_s": 264.35,
+      "vllm_prefix_on_avg_ttft_ms": 3245.8,
+      "ollama_np2_aggregate_tok_s": 22.779,
+      "ollama_np2_avg_ttft_ms": 92113.7,
+      "ollama_np4_aggregate_tok_s": 38.076,
+      "ollama_np4_avg_ttft_ms": 54230.6,
+      "ollama_np8_aggregate_tok_s": 39.468,
+      "ollama_np8_avg_ttft_ms": 45237.3,
+      "speedup_vllm_prefix_off_over_ollama_np2": 11.476,
+      "speedup_vllm_prefix_off_over_ollama_np4": 6.866,
+      "speedup_vllm_prefix_off_over_ollama_np8": 6.624
+    }
+  ]
+}

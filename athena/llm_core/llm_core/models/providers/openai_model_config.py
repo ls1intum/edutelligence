@@ -4,7 +4,7 @@ from llm_core.loaders.model_loaders.openai_loader import (
 )
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
 from typing import ClassVar, Literal
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from langchain.base_language import BaseLanguageModel
 
 
@@ -17,7 +17,7 @@ class OpenAIModelConfig(BaseChatModelConfig):
         "max_tokens": "max_completion_tokens",
     }
 
-    provider: Literal["openai"] = Field("openai", const=True)
+    provider: Literal["openai"] = "openai"
     model_name: OpenAIModel = Field(
         ...,
         description="OpenAI model id (enum value).",
@@ -26,6 +26,4 @@ class OpenAIModelConfig(BaseChatModelConfig):
     def get_model(self) -> BaseLanguageModel:
         tmpl = openai_available_models[self.model_name.value]
         return self._template_get_model(tmpl)
-
-    class Config:
-        title = "OpenAI"
+    model_config = ConfigDict(title="OpenAI")

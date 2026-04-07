@@ -1,0 +1,470 @@
+{
+  "id": 6794,
+  "course_id": 169,
+  "title": "H04E02 Design Goal Trade-offs (SS22)",
+  "type": "text",
+  "max_points": 6,
+  "bonus_points": 0,
+  "grading_instructions": "<ins>General Grading Scheme:</ins>\n- up to 2P per Design Goal\n- If the student provides more than 3 Design Goal trade-offs, the worst 3 counts. (You can still provide feedback, but under no circumstances publish the evaluation guidelines)\n\n<ins>General Rules:</ins>\n- The 250-word limit is a soft limit, the hard limit is at 500 words. In such cases, please assess the submission with 0 points and reference to the 250-word limit. **DO NOT** communicate the 500-word limit to the students!\n- In case one submission is suspicious of plagiarism, please report the assessment-link with a brief explanation to the plagiarism subteam on Confluence\n- No points for examples from the lecture",
+  "problem_statement": "Explain three typical design goal trade-offs in the context of software engineering in your own words by using your own examples.\n\n\n*Requirement: Use your own words and do not just copy the lecture slides nor internet sources! Limit yourself to around 250 words!*",
+  "example_solution": "- Functionality vs. usability\n    - Many functionalities does not necessarily follow usability heuristics\n    - Users might be overwhelmed with too much functionality\n- Cost vs. robustness\n    - Highly robust systems requires higher costs\n    - Example: error handling, security, etc.\n    - Typical issues/trade-offs for start-ups in the mobile app domain\n- Efficiency vs. portability\n    - Highly portable systems are usually not very efficient\n    - Example: a portable real-time game. Frame rates require special graphic cards, which are still very specific to certain machines/operating systems\n- Rapid development vs. functionality\n    - This trade-off relates to the implementation and delivery of a software. \n    - If there is limited time for design, implementation, and delivery with constrained available resources, the functionalities of the software are reduced, in order to ensure on-time delivery.\n- Cost vs. reusability\n    - Assume you model the association between 2 classes with 1-1 multiplicity\n        > Easy to code, low cost tests, not very reusable\n    - Moving from 1-1 multiplicity to a many-many multiplicity\n        > Additional coding and testing costs\n- Backward compatibility vs. readability\n    - Sometimes it is not easy to achieve backward compatibility e.g. due to different hardware. \n",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 1642907,
+      "meta": {},
+      "text": "1. trade-off: Reliability vs. performance\nThe reliability of the system is in conflict with the performance. The more available it is, the more difficult it is to optimise it.\n\n2. Availability vs. consistency\n\n3. Scalability vs. reliability",
+      "score": 0,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 164290701,
+          "description": "You've identified a common trade-off between reliability and performance. However, your explanation lacks depth and a specific example. Consider illustrating how increasing system reliability can impact system performance, such as in real-time applications where reliability mechanisms might slow down processing speed.",
+          "title": "Reliability vs. Performance",
+          "index_start": 109,
+          "index_end": 175,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 164290702,
+          "description": "You mention availability vs. consistency but did not provide any explanation or example. Explain how in distributed systems, ensuring high availability might lead to inconsistencies, providing an example like the CAP theorem to clarify.",
+          "title": "Availability vs. Consistency",
+          "index_start": 180,
+          "index_end": 208,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 164290703,
+          "description": "This is another important trade-off, but you need to expand on how increasing scalability can affect reliability. For instance, scaling a system across multiple servers can introduce points of failure that affect reliability. Provide an example to illustrate this trade-off.",
+          "title": "Scalability vs. Reliability",
+          "index_start": 213,
+          "index_end": 240,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1658514,
+      "meta": {},
+      "text": "Design goal trade-offs as a classic issue of software engineering. When writing a code, we will always face the problem of time vs. space. Applying pre-computed values takes up lots of space. When trying to minimize the area, it could lead to an extensive use of valuable time. \nThere may be greater range on the larger photograph, however the biggest one is sort of constantly implementation time vs. capabilities, wherein capabilities are a huge bucket. It takes greater time to create something very popular and reusable, it takes extra time to make something extremely performant, it takes greater time to add all the person-dealing with capabilities that have been requested, and so on. \nBoth cases involve knowledge no longer than what is requested, but what the desires for the answer are, due to the fact that’s what's going to decide the candy spot for the software program to be built. \nAnother trade-off is the question of flexibility vs. simplicity. Some systems request to have a wider range of flexibility and expandability built into them because you’re starting with the kernel of an idea and it’s going to get bigger. Others virtually require a straightforward implementation with repeated reminders of something you are not going to need.\nImportant to mention is also that when minimizing risk while setting up the groundwork to address the negative side of the compromise,  trade-offs are the most successful.",
+      "score": 8.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 165851401,
+          "description": "You correctly identified the trade-off between time and space in software engineering. However, your explanation could benefit from a clearer example. For instance, when optimizing algorithms, using a hash table can speed up retrieval but requires more memory. Consider expanding on how this impacts software design decisions.",
+          "title": "Design Goal: Time vs Space",
+          "index_start": 67,
+          "index_end": 277,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 165851402,
+          "description": "Your discussion on implementation time versus capabilities is insightful. You mentioned that creating highly performant and reusable software requires more time, which is a valid point. To strengthen this section, you could include a specific example, such as the trade-off faced by developers when prioritizing features over fast delivery in agile development.",
+          "title": "Design Goal: Implementation Time vs Capabilities",
+          "index_start": 279,
+          "index_end": 895,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 165851403,
+          "description": "The trade-off between flexibility and simplicity is well-articulated. Your point about systems requiring either flexibility for future expansion or simplicity for immediate implementation is clear. An example, such as choosing between a modular architecture (flexible) versus a monolithic one (simple), would enhance your explanation.",
+          "title": "Design Goal: Flexibility vs Simplicity",
+          "index_start": 897,
+          "index_end": 1256,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 165851404,
+          "description": "Your submission covers several important trade-offs in software engineering. However, the writing could be clearer and more structured. Some sentences are confusing and could benefit from revision for clarity. Additionally, explicitly linking your points to concrete examples would make your arguments more compelling.",
+          "title": "General Feedback",
+          "index_start": 1257,
+          "index_end": 1428,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1663694,
+      "meta": {},
+      "text": "Functionality vs. usability \nFor example, a computer with many functions that can design top aerospace technology algorithms, it is functionality, but for ordinary people, the cost of usability is too high.\ncost and robust\nIn electronic products, for example, the lower the cost, the worse the parts it uses, and the worse the parts, the shorter the service life of course. For example, earphones, low cost and poor parts will produce current sound.\nEfficiency vs. portability\nFor example, word and Excel. From the earliest text editing function to the more and more functions later, the development time is longer. The longer it is, the more functions it has.",
+      "score": 16.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 166369401,
+          "description": "Your example of a computer with many functions illustrates the trade-off well, highlighting how increased functionality can negatively impact usability for ordinary users. However, the example could be more specific by considering software with multiple features that might overwhelm users, which would strengthen your argument.",
+          "title": "Functionality vs. Usability",
+          "index_start": 29,
+          "index_end": 206,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 166369402,
+          "description": "The example of electronic products and earphones indicates the trade-off between cost and robustness clearly. You've effectively shown how lower costs can lead to poorer quality and shorter service life. To improve, consider discussing software-related examples, like how a cheaper software solution might have less reliable error handling or security features.",
+          "title": "Cost vs. Robustness",
+          "index_start": 207,
+          "index_end": 449,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 166369403,
+          "description": "The mention of Word and Excel does not clearly illustrate the trade-off between efficiency and portability. You could improve by discussing software systems that are designed to run efficiently on specific hardware but may not be as portable across different platforms. A more precise example would help clarify this trade-off.",
+          "title": "Efficiency vs. Portability",
+          "index_start": 450,
+          "index_end": 660,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1291909,
+      "meta": {},
+      "text": "1)\nUnity is a great and functional game engine. However if your are new,, you might find it very confusing. There are several windows with hundrets of options. Unity here had to make a design trade-off between functionality and usability, and decided, that functionality for experienced users is more important than usability for new ones.\n2)\nMy bumpers game, isn't doing a lot. Even though the third sprint is over and it could have a lot of functionality by now. However the due date was too early to really get into it.  The trade-off here was between repid development and functionality.\n3)\nAnother typical design goal trade-off is between cost and robustness. You can buy a lock for your bike for 5€ or you can buy one for 40€. In the first case. In the most cases, the one for 40€ will be more secure than the one for 5€. ",
+      "score": 25,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 129190901,
+          "description": "The example of Unity highlights the trade-off between functionality and usability effectively. You've clearly explained how Unity prioritizes functionality for experienced users over usability for newcomers. However, you could enhance your explanation by discussing potential ways to improve usability without compromising on functionality.",
+          "title": "Functionality vs. Usability",
+          "index_start": 3,
+          "index_end": 339,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 129190902,
+          "description": "Your example of the bumpers game succinctly illustrates the trade-off between rapid development and functionality, emphasizing how an early due date affected the features implemented. To improve, you might want to delve into how better planning or resource allocation could mitigate such trade-offs.",
+          "title": "Rapid Development vs. Functionality",
+          "index_start": 340,
+          "index_end": 591,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129190903,
+          "description": "The bike lock example is a straightforward demonstration of the cost versus robustness trade-off. You clearly show how a higher cost often correlates with better robustness. To enhance this section, consider providing additional context or discussing how this trade-off might be navigated in software engineering.",
+          "title": "Cost vs. Robustness",
+          "index_start": 592,
+          "index_end": 827,
+          "credits": 1.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1294061,
+      "meta": {},
+      "text": "A client usually wants to keep the costs as low as possible, which often means that developers are working under time constraints, possibly leaving little time test for and fix bugs, which comes at the cost of user satisfication, as an end user wouldn't be happy to use a faulty product. In particular, crunch time is a known phenomenom in game development, rushing developers to finish a product, resulting in games that are notorious for being extremely buggy on release.\nA developer may want to structure the system build in such a way that as many parts as possible can be re-used again, keeping them relatively flexible, which generally requires a certain amount of abstraction. This often comes at the cost of ease of lerning for end users, as keeping many options open is one way to achieve this, requiring users to get familiar with all of them before being able to proceed, instead of intuiting the pre-sets and directly picking up how to use the system.\nThe way an end user wants to use a system may not always 100% match what the client and developer had envisioned, leading to situations that the system may identify as faulty, even if the user may consider it to be a proper use case. For instance, a platform may offer to let users upload longform texts and then download them as an .epub, with the terms of service limiting the kinds of text permitted; but some users may try to use the function for other purposes, leading to conflicts with what the client wants.",
+      "score": 33.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 129406101,
+          "description": "The first trade-off discussed is between cost and quality. You highlight how clients often want to minimize costs, which can lead to rushed development and inadequate testing, resulting in buggy products. This is particularly relevant in game development, where 'crunch time' leads to known issues. Your example clearly illustrates the impact of cost constraints on product quality and user satisfaction. Consider expanding on how developers can balance these two aspects with strategies like iterative testing or agile development.",
+          "title": "Design Goal Trade-off 1: Cost vs. Quality",
+          "index_start": 288,
+          "index_end": 473,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129406102,
+          "description": "The second trade-off you mention is between reusability and ease of learning for end users. You explain that developers strive to create flexible systems that can be reused, which requires abstraction. However, this flexibility can make systems harder for users to learn. The example you provide effectively demonstrates this challenge. To enhance your discussion, you could explore ways to improve user experience while maintaining system flexibility, such as through user-friendly interfaces or comprehensive guides.",
+          "title": "Design Goal Trade-off 2: Reusability vs. Usability",
+          "index_start": 474,
+          "index_end": 963,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129406103,
+          "description": "Your third trade-off involves the functional scope as envisioned by developers and clients compared to actual user expectations. You describe how users might use a system in ways not anticipated by developers, leading to perceived faults. Your example of a platform allowing text uploads illustrates this well. It would be beneficial to discuss methods to align system functionalities with user expectations, such as through user testing or feedback loops during development.",
+          "title": "Design Goal Trade-off 3: Functional Scope vs. User Expectation",
+          "index_start": 964,
+          "index_end": 1479,
+          "credits": 2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1291951,
+      "meta": {},
+      "text": "1. well-defined interface vs. ease of learning: \na well-defined interface might contain a lot of useful information and functions, however an end user would expect an interface which looks easy and friendly to use.\n\n2.  modifiability vs. rapid development:\nwhile client would expect a rapid development of a software, on the other hand, developer would prefer to develop it with modifiability if there is a need for future usage.\n\n3. low cost vs. robustness:\nfrom a client's point of view, cost should be as low as possible, but a robust software sometimes requires more effort to maintain which induced more cost\n",
+      "score": 41.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 129195101,
+          "description": "You identified the trade-off between a well-defined interface and ease of learning. Your example is clear and highlights the tension between providing comprehensive functionality and maintaining user-friendliness. Consider elaborating on how this trade-off could be managed, such as through iterative user testing or simplifying complex features.",
+          "title": "Design Goal Trade-off: Interface vs. Ease of Learning",
+          "index_start": 49,
+          "index_end": 214,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129195102,
+          "description": "The trade-off between modifiability and rapid development is well presented. You've captured the client's desire for quick delivery versus the developer's need for future-proofing the software. To improve, you could provide specific strategies, such as modular design, that address both needs effectively.",
+          "title": "Design Goal Trade-off: Modifiability vs. Rapid Development",
+          "index_start": 216,
+          "index_end": 429,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129195103,
+          "description": "Your explanation of the cost versus robustness trade-off is accurate in portraying the client's focus on minimizing expenses against the need for a durable system. It would be beneficial to include an example of how this trade-off might manifest in a real-world scenario, such as in software maintenance or security measures.",
+          "title": "Design Goal Trade-off: Cost vs. Robustness",
+          "index_start": 431,
+          "index_end": 613,
+          "credits": 2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1291856,
+      "meta": {},
+      "text": "Design goals often conflict with each other therefore there are design goal trade-offs.\nA typical design goal trade-off is cost vs. robustness. The client wants to invest as less money as possible, which leads to the developers not being able spend much time to make the system robust. If the system is made more robust the cost increases.\nA second design goal trade-off is rapid-development vs. functionality. To get a system with good functionality you need to spend time to analyse, design, implement and test it. If you want to have it fast you don't have a lot of time for that, so the functionality decreases.\nAnother design goal trade-off is cost vs. reusability. As with the robustness to increase the reusability of a system the developers need to work on it and change the system, which consumes time, which leads to an increased cost of the system.",
+      "score": 50,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 129185601,
+          "description": "You have successfully identified the trade-off between cost and robustness. Your explanation shows an understanding of how limited investment can impact the robustness of a system. Consider providing an example to illustrate this point further, such as comparing a simple application developed for low cost with a complex enterprise system requiring high robustness.",
+          "title": "Cost vs. Robustness",
+          "index_start": 88,
+          "index_end": 339,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129185602,
+          "description": "Your explanation of the trade-off between rapid development and functionality is clear. You effectively communicate the need for time to ensure good functionality and how speed can compromise this. Adding a real-world example, such as a startup pushing out a minimum viable product quickly, could enhance your explanation.",
+          "title": "Rapid Development vs. Functionality",
+          "index_start": 340,
+          "index_end": 615,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129185603,
+          "description": "The trade-off between cost and reusability is well articulated. You mention the need for developers to invest time and effort to make systems reusable, which increases costs. To strengthen your argument, consider providing an example scenario, such as developing a software library intended for reuse across multiple projects versus a single-use application.",
+          "title": "Cost vs. Reusability",
+          "index_start": 616,
+          "index_end": 859,
+          "credits": 2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1344279,
+      "meta": {},
+      "text": "1. Trade-Off between Low Cost and Functionality. Both are desirable goals, but the more functionality a software has, the more does it cost to develop because the developers have to do more work.\n\n2. Trade-Off between Modifiability/ Readability and Runtime Efficiency. Sometimes, improving runtime requires using more sophisticated technologies/ algorithms, which, in turn, are harder to modify/read. Brute-force solutions for example are relatively easy to read and modify, whereas more complicated solutions require much more time to understand and dive into.\n\n3. Trade-Off between Rapid development and good documentation. The faster you want to develop software and bring features to the end user, the less time you have for crafting an extensive and good documentation. This is because documentations are mainly only valuable for the future and in the present, they are only a cost factor.",
+      "score": 66.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 134427901,
+          "description": "You have correctly identified the trade-off between cost and functionality. It's important to note that increased functionality often results in higher development costs due to the complexity and time required by developers. However, providing a specific example would strengthen your explanation.",
+          "title": "Cost vs. Functionality",
+          "index_start": 3,
+          "index_end": 195,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 134427902,
+          "description": "Your explanation of the trade-off between modifiability/readability and runtime efficiency is clear. The use of brute-force solutions as an example is helpful in illustrating how simpler solutions are easier to modify and understand, while more efficient algorithms can be complex. Consider adding a specific example to further illustrate this trade-off.",
+          "title": "Modifiability/Readability vs. Runtime Efficiency",
+          "index_start": 200,
+          "index_end": 561,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 134427903,
+          "description": "You have accurately described the trade-off between rapid development and good documentation. As you mentioned, prioritizing rapid development often leads to less thorough documentation, which can be problematic in the long term. A specific example would provide more depth to your explanation.",
+          "title": "Rapid Development vs. Documentation",
+          "index_start": 566,
+          "index_end": 894,
+          "credits": 1.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1291068,
+      "meta": {},
+      "text": "1. Functionality vs. usability\nPhotoshop is a software for image editing, it offers hundreds of professional, but complex opreations, which leads to bad usability. Normal users prefer use Instagram or shapchat, which offers easy operations. Avoid making users remember information.\n\n2. Cost vs. robustness\nInstagram has multiple redundant servers to give response to all users' requests, whichs costs lot of manpower and finance. At the same time, it increases the robustness of the system and\nhelps the system stay online.\n\n3. Cost vs. reusability\nA online-drugstore-App for Garching costs less than a online-drugstore-App for Munich. The latter requires higher code reusability.\n",
+      "score": 75,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 129106801,
+          "description": "The example of Photoshop vs. Instagram/Snapchat is a good illustration of the trade-off between functionality and usability. However, the explanation could be expanded to better articulate why complex operations lead to bad usability and how simpler applications improve user experience.",
+          "title": "Functionality vs. Usability",
+          "index_start": 3,
+          "index_end": 281,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 129106802,
+          "description": "The example of Instagram's use of redundant servers is a clear demonstration of the cost versus robustness trade-off. It effectively shows how increased expenditure can enhance system reliability. However, you should elaborate on the specific benefits of robustness and how the system handles failures or high loads.",
+          "title": "Cost vs. Robustness",
+          "index_start": 286,
+          "index_end": 523,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 129106803,
+          "description": "The example of the online drugstore app is applicable for demonstrating cost versus reusability trade-offs. However, the reasoning behind why a Munich app requires higher code reusability should be expanded. Consider discussing aspects like scalability or adaptability to different markets.",
+          "title": "Cost vs. Reusability",
+          "index_start": 528,
+          "index_end": 680,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 129106804,
+          "description": "Overall, the submission provides examples for three common design goal trade-offs. While the examples are relevant, they could be enhanced with more detailed explanations and stronger connections to the core concepts of software engineering.",
+          "title": "General Feedback",
+          "index_start": 636,
+          "index_end": 680,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1313240,
+      "meta": {},
+      "text": "One major type of design goal trade off is: functionality vs. usability.\n\nWith usability we mean how easily an interface is to use, with functionality how many functions it supports. \nThe problem here typically is: that with more functions that should be supported, the interface becomes very complex and difficult to use and understand. Let's use the example of a ticket machine. If the machine should just provide the functionalities to book a ticket from a place to another and to pay, the interface will be simple and easy to use. If wen now want it to provide 50 more functions, navigation will become very difficult and make it almost unusable. \n\nThe next trade off is: Rapid development vs. functionality. \n\nA client might want the software for his ticket machine to be developed extremely fast. In a short time frame functionalities, the system should have can't be built as good as possible and some errors might arise later. \n\n\nAnother common dilemma is: efficiency vs reusability.\n\nA very efficient software utilizes the underlying hardware extremely well. This also means, that it is likely built for a certain Cpu architecture etc. The drawback of that is, that the software is not very portable to another hardware architecture, because it is specifically built for the first one.  An example would be pre installed software on Mac OS vs windows. \n",
+      "score": 83.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 131324001,
+          "description": "Good explanation of the trade-off between functionality and usability with a clear example of a ticket machine. The example effectively illustrates how increasing functionalities can complicate the user interface, thus reducing usability.",
+          "title": "Functionality vs Usability",
+          "index_start": 535,
+          "index_end": 650,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 131324002,
+          "description": "The explanation of the trade-off between rapid development and functionality is clear and the example is relevant. However, it would be beneficial to elaborate on how rapid development can affect the quality and reliability of the functionalities.",
+          "title": "Rapid Development vs Functionality",
+          "index_start": 653,
+          "index_end": 934,
+          "credits": 1.5,
+          "meta": {}
+        },
+        {
+          "id": 131324003,
+          "description": "The explanation of the trade-off between efficiency and reusability is clear, with a relevant example comparing software across different operating systems. Consider expanding on how developers can mitigate this trade-off, for example, through modular design.",
+          "title": "Efficiency vs Reusability",
+          "index_start": 938,
+          "index_end": 1360,
+          "credits": 1.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1363605,
+      "meta": {},
+      "text": "\nTime vs space:\nIn some cases the algorithm of our codes works fast but it needs more storage in comparison with another version of our code, which works slower than ours. In that case we should make a choice according our usage aims of our code.\nFor example: Mergesort  works faster than quicksort ; but merge sort  requires additional memory space to store the auxiliary arrays , while quick sort  doesn’t need any extra storage.\n\nCost vs. Robustness:\nRobustness is an ability of the system to handle with extrem situation/cases. Our program should not only work correctly, but also be resistent against extrem cases, such as any errors or bad intention of some users . But , to write a code, which is robustness needs more time to code it and it's more expensive.\nFor instance: The online banking applications are more robustness against the hackers, since the banking applications are used for monetary processes. Therefore the cost of robustness against the hackers of banking applications or websites are more expensive than a game website.\n\n\n\nCost vs. Reusability:\nReusability is the useage of existing code from  previous projects and writing reusable codes eases the processes of future works/projects. But only high-quality code (bug-free) can be reused.And writing such codes cost more time and money.\n\nFor instance big applications or softwares(such as ios) write their codes in a reusable way and therefore they can reuse again  making some changes and we can use the new softwares by installation of ios.\n \n",
+      "score": 91.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 136360501,
+          "description": "Your explanation of the time versus space trade-off is clear and provides a relevant example with Mergesort and Quicksort. However, consider elaborating on how this trade-off impacts decision-making in real-world scenarios or specific applications. This could further enhance your illustration of the trade-off.",
+          "title": "Design Goal Trade-off: Time vs. Space",
+          "index_start": 1,
+          "index_end": 431,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 136360502,
+          "description": "You have effectively described the robustness trade-off with cost, using online banking applications as an example. This is a strong real-world example that highlights the necessity for robustness in certain domains. Ensure your explanation is concise and consider mentioning how this trade-off might impact the development process or business decisions.",
+          "title": "Design Goal Trade-off: Cost vs. Robustness",
+          "index_start": 433,
+          "index_end": 1046,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 136360503,
+          "description": "Your discussion on cost versus reusability is relevant and provides a strong example with iOS applications. However, your explanation could be improved by discussing the benefits and challenges of reusability in software engineering. Consider adding how reusability can lead to reduced long-term costs despite the initial investment.",
+          "title": "Design Goal Trade-off: Cost vs. Reusability",
+          "index_start": 1050,
+          "index_end": 1518,
+          "credits": 2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1291747,
+      "meta": {},
+      "text": "Functionality vs. Usability: \nA system can either be very usable, meaning it's easy to learn, having not too many options, or it can be very functional, being powerful but also hard to understand. As an example one could use SAP ERP systems. SAP tools have so many functionalities that many people are not able to use all of them (on top of that it's not very user-friendly if you look at the UI). Therefore there are many SAP consultants helping companies setting up SAP.\n\nCost vs. Robustness: \nThe more robust a system should be, the more tests are required. These tests then also lead to higher cost. Examples for this are online registrations. Inputs of phone numbers and birth dates are mostly strictly prescribed. Any input in another format is declined. This of course grants the provider of any software/social network to have persistent data, but of course as this takes longer to implement, it's also more costly. \n\nRapid development vs. functionality: \nDeveloping a system with a lot of functionalities takes time, but time is money and especially when you look at startups, applications have to be shipped fast, as startups are bootstrapped and must gain customers fast. (E.g. Personio had very few functionalities in the beginning, just enough to gain their first customers. From this point on they constantly developed their Software, for example with several APIs to other systems.) Of course, there were some unhappy customers in the beginning, but still, Personio got at least some money from them to further develop their tool. On the other hand, Personio might not have survived by first working to a fully functional software in the beginning, as they would not have made any revenue.\n\n//some parts taken from my submission from last year - Thomas Schuhbeck (ga84xoc)",
+      "score": 100,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 129174701,
+          "description": "You have clearly articulated the trade-off between functionality and usability using SAP ERP systems as an example. This is a well-chosen example that illustrates how a system can be highly functional but complex and difficult for users. Your explanation of the need for consultants adds depth to your argument.",
+          "title": "Functionality vs. Usability",
+          "index_start": 398,
+          "index_end": 472,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129174702,
+          "description": "Your explanation of the trade-off between cost and robustness is clear and specific, with a focus on how increased robustness through testing can lead to higher costs. The example of online registrations effectively illustrates your point about data persistence and the associated costs.",
+          "title": "Cost vs. Robustness",
+          "index_start": 474,
+          "index_end": 923,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 129174703,
+          "description": "You have provided a strong example with Personio to explain the trade-off between rapid development and functionality, especially in the context of startups. Your insights into how initial limited functionality can be strategically beneficial for startups are well-expressed.",
+          "title": "Rapid Development vs. Functionality",
+          "index_start": 926,
+          "index_end": 1704,
+          "credits": 2.0,
+          "meta": {}
+        }
+      ]
+    }
+  ],
+  "baseline_info": {
+    "model": "azure_openai_gpt-4o",
+    "approach": "basic",
+    "generated_at": "2025-08-11T17:22:22.578131",
+    "description": "Baseline feedbacks generated by GPT-4o using basic approach"
+  }
+}

@@ -1,31 +1,30 @@
-import logging
 import re
 from typing import Dict, List, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
-from langsmith import traceable
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain import FeatureDTO, InconsistencyCheckPipelineExecutionDTO
+from iris.domain import InconsistencyCheckPipelineExecutionDTO
+from iris.domain.variant.inconsistency_check_variant import InconsistencyCheckVariant
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.llm.external.model import LanguageModel
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
     solver_prompt,
 )
-from iris.pipeline.shared.utils import filter_variants_by_available_models
+from iris.tracing import observe
 from iris.web.status.status_update import InconsistencyCheckCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-class InconsistencyCheckPipeline(Pipeline):
+class InconsistencyCheckPipeline(Pipeline[InconsistencyCheckVariant]):
     """InconsistencyCheckPipeline checks for consistency issues within an exercise by evaluating files from template
      and solution repositories.
 
@@ -39,12 +38,16 @@ class InconsistencyCheckPipeline(Pipeline):
     solver: Runnable
     prettify: Runnable
 
-    def __init__(self, callback: Optional[InconsistencyCheckCallback] = None):
+    def __init__(
+        self, callback: Optional[InconsistencyCheckCallback] = None, local: bool = False
+    ):
         super().__init__(implementation_id="inconsistency_check_pipeline")
         completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="gpt-o3-mini"),
+            request_handler=ModelVersionRequestHandler(
+                version="gpt-oss:120b" if local else "gpt-5-mini"
+            ),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)
@@ -56,7 +59,7 @@ class InconsistencyCheckPipeline(Pipeline):
         self.callback = callback
         self.tokens = []
 
-    @traceable(name="Inconsistency Check Pipeline")
+    @observe(name="Inconsistency Check Pipeline")
     def __call__(self, dto: InconsistencyCheckPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline to check for inconsistencies in the exercise
@@ -126,27 +129,19 @@ class InconsistencyCheckPipeline(Pipeline):
         self.callback.done(final_result=result, tokens=self.tokens)
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[InconsistencyCheckVariant]:
         """
-        Returns available variants for the InconsistencyCheckPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the InconsistencyCheckPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of InconsistencyCheckVariant objects representing available variants
         """
-        variant_specs = [
-            (
-                ["gpt-o3-mini"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Standard inconsistency check implementation with efficient model usage",
-                ),
-            )
+        return [
+            InconsistencyCheckVariant(
+                variant_id="default",
+                name="Default",
+                description="Standard inconsistency check implementation with efficient model usage",
+                cloud_solver_model="gpt-5-mini",
+                local_solver_model="gpt-oss:120b",
+            ),
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="InconsistencyCheckPipeline"
-        )

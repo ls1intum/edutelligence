@@ -1,6 +1,8 @@
+# docker-compose.yaml — Production (pulls pre-built images from GHCR)
+# For local development, use: docker compose -f docker-compose.dev.yaml up --build
 services:
   traefik:
-    image: traefik:v2.10
+    image: traefik:v3.6.1
     container_name: traefik
     restart: unless-stopped
     command:
@@ -9,14 +11,12 @@ services:
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.secure8080.address=:8080"
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
       - "--api.dashboard=true"
-      # - "--entrypoints.grpc.address=:50051"
     ports:
-      - "443:443"
-      - "8080:8080"
-      # - "50051:50051"
+      - "${LOGOS_TRAEFIK_HTTPS_PORT:-443}:443"
+      - "${LOGOS_TRAEFIK_SECURE8080_PORT:-8080}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
@@ -25,9 +25,7 @@ services:
       - extern
 
   logos-server:
-    build:
-      context: ../
-      dockerfile: ./logos/Dockerfile
+    image: ghcr.io/ls1intum/edutelligence/logos:${IMAGE_TAG:-latest}
     container_name: logos-server
     restart: unless-stopped
     depends_on:
@@ -36,11 +34,13 @@ services:
     volumes:
       - data_volume:/src/logos
     environment:
-      PROVIDER_NAME: azure
-      BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
+      LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
+      LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
+      LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
+      PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
     expose:
       - "8080"
-      # - "50051"
     labels:
       - "traefik.enable=true"
 
@@ -51,6 +51,22 @@ services:
       - "traefik.http.routers.logos-server-v1.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-v1.service=logos-server"
       - "traefik.http.routers.logos-server-v1.priority=100"
+
+      # === Routing: /openai ===
+      - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
+      - "traefik.http.routers.logos-server-openai.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-openai.tls=true"
+      - "traefik.http.routers.logos-server-openai.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-openai.service=logos-server"
+      - "traefik.http.routers.logos-server-openai.priority=100"
+
+      # === Routing: /jobs ===
+      - "traefik.http.routers.logos-server-jobs.rule=PathPrefix(`/jobs`)"
+      - "traefik.http.routers.logos-server-jobs.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-jobs.tls=true"
+      - "traefik.http.routers.logos-server-jobs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-jobs.service=logos-server"
+      - "traefik.http.routers.logos-server-jobs.priority=100"
 
       # === Routing: /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
@@ -68,42 +84,55 @@ services:
       - "traefik.http.routers.logos-server-docs.service=logos-server"
       - "traefik.http.routers.logos-server-docs.priority=100"
 
+      # === Routing: /metrics (Prometheus) ===
+      - "traefik.http.routers.logos-server-metrics.rule=PathPrefix(`/metrics`)"
+      - "traefik.http.routers.logos-server-metrics.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-metrics.tls=true"
+      - "traefik.http.routers.logos-server-metrics.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-metrics.service=logos-server"
+      - "traefik.http.routers.logos-server-metrics.priority=100"
+
+      # === Routing: /ws (WebSocket) ===
+      - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
+      - "traefik.http.routers.logos-server-ws.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-ws.tls=true"
+      - "traefik.http.routers.logos-server-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-ws.service=logos-server"
+      - "traefik.http.routers.logos-server-ws.priority=100"
+
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
-
-      # - "traefik.tcp.routers.logos-server-grpc.rule=HostSNI(`*`)"
-      # - "traefik.tcp.routers.logos-server-grpc.entrypoints=grpc"
-      # - "traefik.tcp.routers.logos-server-grpc.service=logos-server-grpc"
-      # - "traefik.tcp.services.logos-server-grpc.loadbalancer.server.port=50051"
-      # - "traefik.tcp.routers.logos-server-grpc.tls.passthrough=true"
     networks:
       - internal
 
   logos-db:
-    image: postgres:17
+    image: ghcr.io/ls1intum/edutelligence/logos-db:${IMAGE_TAG:-latest}
     container_name: logos-db
     restart: unless-stopped
     user: postgres
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_cron
+      -c cron.database_name=logosdb
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
       POSTGRES_DB: logosdb
       POSTGRES_HOST: localhost
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready", "--username=postgres"]
       interval: 1s
       timeout: 5s
       retries: 10
     volumes:
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
       - postgres_data:/var/lib/postgresql/data
     networks:
       - internal
 
   logos-ui:
-    build:
-      context: ../
-      dockerfile: ./logos/logos-ui/Dockerfile
+    image: ghcr.io/ls1intum/edutelligence/logos-ui:${IMAGE_TAG:-latest}
     container_name: logos-ui
     restart: unless-stopped
     expose:
@@ -111,21 +140,14 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Dev (https://localhost:8080) ===
-      - "traefik.http.routers.internal-ui-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui-dev.entrypoints=secure8080"
-      - "traefik.http.routers.internal-ui-dev.tls=true"
-      - "traefik.http.routers.internal-ui-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.internal-ui-dev.service=internal-ui-svc"
-      - "traefik.http.routers.internal-ui-dev.priority=0"
-
-      # === Prod (https://logos.ase.cit.tum.de:8080) ===
-      - "traefik.http.routers.internal-ui-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui-prod.entrypoints=secure8080"
-      - "traefik.http.routers.internal-ui-prod.tls=true"
-      - "traefik.http.routers.internal-ui-prod.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.internal-ui-prod.service=internal-ui-svc"
-      - "traefik.http.routers.internal-ui-prod.priority=0"
+      # === UI routing ===
+      # Override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
+      - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
+      - "traefik.http.routers.internal-ui.entrypoints=secure8080"
+      - "traefik.http.routers.internal-ui.tls=true"
+      - "traefik.http.routers.internal-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.internal-ui.service=internal-ui-svc"
+      - "traefik.http.routers.internal-ui.priority=0"
 
       # Shared service definition
       - "traefik.http.services.internal-ui-svc.loadbalancer.server.port=80"
@@ -133,9 +155,7 @@ services:
       - internal
 
   landing-page:
-    build:
-      context: ../
-      dockerfile: ./logos/logos-landing/Dockerfile
+    image: ghcr.io/ls1intum/edutelligence/logos-landing:${IMAGE_TAG:-latest}
     container_name: logos-landing
     restart: unless-stopped
     environment:
@@ -145,21 +165,14 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Prod (https://logos.ase.cit.tum.de) ===
-      - "traefik.http.routers.landing-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
-      - "traefik.http.routers.landing-prod.entrypoints=websecure"
-      - "traefik.http.routers.landing-prod.tls=true"
-      - "traefik.http.routers.landing-prod.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.landing-prod.service=landing-svc"
-      - "traefik.http.routers.landing-prod.priority=1"
-
-      # === Dev (https://localhost) ===
-      - "traefik.http.routers.landing-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
-      - "traefik.http.routers.landing-dev.entrypoints=websecure"
-      - "traefik.http.routers.landing-dev.tls=true"
-      - "traefik.http.routers.landing-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.landing-dev.service=landing-svc"
-      - "traefik.http.routers.landing-dev.priority=1"
+      # === Landing page routing ===
+      # Override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
+      - "traefik.http.routers.landing.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
+      - "traefik.http.routers.landing.entrypoints=websecure"
+      - "traefik.http.routers.landing.tls=true"
+      - "traefik.http.routers.landing.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.landing.service=landing-svc"
+      - "traefik.http.routers.landing.priority=1"
 
       # Shared service definition
       - "traefik.http.services.landing-svc.loadbalancer.server.port=80"

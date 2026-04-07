@@ -46,21 +46,26 @@ class ClassificationManager:
 
     def update_manager(self, models):
         self.models = models
+        self.laura.remove_db()
         for model in self.models:
             if model["description"] is not None:
                 self.laura.register_model(model["id"], model["description"])
 
-    def classify(self, prompt: str, policy: dict, allowed=None, classifier=None) -> List[Tuple[int, int, int, int]]:
+    def classify(self, prompt: str, policy: dict, allowed=None, classifier=None, system=None) -> List[Tuple[int, int, int, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with
         a weight describing how well the LLM is suited for the given prompt
         and a priority of the given policy.
         """
+        # logging.debug(f"System1: {self.models}")
         if allowed is None:
-            allowed = list()
+            allowed = [model["id"] for model in self.models]
+            current_models = [model for model in self.models]
         else:
-            self.models = [model for model in self.models if model["id"] in allowed]
+            current_models = [model for model in self.models if model["id"] in allowed]
+        if system is None:
+            system = ""
         adjusted_policy = deepcopy(policy)
         if adjusted_policy["threshold_latency"] == 1024:
             adjusted_policy["threshold_latency"] = self.get_special_weight("weight_latency", allowed=allowed)
@@ -80,13 +85,15 @@ class ClassificationManager:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", maximum=False, allowed=allowed)
         logging.debug(f"Policy: {adjusted_policy['id']}")
         logging.debug(f"Models: {allowed}")
+        # logging.debug(f"System2: {current_models}")
         if classifier is None or classifier == "policy":
-            filtered = PolicyClassifier(self.models).classify(prompt, adjusted_policy)
+            filtered = PolicyClassifier(current_models).classify(prompt, adjusted_policy)
         else:
-            filtered = [i for i in self.models]
+            filtered = [i for i in current_models]
         logging.debug(f"Policy-Classification: {[model['id'] for model in filtered]}")
         if classifier is None or classifier == "token":
-            filtered = TokenClassifier(filtered).classify(prompt, adjusted_policy)
+            # Provide the system prompt instead of the normal user input
+            filtered = TokenClassifier(filtered).classify(system, adjusted_policy)
         logging.debug(f"Token-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = allowed
         if classifier is None or classifier == "laura":

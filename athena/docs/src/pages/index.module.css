@@ -1,0 +1,42 @@
+/**
+ * CSS files with the .module.css suffix will be treated as CSS modules
+ * and scoped locally.
+ */
+
+.heroSection {
+  padding: 5.5rem 0 4rem;
+  background: var(--ifm-background-color);
+}
+
+.heroCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.heroTitle {
+  font-size: clamp(2.4rem, 4vw, 3.2rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.heroSubtitle {
+  font-size: clamp(1.125rem, 2vw, 1.35rem);
+  line-height: 1.6;
+  max-width: 58ch;
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+@media screen and (max-width: 996px) {
+  .heroSection {
+    padding: 3.5rem 0 3rem;
+  }
+}

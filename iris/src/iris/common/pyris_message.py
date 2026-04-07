@@ -21,11 +21,10 @@ class IrisMessageRole(str, Enum):
 class PyrisMessage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    id: Optional[int] = Field(default=None)
     token_usage: TokenUsageDTO = Field(default_factory=TokenUsageDTO)
-
     sent_at: datetime | None = Field(alias="sentAt", default=None)
     sender: IrisMessageRole
-
     contents: List[MessageContentDto] = Field(default=[])
 
     def __str__(self):

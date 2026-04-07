@@ -1,0 +1,58 @@
+name: AtlasML Test and Build
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'atlas/AtlasMl/**'
+      - '.github/workflows/atlas_test.yml'
+    branches: [main]
+  push:
+    paths:
+      - 'atlas/AtlasMl/**'
+      - '.github/workflows/atlas_test.yml'
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./atlas/AtlasMl
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run tests
+        run: poetry run pytest
+
+      - name: Run tests with coverage
+        run: poetry run pytest --cov=atlasml --cov-report=term --cov-report=xml > coverage.txt
+
+      - name: Extract coverage percentage
+        run: |
+          COVERAGE=$(grep -oP 'TOTAL.*\s+\K\d+(?=%)' coverage.txt)
+          echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
+
+      - name: Post Coverage Comment
+        if: github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          message: |
+            ## 📊 Code Coverage Report
+            - **Coverage:** ${{ env.COVERAGE }}%
+          comment_tag: code-coverage
+          mode: recreate

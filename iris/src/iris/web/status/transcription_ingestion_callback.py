@@ -1,5 +1,6 @@
-import logging
 from typing import List
+
+from iris.common.logging_config import get_logger
 
 from ...domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -8,7 +9,7 @@ from ...domain.status.stage_dto import StageDTO
 from ...domain.status.stage_state_dto import StageStateEnum
 from .status_update import StatusCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TranscriptionIngestionStatus(StatusCallback):
@@ -21,9 +22,9 @@ class TranscriptionIngestionStatus(StatusCallback):
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO] = None,
-        lecture_id: int = None,
+        lecture_unit_id: int = None,
     ):
-        url = f"{base_url}/api/iris/public/pyris/webhooks/ingestion/transcriptions/runs/{run_id}/status"
+        url = f"{base_url}/api/iris/internal/webhooks/ingestion/transcriptions/runs/{run_id}/status"
 
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
@@ -54,6 +55,6 @@ class TranscriptionIngestionStatus(StatusCallback):
                 name="Ingest lecture unit summary",
             ),
         ]
-        status = IngestionStatusUpdateDTO(stages=stages, id=lecture_id)
+        status = IngestionStatusUpdateDTO(stages=stages, id=lecture_unit_id)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)

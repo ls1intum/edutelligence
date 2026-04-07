@@ -1,0 +1,25 @@
+name: AtlasML - Deploy to Test 1
+
+on:
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        type: string
+        description: 'Image tag to deploy. AtlasML push builds usually publish branch-based tags such as atlas-health-check.'
+      deploy-atlasml:
+        type: boolean
+        default: true
+        description: (Re-)deploys AtlasML.
+
+jobs:
+
+  deploy-atlasml:
+    if: ${{ inputs.deploy-atlasml }}
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+    with:
+      environment: 'Atlas - Test 1'
+      docker-compose-file: './atlas/docker-compose.prod.yml'
+      main-image-name: ls1intum/edutelligence/atlasml
+      image-tag: ${{ inputs.image-tag }}
+      deployment-base-path: '/opt/atlasml'
+    secrets: inherit

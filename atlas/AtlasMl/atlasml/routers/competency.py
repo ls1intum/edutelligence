@@ -1,118 +1,41 @@
-import matplotlib.pyplot as plt
-import numpy as np
-from fastapi import APIRouter, Depends, Response, status
-from matplotlib.patches import Patch
-from scipy.spatial import ConvexHull
-from scipy.spatial.qhull import QhullError
+"""
+Competency endpoints for AtlasML.
 
-from atlasml.clients.weaviate import get_weaviate_client
-from atlasml.dependencies import TokenValidator
-from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
-from atlasml.ml.Clustering.TSNE import apply_tsne
-from atlasml.ml.VectorEmbeddings import FallbackModel
+This router exposes endpoints to:
+- Suggest competencies similar to a given description
+- Persist competencies and exercises with an operation type
+- Suggest competency relations (currently generated heuristically)
+
+All endpoints are versioned under `/api/v1/competency`.
+Request/response models are defined in `atlasml.models.competency`.
+"""
+
+import logging
+import random
+from fastapi import APIRouter, HTTPException, Depends
+
+from atlasml.ml.pipeline_workflows import PipelineWorkflows
 from atlasml.models.competency import (
-    Competency,
-    GenerateCompetencyRequest,
-    GenerateCompetencyRequestBatch,
-    GenerateEmbeddingsResponse,
     SaveCompetencyRequest,
     SuggestCompetencyRequest,
     SuggestCompetencyResponse,
+    CompetencyRelation,
+    CompetencyRelationSuggestionResponse,
+    RelationType,
+    MapNewCompetencyToExerciseRequest,
+    MapCompetencyToCompetencyRequest,
 )
+from atlasml.utils import (
+    handle_pipeline_error,
+    validate_non_empty_string,
+    safe_get_attribute,
+)
+from atlasml.dependencies import TokenValidator
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/competency", tags=["competency"])
-
-
-@router.post("/generate-embeddings", response_model=GenerateEmbeddingsResponse)
-async def generate_embeddings(request: GenerateCompetencyRequest):
-    print("GENERATING EMBEDDING FOR ==> ", request.id)
-    uuid, embeddings = FallbackModel.generate_embeddings(request.id, request.description)
-
-    print("EMBEDDING GENERATED WITH UUID ==> ", uuid)
-    print("EMBEDDING's VECTOR LENGTH ==> ", len(embeddings))
-
-    return GenerateEmbeddingsResponse(embeddings=[])
-
-
-@router.post("/generate-embeddings-batch", response_model=GenerateEmbeddingsResponse)
-async def generate_embeddings_batch(request: GenerateCompetencyRequestBatch):
-    response = []
-    for req in request.competencies:
-        print("GENERATING EMBEDDING FOR ==> ", req.id)
-        embeddings = FallbackModel.generate_embeddings(req.id, req.description)
-        response.append(embeddings)
-        print("EMBEDDING GENERATED")
-    print("EMBEDING ARE HERE ==> ", len(response))
-
-    return GenerateEmbeddingsResponse(embeddings=response)
-
-
-@router.get("/competency/{id}", response_model=Competency)
-async def get_competency(id: str):
-    weaviate_client = get_weaviate_client()
-    competency_embeddings = weaviate_client.get_all_embeddings()
-
-    print("COMPETENCY EMBEDDINGS LENGTH: ", len(competency_embeddings))
-    print("Generating Cluster Plot...")
-
-    vector_data = np.array(
-        [embedding["vector"]["default"] for embedding in competency_embeddings]
-    )
-    data_ids = np.array([embedding["id"] for embedding in competency_embeddings])
-
-    # Apply t-SNE with 2 components for 2D visualization
-    tsne_result = apply_tsne(vector_data, n_components=2, perplexity=5)
-
-    # Cluster the t-SNE result using HDBSCAN
-    labels = apply_hdbscan(
-        tsne_result, eps=0.01, min_samples=1, metric="cosine", min_cluster_size=4
-    )
-
-    # Build clusters dictionary: label -> { 'center': cluster center, 'data_ids': list of data ids }
-    clusters = {}
-    for cluster in np.unique(labels):
-        indices = np.where(labels == cluster)[0]
-        cluster_points = tsne_result[indices]
-        center_point = np.mean(cluster_points, axis=0)
-        cluster_data_ids = list(data_ids[indices])
-        clusters[cluster] = {"center": center_point, "data_ids": cluster_data_ids}
-
-    plt.figure()
-    cmap = plt.get_cmap("tab10")
-    unique_labels = np.unique(labels)
-    legend_handles = []
-
-    # Loop through each cluster and fill the convex hull area and mark the center
-    for idx, cluster in enumerate(unique_labels):
-        # Get indices and points for the current cluster
-        indices = np.where(labels == cluster)[0]
-        cluster_points = tsne_result[indices]
-
-        # Choose a color from the colormap (cycling if necessary)
-        color = cmap(idx % 10)
-
-        # If the cluster has enough points, compute and fill the convex hull area
-        if cluster_points.shape[0] >= 3:
-            try:
-                hull = ConvexHull(cluster_points, qhull_options="QJ")
-                hull_points = cluster_points[hull.vertices]
-                hull_points = np.concatenate([hull_points, hull_points[:1]], axis=0)
-                plt.fill(hull_points[:, 0], hull_points[:, 1], color=color, alpha=0.3)
-            except QhullError as e:
-                print(f"⚠️ Could not compute ConvexHull for cluster {cluster}: {e}")
-
-        # Plot the unique cluster center using the pre-computed clusters dictionary
-        center = clusters[cluster]["center"]
-        plt.scatter(center[0], center[1], color=color, marker="X", s=100)
-
-        # Append a legend entry for this cluster
-        legend_handles.append(Patch(color=color, label=f"Cluster {cluster}"))
-
-    plt.title("Cluster Centers and Background Areas")
-    plt.xlabel("Component 1")
-    plt.ylabel("Component 2")
-    plt.legend(handles=legend_handles)
-    plt.show()
 
 
 @router.post(
@@ -120,24 +43,212 @@ async def get_competency(id: str):
     response_model=SuggestCompetencyResponse,
     dependencies=[Depends(TokenValidator())],
 )
-async def suggest_competencies(request: SuggestCompetencyRequest):
-    # TODO: @ArdaKaraman  call required pipeline with the input and return list of competencies
-    # TODO: For test purposes you can delete TokenValidator() from dependencies
-    return Response(
-        status_code=status.HTTP_200_OK,
-        content=b"[]",
-        media_type="application/json",
-    )
+async def suggest_competencies(
+    request: SuggestCompetencyRequest,
+) -> SuggestCompetencyResponse:
+    """
+    Suggest competencies based on semantic similarity of the input description.
+
+    Args:
+        request: Pydantic model with `description` and `course_id`.
+
+    Returns:
+        SuggestCompetencyResponse: A list of matching `Competency` items.
+
+    Raises:
+        HTTPException: 400 on validation errors, 500 on internal failures.
+    """
+    try:
+        logger.info(
+            f"Suggesting competencies for description: {request.description[:100]}..."
+        )
+
+        # Validate input using utility function
+        validated_description = validate_non_empty_string(
+            request.description, "description"
+        )
+
+        pipeline = PipelineWorkflows()
+        competencies = pipeline.suggest_competencies_by_similarity(
+            validated_description, course_id=request.course_id
+        )
+
+        logger.info(f"Successfully suggested {len(competencies)} competencies")
+        return SuggestCompetencyResponse(competencies=competencies)
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "suggest_competencies")
 
 
-@router.post(
-    "/save", response_model=list[Competency], dependencies=[Depends(TokenValidator())]
-)
+@router.post("/save", dependencies=[Depends(TokenValidator())])
 async def save_competencies(request: SaveCompetencyRequest):
-    # TODO: @ArdaKaraman call required pipeline with the input you do not need to return anything
-    # TODO: For test purposes you can delete TokenValidator() from dependencies
-    return Response(
-        status_code=status.HTTP_200_OK,
-        content=b"[]",
-        media_type="application/json",
-    )
+    """
+    Save competencies and/or a single exercise with an operation type.
+
+    Args:
+        request: Pydantic model with optional `competencies`, optional `exercise`,
+            and an `operation_type` (UPDATE/DELETE).
+
+    Returns:
+        200 OK on success with an empty body.
+
+    Raises:
+        HTTPException: 400 on validation errors, 500 on internal failures.
+    """
+    try:
+        logger.info(
+            f"Saving competencies with operation type: {request.operation_type}"
+        )
+
+        # Validate that at least one item is provided
+        if not request.competencies and not request.exercise:
+            raise ValueError("At least one competency or exercise must be provided")
+
+        # Validate operation type
+        validated_operation_type = validate_non_empty_string(
+            request.operation_type, "operation_type"
+        )
+
+        pipeline = PipelineWorkflows()
+        saved_items = []
+
+        # Save competencies if provided
+        if request.competencies:
+            try:
+                logger.info(f"Saving {len(request.competencies)} competencies")
+                result = pipeline.save_competencies(
+                    request.competencies, validated_operation_type
+                )
+                saved_items.append({"type": "competencies", "result": result})
+                logger.info("All competencies saved and reclustered successfully")
+            except Exception as e:
+                logger.error(f"Failed to save competencies: {e}")
+                raise Exception(f"Failed to save competencies: {str(e)}")
+
+        # Save exercise if provided
+        if request.exercise:
+            try:
+                exercise_desc = safe_get_attribute(request.exercise, "description")
+                logger.info(f"Saving exercise: {exercise_desc}")
+                result = pipeline.save_exercise(
+                    request.exercise, validated_operation_type
+                )
+                saved_items.append({"type": "exercise", "result": result})
+                logger.info("Exercise saved successfully")
+            except Exception as e:
+                logger.error(f"Failed to save exercise: {e}")
+                raise Exception(f"Failed to save exercise: {str(e)}")
+
+        logger.info(f"Successfully saved {len(saved_items)} items")
+        # Return 200 OK response without body
+        return
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "save_competencies")
+
+
+@router.get(
+    "/relations/suggest/{course_id}",
+    response_model=CompetencyRelationSuggestionResponse,
+    dependencies=[Depends(TokenValidator())],
+)
+async def suggest_competency_relations(course_id: int) -> CompetencyRelationSuggestionResponse:
+    """
+    Suggest directed relations between competencies for a course.
+
+    The current implementation relies on the pipeline to produce relation
+    suggestions; it may (temporarily) be heuristic.
+    """
+    try:
+        logger.info(f"Suggesting competency relations for course_id={course_id}")
+
+        pipeline = PipelineWorkflows()
+        relations = pipeline.suggest_competency_relations(course_id)
+
+        logger.info(f"Suggested {len(relations.relations)} competency relations")
+        return relations
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "suggest_competency_relations")
+
+
+@router.post("/map-competency-to-exercise", dependencies=[Depends(TokenValidator())])
+async def map_new_competency_to_exercise(request: MapNewCompetencyToExerciseRequest):
+    """
+    Map a new competency to an existing exercise.
+
+    Args:
+        request: Request containing exercise_id and competency_id to map
+
+    Returns:
+        200 OK HTTP response on successful mapping
+
+    Raises:
+        HTTPException: 400 for validation errors, 500 for server errors
+    """
+    try:
+        logger.info(
+            f"Mapping competency {request.competency_id} to exercise {request.exercise_id}"
+        )
+
+        pipeline = PipelineWorkflows()
+        pipeline.map_new_competency_to_exercise(
+            request.exercise_id, request.competency_id
+        )
+
+        logger.info(
+            f"Successfully mapped competency {request.competency_id} to exercise {request.exercise_id}"
+        )
+        return
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_pipeline_error(e, "map_new_competency_to_exercise")
+
+
+@router.post("/map-competency-to-competency", dependencies=[Depends(TokenValidator())])
+async def map_competency_to_competency(request: MapCompetencyToCompetencyRequest):
+    """
+    Map a competency to another competency (bidirectional relationship).
+
+    Args:
+        request: Request containing source_competency_id and target_competency_id to map
+
+    Returns:
+        200 OK HTTP response on successful mapping
+
+    Raises:
+        HTTPException: 400 for validation errors, 500 for server errors
+    """
+    try:
+        logger.info(
+            f"Mapping competency {request.source_competency_id} to competency {request.target_competency_id}"
+        )
+
+        pipeline = PipelineWorkflows()
+        pipeline.map_competency_to_competency(
+            request.source_competency_id, request.target_competency_id
+        )
+
+        logger.info(
+            f"Successfully mapped competency {request.source_competency_id} to competency {request.target_competency_id}"
+        )
+        return
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_pipeline_error(e, "map_competency_to_competency")

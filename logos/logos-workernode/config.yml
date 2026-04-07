@@ -1,0 +1,34 @@
+# config.yml — Hardware & tuning settings (managed by Ansible)
+#
+# Credentials are NOT in this file.
+# They come from .env (GitHub secrets): LOGOS_URL, LOGOS_API_KEY
+# The server resolves provider identity from the API key.
+
+worker:
+  gpu_poll_interval: 5
+  lane_port_start: 11436
+  lane_port_end: 11499
+
+logos:
+  enabled: true
+  capabilities_models:
+    - Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
+      tensor_parallel_size: 2
+  heartbeat_interval_seconds: 5
+  reconnect_backoff_seconds: 3
+
+engines:
+  vllm:
+    metrics_path: /metrics
+    metrics_timeout_seconds: 5
+    flashinfer_loglevel: 0
+    flashinfer_logdest: stderr
+    nccl_debug: WARN
+    nccl_debug_subsys: INIT
+    # Turing (SM 7.5) workaround for AWQ + TP=2 on Quadro RTX 5000:
+    # force awq path and avoid vLLM custom all-reduce kernels.
+    model_overrides:
+      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
+        quantization: awq
+        disable_custom_all_reduce: true

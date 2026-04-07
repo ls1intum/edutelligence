@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, overload
+from typing import Mapping, Optional, Sequence, overload
 from uuid import UUID
 
 from weaviate.client import WeaviateClient
@@ -124,3 +124,50 @@ class MemoryService:
             raise ValueError("Memory object must have an ID.")
 
         return self._memory_repository.save(tenant, memory)
+
+    def semantic_search(
+        self, tenant: str, vectors: Mapping[str, Sequence[float]], limit: int = 10
+    ) -> Sequence[Memory]:
+        return self._memory_repository.search_multi(tenant, vectors, limit)
+
+    def has_unslept_memories(self, tenant: str) -> bool:
+        """
+        Check if there are any unslept memories for a given tenant.
+
+        Args:
+            tenant: The tenant to which the memories belong.
+        Returns:
+            bool: True if there are unslept memories, False otherwise.
+        """
+        return len(self._memory_repository.find_unslept_memories(tenant)) > 0
+
+    def find_all_tenants(self) -> list[str]:
+        """
+        Retrieve all tenants that have memory entries.
+
+        Returns:
+            list[str]: A list of tenant identifiers.
+        """
+        if isinstance(self._memory_repository, WeaviateMemoryRepository):
+            return self._memory_repository.find_all_tenants()
+        else:
+            raise NotImplementedError(
+                "find_all_tenants is only implemented for WeaviateMemoryRepository."
+            )
+
+    def delete_all_for_tenant(self, tenant: str) -> None:
+        """
+        Delete all memory entries for a given tenant efficiently without loading them first.
+
+        Args:
+            tenant: The tenant whose memories should be deleted.
+
+        Returns:
+            None
+        """
+        if isinstance(self._memory_repository, WeaviateMemoryRepository):
+            self._memory_repository.delete_all_for_tenant(tenant)
+        else:
+            raise NotImplementedError(
+                "delete_all_for_tenant is only implemented for WeaviateMemoryRepository."
+            )

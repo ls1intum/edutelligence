@@ -1,4 +1,3 @@
-import logging
 from typing import List, Optional
 
 from langchain.output_parsers import PydanticOutputParser
@@ -6,25 +5,28 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain import CompetencyExtractionPipelineExecutionDTO, FeatureDTO
+from iris.domain import CompetencyExtractionPipelineExecutionDTO
 from iris.domain.data.competency_dto import Competency
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.variant.competency_extraction_variant import (
+    CompetencyExtractionVariant,
+)
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
-from iris.pipeline.shared.utils import filter_variants_by_available_models
+from iris.tracing import observe
 from iris.web.status.status_update import CompetencyExtractionCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-class CompetencyExtractionPipeline(Pipeline):
+class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
     """CompetencyExtractionPipeline extracts and processes competencies from course content.
 
     It leverages a language model to generate competency JSON, parses the output using a Pydantic output parser,
@@ -35,15 +37,22 @@ class CompetencyExtractionPipeline(Pipeline):
     request_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
 
-    def __init__(self, callback: Optional[CompetencyExtractionCallback] = None):
+    def __init__(
+        self,
+        callback: Optional[CompetencyExtractionCallback] = None,
+        local: bool = False,
+    ):
         super().__init__(
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
+        self.request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5.2"
+        )
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 
+    @observe(name="Competency Extraction Pipeline")
     def __call__(
         self,
         dto: CompetencyExtractionPipelineExecutionDTO,
@@ -109,27 +118,19 @@ class CompetencyExtractionPipeline(Pipeline):
         self.callback.done(final_result=generated_competencies, tokens=self.tokens)
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[CompetencyExtractionVariant]:
         """
-        Returns available variants for the CompetencyExtractionPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the CompetencyExtractionPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of CompetencyExtractionVariant objects representing available variants
         """
-        variant_specs = [
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Default competency extraction variant using GPT-4.1",
-                ),
-            )
+        return [
+            CompetencyExtractionVariant(
+                variant_id="default",
+                name="Default",
+                description="Default competency extraction variant",
+                cloud_agent_model="gpt-5.2",
+                local_agent_model="gpt-oss:120b",
+            ),
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="CompetencyExtractionPipeline"
-        )

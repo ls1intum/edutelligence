@@ -1,7 +1,8 @@
-from typing import Any, Literal
+from typing import Literal
 
-from openai import OpenAI
-from openai.lib.azure import AzureOpenAI
+from langfuse.openai import AzureOpenAI, OpenAI
+
+from iris.tracing import observe
 
 from ...llm.external.model import CompletionModel
 from ..completion_arguments import CompletionArguments
@@ -14,12 +15,12 @@ class OpenAICompletionModel(CompletionModel):
     api_key: str
     _client: OpenAI
 
+    @observe(name="OpenAI Completion")
     def complete(self, prompt: str, arguments: CompletionArguments) -> any:
         response = self._client.completions.create(
             model=self.model,
             prompt=prompt,
             temperature=arguments.temperature,
-            max_tokens=arguments.max_tokens,
             stop=arguments.stop,
         )
         return response
@@ -28,7 +29,7 @@ class OpenAICompletionModel(CompletionModel):
 class DirectOpenAICompletionModel(OpenAICompletionModel):
     type: Literal["openai_completion"]
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = OpenAI(api_key=self.api_key)
 
     def __str__(self):
@@ -43,7 +44,7 @@ class AzureOpenAICompletionModel(OpenAICompletionModel):
     azure_deployment: str
     api_version: str
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = AzureOpenAI(
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,

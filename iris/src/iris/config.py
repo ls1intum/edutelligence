@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
+from typing import Optional
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class APIKeyConfig(BaseModel):
@@ -15,12 +16,37 @@ class WeaviateSettings(BaseModel):
     grpc_port: int
 
 
+class MemirisSettings(BaseModel):
+    enabled: bool = Field(default=True)
+    sleep_enabled: bool = Field(default=True)
+
+
+class LangfuseSettings(BaseModel):
+    """Settings for LangFuse observability integration."""
+
+    enabled: bool = Field(default=False)
+    public_key: Optional[str] = Field(default=None)
+    secret_key: Optional[str] = Field(default=None)
+    host: str = Field(default="https://cloud.langfuse.com")
+
+    @model_validator(mode="after")
+    def validate_keys_when_enabled(self):
+        """Validate that keys are provided when LangFuse is enabled."""
+        if self.enabled and (not self.public_key or not self.secret_key):
+            raise ValueError(
+                "LangFuse public_key and secret_key are required when enabled=True"
+            )
+        return self
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
     api_keys: list[APIKeyConfig]
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
+    memiris: MemirisSettings
+    langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
 
     @classmethod
     def get_settings(cls):

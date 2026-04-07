@@ -1,5 +1,6 @@
-import logging
 from typing import List
+
+from iris.common.logging_config import get_logger
 
 from ...domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -8,7 +9,7 @@ from ...domain.status.stage_dto import StageDTO
 from ...domain.status.stage_state_dto import StageStateEnum
 from .status_update import StatusCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class IngestionStatusCallback(StatusCallback):
@@ -23,9 +24,7 @@ class IngestionStatusCallback(StatusCallback):
         initial_stages: List[StageDTO] = None,
         lecture_unit_id: int = None,
     ):
-        url = (
-            f"{base_url}/api/iris/public/pyris/webhooks/ingestion/runs/{run_id}/status"
-        )
+        url = f"{base_url}/api/iris/internal/webhooks/ingestion/runs/{run_id}/status"
 
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
@@ -36,14 +35,34 @@ class IngestionStatusCallback(StatusCallback):
                 name="Old slides removal",
             ),
             StageDTO(
-                weight=40,
+                weight=20,
                 state=StageStateEnum.NOT_STARTED,
                 name="Slides Interpretation",
             ),
             StageDTO(
-                weight=20,
+                weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Slides ingestion",
+            ),
+            StageDTO(
+                weight=5,
+                state=StageStateEnum.NOT_STARTED,
+                name="Old transcriptions removal",
+            ),
+            StageDTO(
+                weight=5,
+                state=StageStateEnum.NOT_STARTED,
+                name="Transcription chunking",
+            ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Transcription summarization",
+            ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Transcription ingestion",
             ),
             StageDTO(
                 weight=30,

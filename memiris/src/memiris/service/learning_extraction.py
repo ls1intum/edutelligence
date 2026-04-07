@@ -4,13 +4,13 @@ from jinja2 import Template
 from langfuse import observe
 from ollama import Message
 
+from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.dto.learning_creation_dto import LearningCreationDto
-from memiris.service.ollama_wrapper import OllamaService
+from memiris.llm.abstract_language_model import AbstractLanguageModel
 from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import (
-    creation_dto_to_learning,
-    learning_to_creation_dto,
+    creation_dlo_to_learning,
+    learning_to_creation_dlo,
 )
 
 
@@ -19,15 +19,13 @@ class LearningExtractor:
     This class is responsible for extracting learning information from the given data.
     """
 
-    llm: str  # Placeholder for the LLM instance
+    llm: AbstractLanguageModel  # Bound chat model wrapper
     template: Template
     focus: Optional[str]
-    ollama_service: OllamaService
 
     def __init__(
         self,
-        llm: str,
-        ollama_service: OllamaService,
+        llm: AbstractLanguageModel,
         focus: Optional[str] = None,
         template: Optional[str] = None,
     ) -> None:
@@ -35,14 +33,12 @@ class LearningExtractor:
         Initialize the LearningExtractor
 
         Args:
-            llm: The name of the language model to use
-            ollama_service: The Ollama service to use for LLM calls
+            llm: The bound chat model to use
             focus: Optional focus for the extraction
             template: Optional template path to use for the extraction prompt
         """
         self.llm = llm
         self.focus = focus
-        self.ollama_service = ollama_service
         self.template = create_template(template, "learning_extraction.md.j2")
 
     @observe(name="learning-extraction")
@@ -52,14 +48,14 @@ class LearningExtractor:
         """
         Extract learning information from the given data.
         """
-        learning_json_schema = LearningCreationDto.json_array_schema()
+        learning_json_schema = LearningCreationDLO.json_array_schema()
 
         system_message = self.template.render(
             learning_json_schema=learning_json_schema,
             learning_focus=self.focus,
             previous_learnings=(
                 [
-                    learning_to_creation_dto(learning).model_dump()
+                    learning_to_creation_dlo(learning).model_dump()
                     for learning in previous_learnings
                 ]
                 if previous_learnings
@@ -73,21 +69,20 @@ class LearningExtractor:
             Message(role="user", content=text),
         ]
 
-        response = self.ollama_service.chat(
-            model=self.llm,
+        response = self.llm.chat(
             messages=messages,
-            response_format=LearningCreationDto.json_array_type().json_schema(),
+            response_format=LearningCreationDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},
         )
 
         if response and response.message and response.message.content:
             try:
-                learning_dtos = LearningCreationDto.json_array_type().validate_json(
+                learning_dlos = LearningCreationDLO.json_array_type().validate_json(
                     response.message.content
                 )
                 return [
-                    creation_dto_to_learning(learning_dto, reference=None)
-                    for learning_dto in learning_dtos
+                    creation_dlo_to_learning(learning_dlo, reference=None)
+                    for learning_dlo in learning_dlos
                 ]
             except Exception as e:
                 print(f"Error parsing response: {e}")

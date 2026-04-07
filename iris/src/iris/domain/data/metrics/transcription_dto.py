@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +12,9 @@ class TranscriptionSegmentDTO(BaseModel):
 
 class TranscriptionDTO(BaseModel):
     language: str = Field(default="en", alias="language")
-    segments: List[TranscriptionSegmentDTO] = Field(..., alias="segments")
+    segments: Optional[List[TranscriptionSegmentDTO]] = Field(
+        default=None, alias="segments"
+    )
 
 
 class TranscriptionWebhookDTO(BaseModel):

@@ -1,5 +1,3 @@
-import concurrent.futures
-from asyncio.log import logger
 from enum import Enum
 from typing import List
 
@@ -8,10 +6,10 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -34,7 +32,6 @@ from iris.llm.request_handler.model_version_request_handler import (
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_retrieval_prompts import (
     lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
     lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context,
@@ -45,6 +42,7 @@ from iris.pipeline.prompts.lecture_retrieval_prompts import (
     write_hypothetical_lecture_pages_answer_prompt,
     write_hypothetical_lecture_transcriptions_answer_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
@@ -54,6 +52,7 @@ from iris.retrieval.lecture.lecture_transcription_retrieval import (
 from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -67,23 +66,27 @@ from iris.vector_database.lecture_unit_schema import (
     init_lecture_unit_schema,
 )
 
+logger = get_logger(__name__)
+
 
 class QueryRewriteMode(Enum):
     LECTURE_PAGES = "lecture_pages"
     LECTURE_TRANSCRIPTIONS = "lecture_transcriptions"
 
 
-class LectureRetrieval(Pipeline):
+class LectureRetrieval(SubPipeline):
     """LectureRetrieval retrieves lecture data from the vector database by processing lecture units, transcriptions,
      and page chunks.
 
     It combines various sources of lecture-related data and formats them into a single DTO for further processing.
     """
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler(
+            version="gpt-oss:120b" if local else "gpt-5-mini"
+        )
+        completion_args = CompletionArguments(temperature=0)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -100,12 +103,19 @@ class LectureRetrieval(Pipeline):
 
         self.tokens = []
 
-        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(client)
-        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(client)
-        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(client)
+        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(
+            client, local=local
+        )
+        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(
+            client, local=local
+        )
+        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(
+            client, local=local
+        )
 
         self.cohere_client = RerankRequestHandler("cohere")
 
+    @observe(name="Lecture Retrieval")
     def __call__(
         self,
         query: str,
@@ -226,17 +236,26 @@ class LectureRetrieval(Pipeline):
 
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
-                course_id=lecture_unit.course_id,
-                course_name=lecture_unit.course_name,
-                course_description=lecture_unit.course_description,
-                course_language=lecture_unit.course_language,
-                lecture_id=lecture_unit.lecture_id,
-                lecture_name=lecture_unit.lecture_name,
-                lecture_unit_id=lecture_unit.lecture_unit_id,
-                lecture_unit_name=lecture_unit.lecture_unit_name,
-                lecture_unit_link=lecture_unit.lecture_unit_link,
-                base_url=lecture_unit.base_url,
-                lecture_unit_summary=lecture_unit.lecture_unit_summary,
+                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
+                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
+                course_description=lecture_unit[
+                    LectureUnitSchema.COURSE_DESCRIPTION.value
+                ],
+                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_unit_name=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value
+                ],
+                lecture_unit_link=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value
+                ],
+                video_link=lecture_unit[LectureUnitSchema.VIDEO_LINK.value],
+                base_url=base_url,
+                lecture_unit_summary=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
+                ],
             )
 
         elif lecture_id is not None:
@@ -266,6 +285,7 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,
+                video_link=None,
                 base_url=base_url,
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
@@ -295,13 +315,14 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,
+                video_link=None,
                 base_url=base_url,
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
                 ],
             )
 
-    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
+    @observe(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(
         self,
         chat_history: list[PyrisMessage],
@@ -315,7 +336,7 @@ class LectureRetrieval(Pipeline):
         Run the rewrite tasks in parallel.
         """
         if problem_statement:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with TracedThreadPoolExecutor() as executor:
                 # Schedule the rewrite tasks to run in parallel
                 rewritten_lecture_pages_query_future = executor.submit(
                     self.rewrite_student_query_with_exercise_context,
@@ -374,7 +395,7 @@ class LectureRetrieval(Pipeline):
                     hypothetical_lecture_transcriptions_answer_query_future.result()
                 )
         else:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with TracedThreadPoolExecutor() as executor:
                 # Schedule the rewrite tasks to run in parallel
                 rewritten_lecture_pages_query_future = executor.submit(
                     self.rewrite_student_query,
@@ -432,7 +453,7 @@ class LectureRetrieval(Pipeline):
             hypothetical_lecture_transcriptions_answer_query,
         )
 
-    @traceable(name="Retrieval: Rewrite Student Query")
+    @observe(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
         chat_history: List[PyrisMessage],
@@ -469,12 +490,12 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Student Query with Exercise Context")
+    @observe(name="Retrieval: Rewrite Student Query with Exercise Context")
     def rewrite_student_query_with_exercise_context(
         self,
         chat_history: List[PyrisMessage],
@@ -517,12 +538,12 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Elaborated Query")
+    @observe(name="Retrieval: Rewrite Elaborated Query")
     def rewrite_elaborated_query(
         self,
         chat_history: list[PyrisMessage],
@@ -550,9 +571,11 @@ class LectureRetrieval(Pipeline):
             ]
         )
         prompt = self._add_last_four_messages_to_prompt(prompt, chat_history)
+        # Escape curly braces in student_query for LangChain template compatibility
+        safe_query = student_query.replace("{", "{{").replace("}", "}}")
         prompt += ChatPromptTemplate.from_messages(
             [
-                ("user", student_query),
+                ("user", safe_query),
             ]
         )
         prompt_val = prompt.format_messages(
@@ -565,12 +588,12 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from retirval pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
+    @observe(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
     def rewrite_elaborated_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],
@@ -588,7 +611,7 @@ class LectureRetrieval(Pipeline):
 
         if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
             write_hypothetical_answer_prompt = (
-                write_hypothetical_lecture_pages_answer_prompt
+                write_hypothetical_lecture_transcriptions_answer_prompt
             )
         else:
             write_hypothetical_answer_prompt = (
@@ -608,9 +631,11 @@ class LectureRetrieval(Pipeline):
             problem_statement=problem_statement,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
+        # Escape curly braces in student_query for LangChain template compatibility
+        safe_query = student_query.replace("{", "{{").replace("}", "}}")
         prompt += ChatPromptTemplate.from_messages(
             [
-                ("user", student_query),
+                ("user", safe_query),
             ]
         )
         try:
@@ -618,7 +643,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
             raise e
@@ -656,7 +681,7 @@ class LectureRetrieval(Pipeline):
         """
         Call the different pipelines for lecture content retrieval.
         """
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with TracedThreadPoolExecutor() as executor:
             lecture_unit_segments_future = executor.submit(
                 self.lecture_unit_segment_pipeline,
                 student_query,
@@ -722,28 +747,34 @@ class LectureRetrieval(Pipeline):
 
         return [
             LectureTranscriptionRetrievalDTO(
-                str(transcription.uuid),
-                lecture_unit_segment.course_id,
-                lecture_unit_segment.course_name,
-                lecture_unit_segment.course_description,
-                lecture_unit_segment.lecture_id,
-                lecture_unit_segment.lecture_name,
-                lecture_unit_segment.lecture_unit_id,
-                lecture_unit_segment.lecture_unit_name,
-                lecture_unit_segment.lecture_unit_link,
-                transcription.properties[LectureTranscriptionSchema.LANGUAGE.value],
-                transcription.properties[
+                uuid=str(transcription.uuid),
+                course_id=lecture_unit_segment.course_id,
+                course_name=lecture_unit_segment.course_name,
+                course_description=lecture_unit_segment.course_description,
+                lecture_id=lecture_unit_segment.lecture_id,
+                lecture_name=lecture_unit_segment.lecture_name,
+                lecture_unit_id=lecture_unit_segment.lecture_unit_id,
+                lecture_unit_name=lecture_unit_segment.lecture_unit_name,
+                video_link=lecture_unit_segment.video_link,
+                language=transcription.properties[
+                    LectureTranscriptionSchema.LANGUAGE.value
+                ],
+                segment_start_time=transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_START_TIME.value
                 ],
-                transcription.properties[
+                segment_end_time=transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value
                 ],
-                transcription.properties[LectureTranscriptionSchema.PAGE_NUMBER.value],
-                transcription.properties[
+                page_number=transcription.properties[
+                    LectureTranscriptionSchema.PAGE_NUMBER.value
+                ],
+                segment_summary=transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_SUMMARY.value
                 ],
-                transcription.properties[LectureTranscriptionSchema.SEGMENT_TEXT.value],
-                lecture_unit_segment.base_url,
+                segment_text=transcription.properties[
+                    LectureTranscriptionSchema.SEGMENT_TEXT.value
+                ],
+                base_url=lecture_unit_segment.base_url,
             )
             for transcription in lecture_transcriptions
         ]

@@ -3,7 +3,10 @@ from typing import List, Literal
 
 import requests
 
+from iris.common.logging_config import get_logger
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
+
+logger = get_logger(__name__)
 
 
 def generate_images(
@@ -30,7 +33,7 @@ def generate_images(
             **kwargs,
         )
     except Exception as e:
-        print(f"Failed to generate images: {e}")
+        logger.warning("Failed to generate images | error=%s", e)
         return []
 
     images = response.data
@@ -46,7 +49,7 @@ def generate_images(
                 image_response.raise_for_status()
                 base64_data = base64.b64encode(image_response.content).decode("utf-8")
             except requests.RequestException as e:
-                print(f"Failed to download or encode image: {e}")
+                logger.warning("Failed to download or encode image | error=%s", e)
                 continue
 
         iris_images.append(

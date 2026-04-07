@@ -1,9 +1,9 @@
 """
 Simple config test for a single root user
-1. Run test_setup() single
-2. Set VALID_LOGOS_KEY to the key provided in the previous response
-3. Set API-Endpoints and Provider BaseURLs
-4. Run all tests. The last test should print out a response from a registered LLM
+1. Start the server — root API key is auto-generated on first startup (check logs).
+2. Set VALID_LOGOS_KEY to the key from the logs.
+3. Set API-Endpoints and Provider BaseURLs.
+4. Run all tests. The last test should print out a response from a registered LLM.
 """
 
 import unittest
@@ -23,20 +23,6 @@ API_VERSION = ""
 
 
 class TestOpenAIForwardingProxy(unittest.TestCase):
-    def test_setup(self):
-        headers = {
-            "Content-Type": "application/json",
-        }
-
-        data = {
-            "provider_name": "azure",
-            "base_url": BASE_URL,
-        }
-
-        response = requests.post("http://0.0.0.0:8080/logosdb/setup", json=data, headers=headers)
-        from pprint import pprint
-        pprint(response.json())
-
     def test_add_provider(self):
         headers = {
             "Content-Type": "application/json",
@@ -50,7 +36,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "base_url": f"{BASE_URL}",
             "api_key": f"{API_KEY}",
             "auth_name": "api-key",
-            "auth_format": "{}"
+            "auth_format": "{}",
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
@@ -104,7 +91,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
             "profile_id": 1,
-            "api_id": 1,
+            "provider_id": 1,
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_provider", json=data,
@@ -160,7 +147,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
-            "api_id": 1,
+            "provider_id": 1,
+            "api_key": f"{API_KEY}",
             "model_id": 1,
         }
 
@@ -237,7 +225,8 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "base_url": f"{BASE_URL}",
             "api_key": "",
             "auth_name": "api-key",
-            "auth_format": "{}"
+            "auth_format": "{}",
+            "provider_type": "azure",
         }
 
         response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
@@ -255,7 +244,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
             "temperature": 0.5,
             "logos_key": f"{VALID_LOGOS_KEY}",
-            "api_id": 2,
+            "provider_id": 2,
             "profile_id": 2,
         }
 

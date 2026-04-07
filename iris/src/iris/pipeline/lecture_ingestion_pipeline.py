@@ -2,7 +2,6 @@ import base64
 import os
 import tempfile
 import threading
-from asyncio.log import logger
 from typing import List, Optional
 
 import fitz
@@ -13,31 +12,34 @@ from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain import FeatureDTO
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
+)
+from iris.domain.variant.lecture_unit_page_ingestion_variant import (
+    LectureUnitPageIngestionVariant,
 )
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
 from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
-from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
+from ..tracing import observe
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
 )
 from ..web.status import ingestion_status_callback
 from . import Pipeline
-from .lecture_unit_pipeline import LectureUnitPipeline
+
+logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
 
@@ -87,12 +89,15 @@ def create_page_data(
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
+            LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
         }
         for page_split in page_splits
     ]
 
 
-class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
+class LectureUnitPageIngestionPipeline(
+    AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]
+):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
     processing the content, and updating the vector database."""
 
@@ -105,11 +110,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         super().__init__()
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_chat = ModelVersionRequestHandler("gpt-4.1-mini")
+        self.llm_chat = ModelVersionRequestHandler("gpt-5-mini")
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gpt-4.1-mini")
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        request_handler = ModelVersionRequestHandler("gpt-5-mini")
+        completion_args = CompletionArguments(temperature=0.2)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -118,26 +123,47 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.course_language = None
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[LectureUnitPageIngestionVariant]:
         """
-        Returns available variants for the LectureUnitPageIngestionPipeline based on available LLMs.
-
-        Args:
-            _available_llms: List of available language models
+        Returns available variants for the LectureUnitPageIngestionPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of LectureUnitPageIngestionVariant objects representing available variants
         """
         return [
-            FeatureDTO(
-                id="default",
-                name="Default Variant",
-                description="Default lecture ingestion variant.",
-            )
+            LectureUnitPageIngestionVariant(
+                variant_id="default",
+                name="Default",
+                description="Default lecture ingestion variant using efficient models "
+                "for text processing and embeddings.",
+                chat_model="gpt-5-mini",
+                embedding_model="text-embedding-3-small",
+            ),
+            LectureUnitPageIngestionVariant(
+                variant_id="advanced",
+                name="Advanced",
+                description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
+                chat_model="gpt-5.2",
+                embedding_model="text-embedding-3-large",
+            ),
         ]
 
-    def __call__(self) -> bool:
+    @observe(name="Lecture Unit Page Ingestion Pipeline")
+    def __call__(self) -> (str, []):
         try:
+            if not self.check_if_attachment_needs_update():
+                pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+                doc = fitz.open(pdf_path)
+                self.course_language = self.get_course_language(
+                    doc.load_page(min(5, doc.page_count - 1)).get_text()
+                )
+                self.callback.in_progress("skipping slide removal")
+                self.callback.done()
+                self.callback.in_progress("skipping slide interpretation")
+                self.callback.done()
+                self.callback.in_progress("skipping slide ingestion")
+                self.callback.done()
+                return self.course_language, self.tokens
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
@@ -162,38 +188,46 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.batch_update(chunks)
 
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
-            lecture_unit_dto = LectureUnitDTO(
-                course_id=self.dto.lecture_unit.course_id,
-                course_name=self.dto.lecture_unit.course_name,
-                course_description=self.dto.lecture_unit.course_description,
-                course_language=self.course_language,
-                lecture_id=self.dto.lecture_unit.lecture_id,
-                lecture_name=self.dto.lecture_unit.lecture_name,
-                lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-                lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
-                lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
-                base_url=self.dto.settings.artemis_base_url,
-            )
-
-            LectureUnitPipeline()(lecture_unit=lecture_unit_dto)
-
-            self.callback.done(
-                "Lecture Unit Summary Ingestion Finished", tokens=self.tokens
-            )
 
             logger.info(
                 "Lecture ingestion pipeline finished Successfully for course %s",
                 self.dto.lecture_unit.course_name,
             )
-            return True
+            return self.course_language, self.tokens
         except Exception as e:
-            logger.error("Error updating lecture unit: %s", e)
+            logger.error("Error updating lecture unit", exc_info=e)
             self.callback.error(
                 f"Failed to ingest lectures into the database: {e}",
                 exception=e,
                 tokens=self.tokens,
             )
-            return False
+            return "", []
+
+    def check_if_attachment_needs_update(self) -> bool:
+        page_chunk_filter = Filter.by_property(
+            LectureUnitPageChunkSchema.BASE_URL.value
+        ).equal(self.dto.settings.artemis_base_url)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.COURSE_ID.value
+        ).equal(self.dto.lecture_unit.course_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.LECTURE_ID.value
+        ).equal(self.dto.lecture_unit.lecture_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+        ).equal(self.dto.lecture_unit.lecture_unit_id)
+
+        page_chunk = self.collection.query.fetch_objects(
+            filters=page_chunk_filter, limit=1
+        ).objects
+
+        if len(page_chunk) == 0:
+            return True
+        version = page_chunk[0].properties.get(
+            LectureUnitPageChunkSchema.PAGE_VERSION.value
+        )
+
+        return version < self.dto.lecture_unit.attachment_version
 
     def batch_update(self, chunks):
         """
@@ -210,7 +244,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
-                    logger.error("Error updating lecture unit: %s", e)
+                    logger.error("Error updating lecture unit", exc_info=e)
                     self.callback.error(
                         f"Failed to ingest lectures into the database: {e}",
                         exception=e,
@@ -293,7 +327,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             response = self.llm_chat.chat(
                 [iris_message],
-                CompletionArguments(temperature=0, max_tokens=512),
+                CompletionArguments(temperature=0),
                 tools=[],
             )
             self._append_tokens(
@@ -352,7 +386,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         response = self.llm_chat.chat(
             [iris_message],
-            CompletionArguments(temperature=0, max_tokens=20),
+            CompletionArguments(temperature=0),
             tools=[],
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)

@@ -1,0 +1,23 @@
+meta {
+  name: Connect Model Provider
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/logosdb/connect_model_provider
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logos_key": "{{logosKey}}",
+    "model_id": "{{modelId}}",
+    "provider_id": "{{providerId}}"
+  }
+}

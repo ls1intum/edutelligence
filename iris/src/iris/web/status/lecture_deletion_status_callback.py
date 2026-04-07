@@ -1,5 +1,6 @@
-import logging
 from typing import List
+
+from iris.common.logging_config import get_logger
 
 from ...domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -8,7 +9,7 @@ from ...domain.status.stage_dto import StageDTO
 from ...domain.status.stage_state_dto import StageStateEnum
 from .status_update import StatusCallback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LecturesDeletionStatusCallback(StatusCallback):
@@ -19,9 +20,7 @@ class LecturesDeletionStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = (
-            f"{base_url}/api/iris/public/pyris/webhooks/ingestion/runs/{run_id}/status"
-        )
+        url = f"{base_url}/api/iris/internal/webhooks/ingestion/runs/{run_id}/status"
 
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
@@ -29,7 +28,7 @@ class LecturesDeletionStatusCallback(StatusCallback):
             StageDTO(
                 weight=100,
                 state=StageStateEnum.NOT_STARTED,
-                name="Slides removal",
+                name="Lecture unit removal",
             ),
         ]
         status = IngestionStatusUpdateDTO(stages=stages)

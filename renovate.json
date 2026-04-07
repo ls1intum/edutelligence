@@ -44,5 +44,8 @@
       "matchPaths": ["shared/**"],
       "prTitlePrefix": "`Shared`: "
     }
-  ]
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": ["* 0-4 * * *"],
+  "updateNotScheduled": false
 }

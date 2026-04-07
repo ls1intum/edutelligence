@@ -1,6 +1,6 @@
 from pathlib import Path
 from llm_core.loaders.llm_config_loader import get_llm_config
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, BaseModel, Field
 
 from llm_core.models import ModelConfigType
 
@@ -18,6 +18,4 @@ class ApproachConfig(BaseModel):
         default=llm_config.models.base_model_config,
     )
     type: str = Field(..., description="The type of approach config")
-
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)

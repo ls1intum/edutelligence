@@ -59,11 +59,12 @@ class Submission:
         text: str,
         language: str,
         feedbacks: Optional[Union[List[Feedback], Dict[str, List[Feedback]]]],
+        meta: Optional[dict] = None,
     ) -> None:
         self.id = int(id)
         self.text = text
         self.language = language
-        self.meta = {}
+        self.meta = {} if meta is None else dict(meta)
         self.feedbacks = feedbacks
 
 
@@ -136,7 +137,7 @@ class Exercise:
         example_solution: str,
         submissions: List[Submission],
         type: str = "text",
-        meta: dict = {},
+        meta: Optional[dict] = None,
     ) -> None:
         self.id = int(id)
         self.title = title
@@ -146,7 +147,7 @@ class Exercise:
         self.grading_instructions = grading_instructions
         self.grading_criteria = grading_criteria
         self.problem_statement = problem_statement
-        self.meta = meta
+        self.meta = {} if meta is None else dict(meta)
         self.example_solution = example_solution
         self.submissions = submissions
 

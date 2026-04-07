@@ -11,7 +11,14 @@ data/*
 .env
 **/.env
 **/data/*
+!**/data/exercises/
+!**/data/samples/
 test-results/*
 .coverage*
 **/.coverage*
 !.coveragerc
+
+# Test artifacts
+**/quality_drift_report.json
+tests/modules/text/module_text_llm/real/data/exercises/
+tests/modules/modeling/module_modeling_llm/real/data/exercises/

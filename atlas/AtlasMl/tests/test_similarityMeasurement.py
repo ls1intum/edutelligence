@@ -3,9 +3,11 @@ from enum import Enum
 import pytest
 from scipy.spatial.distance import cosine, euclidean, jaccard
 
-from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
-from atlasml.ml.SimilarityMeasurement.Euclidian import compute_euclidean_distance
-from atlasml.ml.SimilarityMeasurement.Jaccard import compute_jaccard_similarity
+from atlasml.ml.similarity_measures import (
+    compute_cosine_similarity,
+    compute_euclidean_distance,
+    compute_jaccard_similarity,
+)
 
 
 class MockModelDimension(Enum):
@@ -55,7 +57,7 @@ def test_cosine_similarity_mismatched_dimensions():
     """Test if function raises ValueError when vectors have different dimensions."""
     vector1 = [1, 2, 3]
     vector2 = [1, 2]
-    with pytest.raises(ValueError, match="Both vectors must have the same dimensions."):
+    with pytest.raises(ValueError, match="Vector dimensions must match"):
         compute_cosine_similarity(vector1, vector2)
 
 
@@ -99,7 +101,7 @@ def test_euclidean_distance_mismatched_dimensions():
     """Test if function raises ValueError when vectors have different dimensions."""
     vector1 = [1, 2, 3]
     vector2 = [1, 2]
-    with pytest.raises(ValueError, match="Both vectors must have the same dimensions."):
+    with pytest.raises(ValueError, match="Vector dimensions must match"):
         compute_euclidean_distance(vector1, vector2)
 
 
@@ -129,9 +131,10 @@ def test_jaccard_similarity_partial_overlap():
     similarity = compute_jaccard_similarity(vector1, vector2)
     assert similarity == pytest.approx(expected_similarity, rel=1e-6)
 
+
 def test_jaccard_similarity_mismatched_dimensions():
     """Test if a function raises ValueError when vectors have different dimensions."""
     vector1 = [1, 0, 1]
     vector2 = [1, 0]
-    with pytest.raises(ValueError, match="Both vectors must have the same dimensions."):
+    with pytest.raises(ValueError, match="Vector dimensions must match"):
         compute_jaccard_similarity(vector1, vector2)

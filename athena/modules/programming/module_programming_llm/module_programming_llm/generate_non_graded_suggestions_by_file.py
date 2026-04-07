@@ -1,7 +1,7 @@
 from typing import List, Optional, Sequence
 import os
 import asyncio
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, BaseModel, Field
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission, Feedback
@@ -28,27 +28,23 @@ from module_programming_llm.helpers.utils import (
 
 class FeedbackModel(BaseModel):
     title: str = Field(
-        description="Very short title, i.e. feedback category", example="Logic Error"
+        description="Very short title, i.e. feedback category", examples=["Logic Error"]
     )
     description: str = Field(description="Feedback description")
     line_start: Optional[int] = Field(
-        description="Referenced line number start, or empty if unreferenced"
+        None, description="Referenced line number start, or empty if unreferenced"
     )
     line_end: Optional[int] = Field(
-        description="Referenced line number end, or empty if unreferenced"
+        None, description="Referenced line number end, or empty if unreferenced"
     )
-
-    class Config:
-        title = "Feedback"
+    model_config = ConfigDict(title="Feedback")
 
 
 class ImprovementModel(BaseModel):
     """Collection of feedbacks making up an improvement"""
 
     feedbacks: Sequence[FeedbackModel] = Field(description="Improvement feedbacks")
-
-    class Config:
-        title = "ImprovementModel"
+    model_config = ConfigDict(title="ImprovementModel")
 
 
 # pylint: disable=too-many-locals
@@ -234,7 +230,7 @@ async def generate_suggestions_by_file(
                 {
                     "file_path": prompt_input["file_path"],
                     "prompt": chat_prompt.format(**prompt_input),
-                    "result": result.dict() if result is not None else None,
+                    "result": result.model_dump() if result is not None else None,
                 }
                 for prompt_input, result in zip(prompt_inputs, results)
             ],
