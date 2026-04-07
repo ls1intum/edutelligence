@@ -49,48 +49,34 @@ class ImprovementModel(BaseModel):
     model_config = ConfigDict(title="ImprovementModel")
 
 
-def get_smallest_positive_credit(exercise: Exercise) -> float:
-    positive_credits = [
-        instruction.credits
-        for criterion in exercise.grading_criteria or []
-        for instruction in criterion.structured_grading_instructions
-        if instruction.credits > 0
-    ]
-    if positive_credits:
-        return min(positive_credits)
-    if exercise.max_points + exercise.bonus_points >= 1:
+def normalize_credit_value(credits: float) -> float:
+    if credits <= 0.25:
+        return 0.0
+    if credits <= 0.75:
         return 0.5
-    return max((exercise.max_points + exercise.bonus_points) / 2, 0.0)
+    return 1.0
 
 
 def normalize_feedback_credits(
     feedbacks: List[Feedback], exercise: Exercise
 ) -> List[Feedback]:
+    if not feedbacks:
+        return feedbacks
+
     feedbacks = [
-        feedback.model_copy(update={"credits": max(feedback.credits, 0.0)})
+        feedback.model_copy(update={"credits": normalize_credit_value(feedback.credits)})
         for feedback in feedbacks
     ]
 
-    max_points = exercise.max_points
-    bonus_points = exercise.bonus_points
-    max_total_points = max_points + bonus_points
+    max_total_points = exercise.max_points + exercise.bonus_points
     if max_total_points <= 0:
         return feedbacks
 
-    has_zero_credit_feedback = any(feedback.credits == 0.0 for feedback in feedbacks)
-    if has_zero_credit_feedback:
-        reserved_credit = min(get_smallest_positive_credit(exercise), max_total_points)
-        max_total_points = max(max_total_points - reserved_credit, 0.0)
-
-    total_positive_credits = sum(max(feedback.credits, 0.0) for feedback in feedbacks)
-    if total_positive_credits <= max_total_points:
-        return feedbacks
-
-    scale_factor = max_total_points / total_positive_credits
+    per_feedback_weight = max_total_points / len(feedbacks)
     return [
         feedback.model_copy(
             update={
-                "credits": round(feedback.credits * scale_factor, 2)
+                "credits": round(feedback.credits * per_feedback_weight, 2)
             }
         )
         for feedback in feedbacks

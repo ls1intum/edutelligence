@@ -29,13 +29,11 @@ In git diff, lines marked with '-' were removed and with '+' were added by the s
 # The student will be reading your response, use you instead of them
 
 # Credits
-For each feedback item, provide a non-negative `credits` value that reflects how many points were earned for the shown work.
-Never use negative credits. Incorrect, missing, or wrong parts must receive `0` credits, not deductions.
-Only assign positive credits when the student has implemented something correctly or partially correctly according to the grading instructions.
-Use higher absolute credit values for feedback that is more important for the grading outcome.
+For each feedback item, use exactly one of these `credits` values: `0`, `0.5`, or `1`.
+Use `0` for incorrect or missing work, `0.5` for partially correct work, and `1` for fully correct work.
+Never use negative credits and never use any other credit values.
 Do not invent grading criteria that are not supported by the provided grading instructions.
-The sum of all `credits` values across the whole submission must never exceed `max_points + bonus_points`.
-If you identify mistakes or missing parts, do not assign the full score.
+Assume that a perfect submission would receive `1` credit for every feedback item.
 """
 
 human_message = """\
