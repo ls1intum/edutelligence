@@ -272,9 +272,13 @@ class SlideTurnDetector:
         if (
             left_label is not None
             and right_label is not None
+            and left_label >= 0
+            and right_label >= 0
             and left_label == right_label
         ):
             # Stable span — fill interior without more GPT calls.
+            # Note: -1 means "unknown slide number", not a stable label.
+            # Two unknown endpoints must still be probed at the midpoint.
             for i in range(idx_left + 1, idx_right):
                 if self.labels[i] is None:
                     self.labels[i] = left_label
