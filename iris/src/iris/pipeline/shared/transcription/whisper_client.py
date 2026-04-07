@@ -8,7 +8,7 @@ the Whisper endpoint/key is loaded from llm_config.yml via LlmManager.
 import os
 import time
 from concurrent.futures import as_completed
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ffmpeg  # type: ignore
 import requests
@@ -80,8 +80,9 @@ class WhisperClient:
     def _get_request_params(self) -> Tuple[str, Dict[str, str], Dict[str, str]]:
         """Build provider-specific URL, headers, and form data for the Whisper API."""
         if isinstance(self.llm, AzureWhisperModel):
+            endpoint = self.llm.endpoint.rstrip("/")
             url = (
-                f"{self.llm.endpoint}/openai/deployments/{self.llm.azure_deployment}"
+                f"{endpoint}/openai/deployments/{self.llm.azure_deployment}"
                 f"/audio/transcriptions?api-version={self.llm.api_version}"
             )
             headers = {"api-key": self.llm.api_key}
@@ -108,7 +109,10 @@ class WhisperClient:
 
     @observe(name="Transcribe Audio")
     def transcribe(
-        self, audio_path: str, lecture_unit_id: Optional[int] = None
+        self,
+        audio_path: str,
+        lecture_unit_id: Optional[int] = None,
+        on_chunk_complete: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, Any]:
         """Transcribe an audio file using Whisper.
 
@@ -118,6 +122,9 @@ class WhisperClient:
         Args:
             audio_path: Path to the audio file.
             lecture_unit_id: For log prefixing.
+            on_chunk_complete: Optional callback invoked after each chunk
+                finishes. Receives (chunks_done, total_chunks). Used as a
+                heartbeat to keep Artemis informed during long transcriptions.
 
         Returns:
             Dict with:
@@ -146,6 +153,7 @@ class WhisperClient:
         # Chunks with 0 surviving segments cast no vote.
         language_votes: Dict[str, int] = {}
 
+        chunks_done = 0
         with TracedThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
                 executor.submit(
@@ -153,22 +161,30 @@ class WhisperClient:
                 ): i
                 for i, chunk_path in enumerate(chunk_paths)
             }
-            for future in as_completed(futures):
-                i = futures[future]
-                offset = offsets[i]
-                segments, language = future.result()
-                if language is not None and len(segments) > 0:
-                    language_votes[language] = language_votes.get(language, 0) + len(
-                        segments
-                    )
-                results[i] = [
-                    {
-                        "start": offset + seg["start"],
-                        "end": offset + seg["end"],
-                        "text": seg["text"],
-                    }
-                    for seg in segments
-                ]
+            try:
+                for future in as_completed(futures):
+                    i = futures[future]
+                    offset = offsets[i]
+                    segments, language = future.result()
+                    if language is not None and len(segments) > 0:
+                        language_votes[language] = language_votes.get(
+                            language, 0
+                        ) + len(segments)
+                    results[i] = [
+                        {
+                            "start": offset + seg["start"],
+                            "end": offset + seg["end"],
+                            "text": seg["text"],
+                        }
+                        for seg in segments
+                    ]
+                    chunks_done += 1
+                    if on_chunk_complete is not None:
+                        on_chunk_complete(chunks_done, total)
+            except Exception:
+                for f in futures:
+                    f.cancel()
+                raise
 
         language_map = {"english": "en", "german": "de"}
         winner = (
@@ -209,7 +225,7 @@ class WhisperClient:
 
         for attempt in range(self.max_retries):
             with open(chunk_path, "rb") as f:
-                logger.info(
+                logger.debug(
                     "%s %s uploading chunk %d/%d",
                     prefix,
                     self.provider_name,
@@ -275,7 +291,13 @@ class WhisperClient:
                     )
                     return segments, language
 
-                except requests.RequestException as e:
+                except requests.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else None
+                    if status in (401, 403, 404):
+                        raise RuntimeError(
+                            f"{self.provider_name} Whisper returned {status} "
+                            f"(non-retryable): {e}"
+                        ) from e
                     logger.error(
                         "%s %s Whisper failed on chunk %d/%d: %s",
                         prefix,
@@ -301,6 +323,40 @@ class WhisperClient:
                         self.max_retries,
                     )
                     time.sleep(wait)
+
+                except requests.Timeout as e:
+                    # Read/connect timeouts are transient — retry with backoff
+                    logger.warning(
+                        "%s %s Whisper timeout on chunk %d/%d: %s",
+                        prefix,
+                        self.provider_name,
+                        chunk_index + 1,
+                        total_chunks,
+                        e,
+                    )
+                    if attempt == self.max_retries - 1:
+                        raise RuntimeError(
+                            f"{self.provider_name} Whisper timed out after "
+                            f"{self.max_retries} retries: {e}"
+                        ) from e
+
+                    wait = self._get_retry_wait_time(attempt)
+                    logger.warning(
+                        "%s Chunk %d/%d retrying in %ds (attempt %d/%d)",
+                        prefix,
+                        chunk_index + 1,
+                        total_chunks,
+                        wait,
+                        attempt + 1,
+                        self.max_retries,
+                    )
+                    time.sleep(wait)
+
+                except requests.RequestException as e:
+                    raise RuntimeError(
+                        f"{self.provider_name} Whisper request failed "
+                        f"(non-retryable): {e}"
+                    ) from e
 
         raise RuntimeError(
             f"{self.provider_name} Whisper too many retries for chunk {chunk_path}"

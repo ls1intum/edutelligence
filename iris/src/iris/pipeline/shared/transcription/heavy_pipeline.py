@@ -95,8 +95,21 @@ class HeavyTranscriptionPipeline:
         # Note: the orchestrator calls done() for this stage so it can
         # attach the checkpoint data atomically in the same HTTP call.
         self.callback.in_progress("Transcribing audio with Whisper...")
+
+        def _on_chunk_complete(chunks_done: int, total_chunks: int) -> None:
+            """Heartbeat: notify Artemis after each Whisper chunk completes.
+
+            This keeps the Hazelcast job token alive and gives the UI
+            accurate progress during long transcriptions.
+            """
+            self.callback.in_progress(
+                f"Transcribing audio with Whisper ({chunks_done}/{total_chunks} chunks)"
+            )
+
         transcription = self.whisper_client.transcribe(
-            self.storage.audio_path, lecture_unit_id=lecture_unit_id
+            self.storage.audio_path,
+            lecture_unit_id=lecture_unit_id,
+            on_chunk_complete=_on_chunk_complete,
         )
         segment_count = len(transcription.get("segments", []))
         logger.info(
