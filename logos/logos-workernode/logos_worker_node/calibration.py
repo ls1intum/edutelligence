@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_VLLM = "vllm"
-_DEFAULT_KV_CACHE = "2G"
+_DEFAULT_KV_CACHE = "4G"
 _READY_TIMEOUT_S = 600.0
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
@@ -56,6 +57,8 @@ _VRAM_SAMPLE_COUNT = 3
 _VRAM_SAMPLE_INTERVAL_S = 1.0
 _PROFILES_FILE = "model_profiles.yml"
 _CALIBRATION_PORT = 11499
+_KV_CACHE_MIN_STEP_MB = 1024.0  # stop binary search when gap < 1 GB
+_KV_CACHE_VRAM_CAP_RATIO = 0.8  # stop search when KV > 80% of total GPU VRAM
 
 # ---------------------------------------------------------------------------
 # KV-cache size parsing
@@ -75,6 +78,21 @@ def _parse_kv_to_mb(value: str) -> float:
     if v.endswith("K"):
         return float(v[:-1]) / 1024.0
     return float(v) / (1024.0 * 1024.0)  # raw bytes
+
+
+def _format_kv_mb(mb: float) -> str:
+    """Format a megabyte value as a human-friendly KV cache size string.
+
+    ``2048.0`` → ``'2G'``, ``1536.0`` → ``'1536M'``.
+    """
+    if mb >= 1024.0 and mb % 1024.0 == 0:
+        return f"{int(mb / 1024)}G"
+    return f"{int(mb)}M"
+
+
+def _round_up_gb(mb: float) -> float:
+    """Round *mb* up to the nearest whole gigabyte (1024 MB boundary)."""
+    return math.ceil(mb / 1024.0) * 1024.0
 
 
 # ---------------------------------------------------------------------------
@@ -414,28 +432,97 @@ def calibrate_model(
         return partial
     logger.info("        baseline = %.0f MB", baseline_mb)
 
-    # Phase 2 — Spawn vLLM and wait for readiness
-    proc = spawn_vllm(
-        plan,
-        vllm_binary,
-        host,
-        port,
-        log_path,
-        kv_cache_memory_bytes=kv_bytes_str,
-    )
+    # Compute VRAM cap for KV cache search (80% of total GPU VRAM)
+    max_kv_mb = float("inf")
     try:
+        gpu_snap = query_gpu_vram(gpu_indices)
+        total_gpu_mb = sum(v["total_mb"] for v in gpu_snap.values())
+        max_kv_mb = total_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
         logger.info(
-            "  [2/5] Waiting for vLLM ready (timeout=%.0fs)...", ready_timeout_s
+            "  GPU total VRAM = %.0f MB, KV cache search cap (%.0f%%) = %.0f MB",
+            total_gpu_mb, _KV_CACHE_VRAM_CAP_RATIO * 100, max_kv_mb,
+        )
+    except Exception as exc:
+        logger.warning(
+            "  Could not query GPU VRAM for KV cache cap: %s — no cap applied", exc,
+        )
+
+    # Phase 2 — Spawn vLLM and wait for readiness (with binary KV cache search)
+    #
+    # Binary search between current_kv_mb (low) and max_kv_mb (high).
+    # On failure: move low up to midpoint.  On success: done.
+    # Stops when the gap between low and high is < _KV_CACHE_MIN_STEP_MB,
+    # at which point we try high (the cap) as a last resort.
+    lo_mb = kv_cache_sent_mb
+    hi_mb = max_kv_mb
+    current_kv_mb = lo_mb
+
+    while True:
+        kv_bytes_str = _format_kv_mb(current_kv_mb)
+        kv_cache_sent_mb = current_kv_mb
+        partial.kv_cache_sent_mb = kv_cache_sent_mb
+
+        proc = spawn_vllm(
+            {**plan, "kv_cache_memory_bytes": kv_bytes_str},
+            vllm_binary,
+            host,
+            port,
+            log_path,
+            kv_cache_memory_bytes=kv_bytes_str,
+        )
+
+        logger.info(
+            "  [2/5] Waiting for vLLM ready (timeout=%.0fs, kv_cache=%s / %.0f MB)...",
+            ready_timeout_s, kv_bytes_str, current_kv_mb,
         )
         t0 = time.perf_counter()
         try:
             wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
-        except (TimeoutError, RuntimeError) as exc:
+            break  # vLLM is ready — proceed to measurement phases
+        except RuntimeError as exc:
+            # vLLM exited before becoming ready — try a larger KV cache
+            logger.warning(
+                "  vLLM startup failed with kv_cache=%s (%.0f MB): %s",
+                kv_bytes_str, current_kv_mb, exc,
+            )
+            stop_vllm(proc)
+            time.sleep(_VRAM_SETTLE_S)
+
+            # Binary search: failed value becomes new lower bound
+            lo_mb = current_kv_mb
+            gap = hi_mb - lo_mb
+            if gap < _KV_CACHE_MIN_STEP_MB:
+                partial.error = (
+                    f"KV cache search exhausted: {kv_bytes_str} failed, "
+                    f"search range [{_format_kv_mb(lo_mb)}–{_format_kv_mb(hi_mb)}] "
+                    f"narrower than {_KV_CACHE_MIN_STEP_MB:.0f} MB step "
+                    f"({_KV_CACHE_VRAM_CAP_RATIO:.0%} VRAM cap = {max_kv_mb:.0f} MB)"
+                )
+                logger.warning("  %s", partial.error)
+                return partial
+
+            # Jump to midpoint (rounded up to nearest GB for clean values)
+            mid = (lo_mb + hi_mb) / 2.0
+            next_kv_mb = max(lo_mb + _KV_CACHE_MIN_STEP_MB, _round_up_gb(mid))
+            next_kv_mb = min(next_kv_mb, hi_mb)  # never exceed cap
+
+            logger.info(
+                "  Binary search: [%.0f–%.0f MB] → trying %s (%.0f MB)...",
+                lo_mb, hi_mb, _format_kv_mb(next_kv_mb), next_kv_mb,
+            )
+            current_kv_mb = next_kv_mb
+            continue
+        except TimeoutError as exc:
+            # Timeout is NOT retried — the model loaded but warmup took too long
             partial.error = str(exc)
             logger.warning("  ERROR: %s", partial.error)
+            stop_vllm(proc)
+            time.sleep(_VRAM_SETTLE_S)
             return partial
-        logger.info("        Ready in %.1fs", time.perf_counter() - t0)
 
+    logger.info("        Ready in %.1fs (kv_cache=%s)", time.perf_counter() - t0, kv_bytes_str)
+
+    try:
         # Phase 3 — Measure awake VRAM
         logger.info(
             "  [3/5] Measuring awake VRAM (settling %.0fs)...", _VRAM_SETTLE_S
@@ -568,6 +655,8 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "residency_source": "calibrated",
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
+        # Discovered KV cache size for use by the lane manager at runtime
+        "calibration_kv_cache_memory_bytes": _format_kv_mb(r.kv_cache_sent_mb),
     }
 
 
