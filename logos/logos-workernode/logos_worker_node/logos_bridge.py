@@ -482,8 +482,13 @@ class LogosBridgeClient:
         raise ValueError(f"Unsupported bridge command '{action}'")
 
     @staticmethod
-    def _lane_target_url(lane_status: dict[str, Any]) -> str:
-        endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
+    def _lane_target_url(lane_status: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
+        # Detect embeddings requests from payload shape: has "input" but not "messages".
+        # vLLM exposes embeddings at /v1/embeddings, not /v1/chat/completions.
+        if payload and "input" in payload and "messages" not in payload:
+            endpoint = "v1/embeddings"
+        else:
+            endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
         return f"http://127.0.0.1:{lane_status['port']}/{endpoint}"
 
     async def _resolve_lane_for_infer(self, lane_id: str) -> dict[str, Any]:
@@ -502,7 +507,7 @@ class LogosBridgeClient:
             raise ValueError("payload must be an object")
 
         lane_status = await self._resolve_lane_for_infer(lane_id)
-        target_url = self._lane_target_url(lane_status)
+        target_url = self._lane_target_url(lane_status, payload)
 
         await lane_manager.increment_active_requests(lane_id)
         try:
@@ -534,7 +539,7 @@ class LogosBridgeClient:
 
         try:
             lane_status = await self._resolve_lane_for_infer(lane_id)
-            target_url = self._lane_target_url(lane_status)
+            target_url = self._lane_target_url(lane_status, payload)
         except Exception as exc:  # noqa: BLE001
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": False, "error": str(exc)})
             return

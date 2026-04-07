@@ -6,7 +6,9 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 import uvicorn
@@ -19,6 +21,7 @@ from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.runtime import SERVICE_VERSION
+from logos_worker_node.calibration import auto_calibrate_models
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +31,106 @@ logging.basicConfig(
 logger = logging.getLogger("logos_worker_node")
 
 _LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
+
+
+async def _auto_calibrate_if_needed(
+    cfg: "AppConfig",
+    model_profiles: ModelProfileRegistry,
+    state_dir: "Path",
+) -> None:
+    """Check for uncalibrated capabilities models and calibrate them on startup."""
+    if os.getenv("LOGOS_SKIP_AUTO_CALIBRATION", "").strip().lower() in ("1", "true", "yes"):
+        logger.info("Auto-calibration disabled via LOGOS_SKIP_AUTO_CALIBRATION")
+        return
+
+    caps = cfg.logos.capabilities_models if cfg.logos else []
+    if not caps:
+        return
+
+    uncalibrated = []
+    for model_name in caps:
+        profile = model_profiles.get_profile(model_name)
+        reason = None
+        if profile is None:
+            reason = "no profile"
+        elif profile.base_residency_mb is None:
+            reason = "base_residency_mb is null"
+        elif profile.sleeping_residual_mb is None:
+            reason = "sleeping_residual_mb is null"
+        elif (
+            profile.residency_source in ("calibrated", "measured")
+            and profile.loaded_vram_mb is not None
+            and abs(profile.base_residency_mb - profile.loaded_vram_mb) > 1.0
+        ):
+            # Old-format profile: base_residency was stored as weights-only.
+            # New format stores full loaded VRAM. Force recalibration.
+            reason = f"stale format (base={profile.base_residency_mb:.0f} != loaded={profile.loaded_vram_mb:.0f})"
+        if reason:
+            logger.info("  %s needs calibration: %s", model_name, reason)
+            uncalibrated.append(model_name)
+
+    if not uncalibrated:
+        logger.info(
+            "All %d capabilities models already calibrated \u2014 skipping calibration",
+            len(caps),
+        )
+        return
+
+    logger.info(
+        "%d of %d capabilities models need calibration: %s. Starting auto-calibration...",
+        len(uncalibrated), len(caps), uncalibrated,
+    )
+
+    # Resolve config.yml path (same logic as config.py)
+    config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+    if config_path_str:
+        config_path = Path(config_path_str)
+    else:
+        for candidate in [Path("/app/config.yml"), Path("config.yml")]:
+            if candidate.resolve().is_file():
+                config_path = candidate
+                break
+        else:
+            config_path = Path("config.yml")
+
+    t0 = time.perf_counter()
+
+    # Run synchronous calibration in a thread to avoid blocking the event loop
+    results = await asyncio.to_thread(
+        auto_calibrate_models,
+        uncalibrated,
+        config_path,
+        state_dir,
+    )
+
+    elapsed = time.perf_counter() - t0
+
+    ok = [r for r in results.values() if r.success]
+    fail = [r for r in results.values() if not r.success]
+
+    for r in ok:
+        logger.info(
+            "Calibrated %s \u2014 base_residency=%.0f MB \u2014 done in calibration batch",
+            r.model, r.base_residency_mb,
+        )
+
+    if fail:
+        for r in fail:
+            logger.warning(
+                "Calibration failed for %s: %s (model will have no placement data)",
+                r.model, r.error,
+            )
+
+    logger.info(
+        "Auto-calibration complete (%d/%d succeeded) in %.1fs. Proceeding to normal startup.",
+        len(ok), len(ok) + len(fail), elapsed,
+    )
+
+    # Reload persisted profiles into the registry so newly calibrated
+    # values are available for lane placement
+    if ok:
+        model_profiles._load_persisted()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -68,6 +171,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model_profile_overrides=cfg.model_profile_overrides,
     )
 
+    await _auto_calibrate_if_needed(cfg, model_profiles, get_state_dir())
+
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
         vllm_engine_config=cfg.engines.vllm,
@@ -78,6 +183,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gpu_device_count=lambda: gpu_collector.device_count,
         per_gpu_vram_mb=lambda: gpu_collector.per_gpu_vram_mb,
         gpu_snapshot=gpu_collector.get_snapshot,
+        gpu_force_poll=gpu_collector.force_poll,
     )
 
     # Validate capabilities models at startup (warnings only)
