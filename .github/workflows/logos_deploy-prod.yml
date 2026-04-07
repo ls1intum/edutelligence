@@ -7,36 +7,134 @@ on:
     types: [completed]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  deploy-logos-server:
+  deploy:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
-    with:
-      environment: "Logos - Prod"
-      docker-compose-file: "./logos/docker-compose.yaml"
-      main-image-name: ls1intum/edutelligence/logos
-      image-tag: latest
-      deployment-base-path: "/opt/logos"
-    secrets: inherit
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        include:
+          - environment: "Logos - Prod"
+            compose-file: ./logos/docker-compose.yaml
+            base-path: /opt/logos
+          - environment: "Logos Worker - Prod - deimama"
+            compose-file: ./logos/logos-workernode/docker-compose.yml
+            base-path: /opt/logos-workernode
+          - environment: "Logos Worker - Prod - deipapa"
+            compose-file: ./logos/logos-workernode/docker-compose.yml
+            base-path: /opt/logos-workernode
+    environment:
+      name: ${{ matrix.environment }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-  deploy-worker-deimama:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
-    with:
-      environment: "Logos Worker - Prod - deimama"
-      docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
-      main-image-name: ls1intum/edutelligence/logos-workernode-vllm
-      image-tag: latest
-      deployment-base-path: "/opt/logos-workernode"
-    secrets: inherit
+      - name: Extract compose file basename
+        id: extract-basename
+        run: |
+          BASENAME=$(basename "${{ matrix.compose-file }}")
+          echo "basename=$BASENAME" >> $GITHUB_OUTPUT
+          cp "${{ matrix.compose-file }}" "$BASENAME"
 
-  deploy-worker-deipapa:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
-    with:
-      environment: "Logos Worker - Prod - deipapa"
-      docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
-      main-image-name: ls1intum/edutelligence/logos-workernode-vllm
-      image-tag: latest
-      deployment-base-path: "/opt/logos-workernode"
-    secrets: inherit
+      - name: Copy docker compose file to VM
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          source: ${{ steps.extract-basename.outputs.basename }}
+          target: ${{ matrix.base-path }}
+
+      - name: Create .env file
+        run: |
+          echo "ENVIRONMENT=${{ matrix.environment }}" > .env
+          echo "IMAGE_TAG=latest" >> .env
+
+          echo "$SECRETS_CONTEXT" | jq -r '
+            del(
+              .github_token,
+              .DOCKER_USERNAME,
+              .DOCKER_PASSWORD,
+              .DEPLOYMENT_GATEWAY_SSH_KEY,
+              .VM_SSH_PRIVATE_KEY
+            )
+            | to_entries[]
+            | "\(.key)=\(.value | @json)"
+          ' >> .env
+
+          echo "$VARS_CONTEXT" | jq -r '
+            del(
+              .DEPLOYMENT_GATEWAY_PORT,
+              .DEPLOYMENT_GATEWAY_USER,
+              .DEPLOYMENT_GATEWAY_HOST,
+              .VM_USERNAME,
+              .VM_HOST
+            )
+            | to_entries[]
+            | "\(.key)=\(.value | @json)"
+          ' >> .env
+        env:
+          VARS_CONTEXT: ${{ toJson(vars) }}
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+
+      - name: Copy .env file to VM
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          source: .env
+          target: ${{ matrix.base-path }}
+
+      - name: Pull new images
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          command_timeout: 30m
+          script: |
+            docker login ${{ vars.HARBOR_REGISTRY_BASE }} -u ${{ vars.HARBOR_ROBOT_USERNAME }} -p ${{ secrets.HARBOR_ROBOT_TOKEN }}
+            docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env pull
+
+      - name: Deploy with docker compose
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          script: |
+            docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env up -d --remove-orphans
+
+      - name: Clean up old images
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          script: |
+            docker image prune -f

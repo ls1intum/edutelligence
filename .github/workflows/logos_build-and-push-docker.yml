@@ -19,11 +19,18 @@ on:
     types:
       - created
 
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ${{ vars.HARBOR_REGISTRY_BASE }}/logos
+
 jobs:
   compute-tag:
     name: Compute tag
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       result: ${{ steps.compute-tag.outputs.result }}
       is_release: ${{ steps.compute-tag.outputs.is_release }}
@@ -65,68 +72,170 @@ jobs:
   build-and-push-server:
     name: Build Logos Server
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos
-      docker-file: ./logos/Dockerfile
-      docker-context: .
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos:latest,ghcr.io/ls1intum/edutelligence/logos:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos:{0}', needs.compute-tag.outputs.result) }}
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.HARBOR_REGISTRY_BASE }}
+          username: ${{ vars.HARBOR_ROBOT_USERNAME }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./logos/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('{0}/logos:latest,{0}/logos:{1}', env.REGISTRY, needs.compute-tag.outputs.release_tag) || format('{0}/logos:{1}', env.REGISTRY, needs.compute-tag.outputs.result) }}
 
   build-and-push-ui:
     name: Build Logos UI
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-ui
-      docker-file: ./logos/logos-ui/Dockerfile
-      docker-context: ./logos/logos-ui
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-ui:latest,ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.result) }}
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.HARBOR_REGISTRY_BASE }}
+          username: ${{ vars.HARBOR_ROBOT_USERNAME }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-ui
+          file: ./logos/logos-ui/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('{0}/logos-ui:latest,{0}/logos-ui:{1}', env.REGISTRY, needs.compute-tag.outputs.release_tag) || format('{0}/logos-ui:{1}', env.REGISTRY, needs.compute-tag.outputs.result) }}
 
   build-and-push-landing:
     name: Build Logos Landing
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-landing
-      docker-file: ./logos/logos-landing/Dockerfile
-      docker-context: ./logos/logos-landing
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-landing:latest,ghcr.io/ls1intum/edutelligence/logos-landing:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-landing:{0}', needs.compute-tag.outputs.result) }}
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.HARBOR_REGISTRY_BASE }}
+          username: ${{ vars.HARBOR_ROBOT_USERNAME }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-landing
+          file: ./logos/logos-landing/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('{0}/logos-landing:latest,{0}/logos-landing:{1}', env.REGISTRY, needs.compute-tag.outputs.release_tag) || format('{0}/logos-landing:{1}', env.REGISTRY, needs.compute-tag.outputs.result) }}
 
   build-and-push-db:
     name: Build Logos DB
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-db
-      docker-file: ./logos/db/Dockerfile
-      docker-context: ./logos/db
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-db:latest,ghcr.io/ls1intum/edutelligence/logos-db:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-db:{0}', needs.compute-tag.outputs.result) }}
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.HARBOR_REGISTRY_BASE }}
+          username: ${{ vars.HARBOR_ROBOT_USERNAME }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/db
+          file: ./logos/db/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('{0}/logos-db:latest,{0}/logos-db:{1}', env.REGISTRY, needs.compute-tag.outputs.release_tag) || format('{0}/logos-db:{1}', env.REGISTRY, needs.compute-tag.outputs.result) }}
 
   build-and-push-workernode-vllm:
     name: Build Logos Worker Node (vLLM)
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm
-      docker-file: ./logos/logos-workernode/Dockerfile
-      docker-context: ./logos/logos-workernode
-      build-args: |
-        BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
-        RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
-        INSTALL_VLLM=1
-        INSTALL_OLLAMA=0
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:latest,ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.result) }}
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.HARBOR_REGISTRY_BASE }}
+          username: ${{ vars.HARBOR_ROBOT_USERNAME }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-workernode
+          file: ./logos/logos-workernode/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
+            RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
+            INSTALL_VLLM=1
+            INSTALL_OLLAMA=0
+          tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('{0}/logos-workernode-vllm:latest,{0}/logos-workernode-vllm:{1}', env.REGISTRY, needs.compute-tag.outputs.release_tag) || format('{0}/logos-workernode-vllm:{1}', env.REGISTRY, needs.compute-tag.outputs.result) }}
 
   build-and-push-workernode-ollama:
     name: Build Logos Worker Node (Ollama)
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-workernode-ollama
-      docker-file: ./logos/logos-workernode/Dockerfile
-      docker-context: ./logos/logos-workernode
-      build-args: |
-        BASE_IMAGE=python:3.12-slim
-        INSTALL_VLLM=0
-        INSTALL_OLLAMA=1
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:latest,ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:{0}', needs.compute-tag.outputs.result) }}
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.HARBOR_REGISTRY_BASE }}
+          username: ${{ vars.HARBOR_ROBOT_USERNAME }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-workernode
+          file: ./logos/logos-workernode/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BASE_IMAGE=python:3.12-slim
+            INSTALL_VLLM=0
+            INSTALL_OLLAMA=1
+          tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('{0}/logos-workernode-ollama:latest,{0}/logos-workernode-ollama:{1}', env.REGISTRY, needs.compute-tag.outputs.release_tag) || format('{0}/logos-workernode-ollama:{1}', env.REGISTRY, needs.compute-tag.outputs.result) }}
