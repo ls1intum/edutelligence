@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Type
 
+from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
@@ -29,6 +30,7 @@ PipelineType = Type[
     | RewritingPipeline
     | LectureIngestionUpdatePipeline
     | FaqIngestionPipeline
+    | AutonomousTutorPipeline
 ]
 
 PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
@@ -42,4 +44,5 @@ PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
     Features.REWRITING: RewritingPipeline,
     Features.LECTURE_INGESTION: LectureIngestionUpdatePipeline,
     Features.FAQ_INGESTION: FaqIngestionPipeline,
+    Features.AUTONOMOUS_TUTOR: AutonomousTutorPipeline,
 }

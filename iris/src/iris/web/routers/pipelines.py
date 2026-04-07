@@ -32,11 +32,8 @@ from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
-
-from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
-
 from iris.llm.llm_requirements import missing_llm_requirements
-
+from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from iris.pipeline.chat.exercise_chat_agent_pipeline import (
     ExerciseChatAgentPipeline,
@@ -537,7 +534,7 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
             )
         case "AUTONOMOUS_TUTOR":
             return get_available_variants(
-                AutonomousTutorPipeline.get_variants(), available_llms
+                safe_get_variants(AutonomousTutorPipeline.get_variants), available_llms
             )
         case _:
             raise HTTPException(
