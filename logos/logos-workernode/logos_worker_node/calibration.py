@@ -286,6 +286,15 @@ def spawn_vllm(
     return proc
 
 
+def _read_log_tail(log_path: Path, max_lines: int = 40) -> str:
+    """Read the last *max_lines* of a vLLM log file, or '' on failure."""
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = lines[-max_lines:] if len(lines) > max_lines else lines
+        return "\n".join(tail)
+    except Exception:
+        return ""
+
 def stop_vllm(proc: subprocess.Popen[str]) -> None:
     if proc.poll() is not None:
         return
@@ -480,11 +489,15 @@ def calibrate_model(
             wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
             break  # vLLM is ready — proceed to measurement phases
         except RuntimeError as exc:
-            # vLLM exited before becoming ready — try a larger KV cache
+            # vLLM exited before becoming ready — log tail for visibility
+            log_tail = _read_log_tail(log_path)
             logger.warning(
                 "  vLLM startup failed with kv_cache=%s (%.0f MB): %s",
                 kv_bytes_str, current_kv_mb, exc,
             )
+            if log_tail:
+                logger.warning("  ── vLLM log tail ──\n%s", log_tail)
+
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
 
@@ -551,15 +564,8 @@ def calibrate_model(
 
         # Phase 4 — Sleep the model
         logger.info("  [4/5] Sleeping model (level=%d)...", sleep_level)
-        sleep_url = (
-            f"{base_url}/sleep?"
-            f"{urllib.parse.urlencode({'level': str(sleep_level), 'mode': 'auto'})}"
-        )
+        sleep_url = f"{base_url}/sleep?level={sleep_level}"
         status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
-        if status not in (200, 204):
-            # Older vLLM: try without mode param
-            sleep_url = f"{base_url}/sleep?level={sleep_level}"
-            status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
         if status not in (200, 204):
             partial.error = f"/sleep returned HTTP {status}"
             logger.warning("  ERROR: %s", partial.error)
