@@ -41,7 +41,6 @@ from pathlib import Path
 
 from logos_worker_node.calibration import (
     CalibrationResult,
-    _DEFAULT_KV_CACHE,
     _DEFAULT_VLLM,
     _HAS_YAML,
     _PROFILES_FILE,
@@ -120,9 +119,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--kv-cache-memory-bytes",
-        default=_DEFAULT_KV_CACHE,
+        default=None,
         help=(
-            f"KV cache size passed to vLLM during calibration (default: {_DEFAULT_KV_CACHE}). "
+            "KV cache size passed to vLLM during calibration (default: 90 percent of available VRAM). "
             "This must be a known value so base_residency_mb = loaded_vram - kv_cache. "
             "Use the same value your worker lanes use in production for the most accurate result. "
             "Accepts suffixes: G (GiB), M (MiB), K (KiB), or raw bytes."

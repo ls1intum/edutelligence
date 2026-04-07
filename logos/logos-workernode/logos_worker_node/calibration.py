@@ -47,7 +47,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_VLLM = "vllm"
-_DEFAULT_KV_CACHE = "2G"
 _READY_TIMEOUT_S = 600.0
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
@@ -185,7 +184,7 @@ def spawn_vllm(
     host: str,
     port: int,
     log_path: Path,
-    kv_cache_memory_bytes: str = _DEFAULT_KV_CACHE,
+    kv_cache_memory_bytes: str,
 ) -> subprocess.Popen[str]:
     model = plan["model"]
     tp = int(plan.get("tensor_parallel_size", 1))
@@ -665,7 +664,7 @@ def auto_calibrate_models(
     vllm_binary: str = _DEFAULT_VLLM,
     port: int = _CALIBRATION_PORT,
     sleep_level: int = 1,
-    kv_cache_memory_bytes: str = _DEFAULT_KV_CACHE,
+    kv_cache_memory_bytes: str,
     ready_timeout_s: float = _READY_TIMEOUT_S,
 ) -> dict[str, CalibrationResult]:
     """Calibrate a list of uncalibrated models and persist results.

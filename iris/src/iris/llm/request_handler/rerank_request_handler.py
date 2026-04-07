@@ -3,11 +3,14 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
+from iris.common.logging_config import get_logger
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
 from iris.llm import CompletionArguments, RequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
+
+logger = get_logger(__name__)
 
 
 class RerankRequestHandler(RequestHandler):
@@ -17,6 +20,7 @@ class RerankRequestHandler(RequestHandler):
 
     model_id: str
     llm_manager: LlmManager | None = None
+    _rerank_available: bool = True
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, model_id: str):
@@ -63,18 +67,32 @@ class RerankRequestHandler(RequestHandler):
         if not valid_documents:
             return []
 
+        # Skip Cohere entirely after first failure to avoid repeated timeout delays
+        if not self._rerank_available:
+            return valid_documents[:top_n]
+
         document_contents = list(
             map(lambda x: getattr(x, content_field_name), valid_documents)
         )
 
         cohere_client = self.llm_manager.get_llm_by_id(self.model_id)
 
-        _, reranked_results, _ = cohere_client.rerank(
-            query=query,
-            documents=document_contents,
-            top_n=top_n,
-        )
-        ranked_documents = []
-        for result in reranked_results[1]:
-            ranked_documents.append(valid_documents[result.index])
-        return ranked_documents
+        try:
+            _, reranked_results, _ = cohere_client.rerank(
+                query=query,
+                documents=document_contents,
+                top_n=top_n,
+            )
+            ranked_documents = []
+            for result in reranked_results[1]:
+                ranked_documents.append(valid_documents[result.index])
+            return ranked_documents
+        except Exception as e:
+            logger.warning(
+                "Reranking failed, disabling for subsequent calls. "
+                "Returning top %d unranked documents: %s",
+                top_n,
+                str(e),
+            )
+            RerankRequestHandler._rerank_available = False
+            return valid_documents[:top_n]
