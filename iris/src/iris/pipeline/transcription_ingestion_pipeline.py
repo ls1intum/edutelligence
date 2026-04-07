@@ -86,6 +86,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.callback.done("Summarized transcription")
 
             self.callback.in_progress("Ingesting transcription into vector database")
+            logger.info(
+                "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
+                self.dto.lecture_unit.lecture_name,
+                self.dto.lecture_unit.lecture_unit_name,
+                len(chunks),
+            )
             self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
@@ -163,6 +169,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value
                 ] = segment.end_time
 
+        logger.info(
+            "[%s / %s] Chunked %d segments → %d slide groups",
+            transcription.lecture_name,
+            transcription.lecture_unit_name,
+            len(transcription.transcription.segments),
+            len(slide_chunks),
+        )
         for i, segment in enumerate(slide_chunks.values()):
             # If the segment is shorter than 1200 characters, we can just add it as is
             if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
@@ -214,6 +227,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 )
                 offset_start = offset_end + 1
 
+        logger.info(
+            "[%s / %s] Chunking complete: %d final chunks",
+            transcription.lecture_name,
+            transcription.lecture_unit_name,
+            len(chunks),
+        )
         return chunks
 
     @staticmethod
@@ -247,7 +266,16 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
     def summarize_chunks(self, chunks: List[Dict[str, Any]]):
         chunks_with_summaries = []
-        for chunk in chunks:
+        total = len(chunks)
+        for i, chunk in enumerate(chunks):
+            logger.info(
+                "[%s / %s] Summarizing chunk %d/%d (slide %s)",
+                self.dto.lecture_unit.lecture_name,
+                self.dto.lecture_unit.lecture_unit_name,
+                i + 1,
+                total,
+                chunk.get(LectureTranscriptionSchema.PAGE_NUMBER.value, "?"),
+            )
             self.prompt = ChatPromptTemplate.from_messages(
                 [
                     (

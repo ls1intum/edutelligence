@@ -6,6 +6,7 @@ the Whisper endpoint/key is loaded from llm_config.yml via LlmManager.
 """
 
 import os
+import threading
 import time
 from concurrent.futures import as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -154,10 +155,16 @@ class WhisperClient:
         language_votes: Dict[str, int] = {}
 
         chunks_done = 0
+        cancel_event = threading.Event()
         with TracedThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
                 executor.submit(
-                    self._transcribe_chunk, chunk_path, i, total, lecture_unit_id
+                    self._transcribe_chunk,
+                    chunk_path,
+                    i,
+                    total,
+                    lecture_unit_id,
+                    cancel_event,
                 ): i
                 for i, chunk_path in enumerate(chunk_paths)
             }
@@ -182,6 +189,7 @@ class WhisperClient:
                     if on_chunk_complete is not None:
                         on_chunk_complete(chunks_done, total)
             except Exception:
+                cancel_event.set()
                 for f in futures:
                     f.cancel()
                 raise
@@ -214,6 +222,7 @@ class WhisperClient:
         chunk_index: int,
         total_chunks: int,
         lecture_unit_id: Optional[int] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Transcribe a single chunk with retry logic.
 
@@ -224,6 +233,8 @@ class WhisperClient:
         prefix = _log_prefix(lecture_unit_id)
 
         for attempt in range(self.max_retries):
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Transcription cancelled")
             with open(chunk_path, "rb") as f:
                 logger.debug(
                     "%s %s uploading chunk %d/%d",
@@ -243,6 +254,12 @@ class WhisperClient:
                     )
 
                     if response.status_code == 429:
+                        if attempt == self.max_retries - 1:
+                            raise RuntimeError(
+                                f"{self.provider_name} Whisper rate limited after "
+                                f"{self.max_retries} attempts on chunk "
+                                f"{chunk_index + 1}/{total_chunks}"
+                            )
                         wait = self._get_retry_wait_time(attempt)
                         logger.warning(
                             "%s Chunk %d/%d rate limited (429) — retrying in %ds "

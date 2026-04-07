@@ -178,6 +178,7 @@ class IngestionStatusCallback(StatusCallback):
         """
         try:
             resp = self._post_status(timeout=30)
+            resp.raise_for_status()
             logger.info("Error callback to %s returned %d", self.url, resp.status_code)
         except http_requests.exceptions.RequestException as e:
             logger.warning("Error callback also failed (best-effort): %s", e)

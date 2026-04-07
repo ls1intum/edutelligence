@@ -43,7 +43,9 @@ class TranscriptionTempStorage:
             lecture_unit_id: Used to create a readable directory name.
         """
         suffix = (
-            f"lecture-{lecture_unit_id}" if lecture_unit_id else str(uuid.uuid4())[:8]
+            f"lecture-{lecture_unit_id}-{uuid.uuid4().hex[:8]}"
+            if lecture_unit_id is not None
+            else uuid.uuid4().hex[:8]
         )
         self.job_dir = os.path.join(base_dir, suffix)
         self.video_path = os.path.join(self.job_dir, "video.mp4")

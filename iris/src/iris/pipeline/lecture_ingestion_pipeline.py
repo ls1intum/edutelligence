@@ -185,6 +185,11 @@ class LectureUnitPageIngestionPipeline(
             cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
+            logger.info(
+                "[%s] Embedding and indexing %d chunks into Weaviate",
+                self.dto.lecture_unit.lecture_unit_name,
+                len(chunks),
+            )
             self.batch_update(chunks)
 
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
@@ -268,11 +273,19 @@ class LectureUnitPageIngestionPipeline(
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
         )
+        prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
+        logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             page_text = page.get_text()
             if page.get_images(full=False):
+                logger.info(
+                    "%s Page %d/%d: has images, interpreting with LLM",
+                    prefix,
+                    page_num + 1,
+                    doc.page_count,
+                )
                 # more pixels thus more details and better quality
                 matrix = fitz.Matrix(5, 5)
                 pix = page.get_pixmap(matrix=matrix)
@@ -298,6 +311,12 @@ class LectureUnitPageIngestionPipeline(
                 )
             )
             old_page_text = page_text
+        logger.info(
+            "%s PDF chunking complete: %d chunks from %d pages",
+            prefix,
+            len(data),
+            doc.page_count,
+        )
         return data
 
     def interpret_image(
@@ -352,7 +371,6 @@ class LectureUnitPageIngestionPipeline(
             "content_image_interpretation_merge_prompt.txt",
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
-            logger.info("Loading ingestion prompt...")
             lecture_ingestion_prompt = file.read()
         prompt = ChatPromptTemplate.from_messages(
             [

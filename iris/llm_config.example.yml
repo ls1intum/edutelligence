@@ -60,7 +60,7 @@
 # ── Whisper transcription models ─────────────────────────────────────────────
 - api_key:
   description: Whisper 1 (OpenAI)
-  id: whisper-1
+  id: whisper-1-openai
   model: whisper-1
   name: Whisper 1
   type: openai_whisper
@@ -69,7 +69,7 @@
   azure_deployment: whisper
   description: Whisper 1 on Azure
   endpoint: "<your-endpoint>"
-  id: whisper-1
+  id: whisper-1-azure
   model: whisper-1
   name: Whisper 1 (Azure)
   type: azure_whisper
