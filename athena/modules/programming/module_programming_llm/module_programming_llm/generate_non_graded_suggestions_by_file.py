@@ -57,9 +57,7 @@ def normalize_credit_value(credits: float) -> float:
     return 1.0
 
 
-def normalize_feedback_credits(
-    feedbacks: List[Feedback], exercise: Exercise
-) -> List[Feedback]:
+def normalize_feedback_credits(feedbacks: List[Feedback], exercise: Exercise) -> List[Feedback]:
     if not feedbacks:
         return feedbacks
 
@@ -68,7 +66,7 @@ def normalize_feedback_credits(
         for feedback in feedbacks
     ]
 
-    max_total_points = exercise.max_points + exercise.bonus_points
+    max_total_points = exercise.max_points
     if max_total_points <= 0:
         return feedbacks
 
@@ -195,8 +193,6 @@ async def generate_suggestions_by_file(
                 "problem_statement": problem_statement,
                 "grading_instructions": grading_instructions
                 or "No grading instructions found.",
-                "max_points": exercise.max_points,
-                "bonus_points": exercise.bonus_points,
                 "file_path": file_path,
                 "summary": summary_string,
             }
