@@ -441,97 +441,78 @@ def calibrate_model(
         return partial
     logger.info("        baseline = %.0f MB", baseline_mb)
 
-    # Compute VRAM cap for KV cache search (80% of total GPU VRAM)
+    # Compute VRAM cap for KV cache search (80% of effective GPU VRAM).
+    # Use per-GPU VRAM × tp so the cap reflects the GPUs actually used,
+    # not all GPUs visible on the host.
     max_kv_mb = float("inf")
     try:
         gpu_snap = query_gpu_vram(gpu_indices)
-        total_gpu_mb = sum(v["total_mb"] for v in gpu_snap.values())
-        max_kv_mb = total_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
+        per_gpu_mb = min(v["total_mb"] for v in gpu_snap.values())
+        effective_gpu_mb = per_gpu_mb * tp
+        max_kv_mb = effective_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
         logger.info(
-            "  GPU total VRAM = %.0f MB, KV cache search cap (%.0f%%) = %.0f MB",
-            total_gpu_mb, _KV_CACHE_VRAM_CAP_RATIO * 100, max_kv_mb,
+            "  GPU VRAM = %.0f MB/GPU × tp=%d = %.0f MB effective, "
+            "KV cache search cap (%.0f%%) = %.0f MB",
+            per_gpu_mb, tp, effective_gpu_mb,
+            _KV_CACHE_VRAM_CAP_RATIO * 100, max_kv_mb,
         )
     except Exception as exc:
         logger.warning(
             "  Could not query GPU VRAM for KV cache cap: %s — no cap applied", exc,
         )
 
-    # Phase 2 — Spawn vLLM and wait for readiness (with binary KV cache search)
+    # Phase 2 — Spawn vLLM and wait for readiness.
     #
-    # Binary search between current_kv_mb (low) and max_kv_mb (high).
-    # On failure: move low up to midpoint.  On success: done.
-    # Stops when the gap between low and high is < _KV_CACHE_MIN_STEP_MB,
-    # at which point we try high (the cap) as a last resort.
-    lo_mb = kv_cache_sent_mb
-    hi_mb = max_kv_mb
-    current_kv_mb = lo_mb
+    # Try the configured KV cache size.  If the very first attempt fails
+    # the model is too large for this tp / GPU configuration — fail fast
+    # so the caller can escalate tp instead of wasting time searching.
+    current_kv_mb = kv_cache_sent_mb
 
-    while True:
-        kv_bytes_str = _format_kv_mb(current_kv_mb)
-        kv_cache_sent_mb = current_kv_mb
-        partial.kv_cache_sent_mb = kv_cache_sent_mb
+    kv_bytes_str = _format_kv_mb(current_kv_mb)
+    kv_cache_sent_mb = current_kv_mb
+    partial.kv_cache_sent_mb = kv_cache_sent_mb
 
-        proc = spawn_vllm(
-            {**plan, "kv_cache_memory_bytes": kv_bytes_str},
-            vllm_binary,
-            host,
-            port,
-            log_path,
-            kv_cache_memory_bytes=kv_bytes_str,
+    proc = spawn_vllm(
+        {**plan, "kv_cache_memory_bytes": kv_bytes_str},
+        vllm_binary,
+        host,
+        port,
+        log_path,
+        kv_cache_memory_bytes=kv_bytes_str,
+    )
+
+    logger.info(
+        "  [2/5] Waiting for vLLM ready (timeout=%.0fs, kv_cache=%s / %.0f MB)...",
+        ready_timeout_s, kv_bytes_str, current_kv_mb,
+    )
+    t0 = time.perf_counter()
+    try:
+        wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
+    except RuntimeError as exc:
+        log_tail = _read_log_tail(log_path)
+        logger.warning(
+            "  vLLM startup failed with kv_cache=%s (%.0f MB): %s",
+            kv_bytes_str, current_kv_mb, exc,
         )
+        if log_tail:
+            logger.warning("  ── vLLM log tail ──\n%s", log_tail)
 
-        logger.info(
-            "  [2/5] Waiting for vLLM ready (timeout=%.0fs, kv_cache=%s / %.0f MB)...",
-            ready_timeout_s, kv_bytes_str, current_kv_mb,
+        stop_vllm(proc)
+        time.sleep(_VRAM_SETTLE_S)
+
+        partial.error = (
+            f"Model failed to start with KV cache {kv_bytes_str} on "
+            f"tp={tp}: {exc}"
         )
-        t0 = time.perf_counter()
-        try:
-            wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
-            break  # vLLM is ready — proceed to measurement phases
-        except RuntimeError as exc:
-            # vLLM exited before becoming ready — log tail for visibility
-            log_tail = _read_log_tail(log_path)
-            logger.warning(
-                "  vLLM startup failed with kv_cache=%s (%.0f MB): %s",
-                kv_bytes_str, current_kv_mb, exc,
-            )
-            if log_tail:
-                logger.warning("  ── vLLM log tail ──\n%s", log_tail)
-
-            stop_vllm(proc)
-            time.sleep(_VRAM_SETTLE_S)
-
-            # Binary search: failed value becomes new lower bound
-            lo_mb = current_kv_mb
-            gap = hi_mb - lo_mb
-            if gap < _KV_CACHE_MIN_STEP_MB:
-                partial.error = (
-                    f"KV cache search exhausted: {kv_bytes_str} failed, "
-                    f"search range [{_format_kv_mb(lo_mb)}–{_format_kv_mb(hi_mb)}] "
-                    f"narrower than {_KV_CACHE_MIN_STEP_MB:.0f} MB step "
-                    f"({_KV_CACHE_VRAM_CAP_RATIO:.0%} VRAM cap = {max_kv_mb:.0f} MB)"
-                )
-                logger.warning("  %s", partial.error)
-                return partial
-
-            # Jump to midpoint (rounded up to nearest GB for clean values)
-            mid = (lo_mb + hi_mb) / 2.0
-            next_kv_mb = max(lo_mb + _KV_CACHE_MIN_STEP_MB, _round_up_gb(mid))
-            next_kv_mb = min(next_kv_mb, hi_mb)  # never exceed cap
-
-            logger.info(
-                "  Binary search: [%.0f–%.0f MB] → trying %s (%.0f MB)...",
-                lo_mb, hi_mb, _format_kv_mb(next_kv_mb), next_kv_mb,
-            )
-            current_kv_mb = next_kv_mb
-            continue
-        except TimeoutError as exc:
-            # Timeout is NOT retried — the model loaded but warmup took too long
-            partial.error = str(exc)
-            logger.warning("  ERROR: %s", partial.error)
-            stop_vllm(proc)
-            time.sleep(_VRAM_SETTLE_S)
-            return partial
+        logger.warning("  %s", partial.error)
+        return partial
+    except TimeoutError as exc:
+        # Timeout is NOT retried — the model loaded but warmup took too long
+        partial.error = str(exc)
+        logger.warning("  ERROR: %s", partial.error)
+        stop_vllm(proc)
+        time.sleep(_VRAM_SETTLE_S)
+        return partial
 
     logger.info("        Ready in %.1fs (kv_cache=%s)", time.perf_counter() - t0, kv_bytes_str)
 
@@ -752,6 +733,48 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
+    """Return the maximum tensor_parallel_size allowed for *plan*."""
+    gpu_devices = str(plan.get("gpu_devices") or "").strip().lower()
+    if not gpu_devices or gpu_devices == "all":
+        return available_gpus
+    return len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
+
+
+def _try_calibrate(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    sleep_level: int,
+    ready_timeout_s: float,
+    kv_cache_memory_bytes: str,
+) -> CalibrationResult:
+    """Call ``calibrate_model`` with exception → failure conversion."""
+    model_name = plan["model"]
+    try:
+        return calibrate_model(
+            plan,
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            kv_cache_memory_bytes=kv_cache_memory_bytes,
+        )
+    except Exception as exc:
+        logger.warning("Calibration failed for %s: %s", model_name, exc)
+        return CalibrationResult(
+            model=model_name,
+            tensor_parallel_size=int(plan.get("tensor_parallel_size", 1)),
+            gpu_devices=str(plan.get("gpu_devices") or ""),
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error=str(exc),
+        )
+
+
 def auto_calibrate_models(
     uncalibrated: list[str],
     config_path: Path,
@@ -767,6 +790,11 @@ def auto_calibrate_models(
 
     Returns a dict mapping model_name -> CalibrationResult.
     Only calibrates models in the *uncalibrated* list.
+
+    When a model fails to calibrate at its configured
+    ``tensor_parallel_size``, the function automatically retries with
+    doubled tp (up to the number of available GPUs) so that models too
+    large for a single GPU still get a profile.
     """
     # Load plans from config
     if config_path.exists():
@@ -791,12 +819,20 @@ def auto_calibrate_models(
         logger.info("No uncalibrated models to calibrate.")
         return {}
 
+    # Detect available GPU count for tp escalation
+    try:
+        gpu_snap = query_gpu_vram()
+        available_gpus = len(gpu_snap)
+    except Exception:
+        available_gpus = 1
+
     profiles_path = state_dir / _PROFILES_FILE
     existing_profiles = load_existing_profiles(profiles_path)
     log_dir = state_dir / "calibration_logs"
 
     logger.info(
-        "Auto-calibration: %d model(s) to calibrate", len(plans)
+        "Auto-calibration: %d model(s) to calibrate, %d GPU(s) available",
+        len(plans), available_gpus,
     )
     for p in plans:
         logger.info(
@@ -806,35 +842,41 @@ def auto_calibrate_models(
             p.get("gpu_devices") or "all",
         )
 
+    cal_kwargs = dict(
+        vllm_binary=vllm_binary,
+        port=port,
+        log_dir=log_dir,
+        sleep_level=sleep_level,
+        ready_timeout_s=ready_timeout_s,
+        kv_cache_memory_bytes=kv_cache_memory_bytes,
+    )
+
     results: dict[str, CalibrationResult] = {}
 
     for plan in plans:
         model_name = plan["model"]
-        try:
-            result = calibrate_model(
-                plan,
-                vllm_binary=vllm_binary,
-                port=port,
-                log_dir=log_dir,
-                sleep_level=sleep_level,
-                ready_timeout_s=ready_timeout_s,
-                kv_cache_memory_bytes=kv_cache_memory_bytes,
+        original_tp = int(plan.get("tensor_parallel_size", 1))
+        max_tp = _max_tp_for_plan(plan, available_gpus)
+
+        tp = original_tp
+        result = _try_calibrate(plan, **cal_kwargs)
+
+        # tp escalation: if calibration failed, retry with doubled tp
+        while not result.success and tp * 2 <= max_tp:
+            next_tp = tp * 2
+            logger.info(
+                "  %s failed with tp=%d — retrying with tp=%d",
+                model_name, tp, next_tp,
             )
-        except Exception as exc:
-            logger.warning(
-                "Calibration failed for %s: %s", model_name, exc
+            tp = next_tp
+            escalated_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(escalated_plan, **cal_kwargs)
+
+        if result.success and tp > original_tp:
+            logger.info(
+                "  %s succeeded after tp escalation %d → %d",
+                model_name, original_tp, tp,
             )
-            results[model_name] = CalibrationResult(
-                model=model_name,
-                tensor_parallel_size=int(
-                    plan.get("tensor_parallel_size", 1)
-                ),
-                gpu_devices=str(plan.get("gpu_devices") or ""),
-                kv_cache_sent_mb=0.0,
-                success=False,
-                error=str(exc),
-            )
-            continue
 
         results[model_name] = result
 
