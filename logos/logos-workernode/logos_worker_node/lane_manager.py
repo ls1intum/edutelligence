@@ -1481,7 +1481,12 @@ class LaneManager:
         if lc is not None:
             is_vllm = lc.vllm
             model = lc.model
-            num_parallel = 0 if lc.vllm else lc.num_parallel
+            if lc.vllm:
+                # Use vLLM-reported max concurrency (KV-budget-derived) when available.
+                vllm_max = getattr(handle, "max_concurrency", None)
+                num_parallel = vllm_max if vllm_max and vllm_max > 0 else 0
+            else:
+                num_parallel = lc.num_parallel
             context_length = lc.context_length
             keep_alive = lc.keep_alive
             kv_cache_type = lc.kv_cache_type

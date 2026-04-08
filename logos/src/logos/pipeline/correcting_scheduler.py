@@ -45,8 +45,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         azure_facade,
         model_registry=None,
         ettft_enabled: bool = True,
+        on_capacity_needed=None,
     ):
-        super().__init__(queue_manager, logosnode_facade, azure_facade, model_registry)
+        super().__init__(queue_manager, logosnode_facade, azure_facade, model_registry, on_capacity_needed)
         self._ettft_enabled = ettft_enabled
 
     async def schedule(self, request: SchedulingRequest) -> Optional[SchedulingResult]:
@@ -198,11 +199,21 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         future = loop.create_future()
 
         entry_id = self._queue_mgr.enqueue(future, model_id, provider_id, priority)
+        queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
             "Request %s queued for model %s (corrected_score=%.2f, tier=%s, depth=%s)",
-            request.request_id, model_id, score, ettft.tier.value,
-            self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id),
+            request.request_id, model_id, score, ettft.tier.value, queue_depth,
         )
+
+        # Fire-and-forget: signal capacity planner to wake/load the model
+        # so queued requests don't wait for the 30s background cycle.
+        if self._on_capacity_needed and provider_type == "logosnode":
+            model_name = self._logosnode.get_model_name(model_id, provider_id)
+            if model_name:
+                asyncio.create_task(
+                    self._on_capacity_needed(provider_id, model_name),
+                    name=f"capacity-needed-{model_name}-{provider_id}",
+                )
 
         try:
             timeout = request.timeout_s if request.timeout_s else 300
@@ -221,9 +232,13 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             provider_id=provider_id,
                             priority=priority.name.lower(),
                         )
+                    # slot_transferred=True means a completing request kept its
+                    # slot for us (release path) — don't double-count.
+                    # slot_transferred=False means fresh dispatch from
+                    # reevaluate_model_queues — must increment active count.
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
-                        increment_active=False,
+                        increment_active=not result.slot_transferred,
                         provider_id=provider_id,
                     )
                 except KeyError:

@@ -5,6 +5,7 @@ Context resolution - prepares execution inputs from database lookups.
 Separates the "what to execute" (context resolution) from "how to execute" (executor).
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple
 import logging
@@ -118,6 +119,18 @@ class ContextResolver:
                 lane = prepared_lane
                 if lane is None:
                     lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                # Retry loop: lane may be transitioning (loading/waking) after
+                # reevaluate_model_queues dispatched us.  Wait up to ~10s.
+                if lane is None:
+                    for attempt in range(10):
+                        await asyncio.sleep(1.0)
+                        lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                        if lane is not None:
+                            logger.info(
+                                "Lane became available after %ds for provider=%s model=%s",
+                                attempt + 1, provider_id, model_name,
+                            )
+                            break
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:
@@ -126,8 +139,8 @@ class ContextResolver:
                         logger.error("logosnode lane missing lane_id for provider=%s", provider_id)
                         return None
                 else:
-                    logger.info(
-                        "No logosnode lane available yet for provider=%s model=%s; waiting instead of falling back to HTTP",
+                    logger.warning(
+                        "No logosnode lane available for provider=%s model=%s after retries",
                         provider_id,
                         model_name,
                     )

@@ -66,9 +66,9 @@ class CapacityPlanner:
 
     # Competitive ratios: applied when eviction IS required.
     # target_effective_demand > max(eviction_set_demand) * RATIO to proceed.
-    WAKE_COMPETITIVE_RATIO = 1.2   # target must beat eviction set by 20%
-    LOAD_COMPETITIVE_RATIO = 1.5   # target must beat eviction set by 50%
-    DRAIN_COMPETITIVE_RATIO = 2.0  # target must 2× outweigh victim (prevents flip-flop)
+    WAKE_COMPETITIVE_RATIO = 1.5   # target must beat eviction set by 50%
+    LOAD_COMPETITIVE_RATIO = 2.0   # target must beat eviction set by 2×
+    DRAIN_COMPETITIVE_RATIO = 3.0  # target must 3× outweigh victim (prevents flip-flop)
 
     # Queue depth contribution to effective demand at decision time.
     QUEUE_WEIGHT = 0.25  # score += QUEUE_WEIGHT * lane.queue_waiting
@@ -79,9 +79,19 @@ class CapacityPlanner:
 
     # Demand-preemptive drain: graceful swap of busy lanes for starving models
     DRAIN_TIMEOUT_SECONDS = 60.0           # Max wait for active requests to finish
-    DRAIN_MIN_COLD_LOADED_SECONDS = 30.0   # Don't drain cold-loaded lanes for 30s
-    DRAIN_MIN_WOKEN_SECONDS = 8.0          # Don't drain woken lanes for 8s
+    DRAIN_MIN_COLD_LOADED_SECONDS = 60.0   # Don't drain cold-loaded lanes for 60s
+    DRAIN_MIN_WOKEN_SECONDS = 30.0         # Don't drain woken lanes for 30s
     DRAIN_DEMAND_SCORE_THRESHOLD = DRAIN_COMPETITIVE_RATIO  # backward-compat alias
+
+    # Anti-thrashing: switch frequency tracking and adaptive tenure
+    SWITCH_WINDOW_SECONDS = 300.0        # track switches over 5-minute window
+    SWITCH_THRASH_THRESHOLD = 6          # >6 switches in 5 min = thrashing
+    SWITCH_TENURE_MULTIPLIER = 2.0       # double tenure when thrashing detected
+    SWITCH_MAX_TENURE_SECONDS = 120.0    # cap adaptive tenure at 2 min
+
+    # Fairness: queue-depth weighting for drain decisions
+    FAIRNESS_QUEUE_RATIO = 2.0           # target needs 2× the queue of incumbent
+    FAIRNESS_MIN_QUEUE_TO_SWITCH = 3     # don't switch for <3 queued requests
 
     # GPU utilization tuning
     GPU_UTIL_MIN = 0.50
@@ -103,6 +113,14 @@ class CapacityPlanner:
     # Slow-path request preparation
     REQUEST_WAKE_TIMEOUT_SECONDS = 30.0
     WAKE_FAILURE_COOLDOWN_SECONDS = 15.0
+    COOLDOWN_WAIT_BUFFER_SECONDS = 2.0   # extra margin added after load cooldown expires
+    BUSY_DRAIN_POLL_SECONDS = 5.0        # poll interval while waiting for a busy lane to drain
+    WAKE_PER_GPU_SAFETY_MARGIN = 1.15    # 15% per-GPU margin for wake ops — CUDA allocator pools
+                                         # and KV-cache growth can consume memory between the check
+                                         # and the actual wake, causing OOM on tight fits
+    TP_RANK0_VRAM_FRACTION = 0.62        # rank 0 hosts API server, tokenizer, sampling, embedding
+                                         # layers — empirically ~60% of total VRAM for TP=2;
+                                         # use 0.62 for safety margin
 
     def __init__(
         self,
@@ -156,6 +174,10 @@ class CapacityPlanner:
 
         # Track how a lane was loaded: True = cold load, False = wake from sleep
         self._lane_was_cold_loaded: dict[tuple[int, str], bool] = {}
+
+        # Anti-thrashing: model switch tracking for adaptive cooldown
+        self._switch_timestamps: list[float] = []
+        self._last_switch_model: dict[int, str] = {}  # provider_id → last activated model
 
         # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
         # when concurrent load/wake/sleep/stop operations overlap.
@@ -764,6 +786,7 @@ class CapacityPlanner:
             self._lane_idle_since[key] = confirmed_at
             self._lane_loaded_at[key] = confirmed_at
             self._lane_was_cold_loaded[key] = (action.action == "load")
+            self._record_switch_event(action.provider_id, action.model_name)
             if action.action == "load" and self._is_preemptive_load_action(action):
                 self._preemptive_sleep_ready.add(key)
             else:
@@ -799,6 +822,239 @@ class CapacityPlanner:
         check_time = time.time() if now is None else now
         return (check_time - loaded_at) < self._load_cooldown_seconds
 
+    def _time_until_cooldown_unblocked_stop(
+        self,
+        *,
+        provider_id: int,
+        target: LaneSchedulerSignals,
+        lanes: list[LaneSchedulerSignals],
+        profiles: dict[str, ModelProfile],
+        required_free_mb: float,
+        now: float,
+    ) -> Optional[float]:
+        """Return seconds until the earliest cooldown-blocked stop candidate becomes
+        actionable, or None if no such candidate exists.
+
+        A lane qualifies as a cooldown-blocked stop candidate when ALL of:
+          - It is not the target lane and not running the target model
+          - It has no active requests and no queued requests
+          - It is not in a terminal/transient state (stopped/error/cold/starting)
+          - Its current_vram > 0 (stopping it would free meaningful VRAM)
+          - current_vram >= required_free_mb (single lane stop would satisfy shortfall)
+          - It IS currently in load cooldown (the only reason it was skipped)
+        """
+        if self._load_cooldown_seconds <= 0:
+            return None
+
+        min_wait: Optional[float] = None
+
+        for lane in lanes:
+            if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
+                continue
+            if lane.active_requests > 0 or lane.queue_waiting > 0:
+                continue
+            if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+            # Skip awake vLLM lanes — these are reclaimed via sleep (which
+            # is allowed even within cooldown) rather than direct stop.
+            # After sleeping, the lane re-enters as a sleeping stop candidate.
+            if (lane.is_vllm
+                    and lane.runtime_state in {"loaded", "running"}
+                    and lane.sleep_state == "awake"):
+                continue
+
+            key = self._lane_key(provider_id, lane.lane_id)
+            loaded_at = self._lane_loaded_at.get(key)
+            if loaded_at is None:
+                continue
+            remaining = self._load_cooldown_seconds - (now - loaded_at)
+            if remaining <= 0:
+                continue  # not actually in cooldown
+
+            profile = profiles.get(lane.model_name)
+            current_vram = float(lane.effective_vram_mb or 0.0)
+            if current_vram <= 0 and profile is not None:
+                current_vram = self._estimate_model_loaded_vram(profile)
+            if lane.is_vllm and lane.runtime_state == "sleeping" and profile is not None:
+                base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
+                if base_residency > current_vram:
+                    current_vram = base_residency
+            if current_vram <= 0:
+                continue
+            # Per-GPU feasibility: for TP>1 models, a lane's VRAM is split
+            # across its GPUs — check per-GPU freed vs per-GPU shortfall.
+            if required_free_mb > 0:
+                lane_tp = int(lane.tensor_parallel_size or 0) or 1
+                if lane_tp <= 1 and profile is not None:
+                    lane_tp = max(int(profile.tensor_parallel_size or 0), 1)
+                target_tp = int(target.tensor_parallel_size or 0) or 1
+                if target_tp <= 1:
+                    target_profile = profiles.get(target.model_name)
+                    if target_profile is not None:
+                        target_tp = max(int(target_profile.tensor_parallel_size or 0), 1)
+                per_gpu_freed = current_vram / lane_tp
+                per_gpu_needed = required_free_mb / target_tp
+                if per_gpu_freed < per_gpu_needed:
+                    continue  # even if unblocked, per-GPU freed can't satisfy the shortfall
+
+            if min_wait is None or remaining < min_wait:
+                min_wait = remaining
+
+        return min_wait
+
+    def _has_blocking_busy_lanes(
+        self,
+        *,
+        provider_id: int,
+        target: LaneSchedulerSignals,
+        lanes: list[LaneSchedulerSignals],
+        profiles: dict[str, ModelProfile],
+        required_free_mb: float,
+    ) -> bool:
+        """Return True if there are busy lanes that would be valid stop candidates
+        once their active requests finish.
+
+        Unlike _should_initiate_drain (which preempts running requests immediately),
+        this helper identifies lanes where waiting for current requests to complete
+        would unlock a clean stop — no demand-ratio check is needed because once
+        a lane is idle it is eligible for a normal stop regardless of demand.
+
+        A busy lane qualifies when ALL of:
+          - Not the target lane / model
+          - Has active_requests > 0 or queue_waiting > 0 (currently busy)
+          - Runtime state is serviceable (not stopped/error/cold/starting)
+          - GPU overlap with target (stopping it would free the right GPUs)
+          - Sufficient VRAM to satisfy the shortfall alone
+        """
+        target_gpu_ids = self._parse_gpu_device_ids(target.gpu_devices)
+
+        for lane in lanes:
+            if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
+                continue
+            if lane.active_requests <= 0 and lane.queue_waiting <= 0:
+                continue  # not busy — irrelevant to this check
+            if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+
+            # GPU overlap: if we know target GPUs and the lane's GPUs, they must overlap.
+            # Unknown placement (empty string) is treated optimistically.
+            if target_gpu_ids:
+                busy_gpu_ids = self._parse_gpu_device_ids(lane.gpu_devices)
+                if busy_gpu_ids and not (set(target_gpu_ids) & set(busy_gpu_ids)):
+                    continue  # wrong GPUs — waiting for drain won't help
+
+            # VRAM: this lane alone must be able to satisfy the shortfall.
+            # For TP>1 models, check per-GPU feasibility — a lane's total VRAM
+            # is split across its GPUs, and the target's shortfall is per-GPU.
+            profile = profiles.get(lane.model_name)
+            current_vram = float(lane.effective_vram_mb or 0.0)
+            if current_vram <= 0 and profile is not None:
+                current_vram = self._estimate_model_loaded_vram(profile)
+            if current_vram <= 0:
+                continue
+            if required_free_mb > 0:
+                lane_tp = int(lane.tensor_parallel_size or 0) or 1
+                if lane_tp <= 1 and profile is not None:
+                    lane_tp = max(int(profile.tensor_parallel_size or 0), 1)
+                target_tp = int(target.tensor_parallel_size or 0) or 1
+                if target_tp <= 1:
+                    target_profile = profiles.get(target.model_name)
+                    if target_profile is not None:
+                        target_tp = max(int(target_profile.tensor_parallel_size or 0), 1)
+                per_gpu_freed = current_vram / lane_tp
+                per_gpu_needed = required_free_mb / target_tp
+                logger.debug(
+                    "_has_blocking_busy_lanes: lane=%s vram=%.0f lane_tp=%d "
+                    "target_tp=%d per_gpu_freed=%.0f per_gpu_needed=%.0f "
+                    "passes=%s",
+                    lane.lane_id, current_vram, lane_tp,
+                    target_tp, per_gpu_freed, per_gpu_needed,
+                    per_gpu_freed >= per_gpu_needed,
+                )
+                if per_gpu_freed < per_gpu_needed:
+                    continue
+
+            return True
+
+        return False
+
+    def _time_until_drain_cooldown_unblocked(
+        self,
+        *,
+        provider_id: int,
+        target: LaneSchedulerSignals,
+        lanes: list[LaneSchedulerSignals],
+        profiles: dict[str, ModelProfile],
+        required_free_mb: float,
+        now: float,
+    ) -> Optional[float]:
+        """Return seconds until a drain-cooldown-blocked busy lane becomes drainable.
+
+        Checks busy lanes that would pass ``_should_initiate_drain`` on all criteria
+        EXCEPT the adaptive tenure cooldown.  Returns the shortest remaining
+        cooldown, or ``None`` when no such lane exists.
+        """
+        min_wait: Optional[float] = None
+        target_gpu_ids = self._parse_gpu_device_ids(target.gpu_devices)
+        target_eff = self._effective_demand(target.model_name)
+
+        for lane in lanes:
+            if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
+                continue
+            if lane.active_requests <= 0 and lane.queue_waiting <= 0:
+                continue  # not busy
+            if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+
+            # 1. Demand ratio check (must pass unless both near-zero)
+            busy_eff = self._effective_demand(lane.model_name, lane)
+            both_near_zero = target_eff < 0.1 and busy_eff < 0.1
+            if not both_near_zero and target_eff <= busy_eff * self.DRAIN_COMPETITIVE_RATIO:
+                continue
+
+            # 2. Drain cooldown check — compute remaining time
+            key = self._lane_key(provider_id, lane.lane_id)
+            loaded_at = self._lane_loaded_at.get(key)
+            if loaded_at is None:
+                continue  # unknown load time — not blocked by cooldown
+            was_cold = self._lane_was_cold_loaded.get(key, True)
+            min_seconds = self._get_effective_tenure(was_cold)
+            drain_remaining = min_seconds - (now - loaded_at)
+            if drain_remaining <= 0:
+                continue  # cooldown already expired — not what we're looking for
+
+            # 3. GPU overlap (must pass)
+            if target_gpu_ids:
+                busy_gpu_ids = self._parse_gpu_device_ids(lane.gpu_devices)
+                if busy_gpu_ids and not (set(target_gpu_ids) & set(busy_gpu_ids)):
+                    continue
+
+            # 4. VRAM feasibility with per-GPU check (must pass)
+            profile = profiles.get(lane.model_name)
+            current_vram = float(lane.effective_vram_mb or 0.0)
+            if current_vram <= 0 and profile is not None:
+                current_vram = self._estimate_model_loaded_vram(profile)
+            if current_vram <= 0:
+                continue
+            if required_free_mb > 0:
+                lane_tp = int(lane.tensor_parallel_size or 0) or 1
+                if lane_tp <= 1 and profile is not None:
+                    lane_tp = max(int(profile.tensor_parallel_size or 0), 1)
+                target_tp = int(target.tensor_parallel_size or 0) or 1
+                if target_tp <= 1:
+                    target_profile = profiles.get(target.model_name)
+                    if target_profile is not None:
+                        target_tp = max(int(target_profile.tensor_parallel_size or 0), 1)
+                per_gpu_freed = current_vram / lane_tp
+                per_gpu_needed = required_free_mb / target_tp
+                if per_gpu_freed < per_gpu_needed:
+                    continue
+
+            if min_wait is None or drain_remaining < min_wait:
+                min_wait = drain_remaining
+
+        return min_wait
+
     def _lane_exists_in_runtime(self, provider_id: int, lane_id: str) -> bool:
         if self._registry is not None:
             snap = self._registry.peek_runtime_snapshot(provider_id)
@@ -826,6 +1082,74 @@ class CapacityPlanner:
         base = self._demand.get_score(model_name)
         queue = float(lane.queue_waiting) if lane is not None else 0.0
         return base + self.QUEUE_WEIGHT * queue
+
+    # ------------------------------------------------------------------
+    # Anti-thrashing helpers
+    # ------------------------------------------------------------------
+
+    def _record_switch_event(self, provider_id: int, model_name: str) -> None:
+        """Record that a model switch occurred for thrash detection."""
+        now = time.time()
+        prev_model = self._last_switch_model.get(provider_id)
+        if prev_model is not None and prev_model != model_name:
+            self._switch_timestamps.append(now)
+            try:
+                from logos.monitoring import prometheus_metrics as prom
+                prom.CAPACITY_PLANNER_SWITCHES_TOTAL.inc()
+                if len(self._switch_timestamps) >= 2:
+                    gap = self._switch_timestamps[-1] - self._switch_timestamps[-2]
+                    prom.CAPACITY_PLANNER_SWITCH_GAP_SECONDS.observe(gap)
+            except Exception:
+                pass
+        self._last_switch_model[provider_id] = model_name
+        # Trim old entries outside the window
+        cutoff = now - self.SWITCH_WINDOW_SECONDS
+        self._switch_timestamps = [
+            t for t in self._switch_timestamps if t >= cutoff
+        ]
+
+    def _is_thrashing(self) -> bool:
+        """Return True if recent switch frequency exceeds threshold."""
+        now = time.time()
+        cutoff = now - self.SWITCH_WINDOW_SECONDS
+        self._switch_timestamps = [
+            t for t in self._switch_timestamps if t >= cutoff
+        ]
+        return len(self._switch_timestamps) >= self.SWITCH_THRASH_THRESHOLD
+
+    def _get_effective_tenure(self, was_cold_loaded: bool) -> float:
+        """Return minimum tenure, scaled up if thrashing detected."""
+        base = (
+            self.DRAIN_MIN_COLD_LOADED_SECONDS if was_cold_loaded
+            else self.DRAIN_MIN_WOKEN_SECONDS
+        )
+        if self._is_thrashing():
+            scaled = base * self.SWITCH_TENURE_MULTIPLIER
+            return min(scaled, self.SWITCH_MAX_TENURE_SECONDS)
+        return base
+
+    def _get_queue_depth_for_model(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: list,
+    ) -> int:
+        """Total demand for a model: lane active/queued + scheduler queue.
+
+        Combines three populations:
+        - active_requests: currently being processed by the backend
+        - queue_waiting: queued inside vLLM's batching system
+        - scheduler queue: requests waiting in the Logos scheduler queue
+          (critical for sleeping models where active/queue_waiting are both 0)
+        """
+        lane_total = 0
+        for lane in lanes:
+            if lane.model_name == model_name:
+                lane_total += lane.active_requests + int(lane.queue_waiting)
+        scheduler_queue = self._facade.get_scheduler_queue_depth_by_model_name(
+            model_name, provider_id,
+        )
+        return lane_total + scheduler_queue
 
     def _get_per_gpu_free(self, provider_id: int) -> dict[int, float]:
         """Return {gpu_id: free_mb} from the worker runtime snapshot.
@@ -1636,17 +1960,30 @@ class CapacityPlanner:
                         if profile is not None:
                             current_vram = self._estimate_model_loaded_vram(profile)
                     if current_vram > 0:
+                        # Prefer sleep over stop: keeps model warm for fast wake
+                        lane_profile = profiles.get(lane.model_name)
+                        sleeping_residual = float(
+                            getattr(lane_profile, "sleeping_residual_mb", 0) or 0
+                        ) if lane_profile else 0.0
+                        if sleeping_residual > 0:
+                            drain_action = "sleep_l1"
+                            drain_reason = f"Demand drain: sleep for {model_name}"
+                            drain_params = {}
+                        else:
+                            drain_action = "stop"
+                            drain_reason = f"Demand drain: stop for {model_name}"
+                            drain_params = {"_stop_penalty": 1}
                         actions.append(CapacityPlanAction(
-                            action="stop",
+                            action=drain_action,
                             provider_id=provider_id,
                             lane_id=lane.lane_id,
                             model_name=lane.model_name,
-                            params={"_stop_penalty": 1},
-                            reason=f"Demand drain: free VRAM for {model_name}",
+                            params=drain_params,
+                            reason=drain_reason,
                         ))
                         logger.info(
-                            "Drain initiated: stopping lane=%s model=%s (vram=%.0fMB) for starving model=%s score=%.2f",
-                            lane.lane_id, lane.model_name, current_vram, model_name, score,
+                            "Drain initiated: %s lane=%s model=%s (vram=%.0fMB) for starving model=%s score=%.2f",
+                            drain_action, lane.lane_id, lane.model_name, current_vram, model_name, score,
                         )
                     break  # Only one lane at a time per cycle
 
@@ -1852,6 +2189,38 @@ class CapacityPlanner:
         except Exception:
             return None
 
+    async def _wait_for_provider(self, provider_id: int, deadline: float):
+        """Wait for a provider to become available after a transient disconnect.
+
+        Returns the CapacitySnapshot once available, or None if deadline exceeded.
+        WebSocket keepalive timeouts cause brief (~3-5s) windows where the provider
+        appears offline.  Instead of immediately failing all queued requests, poll
+        until the provider reconnects or the deadline passes.
+        """
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= self.PROVIDER_RECONNECT_POLL_SECONDS:
+                logger.info(
+                    "ensure_capacity provider=%s: provider offline, "
+                    "%.1fs remaining — giving up",
+                    provider_id, remaining,
+                )
+                return None
+            logger.info(
+                "ensure_capacity provider=%s: provider offline (transient disconnect?) "
+                "— waiting %.1fs then retrying (%.0fs budget remaining)",
+                provider_id, self.PROVIDER_RECONNECT_POLL_SECONDS, remaining,
+            )
+            await asyncio.sleep(self.PROVIDER_RECONNECT_POLL_SECONDS)
+            capacity = self._safe_get_capacity(provider_id)
+            if capacity is not None:
+                logger.info(
+                    "ensure_capacity provider=%s: provider back online "
+                    "(available=%.0fMB)",
+                    provider_id, float(capacity.available_vram_mb),
+                )
+                return capacity
+
     def _safe_get_lanes(self, provider_id: int) -> list[LaneSchedulerSignals]:
         try:
             return self._facade.get_all_provider_lane_signals(provider_id)
@@ -1891,6 +2260,8 @@ class CapacityPlanner:
         )
         return lanes[0]
 
+    PROVIDER_RECONNECT_POLL_SECONDS = 2.0
+
     async def _ensure_request_capacity(
         self,
         *,
@@ -1899,9 +2270,16 @@ class CapacityPlanner:
         profile: Optional[ModelProfile],
         timeout_seconds: float,
     ) -> bool:
+        # Convert to an absolute deadline once so accumulated sleeps reduce the
+        # remaining budget correctly on every subsequent loop iteration.
+        deadline = time.time() + timeout_seconds
+
+        # Wait for provider to be available (handles transient WebSocket disconnects).
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
-            return False
+            capacity = await self._wait_for_provider(provider_id, deadline)
+            if capacity is None:
+                return False
 
         target_action = CapacityPlanAction(
             action="wake" if target.runtime_state == "sleeping" else "load",
@@ -1913,9 +2291,20 @@ class CapacityPlanner:
         )
 
         while True:
+            now = time.time()
+            remaining = deadline - now
+            if remaining <= 0:
+                logger.info(
+                    "ensure_capacity provider=%s model=%s: deadline exceeded, giving up",
+                    provider_id, target.model_name,
+                )
+                return False
+
             capacity = self._safe_get_capacity(provider_id)
             if capacity is None:
-                return False
+                capacity = await self._wait_for_provider(provider_id, deadline)
+                if capacity is None:
+                    return False
 
             needed = self._estimate_action_vram(target_action, profile, capacity) * self.VRAM_SAFETY_MARGIN
             # Use ledger-aware available VRAM (subtracts in-flight reservations)
@@ -1943,7 +2332,22 @@ class CapacityPlanner:
                 and per_gpu_free is not None
                 and all(dev in per_gpu_free for dev in target_gpu_ids)
             ):
-                per_gpu_needed = needed / len(target_gpu_ids)
+                tp = len(target_gpu_ids)
+                if tp > 1:
+                    # TP rank 0 hosts the API server, tokenizer, sampling, and
+                    # embedding layers — ~60% of total VRAM vs ~40% for other
+                    # ranks.  Since we don't know which physical GPU is rank 0,
+                    # require every GPU to have room for the worst case (rank 0).
+                    per_gpu_needed = needed * self.TP_RANK0_VRAM_FRACTION
+                else:
+                    per_gpu_needed = needed
+                # Wake operations are concurrent with loaded models on the same
+                # GPUs — CUDA allocator pools and KV-cache growth can consume
+                # memory between this check and the actual wake.  Apply extra
+                # safety margin so tight fits fall through to the reclaim path
+                # rather than risking a CUDA OOM.
+                if target_action.action == "wake":
+                    per_gpu_needed *= self.WAKE_PER_GPU_SAFETY_MARGIN
                 gpu_effective = [
                     self._vram_ledger.get_gpu_effective_available_mb(
                         provider_id,
@@ -1986,7 +2390,12 @@ class CapacityPlanner:
                     inferred = self._infer_tensor_parallel(profile, capacity, provider_id)
                     if inferred and inferred > 1:
                         tp = inferred
-                per_gpu_needed = needed / tp
+                if tp > 1:
+                    per_gpu_needed = needed * self.TP_RANK0_VRAM_FRACTION
+                else:
+                    per_gpu_needed = needed
+                if target_action.action == "wake":
+                    per_gpu_needed *= self.WAKE_PER_GPU_SAFETY_MARGIN
                 sorted_free = sorted(
                     (
                         self._vram_ledger.get_gpu_effective_available_mb(
@@ -2020,14 +2429,90 @@ class CapacityPlanner:
                 )
                 return True
 
+            lanes = self._safe_get_lanes(provider_id)
+            profiles = self._safe_get_profiles(provider_id)
+
             reclaim = self._next_request_reclaim_action(
                 provider_id=provider_id,
                 target=target,
-                lanes=self._safe_get_lanes(provider_id),
-                profiles=self._safe_get_profiles(provider_id),
+                lanes=lanes,
+                profiles=profiles,
                 required_free_mb=shortfall,
             )
             if reclaim is None:
+                # No immediately actionable reclaim candidate.
+                #
+                # Check 1: idle stop candidates blocked only by load cooldown.
+                # These become valid after a deterministic wait.
+                cooldown_wait = self._time_until_cooldown_unblocked_stop(
+                    provider_id=provider_id,
+                    target=target,
+                    lanes=lanes,
+                    profiles=profiles,
+                    required_free_mb=shortfall,
+                    now=now,
+                )
+                if cooldown_wait is not None:
+                    wait_total = cooldown_wait + self.COOLDOWN_WAIT_BUFFER_SECONDS
+                    if wait_total < remaining:
+                        logger.info(
+                            "ensure_capacity provider=%s model=%s: no action now but "
+                            "cooldown expires in %.1fs — waiting %.1fs then retrying "
+                            "(%.0fs budget remaining)",
+                            provider_id, target.model_name,
+                            cooldown_wait, wait_total, remaining,
+                        )
+                        await asyncio.sleep(wait_total)
+                        continue
+                    logger.info(
+                        "ensure_capacity provider=%s model=%s: cooldown-blocked candidate "
+                        "exists but wait=%.1fs exceeds remaining budget=%.1fs — giving up",
+                        provider_id, target.model_name, wait_total, remaining,
+                    )
+                    return False
+
+                # Check 2: busy lanes — either drain-cooldown-blocked (deterministic
+                # wait) or waiting for active requests to finish (poll).
+                drain_cd_wait = self._time_until_drain_cooldown_unblocked(
+                    provider_id=provider_id,
+                    target=target,
+                    lanes=lanes,
+                    profiles=profiles,
+                    required_free_mb=shortfall,
+                    now=now,
+                )
+                has_busy = self._has_blocking_busy_lanes(
+                    provider_id=provider_id,
+                    target=target,
+                    lanes=lanes,
+                    profiles=profiles,
+                    required_free_mb=shortfall,
+                )
+                if drain_cd_wait is not None or has_busy:
+                    if drain_cd_wait is not None:
+                        # Drain cooldown expires soon — wait precisely then retry
+                        wait = drain_cd_wait + self.COOLDOWN_WAIT_BUFFER_SECONDS
+                    else:
+                        # No drain cooldown, just busy — poll for request completion
+                        wait = self.BUSY_DRAIN_POLL_SECONDS
+                    if wait < remaining:
+                        logger.info(
+                            "ensure_capacity provider=%s model=%s: busy lane holds "
+                            "needed memory — waiting %.1fs (%s) then retrying "
+                            "(%.0fs budget remaining)",
+                            provider_id, target.model_name, wait,
+                            "drain cooldown" if drain_cd_wait is not None else "poll",
+                            remaining,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    logger.info(
+                        "ensure_capacity provider=%s model=%s: busy lane blocks reclaim "
+                        "but wait=%.1fs exceeds remaining budget=%.1fs — giving up",
+                        provider_id, target.model_name, wait, remaining,
+                    )
+                    return False
+
                 logger.info(
                     "No idle reclaim action available for provider=%s model=%s "
                     "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
@@ -2042,10 +2527,20 @@ class CapacityPlanner:
             async with self._lane_lock(reclaim.provider_id, reclaim.lane_id):
                 ok = await self._execute_action_with_confirmation(
                     reclaim,
-                    timeout_seconds=min(timeout_seconds, 45.0),
+                    timeout_seconds=min(remaining, 45.0),
                 )
             if not ok:
-                return False
+                # Execution failed (cooldown race, drain timeout, or worker error).
+                # Re-enter the loop so the deadline guard and updated lane state
+                # decide whether another attempt is viable.  The deadline at the
+                # top of each iteration prevents infinite retries.
+                logger.info(
+                    "ensure_capacity provider=%s model=%s: reclaim action failed "
+                    "(lane=%s action=%s) — re-checking with %.0fs remaining",
+                    provider_id, target.model_name,
+                    reclaim.lane_id, reclaim.action, remaining,
+                )
+                continue
 
     @staticmethod
     def _gpu_overlap(gpu_a: Optional[str], gpu_b: Optional[str]) -> int:
@@ -2071,24 +2566,45 @@ class CapacityPlanner:
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
-                # Lane is busy — add as stop candidate if it qualifies for eviction.
-                # _execute_action will drain atomically as part of the committed stop.
+                # Lane is busy — add as reclaim candidate if it qualifies for eviction.
+                # Prefer sleep_l1 over stop: sleeping frees most VRAM while keeping
+                # the model ready for fast wake (~2-3s vs 30-60s cold-load).
+                # Only use stop if sleeping wouldn't free enough VRAM.
                 if self._should_initiate_drain(provider_id, lane, target, profiles):
                     current_vram = float(lane.effective_vram_mb or 0.0)
-                    if current_vram <= 0 and profiles.get(lane.model_name) is not None:
-                        current_vram = self._estimate_model_loaded_vram(profiles[lane.model_name])
+                    lane_profile = profiles.get(lane.model_name)
+                    if current_vram <= 0 and lane_profile is not None:
+                        current_vram = self._estimate_model_loaded_vram(lane_profile)
                     if current_vram > 0:
-                        stop_candidates.append((
-                            current_vram,
-                            CapacityPlanAction(
-                                action="stop",
-                                provider_id=provider_id,
-                                lane_id=lane.lane_id,
-                                model_name=lane.model_name,
-                                params={"_stop_penalty": 1},
-                                reason=f"Request-time drain+stop for {target.model_name}",
-                            ),
-                        ))
+                        sleeping_residual = float(
+                            getattr(lane_profile, "sleeping_residual_mb", 0) or 0
+                        ) if lane_profile else 0.0
+                        freed_by_sleep = max(0.0, current_vram - sleeping_residual)
+                        if freed_by_sleep >= required_free_mb and sleeping_residual > 0:
+                            # Sleeping frees enough — use sleep_l1 (keeps model warm)
+                            sleep_candidates.append((
+                                freed_by_sleep,
+                                CapacityPlanAction(
+                                    action="sleep_l1",
+                                    provider_id=provider_id,
+                                    lane_id=lane.lane_id,
+                                    model_name=lane.model_name,
+                                    reason=f"Request-time drain+sleep for {target.model_name}",
+                                ),
+                            ))
+                        else:
+                            # Sleeping not enough — must fully stop
+                            stop_candidates.append((
+                                current_vram,
+                                CapacityPlanAction(
+                                    action="stop",
+                                    provider_id=provider_id,
+                                    lane_id=lane.lane_id,
+                                    model_name=lane.model_name,
+                                    params={"_stop_penalty": 1},
+                                    reason=f"Request-time drain+stop for {target.model_name}",
+                                ),
+                            ))
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
                 continue
@@ -2130,22 +2646,9 @@ class CapacityPlanner:
                             ),
                         )
                     )
-                # Stop is blocked during cooldown to prevent immediately evicting
-                # a lane that was just loaded.
-                if current_vram > 0 and not in_cooldown:
-                    stop_candidates.append(
-                        (
-                            current_vram,
-                            CapacityPlanAction(
-                                action="stop",
-                                provider_id=provider_id,
-                                lane_id=lane.lane_id,
-                                model_name=lane.model_name,
-                                params={"_stop_penalty": 1},
-                                reason=f"Request-time reclaim for {target.model_name}",
-                            ),
-                        )
-                    )
+                # Never go loaded → stopped directly for vLLM lanes.
+                # Sleep first to release KV cache; after sleeping the lane
+                # becomes a low-penalty stop candidate on the next iteration.
                 continue
 
             if current_vram > 0 and not in_cooldown:
@@ -3248,38 +3751,47 @@ class CapacityPlanner:
         We drain Mistral (stop routing new requests, wait for in-flight to finish)
         so deepseek can be loaded once the lane clears.
 
-        Four conditions must all hold:
-        1. Target demand > busy lane demand — only drain for strictly higher value.
-        2. Asymmetric cooldown — newly cold-loaded lanes (30 s) and recently woken
-           lanes (8 s) are protected from immediate eviction.
+        Five conditions must all hold:
+        1. Target demand > busy lane demand × DRAIN_COMPETITIVE_RATIO.
+        2. Adaptive tenure — recently loaded/woken lanes are protected for a
+           minimum service window (30-120 s), doubled when thrashing detected.
         3. GPU overlap — busy lane must share at least one GPU with the target so
            sleeping it actually frees the right memory.
         4. VRAM feasibility — sleeping the busy lane must free enough for the target
            (uses full base+KV cost to avoid under-estimating vLLM models).
+        5. Queue-depth fairness — target must have enough queued requests
+           (≥ FAIRNESS_MIN_QUEUE_TO_SWITCH and ≥ FAIRNESS_QUEUE_RATIO × busy queue).
+           Uses both lane-level and scheduler queue depth so sleeping models
+           with requests waiting in the scheduler queue are counted correctly.
         """
-        # 1. Demand comparison: target must outweigh busy lane by DRAIN_COMPETITIVE_RATIO
+        # 1. Demand comparison: target must outweigh busy lane by DRAIN_COMPETITIVE_RATIO.
+        #    Exception: when both demands are near-zero (< 0.1), skip the ratio check
+        #    and let the queue-depth fairness check (step 5) decide.  Sleeping models
+        #    accumulate no demand and have queue_waiting=0, so the ratio is meaningless
+        #    when both sides are zero.
         target_eff = self._effective_demand(target.model_name)
         busy_eff = self._effective_demand(busy_lane.model_name, busy_lane)
-        if target_eff <= busy_eff * self.DRAIN_COMPETITIVE_RATIO:
+        both_near_zero = target_eff < 0.1 and busy_eff < 0.1
+        if not both_near_zero and target_eff <= busy_eff * self.DRAIN_COMPETITIVE_RATIO:
             logger.info(
                 "Drain skip lane=%s: target_eff=%.2f not > busy_eff=%.2f × ratio=%.1f",
                 busy_lane.lane_id, target_eff, busy_eff, self.DRAIN_COMPETITIVE_RATIO,
             )
             return False
 
-        # 2. Asymmetric cooldown based on how the lane was loaded
+        # 2. Adaptive tenure: minimum service time before drain is allowed
         key = self._lane_key(provider_id, busy_lane.lane_id)
         loaded_at = self._lane_loaded_at.get(key)
         if loaded_at is not None:
             was_cold = self._lane_was_cold_loaded.get(key, True)
-            min_seconds = (
-                self.DRAIN_MIN_COLD_LOADED_SECONDS if was_cold
-                else self.DRAIN_MIN_WOKEN_SECONDS
-            )
-            if (time.time() - loaded_at) < min_seconds:
+            min_seconds = self._get_effective_tenure(was_cold)
+            elapsed = time.time() - loaded_at
+            if elapsed < min_seconds:
                 logger.info(
-                    "Drain skip lane=%s: in cooldown (loaded %.0fs ago, min=%.0fs, cold=%s)",
-                    busy_lane.lane_id, time.time() - loaded_at, min_seconds, was_cold,
+                    "Drain skip lane=%s: tenure protection (elapsed %.0fs < min %.0fs, "
+                    "cold=%s, thrashing=%s)",
+                    busy_lane.lane_id, elapsed, min_seconds, was_cold,
+                    self._is_thrashing(),
                 )
                 return False
 
@@ -3316,10 +3828,36 @@ class CapacityPlanner:
                 )
                 return False
 
+        # 5. Fairness: don't drain if target has too few waiting requests.
+        # Includes both lane-level (active + vLLM queue) and scheduler queue
+        # depth, so sleeping models with requests in the scheduler queue
+        # are counted correctly.
+        all_lanes = self._safe_get_lanes(provider_id)
+        busy_queue = self._get_queue_depth_for_model(
+            provider_id, busy_lane.model_name, all_lanes,
+        )
+        target_queue = self._get_queue_depth_for_model(
+            provider_id, target.model_name, all_lanes,
+        )
+        if target_queue < self.FAIRNESS_MIN_QUEUE_TO_SWITCH:
+            logger.info(
+                "Drain skip lane=%s: target queue too small (%d < %d)",
+                busy_lane.lane_id, target_queue, self.FAIRNESS_MIN_QUEUE_TO_SWITCH,
+            )
+            return False
+        if busy_queue > 0 and target_queue < busy_queue * self.FAIRNESS_QUEUE_RATIO:
+            logger.info(
+                "Drain skip lane=%s: fairness — target_queue=%d < busy_queue=%d × %.1f",
+                busy_lane.lane_id, target_queue, busy_queue,
+                self.FAIRNESS_QUEUE_RATIO,
+            )
+            return False
+
         logger.info(
-            "Drain approved: busy_lane=%s model=%s busy_eff=%.2f → target=%s target_eff=%.2f",
+            "Drain approved: busy_lane=%s model=%s busy_eff=%.2f → target=%s target_eff=%.2f"
+            " (target_queue=%d, busy_queue=%d)",
             busy_lane.lane_id, busy_lane.model_name, busy_eff,
-            target.model_name, target_eff,
+            target.model_name, target_eff, target_queue, busy_queue,
         )
         return True
 
@@ -3521,6 +4059,29 @@ class CapacityPlanner:
                         action.lane_id, action.provider_id,
                     )
                     return False
+
+            # For request-time reclaim sleeps, mark the lane cold and drain
+            # active requests BEFORE sending the sleep command.  Without this,
+            # new requests can be routed to the lane between the idle check in
+            # _next_request_reclaim_action and the actual sleep — those in-flight
+            # streams get killed when the lane is subsequently stopped.
+            _is_reclaim_sleep = bool(
+                action.reason and "Request-time reclaim" in action.reason
+            )
+            if _is_reclaim_sleep:
+                self._mark_lane_cold(action.provider_id, action.lane_id)
+                drained = await self._drain_lane(
+                    action.provider_id, action.lane_id, timeout_seconds=60.0,
+                )
+                if not drained:
+                    logger.warning(
+                        "Cannot sleep lane %s for reclaim: "
+                        "active requests did not drain within 60s",
+                        action.lane_id,
+                    )
+                    self._unmark_lane_cold(action.provider_id, action.lane_id)
+                    return False
+
             # Sleeping frees VRAM: record a negative reservation so concurrent
             # load checks see the freed space immediately.
             if _reservation_id is None and _profile is not None:
@@ -3549,6 +4110,8 @@ class CapacityPlanner:
                     "Failed to send %s command for lane %s",
                     action.action, action.lane_id,
                 )
+                if _is_reclaim_sleep:
+                    self._unmark_lane_cold(action.provider_id, action.lane_id)
                 self._release_vram(_reservation_id)
                 return False
 
@@ -3806,6 +4369,10 @@ class CapacityPlanner:
             elif action.action == "load":
                 # A newly loaded lane should never inherit a stale cold mark from a
                 # previous stop of the same lane_id.
+                self._unmark_lane_cold(action.provider_id, action.lane_id)
+            elif action.action == "wake":
+                # Clear any cold mark left by a prior reclaim sleep so the
+                # woken lane is routable again.
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
 
         if confirmed and action.action in ("load", "wake") and self._on_state_change is not None:

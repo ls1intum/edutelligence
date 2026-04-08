@@ -12,9 +12,12 @@ worker:
 logos:
   enabled: true
   capabilities_models:
-    - Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+    - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+      tensor_parallel_size: 2
+      kv_cache_memory_bytes: 4G
     - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
       tensor_parallel_size: 2
+      kv_cache_memory_bytes: 6G
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 
@@ -27,8 +30,16 @@ engines:
     nccl_debug: WARN
     nccl_debug_subsys: INIT
     # Turing (SM 7.5) workaround for AWQ + TP=2 on Quadro RTX 5000:
-    # force awq path and avoid vLLM custom all-reduce kernels.
+    # force AWQ path, disable vLLM custom all-reduce kernels (PCIe, no NVLink),
+    # disable NCCL P2P transfers, and run in eager mode for SM 7.5 stability.
     model_overrides:
+      Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
+        quantization: awq
+        enforce_eager: true
+        disable_custom_all_reduce: true
+        disable_nccl_p2p: true
       Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
         quantization: awq
+        enforce_eager: true
         disable_custom_all_reduce: true
+        disable_nccl_p2p: true

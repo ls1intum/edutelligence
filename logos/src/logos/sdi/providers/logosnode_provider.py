@@ -354,11 +354,11 @@ class LogosNodeDataProvider:
             matched_lanes += 1
             capacity_hint = lane.get("num_parallel")
             if bool(lane.get("vllm")) and not capacity_hint:
-                lane_config = lane.get("lane_config")
-                if isinstance(lane_config, dict):
-                    # vLLM runtime status reports num_parallel=0 because concurrency is continuous,
-                    # but the saved lane config still provides the scheduling capacity hint.
-                    capacity_hint = lane_config.get("num_parallel")
+                # vLLM uses continuous batching — num_parallel=0 means unlimited.
+                # Default to 256 so the scheduler doesn't artificially
+                # serialize requests.  The DB parallel column is the real
+                # ceiling if one is needed.
+                capacity_hint = 256
 
             try:
                 capacity = int(capacity_hint) if capacity_hint is not None else 0
@@ -712,6 +712,14 @@ class LogosNodeDataProvider:
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         with self._lock:
+            # Reject if no lane is ready (loaded/running) — requests for sleeping
+            # or unloaded models should go to the scheduler queue instead.
+            if not self._is_model_lane_ready(model_id):
+                logger.debug(
+                    "Refusing reservation for model %d: no ready lane (sleeping/not loaded)",
+                    model_id,
+                )
+                return False
             current_active = self._model_active.get(model_id, 0)
             max_capacity, _source = self.get_parallel_capacity(model_id)
             if current_active < max_capacity:
@@ -728,6 +736,26 @@ class LogosNodeDataProvider:
                 self._model_active[model_id] = current_active + 1
                 return True
             return False
+
+    def _is_model_lane_ready(self, model_id: int) -> bool:
+        """Check if at least one lane for this model is in a ready state (loaded/running)."""
+        if self._runtime_registry is None:
+            return True  # No runtime info, assume ready (backwards compat)
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return False
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return True  # No snapshot yet, assume ready
+        lanes = ((snap.get("runtime") or {}).get("lanes") or [])
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if lane.get("model") != model_name:
+                continue
+            if lane.get("runtime_state") in ("loaded", "running"):
+                return True
+        return False
 
     def _backend_queue_exceeds_threshold(self, model_id: int) -> bool:
         """Check if the backend (vLLM) queue_waiting exceeds the threshold."""

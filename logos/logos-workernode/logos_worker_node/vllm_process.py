@@ -21,7 +21,9 @@ import asyncio
 from collections import deque
 from datetime import datetime
 import logging
+import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -79,6 +81,7 @@ class VllmProcessHandle:
         self._stuck_vram: bool = False
         self._known_child_pids: set[int] = set()
         self._process_group_id: int | None = None
+        self._max_concurrency: int | None = None
 
     async def init(self) -> None:
         self._http = httpx.AsyncClient(
@@ -983,6 +986,17 @@ class VllmProcessHandle:
         )
         return False
 
+    # Matches vLLM startup line like:
+    #   "Maximum concurrency for 4,096 tokens per request: 10.66x"
+    _RE_MAX_CONCURRENCY = re.compile(
+        r"Maximum concurrency for [\d,]+ tokens per request:\s+([\d.]+)x"
+    )
+
+    @property
+    def max_concurrency(self) -> int | None:
+        """Max concurrent full-context requests reported by vLLM at startup."""
+        return self._max_concurrency
+
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:
             return
@@ -992,6 +1006,14 @@ class VllmProcessHandle:
                 if line:
                     self._recent_logs.append(line)
                     logger.info("[vllm:%s] %s", self.lane_id, line)
+                    if self._max_concurrency is None:
+                        m = self._RE_MAX_CONCURRENCY.search(line)
+                        if m:
+                            self._max_concurrency = max(1, math.floor(float(m.group(1))))
+                            logger.info(
+                                "[%s] vLLM reported max concurrency: %d",
+                                self.lane_id, self._max_concurrency,
+                            )
         except asyncio.CancelledError:
             pass
         except Exception:

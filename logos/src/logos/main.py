@@ -1320,6 +1320,21 @@ async def start_pipeline():
         lane_preparer=_capacity_planner,
     )
     _pipeline._context_resolver = _context_resolver
+
+    # Wire capacity-needed callback: when the scheduler queues a request
+    # for a sleeping/unloaded model, immediately trigger the capacity
+    # planner to wake/load it (instead of waiting for the 30s cycle).
+    async def _on_capacity_needed(provider_id: int, model_name: str) -> None:
+        try:
+            await _capacity_planner.prepare_lane_for_request(provider_id, model_name)
+        except Exception:
+            logger.debug(
+                "Background capacity request for %s on provider %s failed",
+                model_name, provider_id, exc_info=True,
+            )
+
+    scheduler._on_capacity_needed = _on_capacity_needed
+
     await _capacity_planner.start()
 
     logger.info(

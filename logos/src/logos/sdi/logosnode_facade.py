@@ -152,6 +152,29 @@ class LogosNodeSchedulingDataFacade:
             raise KeyError(f"Provider '{provider_id}' not found")
         return self._providers[int(provider_id)].get_capacity_info()
 
+    def get_parallel_capacity(self, model_id: int, provider_id: int) -> tuple[int, str]:
+        """Get the parallel capacity for a model on a specific provider."""
+        provider = self._get_provider_for_model(model_id, provider_id)
+        return provider.get_parallel_capacity(model_id)
+
+    def get_model_name(self, model_id: int, provider_id: int) -> Optional[str]:
+        """Resolve model_id to model_name for a given provider."""
+        try:
+            provider = self._get_provider_for_model(model_id, provider_id)
+        except KeyError:
+            return None
+        return provider._model_id_to_name.get(model_id)
+
+    def get_scheduler_queue_depth_by_model_name(self, model_name: str, provider_id: int) -> int:
+        """Get total scheduler queue depth for a model by name on a specific provider."""
+        provider = self._providers.get(int(provider_id))
+        if not provider:
+            return 0
+        for model_id, name in provider._model_id_to_name.items():
+            if name == model_name:
+                return self.queue_manager.get_total_depth_by_deployment(model_id, provider_id)
+        return 0
+
     # ------------------------------------------------------------------
     # Scheduler-view and lane-signal facade methods (Phase 1.3)
     # ------------------------------------------------------------------
