@@ -31,9 +31,9 @@ _EMPTY_SEGMENT_PREFIX = "There is no content"
 class LectureGlobalSearchRetrieval:
     """Retrieves lecture unit segments from Weaviate using hybrid search and maps them to search result DTOs."""
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    def __init__(self, client: WeaviateClient):
         embedding_model = resolve_model(
-            "lecture_search_answer_pipeline", "default", "embedding", local=local
+            "lecture_search_answer_pipeline", "default", "embedding", local=False
         )
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)

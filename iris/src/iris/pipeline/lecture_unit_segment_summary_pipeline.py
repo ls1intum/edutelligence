@@ -65,7 +65,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
         pipeline_id = "lecture_unit_segment_summary_pipeline"
         embedding_model = resolve_model(
-            pipeline_id, "default", "embedding", local=local
+            pipeline_id, "default", "embedding", local=False
         )
         chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
 

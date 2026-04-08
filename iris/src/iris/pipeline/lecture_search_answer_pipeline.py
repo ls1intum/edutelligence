@@ -46,7 +46,7 @@ class LectureSearchAnswerPipeline(SubPipeline):
     def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_search_answer_pipeline")
         self.tokens = []
-        self.retriever = LectureGlobalSearchRetrieval(client, local=local)
+        self.retriever = LectureGlobalSearchRetrieval(client)
 
         pipeline_id = "lecture_search_answer_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)

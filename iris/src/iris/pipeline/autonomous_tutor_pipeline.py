@@ -7,7 +7,7 @@ from iris.common.logging_config import get_logger
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
-from iris.domain.variant.variant import Variant
+from iris.domain.variant.variant import Dep, Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -51,6 +51,12 @@ class AutonomousTutorPipeline(
             "Default",
             "Default autonomous tutor variant.",
         ),
+    ]
+    DEPENDENCIES = [
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
     ]
 
     DIRECT_POST_CONFIDENCE_THRESHOLD = 0.95
