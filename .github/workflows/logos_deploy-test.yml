@@ -8,6 +8,10 @@ on:
         description: "Image tag to deploy (default: latest)"
         default: "latest"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   deploy-logos-server:
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
