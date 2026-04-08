@@ -56,17 +56,26 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
+def _resolve_provider_name(provider_id: int) -> str:
+    """Best-effort resolve a provider ID to its worker name."""
+    snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+    if snap:
+        return snap.get("worker_id") or str(provider_id)
+    return str(provider_id)
+
+
 def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
     """Callback: sync announced capabilities into DB tables."""
+    pname = _resolve_provider_name(provider_id)
     try:
         with DBManager() as db:
             db.sync_logosnode_capabilities(provider_id, model_names)
         logger.info(
             "Synced %d capability model(s) to DB for provider %s",
-            len(model_names), provider_id,
+            len(model_names), pname,
         )
     except Exception:
-        logger.exception("Failed to sync capabilities to DB for provider %s", provider_id)
+        logger.exception("Failed to sync capabilities to DB for provider %s", pname)
 
 
 _logosnode_registry = LogosNodeRuntimeRegistry(
@@ -659,7 +668,7 @@ def _capture_logosnode_provider_snapshot(
                 try:
                     db.upsert_model_profiles(provider_id, model_profiles)
                 except Exception:
-                    logger.debug("Failed to upsert model profiles for provider %s", provider_id, exc_info=True)
+                    logger.debug("Failed to upsert model profiles for provider %s", _resolve_provider_name(provider_id), exc_info=True)
 
     sample["snapshot_id"] = snapshot_id
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
@@ -2411,7 +2420,7 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
         with DBManager() as db:
             db.sync_logosnode_capabilities(provider_id, [])
     except Exception:
-        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_id)
+        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_name)
 
     return {
         "provider_id": provider_id,
