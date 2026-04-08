@@ -500,9 +500,12 @@ def calibrate_model(
         stop_vllm(proc)
         time.sleep(_VRAM_SETTLE_S)
 
+        error_detail = str(exc)
+        if log_tail:
+            error_detail = f"{error_detail}\n{log_tail}"
         partial.error = (
             f"Model failed to start with KV cache {kv_bytes_str} on "
-            f"tp={tp}: {exc}"
+            f"tp={tp}: {error_detail}"
         )
         logger.warning("  %s", partial.error)
         return partial
@@ -862,7 +865,10 @@ def auto_calibrate_models(
         result = _try_calibrate(plan, **cal_kwargs)
 
         # tp escalation: if calibration failed, retry with doubled tp
-        while not result.success and tp * 2 <= max_tp:
+        # Skip escalation for errors that cannot be solved by more GPUs
+        # (e.g. unsupported model architecture).
+        _fatal = "does not recognize this architecture" in (result.error or "")
+        while not result.success and not _fatal and tp * 2 <= max_tp:
             next_tp = tp * 2
             logger.info(
                 "  %s failed with tp=%d — retrying with tp=%d",

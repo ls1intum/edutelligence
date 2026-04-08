@@ -147,7 +147,9 @@ RUN set -e \
          && if [ -n "$NCCL_PIP_SPEC" ]; then \
               pip install --no-cache-dir --force-reinstall --no-deps "$NCCL_PIP_SPEC"; \
             fi \
-         # 4. FlashInfer (install AFTER torch so it picks up the correct version)
+         # 4. Upgrade transformers for latest model architecture support
+         && pip install --no-cache-dir --upgrade transformers \
+         # 5. FlashInfer (install AFTER torch so it picks up the correct version)
          && pip install --no-cache-dir --no-deps flashinfer-python; \
        fi
 
