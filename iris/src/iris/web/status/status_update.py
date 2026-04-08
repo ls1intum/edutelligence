@@ -83,7 +83,7 @@ class StatusCallback(ABC):
             True if the status update was sent successfully, False otherwise.
         """
         try:
-            requests.post(
+            resp = requests.post(
                 self.url,
                 headers={
                     "Content-Type": "application/json",
@@ -91,7 +91,9 @@ class StatusCallback(ABC):
                 },
                 json=self.status.model_dump(by_alias=True),
                 timeout=200,
-            ).raise_for_status()
+            )
+            logger.info("Status callback to %s returned %d", self.url, resp.status_code)
+            resp.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
             logger.error("Error sending status update: %s", e)

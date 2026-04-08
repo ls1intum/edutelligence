@@ -13,6 +13,7 @@ from ...llm.external.openai_embeddings import (
     AzureOpenAIEmbeddingModel,
     DirectOpenAIEmbeddingModel,
 )
+from ...llm.external.whisper import AzureWhisperModel, OpenAIWhisperModel
 from .cohere_client import CohereAzureClient
 
 AnyLlm = Union[
@@ -22,6 +23,8 @@ AnyLlm = Union[
     AzureOpenAIChatModel,
     DirectOpenAIEmbeddingModel,
     AzureOpenAIEmbeddingModel,
+    AzureWhisperModel,
+    OpenAIWhisperModel,
     OllamaModel,
     CohereAzureClient,
 ]
