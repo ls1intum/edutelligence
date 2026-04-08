@@ -6,6 +6,11 @@ on:
     branches: [main]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      image-tag:
+        type: string
+        description: "Image tag to deploy (default: latest)"
+        default: "latest"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -138,3 +143,35 @@ jobs:
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
           script: |
             docker image prune -f
+  deploy-logos-server:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
+    with:
+      environment: "Logos - Prod"
+      docker-compose-file: "./logos/docker-compose.yaml"
+      main-image-name: ls1intum/edutelligence/logos
+      image-tag: ${{ inputs.image-tag }}
+      deployment-base-path: "/opt/logos"
+    secrets: inherit
+
+  deploy-worker-deimama:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
+    with:
+      environment: "Logos Worker - Prod - deimama"
+      docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
+      main-image-name: ls1intum/edutelligence/logos-workernode-vllm
+      image-tag: ${{ inputs.image-tag }}
+      deployment-base-path: "/opt/logos-workernode"
+    secrets: inherit
+
+  deploy-worker-deipapa:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
+    with:
+      environment: "Logos Worker - Prod - deipapa"
+      docker-compose-file: "./logos/logos-workernode/docker-compose.yml"
+      main-image-name: ls1intum/edutelligence/logos-workernode-vllm
+      image-tag: ${{ inputs.image-tag }}
+      deployment-base-path: "/opt/logos-workernode"
+    secrets: inherit
