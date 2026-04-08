@@ -1488,7 +1488,7 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
-def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None):
+def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, request_path=None):
     """Build streaming response using executor."""
     from fastapi.responses import StreamingResponse
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
@@ -1522,7 +1522,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                 chunk_iter = _logosnode_registry.send_stream_command(
                     provider_id=provider_id,
                     action="infer_stream",
-                    params={"lane_id": context.lane_id, "payload": stream_payload},
+                    params={"lane_id": context.lane_id, "payload": stream_payload, "request_path": request_path},
                     timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
                 )
             else:
@@ -1592,7 +1592,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
     return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
 
 
-async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, is_async_job=False):
+async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, is_async_job=False, request_path=None):
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
@@ -1611,7 +1611,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 rpc_result = await _logosnode_registry.send_command(
                     provider_id=provider_id,
                     action="infer",
-                    params={"lane_id": context.lane_id, "payload": sync_payload},
+                    params={"lane_id": context.lane_id, "payload": sync_payload, "request_path": request_path},
                     timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
                 )
                 status_override = int(rpc_result.get("status_code", 200))
@@ -1838,6 +1838,7 @@ async def _execute_proxy_mode(
     is_async_job: bool,
     profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
+    request_path: Optional[str] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -1889,6 +1890,7 @@ async def _execute_proxy_mode(
         allowed_models_override=[model_id],
         profile_id=profile_id,
         request_id=request_id,
+        request_path=request_path,
     )
 
 
@@ -1902,6 +1904,7 @@ async def _execute_resource_mode(
     allowed_models_override: Optional[list] = None,
     profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
+    request_path: Optional[str] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -1990,7 +1993,8 @@ async def _execute_resource_mode(
                 -1,  # policy_id
                 result.classification_stats,
                 result.scheduling_stats,
-                is_async_job=True
+                is_async_job=True,
+                request_path=request_path,
             )
         else:
             # Sync endpoints support streaming
@@ -2003,7 +2007,8 @@ async def _execute_resource_mode(
                     result.model_id,
                     -1,  # Policy ID not implemented
                     result.classification_stats,
-                    result.scheduling_stats
+                    result.scheduling_stats,
+                    request_path=request_path,
                 )
             else:
                 return await _sync_response(
@@ -2014,7 +2019,8 @@ async def _execute_resource_mode(
                     result.model_id,
                     -1,  # Policy ID not implemented
                     result.classification_stats,
-                    result.scheduling_stats
+                    result.scheduling_stats,
+                    request_path=request_path,
                 )
     except Exception as e:
         logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)
@@ -2123,6 +2129,7 @@ async def route_and_execute(
                 is_async_job,
                 profile_id=profile_id,
                 request_id=request_id,
+                request_path=path,
             )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
@@ -2135,6 +2142,7 @@ async def route_and_execute(
             is_async_job,
             profile_id=profile_id,
             request_id=request_id,
+            request_path=path,
         )
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
@@ -3107,17 +3115,18 @@ async def retrieve_model(model_id: str, request: Request):
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
-    Dynamic proxy for AI endpoints (versioned paths).
+    Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
     Supports both PROXY and RESOURCE modes with streaming.
-
-    Params:
-        path: Upstream path to forward.
-        request: Incoming request.
-
-    Returns:
-        Upstream response (streaming or sync) based on request.
     """
-    return await handle_sync_request(path, request)
+    return await handle_sync_request(f"v1/{path}", request)
+
+
+@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+async def logos_service_v2_sync(path: str, request: Request):
+    """
+    Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
+    """
+    return await handle_sync_request(f"v2/{path}", request)
 
 
 @app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
@@ -3132,7 +3141,24 @@ async def logos_service_long_sync(request: Request, path: str = None):
     :param path: API endpoint path (e.g., 'chat/completions', 'completions', 'embeddings')
     :return: StreamingResponse for streaming requests, JSONResponse for synchronous requests
     """
+    return await handle_sync_request(f"v1/{path}", request)
+
+
+# vLLM non-prefixed endpoints (not part of OpenAI API spec, but user-facing).
+# These are canonical paths for pooling, scoring, reranking, and tokenization.
+async def _handle_vllm_native(request: Request):
+    """Forward to vLLM using the original request path."""
+    path = request.url.path.lstrip("/")
     return await handle_sync_request(path, request)
+
+for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
+    app.add_api_route(
+        _vllm_path,
+        _handle_vllm_native,
+        methods=["POST"],
+        tags=["user-facing"],
+        name=f"vllm_native_{_vllm_path.lstrip('/')}",
+    )
 
 
 @app.api_route("/jobs/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
@@ -3147,7 +3173,13 @@ async def logos_service_async(path: str, request: Request):
     Returns:
         202 with job metadata; poll /jobs/{id} for result.
     """
-    return await submit_job_request(path, request)
+    return await submit_job_request(f"v1/{path}", request)
+
+
+@app.api_route("/jobs/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+async def logos_service_v2_async(path: str, request: Request):
+    """Async job-based proxy for Cohere-compatible endpoints."""
+    return await submit_job_request(f"v2/{path}", request)
 
 
 @app.api_route("/jobs/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
@@ -3162,7 +3194,7 @@ async def logos_service_long_async(path: str, request: Request):
     Returns:
         202 with job metadata; poll /jobs/{id} for result.
     """
-    return await submit_job_request(path, request)
+    return await submit_job_request(f"v1/{path}", request)
 
 
 @app.get("/jobs/{job_id}", tags=["user-facing"])
