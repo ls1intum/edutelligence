@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import logging
 import secrets
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 import uuid
 
 from fastapi import WebSocket
@@ -263,7 +263,10 @@ class ProviderSession:
 class LogosNodeRuntimeRegistry:
     """Tracks auth tickets, active worker sessions, and latest runtime state."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        on_capabilities_changed: Callable[[int, list[str]], None] | None = None,
+    ) -> None:
         self._tickets: dict[str, AuthTicket] = {}
         self._sessions: dict[int, ProviderSession] = {}
         self._lock = asyncio.Lock()
@@ -273,6 +276,18 @@ class LogosNodeRuntimeRegistry:
         # Lanes pre-marked as cold by the capacity planner — excluded from
         # scheduling so new requests don't route to lanes about to be stopped.
         self._cold_marked_lanes: set[tuple[int, str]] = set()
+        # Optional callback invoked when a worker's capabilities_models change.
+        # Signature: (provider_id, sorted_model_names) -> None
+        self._on_capabilities_changed = on_capabilities_changed
+
+    def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
+        if self._on_capabilities_changed is not None:
+            try:
+                self._on_capabilities_changed(provider_id, model_names)
+            except Exception:
+                logger.exception(
+                    "on_capabilities_changed callback failed for provider=%s", provider_id,
+                )
 
     def _session_diagnostic_lines(
         self,
@@ -443,6 +458,9 @@ class LogosNodeRuntimeRegistry:
                     accent=GREEN,
                 )
             )
+        # Sync announced capabilities to DB on session attach
+        if session.capabilities_models:
+            self._fire_capabilities_changed(ticket.provider_id, sorted(session.capabilities_models))
         return session
 
     async def get_conflicting_session(
@@ -511,7 +529,10 @@ class LogosNodeRuntimeRegistry:
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
         if capabilities_models is not None:
-            session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            if new_caps != session.capabilities_models:
+                session.capabilities_models = new_caps
+                self._fire_capabilities_changed(provider_id, sorted(new_caps))
 
     async def update_runtime(
         self,
@@ -530,7 +551,10 @@ class LogosNodeRuntimeRegistry:
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
         if capabilities_models is not None:
-            session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            if new_caps != session.capabilities_models:
+                session.capabilities_models = new_caps
+                self._fire_capabilities_changed(provider_id, sorted(new_caps))
 
         # Detect lane state and metric changes and log them as structured blocks.
         old_lanes = {
@@ -884,7 +908,14 @@ class LogosNodeRuntimeRegistry:
 
     async def is_model_allowed(self, provider_id: int, model_name: str) -> bool:
         session = await self._get_session(provider_id)
-        if session is None or not session.capabilities_models:
+        if session is None:
+            # Worker is offline — do not advertise its models.
+            return False
+        if session.is_stale(30):
+            # Worker hasn't heartbeated recently — treat as offline.
+            return False
+        if not session.capabilities_models:
+            # Worker connected but hasn't declared capabilities yet — allow.
             return True
         return model_name in session.capabilities_models
 

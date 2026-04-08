@@ -56,7 +56,22 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
-_logosnode_registry = LogosNodeRuntimeRegistry()
+def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
+    """Callback: sync announced capabilities into DB tables."""
+    try:
+        with DBManager() as db:
+            db.sync_logosnode_capabilities(provider_id, model_names)
+        logger.info(
+            "Synced %d capability model(s) to DB for provider %s",
+            len(model_names), provider_id,
+        )
+    except Exception:
+        logger.exception("Failed to sync capabilities to DB for provider %s", provider_id)
+
+
+_logosnode_registry = LogosNodeRuntimeRegistry(
+    on_capabilities_changed=_sync_logosnode_capabilities_to_db,
+)
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 
@@ -2389,8 +2404,17 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
     if code != 200:
         return JSONResponse(status_code=code, content=result)
 
+    provider_id = result.get("provider-id")
+
+    # Create logosnode_provider_keys entry so deployment queries work
+    try:
+        with DBManager() as db:
+            db.sync_logosnode_capabilities(provider_id, [])
+    except Exception:
+        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_id)
+
     return {
-        "provider_id": result.get("provider-id"),
+        "provider_id": provider_id,
         "provider_name": provider_name,
         "provider_type": "logosnode",
         "shared_key": shared_key,
