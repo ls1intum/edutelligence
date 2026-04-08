@@ -512,7 +512,7 @@ def calibrate_model(
         gpu_snap = query_gpu_vram(gpu_indices)
         per_gpu_mb = min(v["total_mb"] for v in gpu_snap.values())
         effective_gpu_mb = per_gpu_mb * tp
-        max_kv_mb = effective_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
+        max_kv_mb = per_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
         logger.info(
             "  GPU VRAM = %.0f MB/GPU × tp=%d = %.0f MB effective, "
             "KV cache search cap (%.0f%%) = %.0f MB",
