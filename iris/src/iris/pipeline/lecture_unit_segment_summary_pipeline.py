@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -31,6 +31,7 @@ from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,
 )
+from iris.web.status.status_update import StatusCallback
 
 
 class LectureUnitSegmentSummaryPipeline(SubPipeline):
@@ -50,10 +51,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         client: WeaviateClient,
         lecture_unit_dto: LectureUnitDTO,
         local: bool = False,
+        callback: Optional[StatusCallback] = None,
     ) -> None:
         super().__init__(implementation_id="lecture_unit_segment_summary_pipeline")
         self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
+        self.callback = callback
 
         self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
@@ -84,7 +87,14 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
-        for slide_index in range(slide_number_start, slide_number_end + 1):
+        total_slides = slide_number_end - slide_number_start + 1
+        for i, slide_index in enumerate(
+            range(slide_number_start, slide_number_end + 1)
+        ):
+            if self.callback is not None:
+                self.callback.in_progress(
+                    f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
+                )
             transcriptions = self._get_transcriptions(slide_index)
             slides = self._get_slides(slide_index)
             summary = self._create_summary(transcriptions, slides)

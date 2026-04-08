@@ -86,6 +86,56 @@ LlmRoleConfiguration = dict[
 LlmVariantConfiguration = dict[str, LlmRoleConfiguration]  # variant_id -> role config
 
 
+class TranscriptionSettings(BaseModel):
+    """Settings for video transcription pipeline.
+
+    Whisper API configuration (endpoint, key, deployment) is loaded from
+    llm_config.yml, not here.  Add an entry with type 'azure_whisper' or
+    'openai_whisper' to llm_config.yml and set whisper_model to its id.
+    """
+
+    enabled: bool = Field(default=False, description="Enable video transcription")
+    temp_dir: str = Field(
+        default="/tmp/nebula-transcription",  # nosec B108
+        description="Directory for temporary video/audio files",
+    )
+    chunk_duration_seconds: int = Field(
+        default=900, description="Audio chunk duration in seconds (default: 15 min)"
+    )
+    whisper_model: str = Field(
+        default="whisper",
+        description="Model ID to look up in llm_config.yml",
+    )
+    whisper_max_workers: int = Field(
+        default=2,
+        description="Max parallel Whisper API requests per transcription job",
+    )
+    whisper_request_timeout_seconds: int = Field(
+        default=300,
+        description="Timeout in seconds for a single Whisper API request",
+    )
+    whisper_max_retries: int = Field(
+        default=6,
+        description="Max retry attempts per chunk on transient failures",
+    )
+    download_timeout_seconds: int = Field(
+        default=3600,
+        description="Timeout for video download via FFmpeg (default: 1 hour)",
+    )
+    extract_audio_timeout_seconds: int = Field(
+        default=600,
+        description="Timeout for audio extraction via FFmpeg (default: 10 min)",
+    )
+    no_speech_filter_threshold: float = Field(
+        default=0.8,
+        description=(
+            "Whisper no_speech_prob threshold (0.0-1.0). Segments above this "
+            "are discarded. Use 0.8 for noisy lecture halls, 0.6 for studios, "
+            "1.0 to disable."
+        ),
+    )
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -96,6 +146,7 @@ class Settings(BaseModel):
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
+    transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
 
     @classmethod
     def get_settings(cls):

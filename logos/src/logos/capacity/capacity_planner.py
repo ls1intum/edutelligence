@@ -288,7 +288,8 @@ class CapacityPlanner:
         for pid in provider_ids:
             snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
             if snap is None:
-                lines.append(f"{paint('⊘', RED)} provider={pid} {paint('offline', DIM)}")
+                name = self._facade.get_provider_name(pid) or "?"
+                lines.append(f"{paint('⊘', RED)} provider={pid} worker={paint(name, BOLD)} {paint('offline', DIM)}")
                 continue
 
             connected += 1

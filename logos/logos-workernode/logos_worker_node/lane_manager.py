@@ -602,6 +602,14 @@ class LaneManager:
         async with self._lock:
             return await self._get_status_unlocked(lane_id)
 
+    def get_current_lane_configs(self) -> list[LaneConfig]:
+        """Return the LaneConfig for every active lane (for state persistence)."""
+        configs: list[LaneConfig] = []
+        for handle in self._handles.values():
+            if handle.lane_config is not None:
+                configs.append(handle.lane_config)
+        return configs
+
     def get_handle(self, lane_id: str) -> ProcessHandle | None:
         return self._handles.get(lane_id)
 

@@ -183,6 +183,11 @@ class LogosNodeSchedulingDataFacade:
         with self._lock:
             return list(self._providers.keys())
 
+    def get_provider_name(self, provider_id: int) -> str | None:
+        """Return the display name for a provider, or None if unknown."""
+        provider = self._providers.get(int(provider_id))
+        return provider.name if provider else None
+
     def debug_state(self) -> Dict[str, Dict]:
         with self._lock:
             providers: Dict[str, Dict] = {}

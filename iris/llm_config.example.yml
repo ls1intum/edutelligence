@@ -44,6 +44,23 @@
   api_key:
   cost_per_million_input_token: 0.02
 
+# ── Whisper transcription models ─────────────────────────────────────────────
+- api_key:
+  description: Whisper 1 (OpenAI)
+  id: whisper-1-openai
+  model: whisper-1
+  name: Whisper 1
+  type: openai_whisper
+- api_key:
+  api_version: "2024-06-01"
+  azure_deployment: whisper
+  description: Whisper 1 on Azure
+  endpoint: "<your-endpoint>"
+  id: whisper-1-azure
+  model: whisper-1
+  name: Whisper 1 (Azure)
+  type: azure_whisper
+
 # ── Reranker ─────────────────────────────────────────────────────────────────
 - id: cohere
   type: cohere_azure
