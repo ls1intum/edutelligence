@@ -122,8 +122,11 @@ class ContextResolver:
                 # Retry loop: lane may be transitioning (loading/waking) after
                 # reevaluate_model_queues dispatched us.  Wait up to ~10s.
                 if lane is None:
-                    for attempt in range(10):
-                        await asyncio.sleep(1.0)
+                    # Retry up to 30s — must survive worst-case drain tenure
+                    # (30s) + sleep/wake cycle (~5s).  First 10 retries are 1s
+                    # apart (fast path); remaining retries back off to 2s.
+                    for attempt in range(20):
+                        await asyncio.sleep(1.0 if attempt < 10 else 2.0)
                         lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
                         if lane is not None:
                             logger.info(

@@ -179,6 +179,9 @@ class CapacityPlanner:
         self._switch_timestamps: list[float] = []
         self._last_switch_model: dict[int, str] = {}  # provider_id → last activated model
 
+        # Drain suppression: prevent fire-and-forget from reloading recently drained models
+        self._drain_timestamps: dict[tuple[int, str], float] = {}  # (provider_id, model_name) → drain time
+
         # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
         # when concurrent load/wake/sleep/stop operations overlap.
         self._vram_ledger = VRAMLedger()
@@ -499,6 +502,43 @@ class CapacityPlanner:
                 provider_id, model_name,
             )
             return None
+
+        # Don't reload a model that was recently drained — the drain decision
+        # was intentional and reloading immediately causes oscillation.
+        # Exception: if the incumbent model is idle (0 active requests), the
+        # drain rationale no longer applies — allow the load so queued requests
+        # don't starve.
+        drain_key = (provider_id, model_name)
+        drain_time = self._drain_timestamps.get(drain_key)
+        if drain_time is not None:
+            elapsed = time.time() - drain_time
+            cooldown = self._get_effective_tenure(was_cold_loaded=False)
+            if elapsed < cooldown:
+                # Check if the incumbent is still busy
+                incumbent_busy = False
+                all_lanes = self._safe_get_lanes(provider_id)
+                for lane in all_lanes:
+                    if lane.model_name != model_name and lane.runtime_state in ("loaded", "running"):
+                        if lane.active_requests > 0 or lane.queue_waiting > 0:
+                            incumbent_busy = True
+                            break
+                if incumbent_busy:
+                    logger.info(
+                        "Skipping prepare for %s on provider %s: drained %.0fs ago "
+                        "(cooldown %.0fs, incumbent busy)",
+                        model_name, provider_id, elapsed, cooldown,
+                    )
+                    return None
+                else:
+                    logger.info(
+                        "Allowing prepare for %s on provider %s despite drain %.0fs ago: "
+                        "incumbent is idle",
+                        model_name, provider_id, elapsed,
+                    )
+                    self._drain_timestamps.pop(drain_key, None)
+            else:
+                # Cooldown expired — clear the entry
+                self._drain_timestamps.pop(drain_key, None)
 
         target = self._pick_request_target_lane(provider_id, model_name)
         if target is not None and target.runtime_state not in {"sleeping", "cold"}:
@@ -2630,6 +2670,23 @@ class CapacityPlanner:
             residual_vram = float(profile.sleeping_residual_mb or 0.0) if profile is not None else 0.0
 
             if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
+                # Tenure protection: don't reclaim a lane that just woke up —
+                # reevaluate_model_queues may have dispatched requests that are
+                # still in context resolution (active_requests=0 but in-flight).
+                key = self._lane_key(provider_id, lane.lane_id)
+                loaded_at = self._lane_loaded_at.get(key)
+                if loaded_at is not None:
+                    was_cold = self._lane_was_cold_loaded.get(key, True)
+                    min_seconds = self._get_effective_tenure(was_cold)
+                    elapsed = now - loaded_at
+                    if elapsed < min_seconds:
+                        logger.info(
+                            "Reclaim skip idle lane=%s: tenure protection "
+                            "(elapsed %.0fs < min %.0fs)",
+                            lane.lane_id, elapsed, min_seconds,
+                        )
+                        continue
+
                 freed = max(current_vram - residual_vram, 0.0)
                 # Sleep is allowed even within load cooldown (frees KV cache only,
                 # does not evict the model — no thrashing risk).
@@ -3859,6 +3916,8 @@ class CapacityPlanner:
             busy_lane.lane_id, busy_lane.model_name, busy_eff,
             target.model_name, target_eff, target_queue, busy_queue,
         )
+        # Record drain so fire-and-forget won't immediately reload this model
+        self._drain_timestamps[(provider_id, busy_lane.model_name)] = time.time()
         return True
 
 

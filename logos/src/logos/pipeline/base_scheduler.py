@@ -146,20 +146,47 @@ class BaseScheduler(SchedulerInterface):
 
         has_waiters = next_task is not None
 
+        # For logosnode: check lane readiness BEFORE deciding reuse_slot.
+        # If the lane is sleeping/draining, we must NOT transfer the slot —
+        # that would create a phantom active count.  Instead, release the
+        # slot properly (reuse_slot=False) and re-enqueue the waiter so it
+        # can be served once the model is available again.
+        reuse_slot = has_waiters
+        if provider_type == 'logosnode' and has_waiters:
+            try:
+                lane_ready = self._logosnode.is_model_lane_ready(model_id, provider_id)
+            except Exception:
+                lane_ready = True  # optimistic if check fails
+            if not lane_ready:
+                logger.info(
+                    "Request %s released model %s but lane not ready — "
+                    "re-enqueuing waiter instead of slot transfer",
+                    request_id, model_id,
+                )
+                reuse_slot = False
+                # Put the waiter back in the queue
+                if isinstance(next_task, asyncio.Future) and not next_task.done():
+                    waiter_priority = entry.current_priority if entry else Priority.NORMAL
+                    self._queue_mgr.enqueue(
+                        next_task, model_id, provider_id, waiter_priority,
+                    )
+                next_task = None
+                has_waiters = False
+
         if provider_type == 'logosnode':
             try:
                 self._logosnode.on_request_complete(
                     request_id,
                     was_cold_start=False,
                     duration_ms=0,
-                    reuse_slot=has_waiters,
+                    reuse_slot=reuse_slot,
                     provider_id=provider_id,
                 )
                 logger.info(
                     "Request %s released model %s. Reusing slot? %s",
                     request_id,
                     model_id,
-                    has_waiters,
+                    reuse_slot,
                 )
             except KeyError:
                 pass
@@ -264,6 +291,13 @@ class BaseScheduler(SchedulerInterface):
                 continue
             if not status.is_loaded:
                 continue
+            # Double-check actual lane readiness — status.is_loaded can be
+            # stale during drain transitions
+            try:
+                if not self._logosnode.is_model_lane_ready(model_id, provider_id):
+                    continue
+            except Exception:
+                pass
 
             # Determine how many requests we can dispatch
             try:

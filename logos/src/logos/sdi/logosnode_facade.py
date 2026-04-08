@@ -271,6 +271,14 @@ class LogosNodeSchedulingDataFacade:
                 priority=tracking_data["priority"],
             )
 
+    def is_model_lane_ready(self, model_id: int, provider_id: int) -> bool:
+        """Check if at least one lane for this model is in a ready state (loaded/running)."""
+        try:
+            provider = self._get_provider_for_model(model_id, provider_id)
+        except KeyError:
+            return False
+        return provider._is_model_lane_ready(model_id)
+
     def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
         provider = self._get_provider_for_model(model_id, provider_id)
         return provider.try_reserve_capacity(model_id, request_id)
