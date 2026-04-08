@@ -458,11 +458,19 @@ class LogosBridgeClient:
         if action == "add_lane":
             lane_config = LaneConfig(**params)
             status = await lane_manager.add_lane(lane_config)
+            try:
+                save_lanes_state(lane_manager.get_current_lane_configs())
+            except OSError:
+                logger.debug("Could not persist lane state after add_lane")
             return status.model_dump(mode="json")
 
         lane_id = str(params.get("lane_id", "")).strip()
         if action == "delete_lane":
             await lane_manager.remove_lane(lane_id)
+            try:
+                save_lanes_state(lane_manager.get_current_lane_configs())
+            except OSError:
+                logger.debug("Could not persist lane state after delete_lane")
             return {"ok": True, "lane_id": lane_id}
         if action == "sleep_lane":
             status = await lane_manager.sleep_lane(
