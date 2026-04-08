@@ -864,10 +864,26 @@ def auto_calibrate_models(
         tp = original_tp
         result = _try_calibrate(plan, **cal_kwargs)
 
+        # Auto-retry with --trust-remote-code when vLLM demands it.
+        _err = result.error or ""
+        if not result.success and "trust_remote_code=True" in _err:
+            logger.info(
+                "  %s requires trust_remote_code — adding flag and retrying",
+                model_name,
+            )
+            extra = list(plan.get("extra_args") or [])
+            if "--trust-remote-code" not in extra:
+                extra.append("--trust-remote-code")
+            plan = {**plan, "extra_args": extra}
+            result = _try_calibrate(plan, **cal_kwargs)
+
         # tp escalation: if calibration failed, retry with doubled tp
         # Skip escalation for errors that cannot be solved by more GPUs
-        # (e.g. unsupported model architecture).
-        _fatal = "does not recognize this architecture" in (result.error or "")
+        # (e.g. unsupported model architecture, gated repos).
+        _fatal = (
+            "does not recognize this architecture" in (result.error or "")
+            or "Cannot access gated repo" in (result.error or "")
+        )
         while not result.success and not _fatal and tp * 2 <= max_tp:
             next_tp = tp * 2
             logger.info(
