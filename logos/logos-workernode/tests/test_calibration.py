@@ -21,9 +21,6 @@ import yaml
 
 from logos_worker_node.calibration import (
     CalibrationResult,
-    _DEFAULT_KV_CACHE,
-    _KV_CACHE_MIN_STEP_MB,
-    _KV_CACHE_VRAM_CAP_RATIO,
     _format_kv_mb,
     _max_tp_for_plan,
     _parse_kv_to_mb,
@@ -433,7 +430,12 @@ def test_auto_calibrate_models_filters_to_uncalibrated_only(tmp_path):
 
 
 def test_auto_calibrate_tp_escalation(tmp_path):
-    """When tp=1 fails, auto_calibrate retries with tp=2 on a 2-GPU host."""
+    """Max-first strategy: try tp=2 first, then binary-search down to tp=1.
+
+    On a 2-GPU host with default tp=1, the first attempt uses tp=2 (max).
+    If tp=2 succeeds, it then tries tp=1 to find the minimum.  If tp=1
+    fails, the final result uses tp=2.
+    """
     config_path = _write_config(tmp_path, ["big-model"])
     state_dir = tmp_path / "state"
     state_dir.mkdir()
@@ -450,15 +452,15 @@ def test_auto_calibrate_tp_escalation(tmp_path):
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
 
     assert mock_cm.call_count == 2
-    # First call: tp=1 (default), second call: tp=2 (escalated)
-    assert mock_cm.call_args_list[0][0][0].get("tensor_parallel_size", 1) == 1
-    assert mock_cm.call_args_list[1][0][0]["tensor_parallel_size"] == 2
+    # First call: tp=2 (max), second call: tp=1 (binary search down)
+    assert mock_cm.call_args_list[0][0][0]["tensor_parallel_size"] == 2
+    assert mock_cm.call_args_list[1][0][0]["tensor_parallel_size"] == 1
     assert results["big-model"].success
     assert results["big-model"].tensor_parallel_size == 2
 
 
 def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
-    """On a single-GPU host, no tp escalation is attempted."""
+    """On a single-GPU host, max tp == 1 so only one attempt is made."""
     config_path = _write_config(tmp_path, ["big-model"])
     state_dir = tmp_path / "state"
     state_dir.mkdir()
@@ -468,12 +470,12 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
 
-    assert mock_cm.call_count == 1  # no retry
+    assert mock_cm.call_count == 1  # max tp == 1, single attempt
     assert not results["big-model"].success
 
 
 def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
-    """Model already configured at tp=2 on 2-GPU host — no further escalation."""
+    """Model configured at tp=2 on 2-GPU host — max == configured, single attempt."""
     cfg = {"logos": {"capabilities_models": [{"model": "big-model", "tensor_parallel_size": 2}]}}
     config_path = tmp_path / "config.yml"
     config_path.write_text(yaml.safe_dump(cfg))
@@ -485,7 +487,7 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
         mock_cm.return_value = _fail_result("big-model")
         results = auto_calibrate_models(["big-model"], config_path, state_dir)
 
-    assert mock_cm.call_count == 1  # already at max tp, no retry
+    assert mock_cm.call_count == 1  # already at max tp, single attempt
     assert not results["big-model"].success
 
 
@@ -575,7 +577,7 @@ def test_format_kv_mb_zero():
 
 
 def _make_plan(model: str = "org/test-model", **overrides) -> dict:
-    plan = {"model": model}
+    plan: dict = {"model": model, "kv_cache_memory_bytes": "4G"}
     plan.update(overrides)
     return plan
 
@@ -641,10 +643,15 @@ def _patch_calibration_infra(
         "logos_worker_node.calibration._post", return_value=(200, {})
     )
 
+    # _kill_stale_vllm_workers → no-op (avoids scanning /proc in tests)
+    patches["kill_stale"] = patch(
+        "logos_worker_node.calibration._kill_stale_vllm_workers"
+    )
+
     return patches
 
 
-def _run_calibrate(patches, plan=None, kv_cache_memory_bytes=_DEFAULT_KV_CACHE):
+def _run_calibrate(patches, plan=None):
     """Enter all patches and call calibrate_model. Returns (result, mocks_dict)."""
     plan = plan or _make_plan()
     log_dir = Path("/tmp/test-calibration-logs")
@@ -658,7 +665,6 @@ def _run_calibrate(patches, plan=None, kv_cache_memory_bytes=_DEFAULT_KV_CACHE):
             log_dir=log_dir,
             sleep_level=1,
             ready_timeout_s=60.0,
-            kv_cache_memory_bytes=kv_cache_memory_bytes,
         )
     finally:
         for p in patches.values():
@@ -705,7 +711,7 @@ def test_timeout_not_retried():
     result, mocks = _run_calibrate(patches)
 
     assert not result.success
-    assert "not ready after" in result.error
+    assert "failed" in result.error.lower()
     # Only one spawn attempt — no retry on timeout
     assert mocks["spawn"].call_count == 1
 
