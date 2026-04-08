@@ -275,7 +275,24 @@ class WhisperClient:
                         continue
 
                     response.raise_for_status()
-                    body = response.json()
+                    try:
+                        body = response.json()
+                    except ValueError as json_err:
+                        logger.warning(
+                            "%s %s Whisper returned non-JSON response on chunk %d/%d",
+                            prefix,
+                            self.provider_name,
+                            chunk_index + 1,
+                            total_chunks,
+                        )
+                        if attempt == self.max_retries - 1:
+                            raise RuntimeError(
+                                f"{self.provider_name} Whisper returned non-JSON "
+                                f"response after {self.max_retries} retries"
+                            ) from json_err
+                        wait = self._get_retry_wait_time(attempt)
+                        time.sleep(wait)
+                        continue
                     raw_segments = body.get("segments", [])
                     language = body.get("language")
 
@@ -354,6 +371,34 @@ class WhisperClient:
                     if attempt == self.max_retries - 1:
                         raise RuntimeError(
                             f"{self.provider_name} Whisper timed out after "
+                            f"{self.max_retries} retries: {e}"
+                        ) from e
+
+                    wait = self._get_retry_wait_time(attempt)
+                    logger.warning(
+                        "%s Chunk %d/%d retrying in %ds (attempt %d/%d)",
+                        prefix,
+                        chunk_index + 1,
+                        total_chunks,
+                        wait,
+                        attempt + 1,
+                        self.max_retries,
+                    )
+                    time.sleep(wait)
+
+                except requests.ConnectionError as e:
+                    # DNS failures, connection refused, network blips — transient
+                    logger.warning(
+                        "%s %s Whisper connection error on chunk %d/%d: %s",
+                        prefix,
+                        self.provider_name,
+                        chunk_index + 1,
+                        total_chunks,
+                        e,
+                    )
+                    if attempt == self.max_retries - 1:
+                        raise RuntimeError(
+                            f"{self.provider_name} Whisper connection failed after "
                             f"{self.max_retries} retries: {e}"
                         ) from e
 

@@ -131,12 +131,18 @@ class IngestionStatusCallback(StatusCallback):
             timeout=timeout,
         )
 
-    def on_status_update(self):
+    def on_status_update(self) -> bool:
         """Send a status update to Artemis with retry for transient failures.
 
         Retries up to 3 times with linear backoff (5s, 10s, 15s) before
         giving up.  This protects hour-long pipelines from losing their
         result because Artemis was briefly unavailable (e.g. during a deploy).
+
+        Returns:
+            True if the status update was sent successfully.
+
+        Raises:
+            RuntimeError: If all retry attempts fail.
         """
         last_error = None
         for attempt in range(_CALLBACK_MAX_RETRIES):
@@ -148,7 +154,7 @@ class IngestionStatusCallback(StatusCallback):
                     resp.status_code,
                 )
                 resp.raise_for_status()
-                return
+                return True
             except http_requests.exceptions.RequestException as e:
                 last_error = e
                 if attempt < _CALLBACK_MAX_RETRIES - 1:
@@ -194,6 +200,7 @@ class IngestionStatusCallback(StatusCallback):
         Overrides base class to use best-effort delivery so that a callback
         failure during error reporting doesn't mask the original error.
         """
+        failed_stage_name = self.stage.name
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
         self.status.result = None
@@ -212,12 +219,12 @@ class IngestionStatusCallback(StatusCallback):
         logger.error(
             "Error occurred in job %s in stage %s: %s",
             self.run_id,
-            self.stage.name,
+            failed_stage_name,
             message,
         )
         if exception:
             sentry_capture(exception)
         else:
             capture_message(
-                f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
+                f"Error occurred in job {self.run_id} in stage {failed_stage_name}: {message}"
             )

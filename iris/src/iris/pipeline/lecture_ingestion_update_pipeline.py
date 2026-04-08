@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import List, Optional
 
 from iris.common.logging_config import get_logger
 from iris.config import settings
@@ -351,7 +351,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         raw_transcript: dict,
         lecture_unit_id: int,
         enriched: bool = False,
-        aligned_segments: list = None,
+        aligned_segments: Optional[list] = None,
     ) -> dict:
         """Build a checkpoint dict for piggybacking on a done() callback.
 
