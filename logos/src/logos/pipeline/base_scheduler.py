@@ -285,19 +285,20 @@ class BaseScheduler(SchedulerInterface):
         for (model_id, provider_id), ptype in self._model_registry.items():
             if ptype != "logosnode":
                 continue
-            try:
-                status = self._logosnode.get_model_status(model_id, provider_id)
-            except (ValueError, KeyError):
-                continue
-            if not status.is_loaded:
-                continue
-            # Double-check actual lane readiness — status.is_loaded can be
-            # stale during drain transitions
+
+            # Use lane readiness as the primary check — it reads the runtime
+            # snapshot directly, bypassing the 5s refresh_interval cache in
+            # _loaded_models that can be stale right after a cold load confirms.
             try:
                 if not self._logosnode.is_model_lane_ready(model_id, provider_id):
                     continue
             except Exception:
-                pass
+                continue
+
+            try:
+                status = self._logosnode.get_model_status(model_id, provider_id)
+            except (ValueError, KeyError):
+                continue
 
             # Determine how many requests we can dispatch
             try:

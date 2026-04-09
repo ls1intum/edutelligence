@@ -114,19 +114,34 @@ class VRAMLedger:
         return rid
 
     def release(self, reservation_id: str) -> None:
-        """Release a reservation, restoring its VRAM to available."""
+        """Release a reservation, restoring its VRAM to available.
+
+        Does NOT clamp to zero — negative+positive reservations can coexist
+        and must cancel out exactly regardless of release order.  Clamping
+        would destroy the negative balance and cause committed totals to
+        drift upward over time.  The totals converge to zero once all
+        reservations are released.
+        """
         res = self._reservations.pop(reservation_id, None)
         if res is None:
             return
         committed = self._provider_committed.get(res.provider_id, 0.0)
-        self._provider_committed[res.provider_id] = max(0.0, committed - res.vram_mb)
+        self._provider_committed[res.provider_id] = committed - res.vram_mb
+        # Clamp only when no reservations remain for this provider (floating-point cleanup)
+        if not any(r.provider_id == res.provider_id for r in self._reservations.values()):
+            self._provider_committed[res.provider_id] = max(0.0, self._provider_committed[res.provider_id])
         # Release per-GPU committed
         if res.gpu_devices:
             per_gpu = res.vram_mb / len(res.gpu_devices)
             for dev in res.gpu_devices:
                 key = (res.provider_id, dev)
                 old = self._gpu_committed.get(key, 0.0)
-                self._gpu_committed[key] = max(0.0, old - per_gpu)
+                self._gpu_committed[key] = old - per_gpu
+            # Clamp per-GPU only when no reservations remain for this provider
+            if not any(r.provider_id == res.provider_id for r in self._reservations.values()):
+                for dev in res.gpu_devices:
+                    key = (res.provider_id, dev)
+                    self._gpu_committed[key] = max(0.0, self._gpu_committed[key])
         logger.debug(
             "VRAM release %s: provider=%d lane=%s op=%s freed=%.0fMB "
             "(total_committed=%.0fMB)",
@@ -172,10 +187,16 @@ class VRAMLedger:
             )
             return None
 
-        # Per-GPU check when device placement is known
+        # Per-GPU check when device placement is known (single-GPU only).
+        # For TP>1 (multiple GPUs), vLLM manages its own cross-GPU memory
+        # allocation internally — rank 0 gets more VRAM than other ranks,
+        # and CUDA allocator pools can make per-GPU free appear lower than
+        # reality.  The provider-level check above is authoritative for TP
+        # workloads; adding a per-GPU gate causes false denials on tight fits
+        # that vLLM handles fine in practice.
         parsed_gpus = _parse_gpu_devices(gpu_devices)
-        if parsed_gpus and per_gpu_free is not None:
-            per_gpu_needed = (vram_mb / len(parsed_gpus)) * safety_margin
+        if parsed_gpus and per_gpu_free is not None and len(parsed_gpus) == 1:
+            per_gpu_needed = vram_mb * safety_margin
             for dev in parsed_gpus:
                 gpu_avail = per_gpu_free.get(dev, 0.0)
                 gpu_committed = self._gpu_committed.get((provider_id, dev), 0.0)

@@ -50,6 +50,7 @@ class MockFacade:
         )
         self._profiles = profiles or {}
         self._capabilities = capabilities or []
+        self._scheduler_queue_depths: dict[tuple[str, int], int] = {}
 
     def provider_ids(self):
         return [10]
@@ -68,6 +69,9 @@ class MockFacade:
 
     def get_provider_name(self, provider_id):
         return None
+
+    def get_scheduler_queue_depth_by_model_name(self, model_name: str, provider_id: int) -> int:
+        return self._scheduler_queue_depths.get((model_name, provider_id), 0)
 
 
 class MockRegistry:
@@ -699,6 +703,7 @@ async def test_prepare_lane_for_request_wakes_sleeping_lane():
 
 @pytest.mark.asyncio
 async def test_prepare_lane_for_request_reclaims_idle_competitor_first():
+    past = time.time() - 100
     target = _make_signal(
         lane_id="lane-target",
         model_name="qwen-coder",
@@ -749,6 +754,8 @@ async def test_prepare_lane_for_request_reclaims_idle_competitor_first():
         }
     }
     planner = _make_planner(facade=facade, registry=registry)
+    # Set loaded_at so victim lane passes tenure protection
+    planner._lane_loaded_at[(10, "lane-victim")] = past
     actions = []
 
     async def _fake_execute(action, timeout_seconds=60.0):  # noqa: ARG001
@@ -834,6 +841,10 @@ def test_request_reclaim_prefers_small_sleep_combo_over_large_single_sleep():
     planner = _make_planner(
         facade=MockFacade(lanes=[target, big, small_a, small_b], profiles=profiles),
     )
+    # Set loaded_at so lanes pass tenure protection
+    past = time.time() - 100
+    for lid in ("lane-big", "lane-small-a", "lane-small-b"):
+        planner._lane_loaded_at[(10, lid)] = past
 
     action = planner._next_request_reclaim_action(
         provider_id=10,
@@ -875,6 +886,10 @@ def test_request_reclaim_prefers_smallest_sufficient_stop_candidate():
     planner = _make_planner(
         facade=MockFacade(lanes=[target, big, small], profiles={}),
     )
+    # Set loaded_at so lanes pass tenure protection
+    past = time.time() - 100
+    for lid in ("lane-big", "lane-small"):
+        planner._lane_loaded_at[(10, lid)] = past
 
     action = planner._next_request_reclaim_action(
         provider_id=10,
@@ -884,9 +899,9 @@ def test_request_reclaim_prefers_smallest_sufficient_stop_candidate():
         required_free_mb=3000.0,
     )
 
-    assert action is not None
-    assert action.action == "stop"
-    assert action.lane_id == "lane-small"
+    # Sleeping vLLM lanes are skipped (they only hold residual VRAM,
+    # stopping them frees negligible memory).  No reclaim possible.
+    assert action is None
 
 
 def test_request_reclaim_prefers_stopping_sleeping_overlap_before_sleeping_other_gpu():
@@ -927,6 +942,9 @@ def test_request_reclaim_prefers_stopping_sleeping_overlap_before_sleeping_other
     planner = _make_planner(
         facade=MockFacade(lanes=[target, sleeping_blocker, other_gpu_lane], profiles=profiles),
     )
+    past = time.time() - 100
+    planner._lane_loaded_at[(10, "lane-other")] = past
+    planner._lane_loaded_at[(10, "lane-blocker")] = past
 
     action = planner._next_request_reclaim_action(
         provider_id=10,
@@ -936,29 +954,36 @@ def test_request_reclaim_prefers_stopping_sleeping_overlap_before_sleeping_other
         required_free_mb=1000.0,
     )
 
+    # Sleeping vLLM lanes are skipped (they hold only residual VRAM).
+    # The only remaining candidate is other_gpu_lane on GPU 0 but the
+    # target is on GPU 1 — sleep of other_gpu_lane still offered as the
+    # GPU-overlap sort picks it.
     assert action is not None
-    assert action.action == "stop"
-    assert action.lane_id == "lane-blocker"
+    assert action.action == "sleep_l1"
+    assert action.lane_id == "lane-other"
 
 
 @pytest.mark.asyncio
 async def test_request_capacity_reclaims_for_target_gpu_shortfall_even_when_provider_free_is_high():
+    """Cold load on GPU 1 needs per-GPU reclaim even though provider aggregate has plenty."""
     target = _make_signal(
         lane_id="lane-target",
         model_name="target-model",
-        runtime_state="sleeping",
-        sleep_state="sleeping",
+        runtime_state="cold",
+        sleep_state="unsupported",
         is_vllm=True,
-        effective_vram_mb=500.0,
+        effective_vram_mb=0.0,
         gpu_devices="1",
     )
-    sleeping_blocker = _make_signal(
+    # Use a loaded/awake blocker (not sleeping) since sleeping vLLM lanes
+    # are skipped in reclaim — they only hold residual VRAM.
+    blocker = _make_signal(
         lane_id="lane-blocker",
         model_name="blocker-model",
-        runtime_state="sleeping",
-        sleep_state="sleeping",
+        runtime_state="loaded",
+        sleep_state="awake",
         is_vllm=True,
-        effective_vram_mb=1400.0,
+        effective_vram_mb=8000.0,
         gpu_devices="1",
     )
     other_gpu_lane = _make_signal(
@@ -973,8 +998,14 @@ async def test_request_capacity_reclaims_for_target_gpu_shortfall_even_when_prov
     profiles = {
         "target-model": ModelProfile(
             model_name="target-model",
-            base_residency_mb=1500.0,
-            sleeping_residual_mb=500.0,
+            base_residency_mb=4000.0,
+            loaded_vram_mb=4000.0,
+            engine="vllm",
+        ),
+        "blocker-model": ModelProfile(
+            model_name="blocker-model",
+            loaded_vram_mb=8000.0,
+            sleeping_residual_mb=1000.0,
             engine="vllm",
         ),
         "other-model": ModelProfile(
@@ -985,8 +1016,8 @@ async def test_request_capacity_reclaims_for_target_gpu_shortfall_even_when_prov
         ),
     }
     facade = MockFacade(
-        lanes=[target, sleeping_blocker, other_gpu_lane],
-        capacity=OllamaCapacity(available_vram_mb=32000, total_vram_mb=32768, loaded_models=[]),
+        lanes=[target, blocker, other_gpu_lane],
+        capacity=OllamaCapacity(available_vram_mb=20000, total_vram_mb=32768, loaded_models=[]),
         profiles=profiles,
     )
     registry = MockRegistry()
@@ -1003,11 +1034,15 @@ async def test_request_capacity_reclaims_for_target_gpu_shortfall_even_when_prov
         },
     }
     planner = _make_planner(facade=facade, registry=registry)
+    # Set loaded_at so lanes pass tenure protection
+    past = time.time() - 100
+    planner._lane_loaded_at[(10, "lane-blocker")] = past
+    planner._lane_loaded_at[(10, "lane-other")] = past
     actions: list[tuple[str, str]] = []
 
     async def _fake_execute(action, timeout_seconds=60.0):  # noqa: ARG001
         actions.append((action.action, action.lane_id))
-        registry._snapshot["runtime"]["devices"]["devices"][1]["memory_free_mb"] = 2500
+        registry._snapshot["runtime"]["devices"]["devices"][1]["memory_free_mb"] = 8000
         return True
 
     planner._execute_action_with_confirmation = _fake_execute
@@ -1020,7 +1055,8 @@ async def test_request_capacity_reclaims_for_target_gpu_shortfall_even_when_prov
     )
 
     assert ok is True
-    assert actions == [("stop", "lane-blocker")]
+    # Blocker on GPU 1 is slept (same GPU as target) to free up per-GPU VRAM
+    assert actions == [("sleep_l1", "lane-blocker")]
 
 
 def test_vram_no_profile_uses_fallback():
@@ -2427,3 +2463,263 @@ def test_preemptive_sleep_does_not_presleep_busy_lane():
     # busy_lane must not appear in any sleep action
     sleep_of_busy = [a for a in actions if a.action == "sleep_l1" and a.lane_id == "lane-busy"]
     assert sleep_of_busy == []
+
+
+# ---------------------------------------------------------------------------
+# Fairness: scheduler-queue-aware demand gate
+# ---------------------------------------------------------------------------
+
+
+def test_idle_reclaim_skips_victim_with_higher_scheduler_queue():
+    """Sleeping victim with 20 scheduler-queued requests is NOT reclaimed
+    for a target with only 1 queued request."""
+    target = _make_signal(lane_id="lane-target", model_name="model-c", runtime_state="cold")
+    victim = _make_signal(
+        lane_id="lane-victim", model_name="model-b",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+        effective_vram_mb=12000.0,
+    )
+    profiles = {
+        "model-b": ModelProfile(
+            model_name="model-b", loaded_vram_mb=12000.0,
+            sleeping_residual_mb=1000.0, engine="vllm",
+        ),
+    }
+    facade = MockFacade(lanes=[target, victim], profiles=profiles)
+    facade._scheduler_queue_depths[("model-b", 10)] = 20
+    facade._scheduler_queue_depths[("model-c", 10)] = 1
+    planner = _make_planner(facade=facade)
+    planner._lane_loaded_at[(10, "lane-victim")] = time.time() - 100
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10, target=target,
+        lanes=[target, victim], profiles=profiles,
+        required_free_mb=10000.0,
+    )
+    assert action is None
+
+
+def test_idle_reclaim_allows_when_victim_has_zero_queue():
+    """Victim with 0 scheduler queue is reclaimable even when target has 1."""
+    target = _make_signal(lane_id="lane-target", model_name="model-c", runtime_state="cold")
+    victim = _make_signal(
+        lane_id="lane-victim", model_name="model-b",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+        effective_vram_mb=12000.0,
+    )
+    profiles = {
+        "model-b": ModelProfile(
+            model_name="model-b", loaded_vram_mb=12000.0,
+            sleeping_residual_mb=1000.0, engine="vllm",
+        ),
+    }
+    facade = MockFacade(lanes=[target, victim], profiles=profiles)
+    facade._scheduler_queue_depths[("model-c", 10)] = 1
+    planner = _make_planner(facade=facade)
+    planner._lane_loaded_at[(10, "lane-victim")] = time.time() - 100
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10, target=target,
+        lanes=[target, victim], profiles=profiles,
+        required_free_mb=10000.0,
+    )
+    assert action is not None
+    assert action.action == "sleep_l1"
+    assert action.lane_id == "lane-victim"
+
+
+def test_idle_reclaim_allows_when_target_has_higher_queue():
+    """Target with 10 queued can reclaim victim with 2 queued."""
+    target = _make_signal(lane_id="lane-target", model_name="model-c", runtime_state="cold")
+    victim = _make_signal(
+        lane_id="lane-victim", model_name="model-b",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+        effective_vram_mb=12000.0,
+    )
+    profiles = {
+        "model-b": ModelProfile(
+            model_name="model-b", loaded_vram_mb=12000.0,
+            sleeping_residual_mb=1000.0, engine="vllm",
+        ),
+    }
+    facade = MockFacade(lanes=[target, victim], profiles=profiles)
+    facade._scheduler_queue_depths[("model-b", 10)] = 2
+    facade._scheduler_queue_depths[("model-c", 10)] = 10
+    planner = _make_planner(facade=facade)
+    planner._lane_loaded_at[(10, "lane-victim")] = time.time() - 100
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10, target=target,
+        lanes=[target, victim], profiles=profiles,
+        required_free_mb=10000.0,
+    )
+    assert action is not None
+    assert action.action == "sleep_l1"
+
+
+def test_compute_idle_actions_skips_lane_with_scheduler_queue():
+    """Background idle sleep is NOT issued for a lane that has scheduler queue demand."""
+    lane = _make_signal(
+        lane_id="lane-a", model_name="model-a",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+    )
+    facade = MockFacade(lanes=[lane])
+    facade._scheduler_queue_depths[("model-a", 10)] = 5
+    planner = _make_planner(facade=facade)
+    planner._lane_idle_since[(10, "lane-a")] = time.time() - 600  # idle for 10 min
+
+    actions = planner._compute_idle_actions(10, [lane])
+    sleep_actions = [a for a in actions if a.action == "sleep_l1"]
+    assert sleep_actions == []
+
+
+def test_find_eviction_set_skips_lane_with_scheduler_queue():
+    """Eviction set excludes lanes that have scheduler queue demand."""
+    lane = _make_signal(
+        lane_id="lane-a", model_name="model-a",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+        effective_vram_mb=12000.0, gpu_devices="0",
+    )
+    profiles = {
+        "model-a": ModelProfile(
+            model_name="model-a", loaded_vram_mb=12000.0,
+            sleeping_residual_mb=1000.0, engine="vllm",
+        ),
+    }
+    facade = MockFacade(lanes=[lane], profiles=profiles)
+    facade._scheduler_queue_depths[("model-a", 10)] = 3
+    planner = _make_planner(facade=facade)
+
+    result = planner._find_eviction_set(
+        provider_id=10,
+        required_gpus=frozenset({0}),
+        per_gpu_deficit={0: 5000.0},
+        lanes=[lane],
+        profiles=profiles,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pending_capacity_retry_on_reclaim_confirm():
+    """After a confirmed sleep, _retry_pending_capacity re-fires for blocked models."""
+    facade = MockFacade(lanes=[])
+    planner = _make_planner(facade=facade)
+    planner._pending_capacity["model-x"] = (10, time.time())
+
+    retried: list[str] = []
+
+    async def _mock_prepare(pid, model, timeout_seconds=30.0):
+        retried.append(model)
+
+    planner.prepare_lane_for_request = _mock_prepare
+    planner._retry_pending_capacity(10)
+
+    # Let the created task run
+    await asyncio.sleep(0)
+
+    assert "model-x" in retried
+    assert "model-x" not in planner._pending_capacity
+
+
+def test_pending_capacity_expires_after_60s():
+    """Stale pending capacity entries (>60s) are removed without retry."""
+    facade = MockFacade(lanes=[])
+    planner = _make_planner(facade=facade)
+    planner._pending_capacity["model-x"] = (10, time.time() - 61)
+
+    planner._retry_pending_capacity(10)
+
+    assert "model-x" not in planner._pending_capacity
+
+
+def test_multi_lane_busy_drain_both_needed():
+    """Two busy lanes that individually fail VRAM feasibility are now both
+    candidates when gate 5 is removed from _should_initiate_drain."""
+    target = _make_signal(
+        lane_id="lane-target", model_name="model-z",
+        runtime_state="cold", sleep_state="unsupported", is_vllm=True,
+    )
+    busy_a = _make_signal(
+        lane_id="lane-a", model_name="model-a",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+        active_requests=1, effective_vram_mb=16000.0, gpu_devices="0",
+    )
+    busy_b = _make_signal(
+        lane_id="lane-b", model_name="model-b",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+        active_requests=1, effective_vram_mb=14000.0, gpu_devices="0",
+    )
+    profiles = {
+        "model-z": ModelProfile(
+            model_name="model-z", loaded_vram_mb=25000.0,
+            sleeping_residual_mb=2000.0, engine="vllm",
+        ),
+        "model-a": ModelProfile(
+            model_name="model-a", loaded_vram_mb=16000.0,
+            sleeping_residual_mb=1000.0, engine="vllm",
+        ),
+        "model-b": ModelProfile(
+            model_name="model-b", loaded_vram_mb=14000.0,
+            sleeping_residual_mb=1000.0, engine="vllm",
+        ),
+    }
+    facade = MockFacade(
+        lanes=[target, busy_a, busy_b],
+        capacity=OllamaCapacity(available_vram_mb=2000, total_vram_mb=32768, loaded_models=[]),
+        profiles=profiles,
+    )
+    # Target has 5 queued, each busy lane has 1 active + 0 queued → target_work > busy_remaining
+    facade._scheduler_queue_depths[("model-z", 10)] = 5
+    planner = _make_planner(facade=facade)
+    planner._lane_loaded_at[(10, "lane-a")] = time.time() - 100
+    planner._lane_loaded_at[(10, "lane-b")] = time.time() - 100
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10, target=target,
+        lanes=[target, busy_a, busy_b], profiles=profiles,
+        required_free_mb=20000.0,
+    )
+    # With gate 5 removed, both busy lanes become candidates and
+    # _best_reclaim_plan finds the {A,B} combination.
+    assert action is not None
+    assert action.action == "sleep_l1"
+
+
+def test_busy_lane_sleep_reason_matches_drain_gate():
+    """Busy-lane reclaim sleep reason contains 'Request-time reclaim'
+    so the drain gate in _execute_action_with_confirmation triggers."""
+    target = _make_signal(
+        lane_id="lane-target", model_name="model-z",
+        runtime_state="cold", sleep_state="unsupported", is_vllm=True,
+    )
+    busy = _make_signal(
+        lane_id="lane-busy", model_name="model-a",
+        runtime_state="loaded", sleep_state="awake", is_vllm=True,
+        active_requests=1, effective_vram_mb=16000.0, gpu_devices="0",
+    )
+    profiles = {
+        "model-z": ModelProfile(
+            model_name="model-z", loaded_vram_mb=12000.0, engine="vllm",
+        ),
+        "model-a": ModelProfile(
+            model_name="model-a", loaded_vram_mb=16000.0,
+            sleeping_residual_mb=1000.0, engine="vllm",
+        ),
+    }
+    facade = MockFacade(
+        lanes=[target, busy],
+        capacity=OllamaCapacity(available_vram_mb=2000, total_vram_mb=32768, loaded_models=[]),
+        profiles=profiles,
+    )
+    facade._scheduler_queue_depths[("model-z", 10)] = 5
+    planner = _make_planner(facade=facade)
+    planner._lane_loaded_at[(10, "lane-busy")] = time.time() - 100
+
+    action = planner._next_request_reclaim_action(
+        provider_id=10, target=target,
+        lanes=[target, busy], profiles=profiles,
+        required_free_mb=10000.0,
+    )
+    assert action is not None
+    assert "Request-time reclaim" in action.reason

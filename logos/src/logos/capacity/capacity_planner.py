@@ -91,12 +91,6 @@ class CapacityPlanner:
     DRAIN_MIN_WOKEN_SECONDS = 0.0
     DRAIN_DEMAND_SCORE_THRESHOLD = DRAIN_COMPETITIVE_RATIO
 
-    # Switch tracking (metrics only — no tenure multiplier)
-    SWITCH_WINDOW_SECONDS = 300.0
-    SWITCH_THRASH_THRESHOLD = 6
-    SWITCH_TENURE_MULTIPLIER = 1.0
-    SWITCH_MAX_TENURE_SECONDS = 0.0
-
     # GPU utilization tuning
     GPU_UTIL_MIN = 0.50
     GPU_UTIL_MAX = 0.95
@@ -147,10 +141,6 @@ class CapacityPlanner:
         self._lane_loaded_at: dict[tuple[int, str], float] = {}
         self._lane_wake_failure_until: dict[tuple[int, str], float] = {}
         self._preemptive_sleep_ready: set[tuple[int, str]] = set()
-        # Tracks providers where the last sleep was tenure-waived (clean
-        # idle→queued transition).  Consumed by _record_switch_event on the
-        # subsequent wake so the switch doesn't inflate thrashing counters.
-        self._tenure_waived_pending: set[int] = set()
         # Per-(provider, model) locks for cold-load deduplication.
         # Two requests for different models on the same provider can proceed
         # concurrently; two requests for the same model are serialized so only
@@ -183,12 +173,13 @@ class CapacityPlanner:
         # Track how a lane was loaded: True = cold load, False = wake from sleep
         self._lane_was_cold_loaded: dict[tuple[int, str], bool] = {}
 
-        # Anti-thrashing: model switch tracking for adaptive cooldown
-        self._switch_timestamps: list[float] = []
-        self._last_switch_model: dict[int, str] = {}  # provider_id → last activated model
-
         # Drain suppression: prevent fire-and-forget from reloading recently drained models
         self._drain_timestamps: dict[tuple[int, str], float] = {}  # (provider_id, model_name) → drain time
+
+        # Pending capacity: models whose fire-and-forget capacity trigger failed.
+        # Re-attempted when any reclaim action confirms (freed VRAM may suffice).
+        # Key: model_name → (provider_id, registered_at)
+        self._pending_capacity: dict[str, tuple[int, float]] = {}
 
         # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
         # when concurrent load/wake/sleep/stop operations overlap.
@@ -613,6 +604,7 @@ class CapacityPlanner:
                 timeout_seconds=timeout_seconds,
             )
             if not ok:
+                self._pending_capacity[model_name] = (provider_id, time.time())
                 return None
 
         if target.runtime_state == "sleeping":
@@ -825,6 +817,7 @@ class CapacityPlanner:
                     "Cannot reclaim enough VRAM for cold load of %s on provider %s",
                     model_name, self._facade.get_provider_name(provider_id) or provider_id,
                 )
+                self._pending_capacity[model_name] = (provider_id, time.time())
                 return None
 
         logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id)
@@ -932,11 +925,11 @@ class CapacityPlanner:
             self._lane_idle_since[key] = confirmed_at
             self._lane_loaded_at[key] = confirmed_at
             self._lane_was_cold_loaded[key] = (action.action == "load")
-            waived = action.provider_id in self._tenure_waived_pending
-            self._tenure_waived_pending.discard(action.provider_id)
-            self._record_switch_event(
-                action.provider_id, action.model_name, tenure_waived=waived,
-            )
+            try:
+                from logos.monitoring import prometheus_metrics as prom
+                prom.CAPACITY_PLANNER_SWITCHES_TOTAL.inc()
+            except Exception:
+                pass
             if action.action == "load" and self._is_preemptive_load_action(action):
                 self._preemptive_sleep_ready.add(key)
             else:
@@ -1299,47 +1292,6 @@ class CapacityPlanner:
     # Anti-thrashing helpers
     # ------------------------------------------------------------------
 
-    def _record_switch_event(
-        self, provider_id: int, model_name: str, *, tenure_waived: bool = False,
-    ) -> None:
-        """Record that a model switch occurred for thrash detection.
-
-        When *tenure_waived* is True the switch was a clean idle→queued
-        transition (the displaced model had zero queue depth while the
-        incoming model had queued requests).  These are healthy demand-driven
-        switches and must NOT inflate the thrashing counter — otherwise
-        normal round-robin serving across 3 models on a single GPU slot
-        triggers false thrashing detection within minutes.
-        """
-        now = time.time()
-        prev_model = self._last_switch_model.get(provider_id)
-        if prev_model is not None and prev_model != model_name:
-            if not tenure_waived:
-                self._switch_timestamps.append(now)
-            try:
-                from logos.monitoring import prometheus_metrics as prom
-                prom.CAPACITY_PLANNER_SWITCHES_TOTAL.inc()
-                if not tenure_waived and len(self._switch_timestamps) >= 2:
-                    gap = self._switch_timestamps[-1] - self._switch_timestamps[-2]
-                    prom.CAPACITY_PLANNER_SWITCH_GAP_SECONDS.observe(gap)
-            except Exception:
-                pass
-        self._last_switch_model[provider_id] = model_name
-        # Trim old entries outside the window
-        cutoff = now - self.SWITCH_WINDOW_SECONDS
-        self._switch_timestamps = [
-            t for t in self._switch_timestamps if t >= cutoff
-        ]
-
-    def _is_thrashing(self) -> bool:
-        """Return True if recent switch frequency exceeds threshold."""
-        now = time.time()
-        cutoff = now - self.SWITCH_WINDOW_SECONDS
-        self._switch_timestamps = [
-            t for t in self._switch_timestamps if t >= cutoff
-        ]
-        return len(self._switch_timestamps) >= self.SWITCH_THRASH_THRESHOLD
-
     def _get_effective_tenure(self, was_cold_loaded: bool = False) -> float:
         """Return minimum lane tenure (uniform — sleep is cheap)."""
         return self.LANE_MIN_TENURE_SECONDS
@@ -1366,6 +1318,46 @@ class CapacityPlanner:
             model_name, provider_id,
         )
         return lane_total + scheduler_queue
+
+    def _retry_pending_capacity(self, provider_id: int) -> None:
+        """Re-attempt capacity preparation for models whose earlier trigger failed.
+
+        Called after any successful reclaim action confirms — freed VRAM may
+        now be sufficient for a previously-blocked wake/load.
+        """
+        now = time.time()
+        to_retry: list[str] = []
+        stale: list[str] = []
+
+        for model_name, (pid, registered_at) in list(self._pending_capacity.items()):
+            if pid != provider_id:
+                continue
+            # Expire after 60s — the planner cycle will handle it
+            if now - registered_at > 60.0:
+                stale.append(model_name)
+                continue
+            # Already resolved — lane is now available
+            lanes = self._safe_get_lanes(provider_id)
+            has_ready_lane = any(
+                l.model_name == model_name
+                and l.runtime_state in ("loaded", "running")
+                and l.sleep_state != "sleeping"
+                for l in lanes
+            )
+            if has_ready_lane:
+                stale.append(model_name)
+                continue
+            to_retry.append(model_name)
+
+        for m in stale:
+            self._pending_capacity.pop(m, None)
+
+        for m in to_retry:
+            self._pending_capacity.pop(m, None)
+            logger.info("Retrying pending capacity for %s on provider %d", m, provider_id)
+            asyncio.create_task(
+                self.prepare_lane_for_request(provider_id, m, timeout_seconds=30.0)
+            )
 
     def _get_per_gpu_free(self, provider_id: int) -> dict[int, float]:
         """Return {gpu_id: free_mb} from the worker runtime snapshot.
@@ -1442,8 +1434,9 @@ class CapacityPlanner:
 
         candidates: list[_Cand] = []
         for lane in lanes:
-            # Skip if lane has active traffic
-            if lane.active_requests > 0 or lane.queue_waiting > 0:
+            # Skip if lane has active traffic or scheduler queue demand
+            total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
+            if lane.active_requests > 0 or lane.queue_waiting > 0 or total_demand > 0:
                 continue
             if self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
                 continue
@@ -1693,6 +1686,7 @@ class CapacityPlanner:
             if (
                 lane.sleep_state == "sleeping"
                 and lane.active_requests == 0
+                and self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) == 0
                 and sleep_level < 2
                 and sleep_seconds is not None
                 and sleep_seconds >= self.IDLE_SLEEP_L2
@@ -1712,6 +1706,7 @@ class CapacityPlanner:
                 lane.sleep_state in ("awake", "unknown")
                 and lane.runtime_state in ("loaded", "running")
                 and lane.active_requests == 0
+                and self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) == 0
                 and sleep_level < 1
                 and idle_seconds is not None
                 and idle_seconds >= self.IDLE_SLEEP_L1
@@ -2932,7 +2927,7 @@ class CapacityPlanner:
                                     provider_id=provider_id,
                                     lane_id=lane.lane_id,
                                     model_name=lane.model_name,
-                                    reason=f"Request-time drain+sleep for {target.model_name}",
+                                    reason=f"Request-time reclaim (drain+sleep) for {target.model_name}",
                                 ),
                             ))
                         elif freed_by_sleep >= required_free_mb and sleeping_residual > 0:
@@ -2944,7 +2939,7 @@ class CapacityPlanner:
                                     provider_id=provider_id,
                                     lane_id=lane.lane_id,
                                     model_name=lane.model_name,
-                                    reason=f"Request-time drain+sleep for {target.model_name}",
+                                    reason=f"Request-time reclaim (drain+sleep) for {target.model_name}",
                                 ),
                             ))
                         else:
@@ -2958,11 +2953,24 @@ class CapacityPlanner:
                                         lane_id=lane.lane_id,
                                         model_name=lane.model_name,
                                         params={"_stop_penalty": 1},
-                                        reason=f"Request-time drain+stop for {target.model_name}",
+                                        reason=f"Request-time reclaim (drain+stop) for {target.model_name}",
                                     ),
                                 ))
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+            # Scheduler-queue-aware demand gate: don't reclaim an idle/sleeping
+            # lane that has higher scheduler queue demand than the target.
+            # Sleeping models show active_requests=0/queue_waiting=0 but may
+            # have many requests queued in the Logos scheduler.
+            victim_queue = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
+            target_queue = self._get_queue_depth_for_model(provider_id, target.model_name, lanes)
+            if victim_queue > 0 and victim_queue > target_queue:
+                logger.info(
+                    "Idle reclaim skip: victim %s has %d queued vs target %s with %d — "
+                    "victim has higher demand",
+                    lane.model_name, victim_queue, target.model_name, target_queue,
+                )
                 continue
             # Load cooldown blocks stop (prevents thrashing) but not sleep —
             # sleeping only releases KV-cache memory without evicting the model,
@@ -4159,9 +4167,12 @@ class CapacityPlanner:
            the incumbent's unserved queue competes — active requests are
            in-progress and will finish regardless.
 
-        Plus two physical constraints:
+        Plus one physical constraint:
         3. GPU overlap — must share at least one GPU.
-        4. VRAM feasibility — sleeping the busy lane must free enough.
+
+        VRAM feasibility is NOT checked here — it would block multi-lane
+        drain where no single lane frees enough by itself.  Coverage is
+        handled by _best_reclaim_plan() in _next_request_reclaim_action.
         """
         # 0. Tenure: recently loaded/woken lanes are protected
         lane_key = (provider_id, busy_lane.lane_id)
@@ -4223,27 +4234,10 @@ class CapacityPlanner:
             )
             return False
 
-        # 5. VRAM feasibility: will sleeping this lane free enough?
-        profile = profiles.get(busy_lane.model_name)
-        target_profile = profiles.get(target.model_name)
-        if target_profile is not None:
-            target_cost = self._estimate_model_loaded_vram(target_profile) * self.VRAM_SAFETY_MARGIN
-            current_vram = float(busy_lane.effective_vram_mb or 0.0)
-            if current_vram <= 0 and profile is not None:
-                current_vram = self._estimate_model_loaded_vram(profile)
-            residual = (
-                float(profile.sleeping_residual_mb or 0.0)
-                if profile and busy_lane.is_vllm else 0.0
-            )
-            freed_by_sleep = max(current_vram - residual, 0.0)
-            capacity = self._safe_get_capacity(provider_id)
-            available = float(capacity.available_vram_mb) if capacity else 0.0
-            if (available + freed_by_sleep) < target_cost:
-                logger.info(
-                    "Drain skip lane=%s: VRAM infeasible (avail=%.0f + freed=%.0f < target_cost=%.0f)",
-                    busy_lane.lane_id, available, freed_by_sleep, target_cost,
-                )
-                return False
+        # Gate 5 (VRAM feasibility) removed: the per-lane check blocked
+        # multi-lane busy drain when no single lane frees enough by itself.
+        # Coverage is handled by _best_reclaim_plan() which finds the minimum
+        # subset of candidates that satisfies the shortfall.
 
         logger.info(
             "Drain approved: busy_lane=%s model=%s (remaining=%d, active=%d) "
@@ -4790,6 +4784,12 @@ class CapacityPlanner:
                     "on_state_change callback failed for model %s",
                     action.model_name, exc_info=True,
                 )
+
+        # After any confirmed reclaim, retry pending capacity for models whose
+        # earlier fire-and-forget trigger failed — freed VRAM may now suffice.
+        if confirmed and action.action in ("sleep_l1", "sleep_l2", "stop"):
+            self._retry_pending_capacity(action.provider_id)
+
         return confirmed
 
     async def _poll_confirmation(
