@@ -21,6 +21,9 @@ from .last_artifact import create_tool_get_last_artifact
 
 # Retrieval tools
 from .lecture_content_retrieval import create_tool_lecture_content_retrieval
+
+# MCQ generation tool
+from .mcq_generation import create_tool_generate_mcq_questions
 from .repository_files import create_tool_repository_files
 from .single_exercise_problem_statement import create_tool_get_problem_statement
 from .student_exercise_metrics import create_tool_get_student_exercise_metrics
@@ -50,4 +53,6 @@ __all__ = [
     "create_tool_get_last_artifact",
     "create_tool_get_problem_statement",
     "create_tool_get_simple_course_details",
+    # MCQ generation tool
+    "create_tool_generate_mcq_questions",
 ]

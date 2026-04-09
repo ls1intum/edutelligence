@@ -66,6 +66,9 @@ class MockFacade:
     def get_worker_capabilities(self, provider_id):
         return self._capabilities
 
+    def get_provider_name(self, provider_id):
+        return None
+
 
 class MockRegistry:
     def __init__(self):

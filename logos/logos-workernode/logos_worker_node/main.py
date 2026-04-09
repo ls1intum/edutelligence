@@ -58,12 +58,14 @@ async def _auto_calibrate_if_needed(
         elif profile.sleeping_residual_mb is None:
             reason = "sleeping_residual_mb is null"
         elif (
-            profile.residency_source in ("calibrated", "measured")
+            profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
             and abs(profile.base_residency_mb - profile.loaded_vram_mb) > 1.0
         ):
-            # Old-format profile: base_residency was stored as weights-only.
-            # New format stores full loaded VRAM. Force recalibration.
+            # Old-format calibrated profile: base_residency was stored as
+            # weights-only. New format stores full loaded VRAM. Force recalibration.
+            # Note: "measured" profiles intentionally differ (base=weights-only,
+            # loaded=weights+KV) and must NOT be flagged as stale.
             reason = f"stale format (base={profile.base_residency_mb:.0f} != loaded={profile.loaded_vram_mb:.0f})"
         if reason:
             logger.info("  %s needs calibration: %s", model_name, reason)
@@ -213,25 +215,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if cfg.logos and cfg.logos.capabilities_overrides:
                 model_profiles.add_overrides(cfg.logos.capabilities_overrides)
             model_profiles.seed_capabilities(caps, engine="vllm")
+            ready_caps: list[str] = []
             for cap_model in caps:
                 p = model_profiles.get_profile(cap_model)
                 if p:
                     src = p.residency_source or "unknown"
-                    src_icon = {
-                        "measured": "\033[32m●\033[0m",   # green  — observed
-                        "cached": "\033[33m●\033[0m",     # yellow — from config
-                        "override": "\033[36m●\033[0m",   # cyan   — manual
-                    }.get(src, "\033[31m●\033[0m")         # red    — estimated
+                    has_profile = (p.base_residency_mb or 0) > 0
+                    if has_profile:
+                        src_icon = {
+                            "calibrated": "\033[32m●\033[0m",  # green  — calibrated
+                            "measured": "\033[32m●\033[0m",    # green  — observed
+                            "override": "\033[36m●\033[0m",    # cyan   — manual
+                        }.get(src, "\033[33m●\033[0m")          # yellow — other
+                        label = src.upper()
+                        ready_caps.append(cap_model)
+                    else:
+                        src_icon = "\033[31m●\033[0m"           # red    — no data
+                        label = "UNCALIBRATED"
                     logger.info(
                         "  %s %s [%s]: base_residency=%.0f MB | "
                         "disk=%.1f GB | kv_per_token=%s B | max_ctx=%s | engine=%s",
-                        src_icon, cap_model, src.upper(),
+                        src_icon, cap_model, label,
                         p.base_residency_mb or 0,
                         (p.disk_size_bytes or 0) / (1024**3),
                         p.kv_per_token_bytes,
                         p.max_context_length,
                         p.engine,
                     )
+
+            # Only advertise models with actual profile data to the server
+            if len(ready_caps) < len(caps):
+                skipped = set(caps) - set(ready_caps)
+                logger.warning(
+                    "Excluding %d uncalibrated model(s) from capabilities: %s",
+                    len(skipped), sorted(skipped),
+                )
+                cfg.logos.capabilities_models = ready_caps
 
     app.state.config = cfg
     app.state.gpu_collector = gpu_collector

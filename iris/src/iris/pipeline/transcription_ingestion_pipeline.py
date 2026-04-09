@@ -81,13 +81,17 @@ class TranscriptionIngestionPipeline(SubPipeline):
             chunks = self.chunk_transcription(self.dto.lecture_unit)
             self.callback.done("Chunked transcription")
 
-            logger.info("chunked data")
-
             self.callback.in_progress("Summarizing transcription")
             chunks = self.summarize_chunks(chunks)
             self.callback.done("Summarized transcription")
 
             self.callback.in_progress("Ingesting transcription into vector database")
+            logger.info(
+                "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
+                self.dto.lecture_unit.lecture_name,
+                self.dto.lecture_unit.lecture_unit_name,
+                len(chunks),
+            )
             self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
@@ -99,7 +103,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 exception=e,
                 tokens=self.tokens,
             )
-            return "", []
+            raise
 
     def delete_existing_transcription_data(self, transcription: LectureUnitPageDTO):
         self.collection.data.delete_many(
@@ -118,10 +122,15 @@ class TranscriptionIngestionPipeline(SubPipeline):
         )
 
     def batch_insert(self, chunks):
+        total = len(chunks)
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:
-                    for chunk in chunks:
+                    for i, chunk in enumerate(chunks):
+                        if i % 5 == 0:
+                            self.callback.in_progress(
+                                f"Ingesting transcription chunk {i + 1}/{total} into database..."
+                            )
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
                         )
@@ -165,6 +174,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value
                 ] = segment.end_time
 
+        logger.info(
+            "[%s / %s] Chunked %d segments → %d slide groups",
+            transcription.lecture_name,
+            transcription.lecture_unit_name,
+            len(transcription.transcription.segments),
+            len(slide_chunks),
+        )
         for i, segment in enumerate(slide_chunks.values()):
             # If the segment is shorter than 1200 characters, we can just add it as is
             if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
@@ -216,6 +232,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 )
                 offset_start = offset_end + 1
 
+        logger.info(
+            "[%s / %s] Chunking complete: %d final chunks",
+            transcription.lecture_name,
+            transcription.lecture_unit_name,
+            len(chunks),
+        )
         return chunks
 
     @staticmethod
@@ -249,7 +271,20 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
     def summarize_chunks(self, chunks: List[Dict[str, Any]]):
         chunks_with_summaries = []
-        for chunk in chunks:
+        total = len(chunks)
+        for i, chunk in enumerate(chunks):
+            slide = chunk.get(LectureTranscriptionSchema.PAGE_NUMBER.value, "?")
+            logger.info(
+                "[%s / %s] Summarizing chunk %d/%d (slide %s)",
+                self.dto.lecture_unit.lecture_name,
+                self.dto.lecture_unit.lecture_unit_name,
+                i + 1,
+                total,
+                slide,
+            )
+            self.callback.in_progress(
+                f"Summarizing transcription chunk {i + 1}/{total} (slide {slide})"
+            )
             self.prompt = ChatPromptTemplate.from_messages(
                 [
                     (

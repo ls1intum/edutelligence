@@ -13,6 +13,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AgentPipelineExecutionState,
 )
 from iris.pipeline.shared.utils import (
+    REDACTED_ANSWER_PLACEHOLDER,
     format_post_discussion,
     get_current_utc_datetime_string,
 )
@@ -201,6 +202,8 @@ class AutonomousTutorPipeline(
         """Memory creation is disabled for autonomous tutor pipeline."""
         return False
 
+    NO_RESPONSE_MARKER = "NO_RESPONSE_NEEDED"
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
@@ -208,6 +211,17 @@ class AutonomousTutorPipeline(
         ],
     ) -> str:
         """Send the final response back to Artemis with confidence score."""
+        if state.result and self.NO_RESPONSE_MARKER in state.result:
+            logger.info("Post does not require a tutoring response, skipping.")
+            state.callback.done(
+                "No response needed",
+                final_result=None,
+                tokens=self.tokens,
+                confidence=0.0,
+                should_post_directly=False,
+            )
+            return ""
+
         # TODO(IRIS-22): Implement Confidence Evaluation
         # For now, use a placeholder confidence value
         confidence = self._estimate_confidence(state)
@@ -255,7 +269,9 @@ class AutonomousTutorPipeline(
             return ""
         responses = []
         for answer in post.answers:
-            if answer.content:
+            if answer.redacted:
+                responses.append(f"- {REDACTED_ANSWER_PLACEHOLDER}")
+            elif answer.content:
                 responses.append(f"- {answer.content}")
         return "\n".join(responses)
 
@@ -288,7 +304,7 @@ class AutonomousTutorPipeline(
                 variant_id="default",
                 name="Default",
                 description="Default autonomous tutor variant using the OpenAI GPT-OSS 120B model.",
-                cloud_agent_model="gpt-oss:120b",
+                cloud_agent_model="gpt-5-mini",
                 local_agent_model="gpt-oss:120b",
             ),
         ]
