@@ -490,11 +490,15 @@ class LogosBridgeClient:
         raise ValueError(f"Unsupported bridge command '{action}'")
 
     @staticmethod
-    def _lane_target_url(lane_status: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
-        # Detect embeddings requests from payload shape: has "input" but not "messages".
-        # vLLM exposes embeddings at /v1/embeddings, not /v1/chat/completions.
-        if payload and "input" in payload and "messages" not in payload:
-            endpoint = "v1/embeddings"
+    def _lane_target_url(
+        lane_status: dict[str, Any],
+        payload: dict[str, Any] | None = None,
+        request_path: str | None = None,
+    ) -> str:
+        # If the caller forwarded the original API path (e.g. "v1/embeddings",
+        # "v2/embed", "tokenize"), use it directly so vLLM decides what it supports.
+        if request_path:
+            endpoint = request_path.strip("/")
         else:
             endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
         return f"http://127.0.0.1:{lane_status['port']}/{endpoint}"
@@ -515,7 +519,8 @@ class LogosBridgeClient:
             raise ValueError("payload must be an object")
 
         lane_status = await self._resolve_lane_for_infer(lane_id)
-        target_url = self._lane_target_url(lane_status, payload)
+        request_path = params.get("request_path")
+        target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
 
         await lane_manager.increment_active_requests(lane_id)
         try:
@@ -547,7 +552,8 @@ class LogosBridgeClient:
 
         try:
             lane_status = await self._resolve_lane_for_infer(lane_id)
-            target_url = self._lane_target_url(lane_status, payload)
+            request_path = params.get("request_path")
+            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
         except Exception as exc:  # noqa: BLE001
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": False, "error": str(exc)})
             return
