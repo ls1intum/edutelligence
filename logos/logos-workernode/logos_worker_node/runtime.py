@@ -138,4 +138,5 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         capacity=capacity,
         lanes=lanes,
         model_profiles=model_profiles if model_profiles else None,
+        max_lanes=cfg.worker.max_lanes,
     )
