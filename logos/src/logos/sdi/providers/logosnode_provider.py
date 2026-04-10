@@ -352,8 +352,9 @@ class LogosNodeDataProvider:
                 continue
 
             matched_lanes += 1
+            is_vllm = bool(lane.get("vllm"))
             capacity_hint = lane.get("num_parallel")
-            if bool(lane.get("vllm")) and not capacity_hint:
+            if is_vllm and not capacity_hint:
                 # vLLM uses continuous batching — num_parallel=0 means unlimited.
                 # Default to 256 so the scheduler doesn't artificially
                 # serialize requests.  The DB parallel column is the real
@@ -364,6 +365,12 @@ class LogosNodeDataProvider:
                 capacity = int(capacity_hint) if capacity_hint is not None else 0
             except (TypeError, ValueError):
                 capacity = 0
+
+            # Apply oversubscription for vLLM lanes: the reported
+            # num_parallel is based on worst-case full-context requests,
+            # but real requests typically use a fraction of context.
+            if is_vllm and capacity > 0 and capacity < 256:
+                capacity = capacity * self.VLLM_CONCURRENCY_OVERSUBSCRIPTION
 
             if capacity > 0:
                 total_capacity += capacity
@@ -708,7 +715,19 @@ class LogosNodeDataProvider:
 
     # Maximum backend queue_waiting before we refuse new reservations.
     # Prevents piling requests on an already-backlogged vLLM process.
-    BACKEND_QUEUE_PRESSURE_THRESHOLD = 2
+    # Raised from 2→8: with oversubscription enabled, vLLM's internal
+    # scheduler (PagedAttention) handles queuing efficiently; we only
+    # need to back off when the engine is genuinely saturated.
+    BACKEND_QUEUE_PRESSURE_THRESHOLD = 8
+
+    # vLLM reports "Maximum concurrency for N tokens per request" assuming
+    # every request fills the entire context window.  In practice, requests
+    # use a fraction of context (e.g. 200/4096 = 5%), so the KV cache can
+    # safely hold many more concurrent sequences.  This multiplier is
+    # applied to the vLLM-reported num_parallel to allow higher throughput
+    # while still letting vLLM's own scheduler handle fine-grained KV
+    # admission via PagedAttention preemption.
+    VLLM_CONCURRENCY_OVERSUBSCRIPTION = 3
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         with self._lock:

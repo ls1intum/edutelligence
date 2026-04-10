@@ -3985,7 +3985,10 @@ class CapacityPlanner:
     ) -> bool:
         """Wait for a lane's active requests to drain before a destructive action.
 
-        Returns True if drained (active_requests == 0), False on timeout.
+        Returns True if drained (active_requests == 0 AND vLLM internal
+        queue_waiting == 0), False on timeout.  With concurrency
+        oversubscription, vLLM may hold requests in its internal queue
+        that haven't started processing yet — we must wait for those too.
         """
         deadline = time.time() + timeout_seconds
         poll_interval = 2.0
@@ -4001,11 +4004,16 @@ class CapacityPlanner:
             if lane is None:
                 return True  # lane already gone
             active = int(lane.get("active_requests") or 0)
-            if active == 0:
+            backend = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+            vllm_queue = int(float(backend.get("queue_waiting") or 0))
+            vllm_running = int(float(backend.get("requests_running") or 0))
+            if active == 0 and vllm_queue == 0 and vllm_running == 0:
                 return True
             logger.info(
-                "Waiting for lane %s to drain (%d active requests, %.0fs remaining)",
-                lane_id, active, deadline - time.time(),
+                "Waiting for lane %s to drain (%d active, %d vllm_running, "
+                "%d vllm_queued, %.0fs remaining)",
+                lane_id, active, vllm_running, vllm_queue,
+                deadline - time.time(),
             )
             await asyncio.sleep(poll_interval)
         logger.warning(

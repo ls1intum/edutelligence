@@ -46,6 +46,9 @@ services:
         condition: service_healthy
     volumes:
       - data_volume:/src/logos
+      - ./src/logos/capacity:/app/src/logos/capacity:ro
+      - ./src/logos/pipeline:/app/src/logos/pipeline:ro
+      - ./src/logos/sdi:/app/src/logos/sdi:ro
       - ./tests/performance/results:/app/tests/performance/results
       - ./tests/integration:/app/tests/integration
     environment:
@@ -199,8 +202,9 @@ services:
       LOGOS_ALLOW_INSECURE_HTTP: "true"
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
-      LOGOS_SKIP_AUTO_CALIBRATION: "1"
+      LOGOS_SKIP_AUTO_CALIBRATION: "0"
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      HF_HUB_OFFLINE: "1"
       NVIDIA_VISIBLE_DEVICES: all
     volumes:
       - ./logos-workernode/config.yml:/app/config.yml:ro
