@@ -2,6 +2,7 @@ import atexit
 import threading
 
 import weaviate
+from weaviate.classes.init import Auth
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
@@ -28,10 +29,19 @@ class VectorDatabase:
     def __init__(self):
         with VectorDatabase._lock:
             if not VectorDatabase.static_client_instance:
-                VectorDatabase.static_client_instance = weaviate.connect_to_local(
-                    host=settings.weaviate.host,
-                    port=settings.weaviate.port,
+                auth = (
+                    Auth.api_key(settings.weaviate.api_key)
+                    if settings.weaviate.api_key
+                    else None
+                )
+                VectorDatabase.static_client_instance = weaviate.connect_to_custom(
+                    http_host=settings.weaviate.host,
+                    http_port=settings.weaviate.port,
+                    http_secure=settings.weaviate.http_secure,
+                    grpc_host=settings.weaviate.host,
                     grpc_port=settings.weaviate.grpc_port,
+                    grpc_secure=settings.weaviate.grpc_secure,
+                    auth_credentials=auth,
                 )
                 atexit.register(VectorDatabase.static_client_instance.close)
                 logger.info("Weaviate client initialized")

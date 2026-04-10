@@ -14,6 +14,9 @@ class WeaviateSettings(BaseModel):
     host: str
     port: int
     grpc_port: int
+    http_secure: bool = False
+    grpc_secure: bool = False
+    api_key: Optional[str] = None
 
 
 class MemirisLlmConfiguration(BaseModel):
