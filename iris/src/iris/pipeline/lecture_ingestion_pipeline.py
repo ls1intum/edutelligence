@@ -3,7 +3,7 @@ import os
 import re
 import tempfile
 import threading
-from typing import List, Optional
+from typing import Optional
 
 import fitz
 from langchain_core.output_parsers import StrOutputParser
@@ -17,9 +17,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from iris.domain.variant.lecture_unit_page_ingestion_variant import (
-    LectureUnitPageIngestionVariant,
-)
+from iris.domain.variant.variant import Variant
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -28,7 +26,7 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
@@ -140,58 +138,50 @@ def create_page_data(
     ]
 
 
-class LectureUnitPageIngestionPipeline(
-    AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]
-):
+class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
     processing the content, and updating the vector database."""
+
+    PIPELINE_ID = "lecture_unit_page_ingestion_pipeline"
+    ROLES = {"chat", "embedding"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Default lecture ingestion variant using efficient models "
+            "for text processing and embeddings.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
+        ),
+    ]
 
     def __init__(
         self,
         client: WeaviateClient,
         dto: Optional[IngestionPipelineExecutionDto],
         callback: ingestion_status_callback,
+        variant: Variant,
+        local: bool = False,
     ):
-        super().__init__()
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_chat = ModelVersionRequestHandler("gpt-5-mini")
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gpt-5-mini")
-        completion_args = CompletionArguments(temperature=0.2)
+        chat_model = variant.model("chat", local)
+        embedding_model = variant.model("embedding", local)
+        self.llm_chat = LlmRequestHandler(chat_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+        request_handler = LlmRequestHandler(chat_model)
+        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
-
-    @classmethod
-    def get_variants(cls) -> List[LectureUnitPageIngestionVariant]:
-        """
-        Returns available variants for the LectureUnitPageIngestionPipeline.
-
-        Returns:
-            List of LectureUnitPageIngestionVariant objects representing available variants
-        """
-        return [
-            LectureUnitPageIngestionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default lecture ingestion variant using efficient models "
-                "for text processing and embeddings.",
-                chat_model="gpt-5-mini",
-                embedding_model="text-embedding-3-small",
-            ),
-            LectureUnitPageIngestionVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
-                chat_model="gpt-5.2",
-                embedding_model="text-embedding-3-large",
-            ),
-        ]
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
@@ -230,6 +220,11 @@ class LectureUnitPageIngestionPipeline(
             cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
+            logger.info(
+                "[%s] Embedding and indexing %d chunks into Weaviate",
+                self.dto.lecture_unit.lecture_unit_name,
+                len(chunks),
+            )
             self.batch_update(chunks)
 
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
@@ -280,10 +275,15 @@ class LectureUnitPageIngestionPipeline(
         This method is thread-safe and can only be executed by one thread at a time.
         Weaviate limitation.
         """
+        total = len(chunks)
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
-                    for _, chunk in enumerate(chunks):
+                    for i, chunk in enumerate(chunks):
+                        if i % 10 == 0:
+                            self.callback.in_progress(
+                                f"Ingesting lecture chunk {i + 1}/{total} into database..."
+                            )
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
@@ -313,11 +313,22 @@ class LectureUnitPageIngestionPipeline(
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
         )
+        prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
+        logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
         for page_num in range(doc.page_count):
+            self.callback.in_progress(
+                f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
+            )
             page = doc.load_page(page_num)
             page_text = page.get_text()
             if page.get_images(full=False):
+                logger.info(
+                    "%s Page %d/%d: has images, interpreting with LLM",
+                    prefix,
+                    page_num + 1,
+                    doc.page_count,
+                )
                 # more pixels thus more details and better quality
                 matrix = fitz.Matrix(5, 5)
                 pix = page.get_pixmap(matrix=matrix)
@@ -343,6 +354,12 @@ class LectureUnitPageIngestionPipeline(
                 )
             )
             old_page_text = page_text
+        logger.info(
+            "%s PDF chunking complete: %d chunks from %d pages",
+            prefix,
+            len(data),
+            doc.page_count,
+        )
         return data
 
     def interpret_image(
@@ -397,7 +414,6 @@ class LectureUnitPageIngestionPipeline(
             "content_image_interpretation_merge_prompt.txt",
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
-            logger.info("Loading ingestion prompt...")
             lecture_ingestion_prompt = file.read()
         prompt = ChatPromptTemplate.from_messages(
             [

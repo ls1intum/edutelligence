@@ -16,9 +16,10 @@ from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.llm_configuration import resolve_model
 from ...web.status.status_update import StatusCallback
 from ..sub_pipeline import SubPipeline
 
@@ -54,25 +55,17 @@ class CodeFeedbackPipeline(SubPipeline):
         variant: str = "default",
         local: bool = False,
     ):
-        super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
+        super().__init__(implementation_id="code_feedback_pipeline")
         self.callback = callback
         self.variant = variant
 
         # Set up the language model
         completion_args = CompletionArguments(temperature=0, response_format="TEXT")
 
-        if local:
-            if variant == "advanced":
-                model = "gpt-oss:120b"
-            else:
-                model = "gpt-oss:120b"
-        else:
-            if variant == "advanced":
-                model = "gpt-5.2"
-            else:
-                model = "gpt-5-mini"
+        pipeline_id = "code_feedback_pipeline"
+        model = resolve_model(pipeline_id, variant, "chat", local=local)
 
-        request_handler = ModelVersionRequestHandler(version=model)
+        request_handler = LlmRequestHandler(model_id=model)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

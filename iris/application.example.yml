@@ -9,6 +9,27 @@ weaviate:
 memiris:
   enabled: true
   sleep_enabled: true
+  llm_configuration:
+    embeddings:
+      - mxbai-embed-large
+      - nomic-embed-text
+    learning_extractor:
+      local: gemma3
+      cloud: gemma3
+    learning_deduplicator:
+      local: gemma3
+      cloud: gemma3
+    memory_creator:
+      local: gpt-oss
+      cloud: gpt-oss
+    sleep_tool_llm:
+      local: gpt-oss
+      cloud: gpt-oss
+    sleep_json_llm:
+      local: gemma3
+      cloud: gemma3
+
+local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:
   enabled: false # Set to true to enable LangFuse tracing
@@ -16,5 +37,237 @@ langfuse:
   secret_key: "sk-lf-..." # Your LangFuse secret key  # pragma: allowlist secret
   host: "https://cloud.langfuse.com" # Or your self-hosted instance URL
 
+transcription:
+  enabled: false # Set to true to enable video transcription
+  temp_dir: "tmp/transcription" # Temporary directory for video/audio files
+  chunk_duration_seconds: 900 # Audio chunk size in seconds for Whisper
+  whisper_model: "whisper-1" # Model ID in llm_config.yml (e.g. whisper-1-openai or whisper-1-azure)
+  whisper_max_workers: 2 # Parallel Whisper API requests per job
+  whisper_request_timeout_seconds: 300 # Timeout per Whisper request
+  whisper_max_retries: 6 # Max retries per chunk on failure
+  download_timeout_seconds: 3600 # Video download timeout
+  extract_audio_timeout_seconds: 600 # Audio extraction timeout
+  no_speech_filter_threshold: 0.8 # Filter silent segments (0.0-1.0)
+
 env_vars:
   SOME: "value"
+
+# Values are LLM entry IDs (the "id" field in llm_config.yml).
+llm_configuration:
+  exercise_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+    advanced:
+      chat:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+
+  course_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+    advanced:
+      chat:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+
+  lecture_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+    advanced:
+      chat:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+
+  text_exercise_chat_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+    advanced:
+      chat:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+
+  autonomous_tutor_pipeline:
+    default:
+      chat:
+        local: gpt-oss
+        cloud: oai-gpt-5-mini
+
+  tutor_suggestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+    advanced:
+      chat:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+
+  competency_extraction_pipeline:
+    default:
+      chat:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+
+  inconsistency_check_pipeline:
+    default:
+      solver:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      prettify:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+
+  rewriting_pipeline:
+    faq:
+      rewriting:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+      consistency:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+    problem_statement:
+      rewriting:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+      consistency:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+
+  lecture_unit_page_ingestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+    advanced:
+      chat:
+        local: oai-gpt-52
+        cloud: oai-gpt-52
+      embedding: azure-embedding-large
+
+  faq_ingestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  transcription_ingestion_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  lecture_unit_segment_summary_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  lecture_unit_summary_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+
+  lecture_unit_pipeline:
+    default:
+      embedding: oai-embedding-small
+
+  lecture_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+      reranker: cohere
+
+  lecture_unit_segment_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+      reranker: cohere
+
+  lecture_transcriptions_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+      reranker: cohere
+
+  faq_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  citation_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-nano
+      keyword_summary:
+        local: oai-gpt-5-nano
+        cloud: oai-gpt-5-nano
+    advanced:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+
+  interaction_suggestion_pipeline:
+    course:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-nano
+    exercise:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-nano
+
+  session_title_generation_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-nano
+
+  code_feedback_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+
+  summary_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-nano
+
+  lecture_search_answer_pipeline:
+    default:
+      hyde:
+        local: gpt-oss
+        cloud: oai-gpt-5-nano
+      answer:
+        local: gpt-oss
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  mcq_generation_pipeline:
+    default:
+      chat:
+        local: gpt-oss
+        cloud: oai-gpt-5-nano

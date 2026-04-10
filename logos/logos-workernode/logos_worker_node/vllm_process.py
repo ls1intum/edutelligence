@@ -679,6 +679,11 @@ class VllmProcessHandle:
                     env["CUDA_HOME"] = candidate
                     break
 
+        # HuggingFace token — needed for gated models (e.g. gemma)
+        hf_token = os.environ.get("HF_TOKEN", "")
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+
         # HuggingFace cache — use same location as Ollama models for consistency
         # (though vLLM uses HF format, not GGUF)
         if "HF_HOME" not in os.environ:

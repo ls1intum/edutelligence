@@ -89,6 +89,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         allowed_models_override=None,
         profile_id=None,
         request_id=None,
+        request_path=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -147,6 +148,7 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         allowed_models_override=None,
         profile_id=None,
         request_id=None,
+        request_path=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -190,7 +192,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
             return SchedulingResult(
                 model_id=27,
                 provider_id=12,
-                provider_type="logosnode",
+                provider_type="cloud",
                 queue_entry_id=None,
                 was_queued=False,
                 queue_depth_at_schedule=0,
@@ -243,7 +245,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
             payload={"messages": [{"role": "user", "content": "hi"}]},
             headers={},
             allowed_models=[27],
-            deployments=[{"model_id": 27, "provider_id": 12, "type": "logosnode"}],
+            deployments=[{"model_id": 27, "provider_id": 12, "type": "cloud"}],
             policy=None,
             profile_id=1,
         )
@@ -252,7 +254,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
     assert result.success is False
     assert result.provider_id == 12
     assert len(scheduler.released) == 1
-    assert scheduler.released[0][0:3] == (27, 12, "logosnode")
+    assert scheduler.released[0][0:3] == (27, 12, "cloud")
 
 
 async def test_pipeline_releases_capacity_when_context_resolution_raises():

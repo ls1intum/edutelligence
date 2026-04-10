@@ -3,7 +3,7 @@ name = "iris"
 version = "3.0.0"
 description = "An LLM microservice for the learning platform Artemis"
 authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>"]
-readme = "README.MD"
+readme = "README.md"
 packages = [{include = "iris", from = "src"}]
 include = ["src/iris/py.typed"]
 
@@ -35,6 +35,8 @@ types-pytz = "^2025.2.0.20251108"
 httpx = {version = "^0.28.1", extras = ["http2"]}
 memiris = {path = "../memiris", develop = true}
 apscheduler = "^3.11.2"
+ffmpeg-python = "^0.2.0"
+opencv-python-headless = "^4.13.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.19.1"

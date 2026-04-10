@@ -18,6 +18,7 @@ services:
       LOGOS_URL: ${LOGOS_URL:-}
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
+      HF_TOKEN: ${HF_TOKEN:-}
       # ── Auto-calibration ───────────────────────────────────────────────
       # Set to "1" to skip auto-calibration on startup (use manual calibrate.sh instead)
       LOGOS_SKIP_AUTO_CALIBRATION: ${LOGOS_SKIP_AUTO_CALIBRATION:-}
@@ -82,6 +83,7 @@ services:
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}

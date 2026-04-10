@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Iterable, Set
 
 from iris.domain.variant.abstract_variant import AbstractVariant
+from iris.llm.llm_configuration import LlmConfigurationError
+from iris.llm.llm_requirements import missing_llm_requirements
 from iris.web.routers.health.Pipelines.features import Features
 from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
 
@@ -34,7 +36,23 @@ class FeatureResult:
         return self.wired and self.has_default and not self.missing_models
 
 
-def evaluate_feature(feature: Features, available: Set[str]) -> FeatureResult:
+def _missing_from_llm_configuration_error(
+    error: LlmConfigurationError,
+) -> frozenset[str]:
+    message = str(error)
+    if message.startswith("Missing llm configuration entries:"):
+        lines = [line.strip() for line in message.splitlines()[1:] if line.strip()]
+        if lines:
+            return frozenset(lines)
+    return frozenset({message})
+
+
+def evaluate_feature(feature: Features, available_ids: Set[str]) -> FeatureResult:
+    """
+    Evaluate a feature based on configured variants and available LLMs.
+
+    All requirements are matched against ``LanguageModel.id``.
+    """
     pipeline_cls = PIPELINE_BY_FEATURE.get(feature)
     if pipeline_cls is None:
         return FeatureResult(
@@ -42,6 +60,13 @@ def evaluate_feature(feature: Features, available: Set[str]) -> FeatureResult:
         )
     try:
         variants: list[AbstractVariant] = pipeline_cls.get_variants()
+    except LlmConfigurationError as e:
+        return FeatureResult(
+            feature,
+            wired=True,
+            has_default=False,
+            missing_models=_missing_from_llm_configuration_error(e),
+        )
     except (TypeError, ValueError):
         return FeatureResult(
             feature, wired=True, has_default=False, missing_models=frozenset()
@@ -61,9 +86,15 @@ def evaluate_feature(feature: Features, available: Set[str]) -> FeatureResult:
     required_advanced = _get_advanced_required_models(variants)
 
     all_required = required_default.union(required_advanced)
-    # Find all missing models
-    all_missing = all_required - available
-    default_available = required_default - available == set()
+    all_missing = missing_llm_requirements(
+        all_required,
+        available_ids=set(available_ids),
+    )
+    default_missing = missing_llm_requirements(
+        required_default,
+        available_ids=set(available_ids),
+    )
+    default_available = not default_missing
     if not default_available:
         return FeatureResult(
             feature,
