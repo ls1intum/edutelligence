@@ -7,6 +7,7 @@ from multiprocessing import Value
 
 from sentry_sdk import capture_exception
 
+from iris import sentry
 from iris.common.logging_config import get_logger, setup_logging
 from iris.config import settings
 from iris.domain.transcription.video_transcription_execution_dto import (
@@ -55,6 +56,10 @@ class TranscriptionWorker:
 
     def run(self):
         setup_logging()
+        # Subprocess needs its own Sentry init: on spawn-based platforms (macOS,
+        # Windows) the child does not inherit the parent's SDK client, so
+        # capture_exception would otherwise be a silent no-op.
+        sentry.init()
         os.setpgrp()  # own process group so ffmpeg children can be killed together
         signal.signal(signal.SIGTERM, self._on_sigterm)
 

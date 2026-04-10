@@ -2,11 +2,12 @@ import signal
 from multiprocessing import Process
 from multiprocessing import Semaphore as ProcessSemaphore
 from multiprocessing import Value
-from threading import Semaphore, Thread
+from threading import Thread
 
 from fastapi import APIRouter, Depends, status
 from sentry_sdk import capture_exception
 
+from iris import sentry
 from iris.common.logging_config import get_logger, setup_logging
 from iris.config import settings
 from iris.dependencies import TokenValidator
@@ -41,7 +42,6 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
-semaphore = Semaphore(5)
 ingestion_semaphore = ProcessSemaphore(5)
 TRANSCRIPTION_MAX_SLOTS = settings.transcription.max_concurrent_jobs
 transcription_semaphore = ProcessSemaphore(TRANSCRIPTION_MAX_SLOTS)
@@ -62,6 +62,10 @@ def run_lecture_update_pipeline_worker(
     is called.
     """
     setup_logging()
+    # Subprocess needs its own Sentry init: on spawn-based platforms (macOS,
+    # Windows) the child does not inherit the parent's SDK client, so
+    # capture_exception would otherwise be a silent no-op.
+    sentry.init()
     slot_acquired = False
 
     def _on_sigterm(*_):
