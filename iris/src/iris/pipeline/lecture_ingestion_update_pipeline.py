@@ -107,6 +107,9 @@ class LectureIngestionUpdatePipeline(Pipeline):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.dto = dto
         self.variant_id = variant_id
+        self._is_local = bool(
+            self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
+        )
 
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
@@ -187,6 +190,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             light = LightTranscriptionPipeline(
                 callback=callback,
                 video_path=storage.video_path,
+                local=self._is_local,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -270,6 +274,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             light = LightTranscriptionPipeline(
                 callback=callback,
                 video_path=storage.video_path,
+                local=self._is_local,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -300,9 +305,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         tokens = []
 
         variant_id = self.variant_id
-        is_local = bool(
-            self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
-        )
+        is_local = self._is_local
 
         # PDF page ingestion
         if (

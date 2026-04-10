@@ -8,9 +8,8 @@ with a slide number by analysing video frames.
 from typing import Any, Dict, List, Optional
 
 from iris.common.logging_config import get_logger
-from iris.llm.request_handler.model_version_request_handler import (
-    ModelVersionRequestHandler,
-)
+from iris.llm.llm_configuration import resolve_model
+from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
 from iris.pipeline.shared.transcription.alignment import align_slides_with_segments
 from iris.pipeline.shared.transcription.slide_turn_detector import (
     detect_slide_timestamps,
@@ -19,9 +18,6 @@ from iris.tracing import observe
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
-
-# Model used for GPT Vision slide detection
-VISION_MODEL = "gpt-4.1-mini"
 
 
 class LightTranscriptionPipeline:
@@ -39,10 +35,20 @@ class LightTranscriptionPipeline:
         self,
         callback: StatusCallback,
         video_path: Optional[str],
+        local: bool = False,
     ):
         self.callback = callback
         self.video_path = video_path
-        self.request_handler = ModelVersionRequestHandler(VISION_MODEL)
+        # Vision model for slide-number detection. Resolved through the
+        # standard llm_configuration so it can be swapped per deployment
+        # without touching code.
+        model_id = resolve_model(
+            "transcription_ingestion_pipeline",
+            "default",
+            "vision_chat",
+            local=local,
+        )
+        self.request_handler = LlmRequestHandler(model_id=model_id)
 
     @observe(name="Light Transcription Pipeline")
     def __call__(

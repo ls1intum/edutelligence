@@ -170,6 +170,12 @@ llm_configuration:
       chat:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-mini
+      # Vision-capable model used by the light transcription pipeline to
+      # detect slide-number changes from video frames. Must be a chat model
+      # that accepts image inputs (e.g. gpt-4.1-mini, gpt-5-mini).
+      vision_chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
 
   lecture_unit_segment_summary_pipeline:
