@@ -147,32 +147,14 @@ def plot_distribution(
             zorder=5,
         )
 
-    # Stats text box
-    stats_text = (
-        f"n={st['count']}   "
-        f"min={st['min']:,.0f}   "
-        f"max={st['max']:,.0f}   "
-        f"stdev={st['stdev']:,.0f}{unit}\n"
-        f"mean={st['mean']:,.0f}   "
-        f"median={st['median']:,.0f}   "
-        f"P90={st['p90']:,.0f}   "
-        f"P95={st['p95']:,.0f}   "
-        f"P99={st['p99']:,.0f}{unit}"
-    )
-    ax.text(
-        0.98, 0.02, stats_text,
-        transform=ax.transAxes, fontsize=8, fontfamily="monospace",
-        va="bottom", ha="right",
-        bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="#999999", alpha=0.9),
-        zorder=5,
-    )
-
     # Formatting
     subtitle = f"  [{model_label}]" if model_label else ""
     ax.set_title(f"{title}{subtitle}", fontsize=14, fontweight="bold", pad=12)
     ax.set_xlabel(xlabel, fontsize=11)
     ax.set_ylabel("Density", fontsize=11)
+    ax.set_xlim(left=0)
     ax.set_ylim(0, y_max)
+    ax.yaxis.set_tick_params(labelleft=False)
     ax.grid(True, alpha=0.3, color=COLOR_GRID, zorder=0)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -185,7 +167,7 @@ def plot_distribution(
         Line2D([0], [0], color=COLOR_P95, linestyle="--", lw=2, label=f"P95: {st['p95']:,.0f}{unit}"),
         Line2D([0], [0], color=COLOR_P99, linestyle=":", lw=2, label=f"P99: {st['p99']:,.0f}{unit}"),
     ]
-    ax.legend(handles=legend_elements, loc="upper right", fontsize=9, framealpha=0.9)
+    ax.legend(handles=legend_elements, loc="upper left", fontsize=9, framealpha=0.9)
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -251,9 +233,9 @@ def plot_combined_distribution(
         ax.plot(x_grid, kde, color=color, linewidth=2.5, zorder=3)
         ax.fill_between(x_grid, kde, alpha=0.08, color=color, zorder=2)
 
-    # Overall KDE (black dashed)
+    # Overall KDE (thick solid, high contrast — this is the summary)
     kde_all = gaussian_kde(all_values, x_grid)
-    ax.plot(x_grid, kde_all, color="#333333", linewidth=2.0, linestyle="--", zorder=3, alpha=0.6)
+    ax.plot(x_grid, kde_all, color="#111111", linewidth=3.5, linestyle="-", zorder=4, alpha=0.85)
 
     y_max = kde_all.max()
     for vals in model_values.values():
@@ -283,49 +265,31 @@ def plot_combined_distribution(
             zorder=5,
         )
 
-    # Per-model stats in bottom-right
-    lines = []
-    for model_name, vals in sorted(model_values.items()):
-        mst = stats_block(vals)
-        lines.append(
-            f"{model_name} (n={mst['count']})  "
-            f"median={mst['median']:{val_fmt}}  p95={mst['p95']:{val_fmt}}  p99={mst['p99']:{val_fmt}}{unit}"
-        )
-    lines.append(
-        f"Overall (n={st['count']})  "
-        f"median={st['median']:{val_fmt}}  p95={st['p95']:{val_fmt}}  p99={st['p99']:{val_fmt}}  "
-        f"stdev={st['stdev']:{val_fmt}}{unit}"
-    )
-    ax.text(
-        0.98, 0.02, "\n".join(lines),
-        transform=ax.transAxes, fontsize=8, fontfamily="monospace",
-        va="bottom", ha="right",
-        bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="#999999", alpha=0.92),
-        zorder=5,
-    )
-
     ax.set_title(title, fontsize=15, fontweight="bold", pad=14)
     ax.set_xlabel(xlabel, fontsize=12)
     ax.set_ylabel("Density", fontsize=12)
+    ax.set_xlim(left=0)
     ax.set_ylim(0, y_max)
+    ax.yaxis.set_tick_params(labelleft=False)
     ax.grid(True, alpha=0.3, color=COLOR_GRID, zorder=0)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    # Legend: models + percentile lines
+    # Legend: models + percentile lines — placed upper-left to avoid covering data
     legend_elements = []
     for model_name in sorted(model_values.keys()):
         legend_elements.append(
             Patch(facecolor=model_color_map[model_name], alpha=0.5, label=model_name)
         )
     legend_elements.append(
-        Line2D([0], [0], color="#333333", linestyle="--", lw=2, alpha=0.6, label="Overall")
+        Line2D([0], [0], color="#111111", linestyle="-", lw=3.5, alpha=0.85, label="Overall")
     )
     legend_elements.append(Line2D([0], [0], color=COLOR_P50, linestyle="--", lw=2, label=f"Median: {st['median']:{val_fmt}}{unit}"))
     legend_elements.append(Line2D([0], [0], color=COLOR_MEAN, linestyle="-.", lw=2, label=f"Mean: {st['mean']:{val_fmt}}{unit}"))
     legend_elements.append(Line2D([0], [0], color=COLOR_P95, linestyle="--", lw=2, label=f"P95: {st['p95']:{val_fmt}}{unit}"))
     legend_elements.append(Line2D([0], [0], color=COLOR_P99, linestyle=":", lw=2, label=f"P99: {st['p99']:{val_fmt}}{unit}"))
-    ax.legend(handles=legend_elements, loc="upper right", fontsize=9, framealpha=0.92)
+    ax.legend(handles=legend_elements, loc="center right", fontsize=7.5,
+              framealpha=0.95, edgecolor="#999999", fancybox=True)
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")

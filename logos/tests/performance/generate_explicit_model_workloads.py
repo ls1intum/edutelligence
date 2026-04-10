@@ -317,6 +317,34 @@ VARIANTS = (
             "mistral7": 50,
         },
     },
+    {
+        "name": "10m_hw3_even_random_300",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 300,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-random-300",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_300_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 100,
+            "coder14": 100,
+            "mistral7": 100,
+        },
+    },
+    {
+        "name": "10m_hw3_even_random_600",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 600,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-random-600",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_600_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 200,
+            "coder14": 200,
+            "mistral7": 200,
+        },
+    },
 )
 
 
