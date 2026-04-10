@@ -670,7 +670,7 @@ class CapacityPlanner:
         logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id)
         async with self._lane_lock(provider_id, lane_id):
             loaded = await self._execute_action_with_confirmation(
-                load_action, timeout_seconds=max(timeout_seconds, 180.0),
+                load_action, timeout_seconds=max(timeout_seconds, 300.0),
             )
         if not loaded:
             return None
@@ -1127,6 +1127,21 @@ class CapacityPlanner:
         """
         now = time.time()
         actions = []
+
+        # Never sleep the only usable lane on a worker — it would leave
+        # the worker with zero serving capacity.
+        active_lanes = [
+            l for l in lanes
+            if l.runtime_state not in ("stopped", "error", "cold")
+        ]
+        if len(active_lanes) <= 1:
+            if active_lanes:
+                logger.info(
+                    "Skipping idle sleep for provider %s: only 1 active lane (%s)",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    active_lanes[0].lane_id,
+                )
+            return []
 
         for lane in lanes:
             key = self._lane_key(provider_id, lane.lane_id)
@@ -3640,7 +3655,8 @@ class CapacityPlanner:
                 try:
                     await self._registry.send_command(
                         action.provider_id, "add_lane", action.params,
-                        timeout_seconds=int(timeout_seconds),
+                        timeout_seconds=int(max(timeout_seconds, 300)),
+                        stale_after_seconds=360,
                     )
                     self._registry.update_desired_lane_add(
                         action.provider_id, action.params,
@@ -3666,7 +3682,8 @@ class CapacityPlanner:
                     result = await self._registry.send_command(
                         action.provider_id, "apply_lanes",
                         {"lanes": desired},
-                        timeout_seconds=int(timeout_seconds),
+                        timeout_seconds=int(max(timeout_seconds, 300)),
+                        stale_after_seconds=360,
                     )
                     rolled_back = isinstance(result, dict) and result.get("rolled_back")
                     if rolled_back:

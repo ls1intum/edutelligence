@@ -1,0 +1,29 @@
+# docker-compose.tmpfs.yml — Optional overlay for tmpfs RAM cache
+#
+# Mounts a tmpfs volume at /mnt/ramcache inside the worker container so that
+# model files can be cached in RAM for faster loading.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.tmpfs.yml up -d
+#
+# Set TMPFS_SIZE_BYTES in .env to the desired tmpfs size in bytes.
+# Example: 107374182400 = 100 GB
+#
+# Also set LOGOS_TMPFS_CACHE_PATH=/mnt/ramcache in .env to enable the cache.
+
+services:
+  logos-workernode:
+    volumes:
+      - type: tmpfs
+        target: /mnt/ramcache
+        tmpfs:
+          size: ${TMPFS_SIZE_BYTES:-0}
+
+  # Calibration one-shot also gets the tmpfs mount so calibration benefits
+  # from RAM-cached models.
+  logos-workernode-calibrate:
+    volumes:
+      - type: tmpfs
+        target: /mnt/ramcache
+        tmpfs:
+          size: ${TMPFS_SIZE_BYTES:-0}

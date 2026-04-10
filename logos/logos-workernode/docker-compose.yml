@@ -19,6 +19,9 @@ services:
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
       HF_TOKEN: ${HF_TOKEN:-}
+      MAX_LANES: ${MAX_LANES:-}
+      # ── tmpfs RAM cache ────────────────────────────────────────────────
+      LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       # ── Auto-calibration ───────────────────────────────────────────────
       # Set to "1" to skip auto-calibration on startup (use manual calibrate.sh instead)
       LOGOS_SKIP_AUTO_CALIBRATION: ${LOGOS_SKIP_AUTO_CALIBRATION:-}

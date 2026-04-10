@@ -20,6 +20,7 @@ from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_profiles import ModelProfileRegistry
+from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.runtime import SERVICE_VERSION
 from logos_worker_node.calibration import auto_calibrate_models
 
@@ -175,6 +176,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _auto_calibrate_if_needed(cfg, model_profiles, get_state_dir())
 
+    # ── tmpfs RAM cache ──────────────────────────────────────────────────
+    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
+    model_cache = create_model_cache(
+        tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
+        hf_home=hf_home,
+    )
+    if model_cache.enabled:
+        caps = list(cfg.logos.capabilities_models) if cfg.logos else []
+        if caps:
+            # Priority: models with calibration profiles first, then smallest first
+            def _sort_key(m: str) -> tuple[int, int]:
+                p = model_profiles.get_profile(m)
+                has_profile = int(p is not None and (p.base_residency_mb or 0) > 0)
+                size = model_cache.model_size_bytes(m)
+                return (-has_profile, size)
+            caps_sorted = sorted(caps, key=_sort_key)
+            logger.info("Pre-populating RAM cache with %d models: %s", len(caps_sorted), caps_sorted)
+            effective_paths = await model_cache.cache_models_by_priority(caps_sorted)
+            for m, p in effective_paths.items():
+                if p == str(model_cache._cache_hub.parent):
+                    logger.info("  %s → RAM cache", m)
+                else:
+                    logger.info("  %s → source filesystem", m)
+
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
         vllm_engine_config=cfg.engines.vllm,
@@ -186,6 +211,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         per_gpu_vram_mb=lambda: gpu_collector.per_gpu_vram_mb,
         gpu_snapshot=gpu_collector.get_snapshot,
         gpu_force_poll=gpu_collector.force_poll,
+        max_lanes=cfg.worker.max_lanes,
+        model_cache=model_cache,
     )
 
     # Validate capabilities models at startup (warnings only)
@@ -256,6 +283,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gpu_collector = gpu_collector
     app.state.lane_manager = lane_manager
     app.state.model_profiles = model_profiles
+    app.state.model_cache = model_cache
     logos_bridge = LogosBridgeClient(app, cfg.logos)
     app.state.logos_bridge = logos_bridge
     await logos_bridge.start()

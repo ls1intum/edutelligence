@@ -174,6 +174,7 @@ class WorkerConfig(BaseModel):
     lane_port_start: int = 11436
     lane_port_end: int = 11499
     name: str = "logos-workernode"
+    max_lanes: int = 0  # 0 = unlimited (backwards compatible)
 
 
 class LogosConfig(BaseModel):
@@ -382,6 +383,7 @@ class WorkerRuntimeStatus(BaseModel):
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None
+    max_lanes: int = 0  # 0 = unlimited
 
 
 class LaneSetRequest(BaseModel):
