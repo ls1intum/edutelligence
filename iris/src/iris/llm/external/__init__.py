@@ -23,6 +23,8 @@ AnyLlm = Union[
     AzureOpenAIChatModel,
     DirectOpenAIEmbeddingModel,
     AzureOpenAIEmbeddingModel,
+    AzureWhisperModel,
+    OpenAIWhisperModel,
     OllamaModel,
     CohereAzureClient,
     AzureWhisperModel,

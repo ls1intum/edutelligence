@@ -1,7 +1,11 @@
 """Whisper transcription model definitions.
 
 These models are used exclusively by the video transcription pipeline
-and are not part of the standard Iris chat/completion pipeline.
+and are not part of the standard Iris chat/completion pipeline. They
+are data classes that hold API configuration only — the actual HTTP
+calls are made by WhisperClient in the transcription pipeline
+utilities, which uses the stored endpoint, key, and deployment info
+to build the correct request.
 """
 
 from typing import Literal

@@ -185,6 +185,11 @@ class LectureUnitPageIngestionPipeline(
             cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
+            logger.info(
+                "[%s] Embedding and indexing %d chunks into Weaviate",
+                self.dto.lecture_unit.lecture_unit_name,
+                len(chunks),
+            )
             self.batch_update(chunks)
 
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
@@ -241,11 +246,9 @@ class LectureUnitPageIngestionPipeline(
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
                     for idx, chunk in enumerate(chunks):
-                        if (idx + 1) % 10 == 0 or idx == total_chunks - 1:
-                            logger.info(
-                                "Embedding and ingesting chunk %d/%d",
-                                idx + 1,
-                                total_chunks,
+                        if idx % 10 == 0:
+                            self.callback.in_progress(
+                                f"Ingesting lecture chunk {idx + 1}/{total_chunks} into database..."
                             )
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
@@ -277,25 +280,22 @@ class LectureUnitPageIngestionPipeline(
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
         )
-        total_pages = doc.page_count
-        logger.info(
-            "[Lecture %d] Processing %d pages...",
-            lecture_unit_slide_dto.lecture_unit_id,
-            total_pages,
-        )
+        prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
+        logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
         for page_num in range(doc.page_count):
+            self.callback.in_progress(
+                f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
+            )
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            has_images = bool(page.get_images(full=False))
-            logger.info(
-                "[Lecture %d] Processing page %d/%d (has_images=%s)",
-                lecture_unit_slide_dto.lecture_unit_id,
-                page_num + 1,
-                total_pages,
-                has_images,
-            )
-            if has_images:
+            if page.get_images(full=False):
+                logger.info(
+                    "%s Page %d/%d: has images, interpreting with LLM",
+                    prefix,
+                    page_num + 1,
+                    doc.page_count,
+                )
                 # more pixels thus more details and better quality
                 matrix = fitz.Matrix(5, 5)
                 pix = page.get_pixmap(matrix=matrix)
@@ -322,10 +322,10 @@ class LectureUnitPageIngestionPipeline(
             )
             old_page_text = page_text
         logger.info(
-            "[Lecture %d] Finished processing %d pages, created %d chunks",
-            lecture_unit_slide_dto.lecture_unit_id,
-            total_pages,
+            "%s PDF chunking complete: %d chunks from %d pages",
+            prefix,
             len(data),
+            doc.page_count,
         )
         return data
 

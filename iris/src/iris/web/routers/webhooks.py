@@ -77,6 +77,14 @@ def run_lecture_update_pipeline_worker(
     slot_acquired = True
     try:
         LectureIngestionUpdatePipeline(dto)()
+    except Exception as e:
+        logger.error(
+            "[Lecture %d] Worker failed: %s",
+            dto.lecture_unit.lecture_unit_id,
+            e,
+            exc_info=True,
+        )
+        capture_exception(e)
     finally:
         if slot_acquired:
             slot_acquired = False
@@ -84,9 +92,7 @@ def run_lecture_update_pipeline_worker(
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
-    """
-    Run the exercise chat pipeline in a separate thread
-    """
+    """Run the lecture deletion pipeline in a separate thread."""
     for lu in dto.lecture_units:
         transcription_job_handler.cancel_job(
             lu.course_id, lu.lecture_id, lu.lecture_unit_id
@@ -112,51 +118,39 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
 
 
 def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
-    """
-    Run the exercise chat pipeline in a separate thread
-    """
-    with semaphore:
-        try:
-            callback = FaqIngestionStatus(
-                run_id=dto.settings.authentication_token,
-                base_url=dto.settings.artemis_base_url,
-                initial_stages=dto.initial_stages,
-                faq_id=dto.faq.faq_id,
-            )
-            db = VectorDatabase()
-            client = db.get_client()
-            pipeline = FaqIngestionPipeline(client=client, dto=dto, callback=callback)
-            pipeline()
-
-        except Exception as e:
-            logger.error("Error in FAQ ingestion pipeline", exc_info=e)
-            capture_exception(e)
-        finally:
-            semaphore.release()
+    """Run the FAQ ingestion pipeline in a separate thread."""
+    try:
+        callback = FaqIngestionStatus(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+            faq_id=dto.faq.faq_id,
+        )
+        db = VectorDatabase()
+        client = db.get_client()
+        pipeline = FaqIngestionPipeline(client=client, dto=dto, callback=callback)
+        pipeline()
+    except Exception as e:
+        logger.error("Error in FAQ ingestion pipeline", exc_info=e)
+        capture_exception(e)
 
 
 def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
-    """
-    Run the faq deletion in a separate thread
-    """
-    with semaphore:
-        try:
-            callback = FaqIngestionStatus(
-                run_id=dto.settings.authentication_token,
-                base_url=dto.settings.artemis_base_url,
-                initial_stages=dto.initial_stages,
-                faq_id=dto.faq.faq_id,
-            )
-            db = VectorDatabase()
-            client = db.get_client()
-            pipeline = FaqIngestionPipeline(client=client, dto=None, callback=callback)
-            pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
-
-        except Exception as e:
-            logger.error("Error in FAQ deletion pipeline", exc_info=e)
-            capture_exception(e)
-        finally:
-            semaphore.release()
+    """Run the FAQ deletion in a separate thread."""
+    try:
+        callback = FaqIngestionStatus(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+            faq_id=dto.faq.faq_id,
+        )
+        db = VectorDatabase()
+        client = db.get_client()
+        pipeline = FaqIngestionPipeline(client=client, dto=None, callback=callback)
+        pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
+    except Exception as e:
+        logger.error("Error in FAQ deletion pipeline", exc_info=e)
+        capture_exception(e)
 
 
 @router.post(
@@ -166,9 +160,7 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
 )
 @observe(name="POST /webhooks/lectures/ingest")
 def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
-    """
-    Webhook endpoint to trigger the exercise chat pipeline
-    """
+    """Webhook endpoint to trigger the lecture ingestion pipeline."""
     validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
 
     process = Process(
@@ -189,9 +181,7 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
 )
 @observe(name="POST /webhooks/lectures/delete")
 def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
-    """
-    Webhook endpoint to trigger the lecture deletion
-    """
+    """Webhook endpoint to trigger the lecture deletion."""
     validate_pipeline_variant(dto.settings, LectureUnitDeletionPipeline)
 
     thread = Thread(target=run_lecture_deletion_pipeline_worker, args=(dto,))
@@ -205,14 +195,11 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
 )
 @observe(name="POST /webhooks/faqs/ingest")
 def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
-    """
-    Webhook endpoint to trigger the faq ingestion pipeline
-    """
+    """Webhook endpoint to trigger the FAQ ingestion pipeline."""
     validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
     thread = Thread(target=run_faq_update_pipeline_worker, args=(dto,))
     thread.start()
-    return
 
 
 @router.post(
@@ -222,14 +209,11 @@ def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
 )
 @observe(name="POST /webhooks/faqs/delete")
 def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
-    """
-    Webhook endpoint to trigger the faq deletion pipeline
-    """
+    """Webhook endpoint to trigger the FAQ deletion pipeline."""
     validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
     thread.start()
-    return
 
 
 @router.post(

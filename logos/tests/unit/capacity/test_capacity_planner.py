@@ -66,6 +66,9 @@ class MockFacade:
     def get_worker_capabilities(self, provider_id):
         return self._capabilities
 
+    def get_provider_name(self, provider_id):
+        return None
+
 
 class MockRegistry:
     def __init__(self):
@@ -2136,7 +2139,7 @@ def test_anti_flip_does_not_block_sleep():
 
 
 def test_anti_flip_blocks_request_reclaim_within_cooldown():
-    """Request-time reclaim must not immediately reuse a lane that was just prepared."""
+    """Cooldown blocks stop but allows sleep_l1 (frees KV cache only, no thrashing)."""
     target = _make_signal(
         lane_id="lane-target",
         model_name="model-b",
@@ -2171,7 +2174,10 @@ def test_anti_flip_blocks_request_reclaim_within_cooldown():
         required_free_mb=1000.0,
     )
 
-    assert action is None
+    # Sleep is allowed even within cooldown — it only frees KV cache, not the model.
+    assert action is not None
+    assert action.action == "sleep_l1"
+    assert action.lane_id == "lane-victim"
 
 
 # ---------------------------------------------------------------------------

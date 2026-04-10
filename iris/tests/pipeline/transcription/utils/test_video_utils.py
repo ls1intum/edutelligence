@@ -66,6 +66,7 @@ class TestDownloadVideo:
 
 class TestExtractAudio:
     """Tests for FFmpeg audio extraction from video files."""
+
     @patch("iris.pipeline.transcription.utils.video_utils.subprocess.run")
     def test_successful_extraction(self, mock_run):
         extract_audio(

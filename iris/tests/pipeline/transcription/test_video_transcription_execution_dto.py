@@ -25,6 +25,7 @@ def _base_payload(**overrides) -> dict:
 
 class TestVideoSourceTypeDeserialization:
     """Tests for VideoSourceType deserialization from Artemis JSON."""
+
     def test_youtube_source_type(self):
         dto = VideoTranscriptionPipelineExecutionDto(
             **_base_payload(videoSourceType="YOUTUBE")
@@ -50,6 +51,7 @@ class TestVideoSourceTypeDeserialization:
 
 class TestFieldAliases:
     """Tests for Pydantic camelCase alias mapping."""
+
     def test_camel_case_aliases(self):
         dto = VideoTranscriptionPipelineExecutionDto(
             **_base_payload(

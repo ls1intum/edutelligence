@@ -25,6 +25,7 @@ DROP TABLE IF EXISTS token_prices CASCADE;
 DROP TABLE IF EXISTS jobs CASCADE;
 DROP TABLE IF EXISTS ollama_provider_snapshots CASCADE;
 DROP TABLE IF EXISTS model_profiles CASCADE;
+DROP TABLE IF EXISTS logosnode_provider_keys CASCADE;
 DROP TABLE IF EXISTS schema_migrations CASCADE;
 
 CREATE TABLE users (
@@ -109,6 +110,14 @@ CREATE TABLE model_api_keys (
     api_key TEXT NOT NULL,
     endpoint TEXT NOT NULL DEFAULT '',
     UNIQUE(model_id, provider_id)
+);
+
+-- Per-provider key for logosnode workers (replaces per-model model_api_keys for workers)
+CREATE TABLE logosnode_provider_keys (
+    id SERIAL PRIMARY KEY,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(provider_id)
 );
 
 CREATE TABLE profile_model_permissions (

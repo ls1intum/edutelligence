@@ -21,6 +21,7 @@ def _ffmpeg_creates_chunks(tmp_path, filenames):
 
 class TestSplitAudioFfmpeg:
     """Tests for FFmpeg audio splitting into chunks."""
+
     def test_successful_split_returns_sorted_mp3_paths(self, tmp_path):
         output_dir = str(tmp_path / "chunks")
 

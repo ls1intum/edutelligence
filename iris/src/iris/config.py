@@ -42,9 +42,10 @@ class LangfuseSettings(BaseModel):
 class TranscriptionSettings(BaseModel):
     """Settings for video transcription pipeline.
 
-    Note: Whisper API configuration is loaded from llm_config.yml,
-    not from application.yml. Add a whisper entry to llm_config.yml
-    with type 'azure_whisper' or 'openai_whisper'.
+    Note: Whisper API configuration (endpoint, key, deployment) is loaded
+    from llm_config.yml, not from application.yml. Add a whisper entry to
+    llm_config.yml with type 'azure_whisper' or 'openai_whisper' and set
+    whisper_model to its id.
 
     FFmpeg timeout fields (download_timeout_seconds, extract_audio_timeout_seconds)
     guard against stalled network streams or corrupt files blocking a worker indefinitely.
@@ -72,6 +73,10 @@ class TranscriptionSettings(BaseModel):
             "Timeout in seconds for a single Whisper API request. "
             "Should be at least chunk_duration_seconds / 3 to account for processing time."
         ),
+    )
+    whisper_max_retries: int = Field(
+        default=6,
+        description="Max retry attempts per chunk on transient failures",
     )
     max_concurrent_jobs: int = Field(
         default=2,

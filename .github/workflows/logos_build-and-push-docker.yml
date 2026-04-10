@@ -19,6 +19,10 @@ on:
     types:
       - created
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   compute-tag:
     name: Compute tag
@@ -111,8 +115,8 @@ jobs:
       docker-file: ./logos/logos-workernode/Dockerfile
       docker-context: ./logos/logos-workernode
       build-args: |
-        BASE_IMAGE=nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04
-        RUNTIME_IMAGE=nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04
+        BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
+        RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
         INSTALL_VLLM=1
         INSTALL_OLLAMA=0
       tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:latest,ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.result) }}
