@@ -317,11 +317,18 @@ class OpenAIChatModel(ChatModel):
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):
-    """Direct implementation of the OpenAI Chat Model."""
+    """Direct implementation of the OpenAI Chat Model.
+
+    If ``base_url`` is set, the client points at an OpenAI-compatible endpoint
+    (e.g. a vLLM/Logos gateway); otherwise it defaults to the official OpenAI API.
+    """
 
     type: Literal["openai_chat"]
+    base_url: Optional[str] = None
 
     def get_client(self) -> OpenAI:
+        if self.base_url:
+            return OpenAI(api_key=self.api_key, base_url=self.base_url)
         return OpenAI(api_key=self.api_key)
 
     def __str__(self):
