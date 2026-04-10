@@ -60,6 +60,8 @@ MIGRATIONS=(
     "023_extend_provider_snapshots_for_worker_runtime.sql"
     "024_store_logosnode_runtime_payload.sql"
     "025_create_model_profiles_table.sql"
+    "026_create_schema_migrations.sql"
+    "027_logosnode_dynamic_deployments.sql"
 )
 
 FAILED=0

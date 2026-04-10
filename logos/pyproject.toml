@@ -1,6 +1,6 @@
 [project]
 name = "logos"
-version = "0.1.0"
+version = "2.0.0"
 description = "Logos is an LLM Engineering Platform that includes usage logging, billing, central resouce management, policy-based model selection, scheduling, and monitoring."
 authors = [
     {name = "Tobias Wasner",email = "tobias.wasner@tum.de"},

@@ -172,7 +172,7 @@ Tests stub heavy dependencies (sentence_transformers, gRPC) via `conftest.py`. D
 
 **PR Title** — Must match this regex (enforced by CI):
 ```
-^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Nebula|Memiris)`:\s[A-Z].*$
+^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Memiris)`:\s[A-Z].*$
 ```
 Examples:
 - `` `Logos`: Add OpenAI-compatible /v1/models endpoint ``

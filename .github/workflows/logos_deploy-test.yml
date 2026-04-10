@@ -8,9 +8,13 @@ on:
         description: "Image tag to deploy (default: latest)"
         default: "latest"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   deploy-logos-server:
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
     with:
       environment: "Logos - Test"
       docker-compose-file: "./logos/docker-compose.yaml"
@@ -20,7 +24,7 @@ jobs:
     secrets: inherit
 
   deploy-worker-hochbruegge:
-    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
+    uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@optimize-deployment-workflow
     with:
       environment: "Logos Worker - Test - hochbruegge"
       docker-compose-file: "./logos/logos-workernode/docker-compose.yml"

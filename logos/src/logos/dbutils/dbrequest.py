@@ -167,9 +167,7 @@ class AddBillingRequest(LogosKeyModel):
 
 
 class LogosNodeAuthRequest(BaseModel):
-    provider_id: int
     shared_key: str
-    worker_id: str = ""
     capabilities_models: list[str] = Field(default_factory=list)
 
 

@@ -34,9 +34,10 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
 
     return client.collections.create(
         name=LectureTranscriptionSchema.COLLECTION_NAME.value,
-        vectorizer_config=Configure.Vectorizer.none(),
-        vector_index_config=Configure.VectorIndex.hnsw(
-            distance_metric=VectorDistances.COSINE
+        vector_config=Configure.Vectors.self_provided(
+            vector_index_config=Configure.VectorIndex.hnsw(
+                distance_metric=VectorDistances.COSINE
+            ),
         ),
         properties=[
             Property(

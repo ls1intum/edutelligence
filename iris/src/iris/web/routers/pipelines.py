@@ -21,9 +21,11 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
-from iris.domain.variant.abstract_variant import AbstractVariant
+from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
+from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
+from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.competency_extraction_pipeline import (
@@ -33,7 +35,9 @@ from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.pipeline.inconsistency_check_pipeline import (
     InconsistencyCheckPipeline,
 )
-from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
+from iris.pipeline.lecture_ingestion_update_pipeline import (
+    LectureIngestionUpdatePipeline,
+)
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
@@ -64,19 +68,15 @@ def run_chat_pipeline_worker(
             chat_mode=dto.chat_mode,
             initial_stages=dto.initial_stages,
         )
-        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = ChatPipeline(chat_mode=dto.chat_mode, local=is_local)
     except Exception as e:
         logger.error("Error preparing chat pipeline", exc_info=e)
         capture_exception(e)
         return
 
     try:
-        for variant in ChatPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = ChatPipeline(chat_mode=dto.chat_mode, local=is_local)
+        variant = find_variant(ChatPipeline.get_variants(), variant_id)
 
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
     except Exception as e:
@@ -112,17 +112,20 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        is_local = bool(
-            getattr(dto.execution, "settings", None)
-            and dto.execution.settings.is_local()
-        )
-        pipeline = CompetencyExtractionPipeline(callback=callback, local=is_local)
     except Exception as e:
-        logger.error("Error preparing competency extraction pipeline", exc_info=e)
+        logger.error("Error creating competency extraction callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
+        variant = find_variant(CompetencyExtractionPipeline.get_variants(), _variant)
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
+        pipeline = CompetencyExtractionPipeline(
+            callback=callback, variant=variant, local=is_local
+        )
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running competency extraction pipeline", exc_info=e)
@@ -156,25 +159,18 @@ def run_rewriting_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        is_local = bool(
-            getattr(dto.execution, "settings", None)
-            and dto.execution.settings.is_local()
-        )
-        match variant:
-            case "faq" | "problem_statement":
-                pipeline = RewritingPipeline(
-                    callback=callback,
-                    variant=variant,
-                    local=is_local,
-                )
-            case _:
-                raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
-        logger.error("Error preparing rewriting pipeline", exc_info=e)
+        logger.error("Error creating rewriting callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
+        v = find_variant(RewritingPipeline.get_variants(), variant)
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
+        pipeline = RewritingPipeline(callback=callback, variant=v, local=is_local)
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running rewriting pipeline", exc_info=e)
@@ -209,17 +205,20 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        is_local = bool(
-            getattr(dto.execution, "settings", None)
-            and dto.execution.settings.is_local()
-        )
-        pipeline = InconsistencyCheckPipeline(callback=callback, local=is_local)
     except Exception as e:
-        logger.error("Error preparing inconsistency check pipeline", exc_info=e)
+        logger.error("Error creating inconsistency check callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
+        variant = find_variant(InconsistencyCheckPipeline.get_variants(), _variant)
+        is_local = bool(
+            getattr(dto.execution, "settings", None)
+            and dto.execution.settings.is_local()
+        )
+        pipeline = InconsistencyCheckPipeline(
+            callback=callback, variant=variant, local=is_local
+        )
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running inconsistency check pipeline", exc_info=e)
@@ -254,20 +253,16 @@ def run_communication_tutor_suggestions_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        for variant in TutorSuggestionPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TutorSuggestionPipeline()
     except Exception as e:
         logger.error(
-            "Error preparing communication tutor suggestions pipeline", exc_info=e
+            "Error creating communication tutor suggestions callback", exc_info=e
         )
         capture_exception(e)
         return
 
     try:
+        variant = find_variant(TutorSuggestionPipeline.get_variants(), variant_id)
+        pipeline = TutorSuggestionPipeline()
         pipeline(dto=dto, callback=callback, variant=variant)
     except Exception as e:
         logger.error(
@@ -304,18 +299,18 @@ def run_autonomous_tutor_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
+    except Exception as e:
+        logger.error("Error creating autonomous tutor callback", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
         for variant in AutonomousTutorPipeline.get_variants():
             if variant.id == variant_id:
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
         pipeline = AutonomousTutorPipeline()
-    except Exception as e:
-        logger.error("Error preparing autonomous tutor pipeline", exc_info=e)
-        capture_exception(e)
-        return
-
-    try:
         pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
         logger.error("Error running autonomous tutor pipeline", exc_info=e)
@@ -346,36 +341,49 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
     llm_manager = LlmManager()
     available_llms = llm_manager.entries
 
+    def safe_get_variants(get_variants_fn):
+        try:
+            return get_variants_fn()
+        except LlmConfigurationError as e:
+            logger.warning("LLM configuration incomplete for %s: %s", feature, e)
+            return []
+
     match feature:
         case "CHAT":
-            return get_available_variants(ChatPipeline.get_variants(), available_llms)
+            return get_available_variants(
+                safe_get_variants(ChatPipeline.get_variants),
+                available_llms,
+            )
         case "COMPETENCY_GENERATION":
             return get_available_variants(
-                CompetencyExtractionPipeline.get_variants(), available_llms
+                safe_get_variants(CompetencyExtractionPipeline.get_variants),
+                available_llms,
             )
         case "INCONSISTENCY_CHECK":
             return get_available_variants(
-                InconsistencyCheckPipeline.get_variants(), available_llms
+                safe_get_variants(InconsistencyCheckPipeline.get_variants),
+                available_llms,
             )
         case "REWRITING":
             return get_available_variants(
-                RewritingPipeline.get_variants(), available_llms
+                safe_get_variants(RewritingPipeline.get_variants), available_llms
             )
         case "LECTURE_INGESTION":
             return get_available_variants(
-                LectureUnitPageIngestionPipeline.get_variants(), available_llms
+                safe_get_variants(LectureIngestionUpdatePipeline.get_variants),
+                available_llms,
             )
         case "FAQ_INGESTION":
             return get_available_variants(
-                FaqIngestionPipeline.get_variants(), available_llms
+                safe_get_variants(FaqIngestionPipeline.get_variants), available_llms
             )
         case "TUTOR_SUGGESTION":
             return get_available_variants(
-                TutorSuggestionPipeline.get_variants(), available_llms
+                safe_get_variants(TutorSuggestionPipeline.get_variants), available_llms
             )
         case "AUTONOMOUS_TUTOR":
             return get_available_variants(
-                AutonomousTutorPipeline.get_variants(), available_llms
+                safe_get_variants(AutonomousTutorPipeline.get_variants), available_llms
             )
         case _:
             raise HTTPException(
@@ -395,10 +403,12 @@ def get_available_variants(
 
     :return: List of FeatureDTO objects for supported variants
     """
+    available_ids = {llm.id for llm in available_llms}
     return [
         variant.feature_dto()
         for variant in all_variants
-        if set(variant.required_models()).issubset(
-            {llm.model for llm in available_llms}
+        if not missing_llm_requirements(
+            variant.required_models(),
+            available_ids=available_ids,
         )
     ]

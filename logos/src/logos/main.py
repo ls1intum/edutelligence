@@ -56,7 +56,31 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
-_logosnode_registry = LogosNodeRuntimeRegistry()
+def _resolve_provider_name(provider_id: int) -> str:
+    """Best-effort resolve a provider ID to its worker name."""
+    snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+    if snap:
+        return snap.get("worker_id") or str(provider_id)
+    return str(provider_id)
+
+
+def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
+    """Callback: sync announced capabilities into DB tables."""
+    pname = _resolve_provider_name(provider_id)
+    try:
+        with DBManager() as db:
+            db.sync_logosnode_capabilities(provider_id, model_names)
+        logger.info(
+            "Synced %d capability model(s) to DB for provider %s",
+            len(model_names), pname,
+        )
+    except Exception:
+        logger.exception("Failed to sync capabilities to DB for provider %s", pname)
+
+
+_logosnode_registry = LogosNodeRuntimeRegistry(
+    on_capabilities_changed=_sync_logosnode_capabilities_to_db,
+)
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 
@@ -644,7 +668,7 @@ def _capture_logosnode_provider_snapshot(
                 try:
                     db.upsert_model_profiles(provider_id, model_profiles)
                 except Exception:
-                    logger.debug("Failed to upsert model profiles for provider %s", provider_id, exc_info=True)
+                    logger.debug("Failed to upsert model profiles for provider %s", _resolve_provider_name(provider_id), exc_info=True)
 
     sample["snapshot_id"] = snapshot_id
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
@@ -968,8 +992,16 @@ async def lifespan(app: FastAPI):
             logging.error("Error during initial setup: %s", result)
         else:
             logging.info("Initial setup complete. Root API key: %s", result["api_key"])
+        # Apply migrations on fresh install (init.sql already has current schema)
+        with DBManager() as db:
+            logging.info("Applying pending migrations on fresh install...")
+            db.run_migrations(is_fresh_install=True)
     else:
         logging.info("Database already initialized, skipping setup.")
+        # Apply any pending migrations on existing install
+        with DBManager() as db:
+            logging.info("Checking for pending migrations...")
+            db.run_migrations(is_fresh_install=False)
 
     yield
 
@@ -989,7 +1021,12 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
     swagger_ui_init_oauth={},
-    openapi_tags=[{"name": "monitoring"}],
+    openapi_tags=[
+        {"name": "user-facing", "description": "OpenAI-compatible API endpoints for model inference, model listing, and async jobs"},
+        {"name": "admin", "description": "Database management, statistics, dashboards, and system configuration"},
+        {"name": "logosnode", "description": "LogosWorkerNode provider registration, sessions, and lane management"},
+        {"name": "monitoring", "description": "Prometheus metrics and health checks"},
+    ],
 )
 
 def custom_openapi():
@@ -1451,7 +1488,7 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
-def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None):
+def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, request_path=None):
     """Build streaming response using executor."""
     from fastapi.responses import StreamingResponse
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
@@ -1485,7 +1522,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                 chunk_iter = _logosnode_registry.send_stream_command(
                     provider_id=provider_id,
                     action="infer_stream",
-                    params={"lane_id": context.lane_id, "payload": stream_payload},
+                    params={"lane_id": context.lane_id, "payload": stream_payload, "request_path": request_path},
                     timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
                 )
             else:
@@ -1555,7 +1592,7 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
     return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
 
 
-async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, is_async_job=False):
+async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, is_async_job=False, request_path=None):
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
@@ -1574,7 +1611,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 rpc_result = await _logosnode_registry.send_command(
                     provider_id=provider_id,
                     action="infer",
-                    params={"lane_id": context.lane_id, "payload": sync_payload},
+                    params={"lane_id": context.lane_id, "payload": sync_payload, "request_path": request_path},
                     timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
                 )
                 status_override = int(rpc_result.get("status_code", 200))
@@ -1801,6 +1838,7 @@ async def _execute_proxy_mode(
     is_async_job: bool,
     profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
+    request_path: Optional[str] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -1852,6 +1890,7 @@ async def _execute_proxy_mode(
         allowed_models_override=[model_id],
         profile_id=profile_id,
         request_id=request_id,
+        request_path=request_path,
     )
 
 
@@ -1865,6 +1904,7 @@ async def _execute_resource_mode(
     allowed_models_override: Optional[list] = None,
     profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
+    request_path: Optional[str] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -1953,7 +1993,8 @@ async def _execute_resource_mode(
                 -1,  # policy_id
                 result.classification_stats,
                 result.scheduling_stats,
-                is_async_job=True
+                is_async_job=True,
+                request_path=request_path,
             )
         else:
             # Sync endpoints support streaming
@@ -1966,7 +2007,8 @@ async def _execute_resource_mode(
                     result.model_id,
                     -1,  # Policy ID not implemented
                     result.classification_stats,
-                    result.scheduling_stats
+                    result.scheduling_stats,
+                    request_path=request_path,
                 )
             else:
                 return await _sync_response(
@@ -1977,7 +2019,8 @@ async def _execute_resource_mode(
                     result.model_id,
                     -1,  # Policy ID not implemented
                     result.classification_stats,
-                    result.scheduling_stats
+                    result.scheduling_stats,
+                    request_path=request_path,
                 )
     except Exception as e:
         logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)
@@ -2086,6 +2129,7 @@ async def route_and_execute(
                 is_async_job,
                 profile_id=profile_id,
                 request_id=request_id,
+                request_path=path,
             )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
@@ -2098,6 +2142,7 @@ async def route_and_execute(
             is_async_job,
             profile_id=profile_id,
             request_id=request_id,
+            request_path=path,
         )
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
@@ -2145,8 +2190,10 @@ async def handle_sync_request(path: str, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
     if not deployments:
-        _record_log_failure(log_id, request_id, "No available model deployments for this profile", result_status="error")
-        raise HTTPException(status_code=404, detail="No available model deployments for this profile")
+        requested_model = body.get("model", "unknown")
+        msg = f"No available model deployments for model '{requested_model}' in this profile"
+        _record_log_failure(log_id, request_id, msg, result_status="error")
+        raise HTTPException(status_code=404, detail=msg)
 
     # Route and execute request with profile context
     return await route_and_execute(
@@ -2348,7 +2395,7 @@ def _is_tls_websocket(websocket: WebSocket) -> bool:
     return "https" in forwarded_values or "wss" in forwarded_values
 
 
-@app.post("/logosdb/providers/logosnode/register")
+@app.post("/logosdb/providers/logosnode/register", tags=["logosnode"])
 async def logosnode_register(data: LogosNodeRegisterRequest):
     """
     Root-only provider bootstrap endpoint for LogosWorkerNode providers.
@@ -2374,37 +2421,46 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
     if code != 200:
         return JSONResponse(status_code=code, content=result)
 
+    provider_id = result.get("provider-id")
+
+    # Create logosnode_provider_keys entry so deployment queries work
+    try:
+        with DBManager() as db:
+            db.sync_logosnode_capabilities(provider_id, [])
+    except Exception:
+        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_name)
+
     return {
-        "provider_id": result.get("provider-id"),
+        "provider_id": provider_id,
         "provider_name": provider_name,
         "provider_type": "logosnode",
         "shared_key": shared_key,
     }
 
 
-@app.post("/logosdb/providers/logosnode/auth")
+@app.post("/logosdb/providers/logosnode/auth", tags=["logosnode"])
 async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     """
-    Pre-provisioned provider authentication for LogosWorkerNode.
+    Authenticate a LogosWorkerNode by its API key.
+
+    The server resolves the provider from the key. The worker never needs
+    to know or send a provider_id.
     """
     _require_tls_request(request)
     with DBManager() as db:
-        provider = db.get_provider(data.provider_id)
+        provider = db.get_logosnode_provider_by_api_key(data.shared_key)
 
     if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
+        raise HTTPException(status_code=404, detail="Provider not found for this API key")
     provider_type = _normalize_provider_type(provider.get("provider_type"))
     if provider_type != "logosnode":
         raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
 
-    expected = str(provider.get("api_key") or "")
-    presented = data.shared_key or ""
-    if not expected or not hmac.compare_digest(presented, expected):
-        raise HTTPException(status_code=403, detail="Invalid provider shared key")
+    provider_id = provider["id"]
+    worker_id = provider.get("name") or f"worker-{provider_id}"
 
-    worker_id = data.worker_id.strip() if data.worker_id else f"worker-{data.provider_id}"
     conflicting_session = await _logosnode_registry.get_conflicting_session(
-        data.provider_id,
+        provider_id,
         worker_id,
         stale_after_seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS,
     )
@@ -2412,13 +2468,12 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Provider {data.provider_id} is already connected as worker "
-                f"'{conflicting_session.worker_id}'. Register a separate logosnode "
-                f"provider for '{worker_id}' or stop the existing worker first."
+                f"Worker '{conflicting_session.worker_id}' is already connected. "
+                f"Stop the existing worker first."
             ),
         )
     token = await _logosnode_registry.issue_ticket(
-        provider_id=data.provider_id,
+        provider_id=provider_id,
         worker_id=worker_id,
         capabilities_models=data.capabilities_models,
         ttl_seconds=60,
@@ -2426,6 +2481,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     return {
         "session_token": token,
         "ws_url": _build_logosnode_ws_url(request, token),
+        "worker_id": worker_id,
         "expires_in_seconds": 60,
     }
 
@@ -2493,7 +2549,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
         await _logosnode_registry.detach_session(ticket.provider_id, websocket)
 
 
-@app.post("/logosdb/providers/logosnode/status")
+@app.post("/logosdb/providers/logosnode/status", tags=["logosnode"])
 async def logosnode_status(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
@@ -2502,7 +2558,7 @@ async def logosnode_status(data: LogosNodeStatusRequest):
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
 
-@app.post("/logosdb/providers/logosnode/devices")
+@app.post("/logosdb/providers/logosnode/devices", tags=["logosnode"])
 async def logosnode_devices(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
@@ -2511,7 +2567,7 @@ async def logosnode_devices(data: LogosNodeStatusRequest):
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
 
-@app.post("/logosdb/providers/logosnode/lanes")
+@app.post("/logosdb/providers/logosnode/lanes", tags=["logosnode"])
 async def logosnode_lanes(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
@@ -2541,7 +2597,7 @@ async def _dispatch_logosnode_command(provider_id: int, action: str, params: dic
         return JSONResponse(status_code=502, content={"error": str(exc)})
 
 
-@app.post("/logosdb/providers/logosnode/lanes/apply")
+@app.post("/logosdb/providers/logosnode/lanes/apply", tags=["logosnode"])
 async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
     _require_root_access(data.logos_key)
     return await _dispatch_logosnode_command(
@@ -2551,7 +2607,7 @@ async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
     )
 
 
-@app.post("/logosdb/providers/logosnode/lanes/sleep")
+@app.post("/logosdb/providers/logosnode/lanes/sleep", tags=["logosnode"])
 async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
     _require_root_access(data.logos_key)
     return await _dispatch_logosnode_command(
@@ -2561,7 +2617,7 @@ async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
     )
 
 
-@app.post("/logosdb/providers/logosnode/lanes/wake")
+@app.post("/logosdb/providers/logosnode/lanes/wake", tags=["logosnode"])
 async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
     _require_root_access(data.logos_key)
     return await _dispatch_logosnode_command(
@@ -2571,7 +2627,7 @@ async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
     )
 
 
-@app.post("/logosdb/providers/logosnode/lanes/delete")
+@app.post("/logosdb/providers/logosnode/lanes/delete", tags=["logosnode"])
 async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     _require_root_access(data.logos_key)
     return await _dispatch_logosnode_command(
@@ -2581,7 +2637,7 @@ async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     )
 
 
-@app.post("/logosdb/providers/logosnode/lanes/reconfigure")
+@app.post("/logosdb/providers/logosnode/lanes/reconfigure", tags=["logosnode"])
 async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
     _require_root_access(data.logos_key)
     return await _dispatch_logosnode_command(
@@ -2596,7 +2652,7 @@ async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
 # ============================================================================
 
 
-@app.post("/logosdb/add_service_proxy")
+@app.post("/logosdb/add_service_proxy", tags=["admin"])
 async def add_service_proxy(data: AddServiceProxyRequest):
     try:
         with DBManager() as db:
@@ -2611,7 +2667,7 @@ async def add_service_proxy(data: AddServiceProxyRequest):
         return {"error": f"{str(e)}"}, 500
 
 
-@app.post("/logosdb/set_log")
+@app.post("/logosdb/set_log", tags=["admin"])
 async def set_log(data: SetLogRequest):
     with DBManager() as db:
         check, code = db.get_process_id(data.dict()["logos_key"])
@@ -2622,7 +2678,7 @@ async def set_log(data: SetLogRequest):
         return db.set_process_log(data.dict()["process_id"], data.dict()["set_log"])
 
 
-@app.post("/logosdb/add_provider")
+@app.post("/logosdb/add_provider", tags=["admin"])
 async def add_provider(data: AddProviderRequest):
     with DBManager() as db:
         result = db.add_provider(**data.dict())
@@ -2630,7 +2686,7 @@ async def add_provider(data: AddProviderRequest):
     return result
 
 
-@app.post("/logosdb/update_provider_sdi_config")
+@app.post("/logosdb/update_provider_sdi_config", tags=["admin"])
 async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     with DBManager() as db:
         result = db.update_provider_sdi_config(**data.dict())
@@ -2638,13 +2694,13 @@ async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
     return result
 
 
-@app.post("/logosdb/add_profile")
+@app.post("/logosdb/add_profile", tags=["admin"])
 async def add_profile(data: AddProfileRequest):
     with DBManager() as db:
         return db.add_profile(**data.dict())
 
 
-@app.post("/logosdb/connect_process_provider")
+@app.post("/logosdb/connect_process_provider", tags=["admin"])
 async def connect_process_provider(data: ConnectProcessProviderRequest):
     with DBManager() as db:
         result = db.connect_process_provider(**data.dict())
@@ -2652,7 +2708,7 @@ async def connect_process_provider(data: ConnectProcessProviderRequest):
     return result
 
 
-@app.post("/logosdb/connect_process_model")
+@app.post("/logosdb/connect_process_model", tags=["admin"])
 async def connect_process_model(data: ConnectProcessModelRequest):
     with DBManager() as db:
         result = db.connect_process_model(**data.dict())
@@ -2660,7 +2716,7 @@ async def connect_process_model(data: ConnectProcessModelRequest):
     return result
 
 
-@app.post("/logosdb/connect_profile_model")
+@app.post("/logosdb/connect_profile_model", tags=["admin"])
 async def connect_profile_model(data: ConnectProcessModelRequest):
     with DBManager() as db:
         result = db.connect_profile_model(**data.dict())
@@ -2668,13 +2724,13 @@ async def connect_profile_model(data: ConnectProcessModelRequest):
     return result
 
 
-@app.post("/logosdb/connect_service_process")
+@app.post("/logosdb/connect_service_process", tags=["admin"])
 async def connect_service_process(data: ConnectServiceProcessRequest):
     with DBManager() as db:
         return db.connect_service_process(**data.dict())
 
 
-@app.post("/logosdb/connect_model_provider")
+@app.post("/logosdb/connect_model_provider", tags=["admin"])
 async def connect_model_provider(data: ConnectModelProviderRequest):
     with DBManager() as db:
         result = db.connect_model_provider(**data.dict())
@@ -2682,7 +2738,7 @@ async def connect_model_provider(data: ConnectModelProviderRequest):
     return result
 
 
-@app.post("/logosdb/connect_model_api")
+@app.post("/logosdb/connect_model_api", tags=["admin"])
 async def connect_model_api(data: ConnectModelApiRequest):
     with DBManager() as db:
         result = db.connect_model_api(**data.dict())
@@ -2690,7 +2746,7 @@ async def connect_model_api(data: ConnectModelApiRequest):
     return result
 
 
-@app.post("/logosdb/add_model")
+@app.post("/logosdb/add_model", tags=["admin"])
 async def add_model(data: AddModelRequest):
     with DBManager() as db:
         back = db.add_model(**data.dict())
@@ -2698,7 +2754,7 @@ async def add_model(data: AddModelRequest):
     return back
 
 
-@app.post("/logosdb/add_full_model")
+@app.post("/logosdb/add_full_model", tags=["admin"])
 async def add_full_model(data: AddFullModelRequest):
     with DBManager() as db:
         back = db.add_full_model(**data.dict())
@@ -2706,7 +2762,7 @@ async def add_full_model(data: AddFullModelRequest):
     return back
 
 
-@app.post("/logosdb/update_model")
+@app.post("/logosdb/update_model", tags=["admin"])
 async def update_model(data: GiveFeedbackRequest):
     with DBManager() as db:
         back = db.update_model_weights(**data.dict())
@@ -2714,7 +2770,7 @@ async def update_model(data: GiveFeedbackRequest):
     return back
 
 
-@app.post("/logosdb/delete_model")
+@app.post("/logosdb/delete_model", tags=["admin"])
 async def delete_model(data: DeleteModelRequest):
     with DBManager() as db:
         back = db.delete_model(**data.dict())
@@ -2722,111 +2778,111 @@ async def delete_model(data: DeleteModelRequest):
     return back
 
 
-@app.post("/logosdb/get_model")
+@app.post("/logosdb/get_model", tags=["admin"])
 async def get_model(data: GetModelRequest):
     with DBManager() as db:
         payload = db.get_model(data.id)
     return JSONResponse(content=jsonable_encoder(payload), status_code=200)
 
 
-@app.post("/logosdb/add_policy")
+@app.post("/logosdb/add_policy", tags=["admin"])
 async def add_policy(data: AddPolicyRequest):
     with DBManager() as db:
         return db.add_policy(**data.dict())
 
 
-@app.post("/logosdb/update_policy")
+@app.post("/logosdb/update_policy", tags=["admin"])
 async def update_policy(data: UpdatePolicyRequest):
     with DBManager() as db:
         return db.update_policy(**data.dict())
 
 
-@app.post("/logosdb/delete_policy")
+@app.post("/logosdb/delete_policy", tags=["admin"])
 async def delete_policy(data: DeletePolicyRequest):
     with DBManager() as db:
         return db.delete_policy(**data.dict())
 
 
-@app.post("/logosdb/get_policy")
+@app.post("/logosdb/get_policy", tags=["admin"])
 async def add_model(data: GetPolicyRequest):
     with DBManager() as db:
         return db.get_policy(**data.dict()), 200
 
 
-@app.post("/logosdb/add_service")
+@app.post("/logosdb/add_service", tags=["admin"])
 async def add_service(data: AddServiceRequest):
     with DBManager() as db:
         return db.add_service(**data.dict())
 
 
-@app.post("/logosdb/get_process_id")
+@app.post("/logosdb/get_process_id", tags=["admin"])
 async def get_process_id(data: GetProcessIdRequest):
     with DBManager() as db:
         return db.get_process_id(data.logos_key)
 
 
-@app.post("/logosdb/get_role")
+@app.post("/logosdb/get_role", tags=["admin"])
 async def get_role(data: GetRole):
     with DBManager() as db:
         return db.get_role(**data.dict())
 
 
-@app.post("/logosdb/get_providers")
+@app.post("/logosdb/get_providers", tags=["admin"])
 async def get_providers(data: LogosKeyModel):
     with DBManager() as db:
         return db.get_provider_info(**data.dict()), 200
 
 
-@app.post("/logosdb/get_general_provider_stats")
+@app.post("/logosdb/get_general_provider_stats", tags=["admin"])
 async def get_general_provider_stats(data: LogosKeyModel):
     with DBManager() as db:
         return db.get_general_provider_stats(**data.dict())
 
 
-@app.post("/logosdb/get_models")
+@app.post("/logosdb/get_models", tags=["admin"])
 async def get_models(data: LogosKeyModel):
     with DBManager() as db:
         return db.get_models_info(**data.dict()), 200
 
 
-@app.post("/logosdb/get_policies")
+@app.post("/logosdb/get_policies", tags=["admin"])
 async def get_models(data: LogosKeyModel):
     with DBManager() as db:
         return db.get_policy_info(**data.dict()), 200
 
 
-@app.post("/logosdb/get_general_model_stats")
+@app.post("/logosdb/get_general_model_stats", tags=["admin"])
 async def get_general_model_stats(data: LogosKeyModel):
     with DBManager() as db:
         return db.get_general_model_stats(**data.dict())
 
 
-@app.post("/logosdb/export")
+@app.post("/logosdb/export", tags=["admin"])
 async def export(data: LogosKeyModel):
     with DBManager() as db:
         payload, status = db.export(**data.dict())
     return JSONResponse(content=jsonable_encoder(payload), status_code=status)
 
 
-@app.post("/logosdb/import")
+@app.post("/logosdb/import", tags=["admin"])
 async def import_json(data: GetImportDataRequest):
     with DBManager() as db:
         return db.import_from_json(**data.dict())
 
 
-@app.get("/forward_host")
+@app.get("/forward_host", tags=["admin"])
 def route_handler(request: Request):
     host = request.headers.get("x-forwarded-host") or request.headers.get("forwarded")
     return {"host": host}
 
 
-@app.post("/logosdb/add_billing")
+@app.post("/logosdb/add_billing", tags=["admin"])
 async def add_billing(data: AddBillingRequest):
     with DBManager() as db:
         return db.add_billing(**data.dict())
 
 
-@app.post("/logosdb/generalstats")
+@app.post("/logosdb/generalstats", tags=["admin"])
 async def generalstats(data: LogosKeyModel):
     with DBManager() as db:
         return db.generalstats(**data.dict())
@@ -2880,12 +2936,12 @@ async def _build_request_log_stats_response(request: Request) -> JSONResponse:
         )
 
 
-@app.post("/logosdb/request_log_stats")
+@app.post("/logosdb/request_log_stats", tags=["admin"])
 async def request_log_stats(request: Request):
     return await _build_request_log_stats_response(request)
 
 
-@app.options("/logosdb/request_log_stats")
+@app.options("/logosdb/request_log_stats", tags=["admin"])
 async def request_log_stats_options():
     """
     Local testing helper to dodge CORS preflight failures.
@@ -2901,7 +2957,7 @@ async def request_log_stats_options():
     )
 
 
-@app.get("/logosdb/scheduler_state")
+@app.get("/logosdb/scheduler_state", tags=["admin"])
 async def scheduler_state(request: Request):
     """
     Debug endpoint to inspect in-memory scheduler and LogosWorkerNode capacity state.
@@ -2919,7 +2975,7 @@ async def scheduler_state(request: Request):
     return JSONResponse(content=payload, status_code=200)
 
 
-@app.post("/logosdb/get_ollama_vram_stats")
+@app.post("/logosdb/get_ollama_vram_stats", tags=["admin"])
 async def get_ollama_vram_stats(request: Request):
     """
     Return live LogosWorkerNode provider VRAM usage for dashboards.
@@ -2962,7 +3018,7 @@ async def get_ollama_vram_stats(request: Request):
     )
 
 
-@app.options("/logosdb/get_ollama_vram_stats")
+@app.options("/logosdb/get_ollama_vram_stats", tags=["admin"])
 async def get_ollama_vram_stats_options():
     """CORS preflight for get_ollama_vram_stats."""
     return JSONResponse(
@@ -2979,7 +3035,7 @@ async def get_ollama_vram_stats_options():
 # OPENAI-COMPATIBLE MODEL LISTING
 # ============================================================================
 
-@app.get("/v1/models")
+@app.get("/v1/models", tags=["user-facing"])
 async def list_models(request: Request):
     """
     List models accessible to the authenticated user (OpenAI-compatible).
@@ -3009,7 +3065,7 @@ async def list_models(request: Request):
     return JSONResponse(content={"object": "list", "data": data})
 
 
-@app.get("/v1/models/{model_id:path}")
+@app.get("/v1/models/{model_id:path}", tags=["user-facing"])
 async def retrieve_model(model_id: str, request: Request):
     """
     Retrieve a single model by name (OpenAI-compatible).
@@ -3056,23 +3112,24 @@ async def retrieve_model(model_id: str, request: Request):
 # MAIN API ENDPOINTS
 # ============================================================================
 
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
-    Dynamic proxy for AI endpoints (versioned paths).
+    Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
     Supports both PROXY and RESOURCE modes with streaming.
-
-    Params:
-        path: Upstream path to forward.
-        request: Incoming request.
-
-    Returns:
-        Upstream response (streaming or sync) based on request.
     """
-    return await handle_sync_request(path, request)
+    return await handle_sync_request(f"v1/{path}", request)
 
 
-@app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+async def logos_service_v2_sync(path: str, request: Request):
+    """
+    Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
+    """
+    return await handle_sync_request(f"v2/{path}", request)
+
+
+@app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_long_sync(request: Request, path: str = None):
     """
     Dynamic proxy for LLM API endpoints (OpenAI-compatible paths).
@@ -3084,10 +3141,27 @@ async def logos_service_long_sync(request: Request, path: str = None):
     :param path: API endpoint path (e.g., 'chat/completions', 'completions', 'embeddings')
     :return: StreamingResponse for streaming requests, JSONResponse for synchronous requests
     """
+    return await handle_sync_request(f"v1/{path}", request)
+
+
+# vLLM non-prefixed endpoints (not part of OpenAI API spec, but user-facing).
+# These are canonical paths for pooling, scoring, reranking, and tokenization.
+async def _handle_vllm_native(request: Request):
+    """Forward to vLLM using the original request path."""
+    path = request.url.path.lstrip("/")
     return await handle_sync_request(path, request)
 
+for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
+    app.add_api_route(
+        _vllm_path,
+        _handle_vllm_native,
+        methods=["POST"],
+        tags=["user-facing"],
+        name=f"vllm_native_{_vllm_path.lstrip('/')}",
+    )
 
-@app.api_route("/jobs/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+
+@app.api_route("/jobs/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_async(path: str, request: Request):
     """
     Async job-based proxy for long running/low-priority requests.
@@ -3099,10 +3173,16 @@ async def logos_service_async(path: str, request: Request):
     Returns:
         202 with job metadata; poll /jobs/{id} for result.
     """
-    return await submit_job_request(path, request)
+    return await submit_job_request(f"v1/{path}", request)
 
 
-@app.api_route("/jobs/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/jobs/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+async def logos_service_v2_async(path: str, request: Request):
+    """Async job-based proxy for Cohere-compatible endpoints."""
+    return await submit_job_request(f"v2/{path}", request)
+
+
+@app.api_route("/jobs/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
 async def logos_service_long_async(path: str, request: Request):
     """
     Async job-based proxy for OpenAI-compatible, long running/low-priority requests.
@@ -3114,10 +3194,10 @@ async def logos_service_long_async(path: str, request: Request):
     Returns:
         202 with job metadata; poll /jobs/{id} for result.
     """
-    return await submit_job_request(path, request)
+    return await submit_job_request(f"v1/{path}", request)
 
 
-@app.get("/jobs/{job_id}")
+@app.get("/jobs/{job_id}", tags=["user-facing"])
 async def get_job_status(job_id: int, request: Request):
     """
     Return current state of a submitted job, including result or error when finished.
@@ -3168,7 +3248,7 @@ async def get_job_status(job_id: int, request: Request):
     }
 
 
-@app.post("/logosdb/latest_requests")
+@app.post("/logosdb/latest_requests", tags=["admin"])
 async def latest_requests(request: Request):
     """
     Fetch the latest 10 requests for the dashboard stack.
@@ -3181,7 +3261,7 @@ async def latest_requests(request: Request):
         return JSONResponse(content=payload, status_code=status)
 
 
-@app.post("/logosdb/request_logs")
+@app.post("/logosdb/request_logs", tags=["admin"])
 async def request_logs(request: Request):
     """
     Fetch request logs by request_id for performance replay correlation.
@@ -3206,7 +3286,7 @@ async def request_logs(request: Request):
         return JSONResponse(content=payload, status_code=status)
 
 
-@app.options("/logosdb/latest_requests")
+@app.options("/logosdb/latest_requests", tags=["admin"])
 async def latest_requests_options():
     return JSONResponse(
         content={},
@@ -3218,7 +3298,7 @@ async def latest_requests_options():
     )
 
 
-@app.options("/logosdb/request_logs")
+@app.options("/logosdb/request_logs", tags=["admin"])
 async def request_logs_options():
     return JSONResponse(
         content={},

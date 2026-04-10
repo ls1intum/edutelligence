@@ -98,7 +98,7 @@ environment:
   LOGOS_CAPACITY_PLANNER_ENABLED: "true"
 ```
 
-Worker nodes auto-calibrate model VRAM profiles (how much GPU memory each model needs when loaded vs sleeping). Profiles persist in the worker's `config.yml` and are sent to Logos over the existing websocket heartbeat. No extra configuration needed on the worker side.
+Worker nodes auto-calibrate model VRAM profiles (how much GPU memory each model needs when loaded vs sleeping). Profiles persist in the worker's state directory and are sent to Logos over the existing websocket heartbeat. No extra configuration needed on the worker side.
 
 ## Scheduler Benchmarking
 

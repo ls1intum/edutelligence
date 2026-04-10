@@ -23,7 +23,10 @@ DROP TABLE IF EXISTS token_types CASCADE;
 DROP TABLE IF EXISTS usage_tokens CASCADE;
 DROP TABLE IF EXISTS token_prices CASCADE;
 DROP TABLE IF EXISTS jobs CASCADE;
-DROP TABLE IF EXISTS request_events CASCADE;
+DROP TABLE IF EXISTS ollama_provider_snapshots CASCADE;
+DROP TABLE IF EXISTS model_profiles CASCADE;
+DROP TABLE IF EXISTS logosnode_provider_keys CASCADE;
+DROP TABLE IF EXISTS schema_migrations CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -107,6 +110,14 @@ CREATE TABLE model_api_keys (
     api_key TEXT NOT NULL,
     endpoint TEXT NOT NULL DEFAULT '',
     UNIQUE(model_id, provider_id)
+);
+
+-- Per-provider key for logosnode workers (replaces per-model model_api_keys for workers)
+CREATE TABLE logosnode_provider_keys (
+    id SERIAL PRIMARY KEY,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(provider_id)
 );
 
 CREATE TABLE profile_model_permissions (
@@ -205,4 +216,96 @@ CREATE TABLE jobs (
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Time-series snapshots of Ollama provider state from /api/ps endpoint
+CREATE TABLE ollama_provider_snapshots (
+    id SERIAL PRIMARY KEY,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    snapshot_ts TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- Aggregate metrics
+    total_models_loaded INTEGER NOT NULL DEFAULT 0,
+    total_vram_used_bytes BIGINT NOT NULL DEFAULT 0,
+
+    -- Per-model details (JSONB array containing model name, size_vram, expires_at)
+    loaded_models JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+    -- Error tracking
+    poll_success BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message TEXT,
+
+    -- Worker runtime memory fields (from migration 023)
+    total_memory_bytes BIGINT,
+    free_memory_bytes BIGINT,
+    snapshot_source TEXT,
+
+    -- Rich runtime payloads and scheduler signals (from migration 024)
+    runtime_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    scheduler_signals JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+-- Create indexes for efficient time-series queries
+CREATE INDEX idx_provider_snapshots_provider_ts
+    ON ollama_provider_snapshots(provider_id, snapshot_ts DESC);
+CREATE INDEX idx_provider_snapshots_ts
+    ON ollama_provider_snapshots(snapshot_ts DESC);
+CREATE INDEX idx_provider_snapshots_success
+    ON ollama_provider_snapshots(poll_success)
+    WHERE poll_success = FALSE;
+CREATE INDEX idx_provider_snapshots_models
+    ON ollama_provider_snapshots USING GIN (loaded_models);
+
+-- Calibrated model VRAM profiles per provider
+CREATE TABLE model_profiles (
+    id SERIAL PRIMARY KEY,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    model_name TEXT NOT NULL,
+
+    -- VRAM measurements
+    base_residency_mb REAL,            -- model weights + runtime overhead (MB)
+    loaded_vram_mb REAL,               -- total observed VRAM when loaded (weights + KV)
+    sleeping_residual_mb REAL,         -- VRAM while sleeping (L1/L2)
+    kv_budget_mb REAL,                 -- KV cache allocation (MB)
+
+    -- Model metadata
+    disk_size_bytes BIGINT,            -- on-disk weight size (bytes)
+    engine TEXT,                        -- 'vllm' or 'ollama'
+    tensor_parallel_size INTEGER,
+    kv_per_token_bytes INTEGER,        -- KV cache bytes per token (from architecture)
+    max_context_length INTEGER,
+
+    -- Calibration provenance
+    residency_source TEXT,             -- 'measured', 'hf', 'name', 'override', 'cached'
+    measurement_count INTEGER NOT NULL DEFAULT 0,
+    last_measured_at TIMESTAMPTZ,
+
+    -- GPU utilization bounds
+    observed_gpu_memory_utilization REAL,
+    min_gpu_memory_utilization_to_load REAL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(provider_id, model_name)
+);
+
+-- Fast lookups by provider
+CREATE INDEX idx_model_profiles_provider
+    ON model_profiles(provider_id);
+
+-- Find all profiles for a specific model across providers
+CREATE INDEX idx_model_profiles_model_name
+    ON model_profiles(model_name);
+
+-- Filter by source to find models that still need measurement
+CREATE INDEX idx_model_profiles_source
+    ON model_profiles(residency_source)
+    WHERE residency_source != 'measured';
+
+-- Track applied migrations
+CREATE TABLE schema_migrations (
+    id SERIAL PRIMARY KEY,
+    filename TEXT NOT NULL UNIQUE,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

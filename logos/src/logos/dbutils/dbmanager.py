@@ -486,6 +486,133 @@ class DBManager:
             file.write("\n")
         return {"result": f"Created root user. ID: {user_id}", "api_key": api_key}
 
+    def run_migrations(self, is_fresh_install: bool = False):
+        """
+        Apply pending database migrations on startup.
+        - Fresh install: marks all migrations as applied without executing (init.sql is current)
+        - Existing install: executes pending migrations in order, records each
+
+        Args:
+            is_fresh_install: If True, assumes init.sql has all current schema and skips execution
+        """
+        import pathlib
+
+        # List of all migrations in order (matches run_all_migrations.sh)
+        MIGRATION_FILES = [
+            "001_add_jobs_table.sql",
+            "002_add_provider_sdi_columns.sql",
+            "003a_drop_provider_ssh_columns.sql",
+            "003b_create_model_provider_config.sql",
+            "004_add_log_entry_sdi_columns.sql",
+            "005_create_request_events_table.sql",
+            "006_update_model_endpoints_to_local_ollama.sql",
+            "007_rename_openwebui_to_ollama_no_auth.sql",
+            "008_create_ollama_provider_snapshots.sql",
+            "009_add_profile_id_to_jobs.sql",
+            "010_remove_api_id_from_models.sql",
+            "010b_revert_profile_constraint.sql",
+            "011_restructure_model_api_keys_to_model_based.sql",
+            "012_dedup_models_providers.sql",
+            "013_set_ollama_provider_urls_and_auth.sql",
+            "014_add_api_key_to_providers.sql",
+            "015_add_snapshot_retention_cron.sql",
+            "016_move_endpoint_to_model_api_keys.sql",
+            "017_snapshot_provider_id_migration.sql",
+            "018_drop_model_provider_config.sql",
+            "019_add_request_id_to_log_entry.sql",
+            "020_normalize_local_provider_types_to_logosnode.sql",
+            "021_collapse_request_events_into_log_entry.sql",
+            "022_drop_request_events_table.sql",
+            "023_extend_provider_snapshots_for_worker_runtime.sql",
+            "024_store_logosnode_runtime_payload.sql",
+            "025_create_model_profiles_table.sql",
+            "026_create_schema_migrations.sql",
+            "027_logosnode_dynamic_deployments.sql",
+        ]
+
+        # Ensure schema_migrations table exists
+        try:
+            self.session.execute(text("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    id SERIAL PRIMARY KEY,
+                    filename TEXT NOT NULL UNIQUE,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            self.session.commit()
+        except Exception as e:
+            logging.warning("Could not create schema_migrations table: %s", e)
+            self.session.rollback()
+            return
+
+        # Get list of already-applied migrations
+        try:
+            existing = set(
+                row[0] for row in
+                self.session.execute(text("SELECT filename FROM schema_migrations")).fetchall()
+            )
+        except Exception as e:
+            logging.warning("Could not query schema_migrations: %s", e)
+            existing = set()
+
+        # Determine which migrations to apply
+        pending = [m for m in MIGRATION_FILES if m not in existing]
+
+        if not pending:
+            logging.info("All migrations already applied")
+            return
+
+        # Get migrations directory
+        migrations_dir = pathlib.Path(__file__).parent.parent.parent.parent / "db" / "migrations"
+
+        if is_fresh_install:
+            # Fresh install: just record all migrations without executing
+            logging.info("Fresh install detected — recording all %d migrations as applied", len(MIGRATION_FILES))
+            for migration_file in MIGRATION_FILES:
+                try:
+                    self.session.execute(text(
+                        "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
+                    ), {"filename": migration_file})
+                except Exception as e:
+                    logging.warning("Could not record migration %s: %s", migration_file, e)
+            self.session.commit()
+        else:
+            # Existing install: execute pending migrations
+            logging.info("Applying %d pending migrations", len(pending))
+            for migration_file in pending:
+                migration_path = migrations_dir / migration_file
+                if not migration_path.exists():
+                    logging.warning("Migration file not found: %s", migration_file)
+                    continue
+
+                # Special handling for migration 015 (pg_cron extension)
+                is_pg_cron = migration_file == "015_add_snapshot_retention_cron.sql"
+
+                try:
+                    migration_sql = migration_path.read_text()
+
+                    # Execute migration in its own transaction
+                    try:
+                        self.session.execute(text(migration_sql))
+                        self.session.commit()
+                    except Exception as e:
+                        if is_pg_cron:
+                            # pg_cron might not be available; log warning but don't block startup
+                            logging.warning("Migration %s skipped (pg_cron may not be installed): %s", migration_file, e)
+                            self.session.rollback()
+                        else:
+                            raise
+
+                    # Record migration as applied
+                    self.session.execute(text(
+                        "INSERT INTO schema_migrations (filename) VALUES (:filename) ON CONFLICT DO NOTHING"
+                    ), {"filename": migration_file})
+                    self.session.commit()
+                    logging.info("Applied migration: %s", migration_file)
+                except Exception as e:
+                    logging.error("Error applying migration %s: %s", migration_file, e)
+                    self.session.rollback()
+
     def add_provider(self, logos_key: str, provider_name: str, base_url: str,
                      api_key: str, auth_name: str, auth_format: str, provider_type: str) -> Tuple[dict, int]:
         if not self.check_authorization(logos_key):
@@ -1413,6 +1540,101 @@ class DBManager:
         self.session.commit()
 
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
+
+    def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> None:
+        """Auto-sync models announced by a logosnode worker into the DB.
+
+        For each model name the worker advertises:
+        1. Ensure a row exists in ``models`` (create if missing).
+        2. Ensure a ``model_provider`` link exists for this provider.
+        3. Ensure ``profile_model_permissions`` exist for all profiles.
+        4. Ensure a ``logosnode_provider_keys`` row exists for this provider.
+
+        Stale ``model_provider`` links (models the worker no longer advertises)
+        are removed so that the deployment queries stay in sync with the worker's
+        actual capabilities.
+        """
+        pid = int(provider_id)
+
+        # Ensure logosnode_provider_keys entry exists for this provider
+        self.session.execute(
+            text("""
+                INSERT INTO logosnode_provider_keys (provider_id)
+                VALUES (:pid)
+                ON CONFLICT (provider_id) DO NOTHING
+            """),
+            {"pid": pid},
+        )
+
+        # Get current model_provider links for this logosnode provider
+        existing_rows = self.session.execute(
+            text("""
+                SELECT mp.model_id, m.name
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE mp.provider_id = :pid AND p.provider_type = 'logosnode'
+            """),
+            {"pid": pid},
+        ).fetchall()
+        existing_by_name: dict[str, int] = {row.name: row.model_id for row in existing_rows}
+
+        announced = set(model_names)
+        current = set(existing_by_name.keys())
+
+        # Remove stale links (models no longer announced)
+        for stale_name in current - announced:
+            stale_mid = existing_by_name[stale_name]
+            self.session.execute(
+                text("DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"),
+                {"pid": pid, "mid": stale_mid},
+            )
+
+        # Add missing models & links
+        for model_name in announced - current:
+            # Upsert model row
+            row = self.session.execute(
+                text("SELECT id FROM models WHERE name = :name"),
+                {"name": model_name},
+            ).fetchone()
+            if row is not None:
+                mid = row.id
+            else:
+                mid = self.session.execute(
+                    text("""
+                        INSERT INTO models (name, weight_privacy, weight_latency, weight_accuracy,
+                                            weight_cost, weight_quality, tags, parallel, description)
+                        VALUES (:name, 'LOCAL', 0, 0, 0, 0, '', 1, '')
+                        RETURNING id
+                    """),
+                    {"name": model_name},
+                ).fetchone().id
+
+            # Upsert model_provider link
+            self.session.execute(
+                text("""
+                    INSERT INTO model_provider (provider_id, model_id)
+                    VALUES (:pid, :mid)
+                    ON CONFLICT DO NOTHING
+                """),
+                {"pid": pid, "mid": mid},
+            )
+
+            # Ensure profile_model_permissions for all profiles
+            self.session.execute(
+                text("""
+                    INSERT INTO profile_model_permissions (profile_id, model_id)
+                    SELECT pr.id, :mid
+                    FROM profiles pr
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM profile_model_permissions pmp
+                        WHERE pmp.profile_id = pr.id AND pmp.model_id = :mid
+                    )
+                """),
+                {"mid": mid},
+            )
+
+        self.session.commit()
 
     def get_provider_config(
         self,
@@ -2368,6 +2590,9 @@ class DBManager:
         """
         Get a list of all authorized model deployments for a profile.
 
+        For cloud/azure providers: requires model_provider + model_api_keys (per-model credentials).
+        For logosnode providers: requires model_provider + logosnode_provider_keys (per-provider key).
+
         Returns: List of complete deployment dicts with:
             - model_id
             - provider_id
@@ -2386,7 +2611,22 @@ class DBManager:
                             JOIN process proc ON pr.process_id = proc.id
                    WHERE proc.logos_key = :logos_key
                      AND pr.id = :profile_id
-                   ORDER BY m.id, p.id
+                     AND p.provider_type != 'logosnode'
+                   UNION
+                   SELECT m.id               as model_id,
+                          p.id               as provider_id,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
+                            JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+                            JOIN profiles pr ON pmp.profile_id = pr.id
+                            JOIN process proc ON pr.process_id = proc.id
+                   WHERE proc.logos_key = :logos_key
+                     AND pr.id = :profile_id
+                     AND p.provider_type = 'logosnode'
+                   ORDER BY model_id, provider_id
                    """)
         rows = self.session.execute(sql, {
             "logos_key": logos_key,
@@ -2399,6 +2639,9 @@ class DBManager:
     def get_all_deployments(self) -> list[Deployment]:
         """
         Get a list of ALL model deployments.
+
+        For cloud/azure providers: requires model_provider + model_api_keys (per-model credentials).
+        For logosnode providers: requires model_provider + logosnode_provider_keys (per-provider key).
 
         Returns: List of complete deployment dicts with:
             - model_id
@@ -2413,7 +2656,17 @@ class DBManager:
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
                             JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
-                   ORDER BY m.id, p.id
+                   WHERE p.provider_type != 'logosnode'
+                   UNION
+                   SELECT m.id               as model_id,
+                          p.id               as provider_id,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
+                   WHERE p.provider_type = 'logosnode'
+                   ORDER BY model_id, provider_id
                    """)
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
@@ -2641,6 +2894,27 @@ class DBManager:
             WHERE id = :provider_id
         """)
         result = self.session.execute(sql, {"provider_id": int(provider_id)}).fetchone()
+        if result is None:
+            return None
+        return {
+            "id": result.id,
+            "name": result.name,
+            "base_url": result.base_url,
+            "provider_type": result.provider_type,
+            "auth_name": result.auth_name,
+            "auth_format": result.auth_format,
+            "api_key": result.api_key,
+        }
+
+    def get_logosnode_provider_by_api_key(self, api_key: str):
+        """Look up a logosnode provider by its shared API key."""
+        sql = text("""
+            SELECT *
+            FROM providers
+            WHERE api_key = :api_key
+              AND provider_type = 'logosnode'
+        """)
+        result = self.session.execute(sql, {"api_key": api_key}).fetchone()
         if result is None:
             return None
         return {

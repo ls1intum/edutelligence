@@ -44,6 +44,7 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(mo
     )
 
     monkeypatch.setattr(worker_main, "load_config", lambda: cfg)
+    monkeypatch.setattr(worker_main, "get_state_dir", lambda: None)
     monkeypatch.setattr(worker_main, "GpuMetricsCollector", _FakeGpuCollector)
 
     app = FastAPI()

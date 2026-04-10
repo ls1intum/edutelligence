@@ -21,7 +21,7 @@ except Exception:  # noqa: BLE001
     class ConnectionClosed(Exception):
         pass
 
-from logos_worker_node.config import save_lanes_config
+from logos_worker_node.config import save_lanes_state
 from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.runtime import build_runtime_status
@@ -55,10 +55,12 @@ class LogosBridgeClient:
         self._last_event_seq = 0
         self._last_runtime_signature: str | None = None
         self._last_runtime_payload: dict[str, Any] = {}
+        # Resolved by server during auth
+        self._resolved_worker_id: str = ""
 
     @property
     def worker_id(self) -> str:
-        return self._cfg.worker_id or f"worker-{self._cfg.provider_id}"
+        return self._resolved_worker_id or "worker"
 
     def transport_status(self) -> WorkerTransportStatus:
         return WorkerTransportStatus(
@@ -77,7 +79,7 @@ class LogosBridgeClient:
             return
         self._stopping.clear()
         self._task = asyncio.create_task(self._run(), name="logos-bridge")
-        logger.info("Logos bridge started (provider_id=%s, worker_id=%s)", self._cfg.provider_id, self.worker_id)
+        logger.info("Logos bridge started (worker_id=%s)", self.worker_id)
 
     async def stop(self) -> None:
         self._stopping.set()
@@ -117,10 +119,10 @@ class LogosBridgeClient:
                     self._last_runtime_payload = {}
                     caps = list(self._cfg.capabilities_models) if self._cfg.capabilities_models else []
                     logger.info(
-                        "%s══ BRIDGE CONNECTED ══%s provider_id=%s worker_id=%s "
+                        "%s══ BRIDGE CONNECTED ══%s worker_id=%s "
                         "capabilities=%s url=%s",
                         _GREEN + _BOLD, _RESET,
-                        self._cfg.provider_id, self.worker_id,
+                        self.worker_id,
                         caps or "(none)", ws_url.split("?")[0],
                     )
                     await self._send_hello(ws)
@@ -181,14 +183,12 @@ class LogosBridgeClient:
             raise RuntimeError("logos.logos_url must use https or http")
         if parsed.scheme == "http" and not self._cfg.allow_insecure_http:
             raise RuntimeError("logos.logos_url uses http but logos.allow_insecure_http is false")
-        if not self._cfg.provider_id or not self._cfg.shared_key:
-            raise RuntimeError("logos.provider_id and logos.shared_key are required")
+        if not self._cfg.shared_key:
+            raise RuntimeError("logos.shared_key (LOGOS_API_KEY) is required")
 
         auth_url = f"{logos_url}/logosdb/providers/logosnode/auth"
         payload = {
-            "provider_id": self._cfg.provider_id,
             "shared_key": self._cfg.shared_key,
-            "worker_id": self.worker_id,
             "capabilities_models": self._cfg.capabilities_models,
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -196,6 +196,11 @@ class LogosBridgeClient:
         if resp.status_code >= 400:
             raise RuntimeError(f"/auth rejected with HTTP {resp.status_code}: {resp.text}")
         data = resp.json() if resp.content else {}
+
+        # Pick up server-resolved worker identity
+        if "worker_id" in data:
+            self._resolved_worker_id = str(data["worker_id"])
+
         ws_url = str(data.get("ws_url", "")).strip()
         if not ws_url:
             token = str(data.get("session_token", "")).strip()
@@ -255,7 +260,6 @@ class LogosBridgeClient:
                     ws,
                     {
                         "type": "event",
-                        "provider_id": self._cfg.provider_id,
                         "worker_id": self.worker_id,
                         "event": event.model_dump(mode="json"),
                     },
@@ -267,7 +271,6 @@ class LogosBridgeClient:
             ws,
             {
                 "type": "hello",
-                "provider_id": self._cfg.provider_id,
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "actions": [
@@ -308,7 +311,6 @@ class LogosBridgeClient:
             ws,
             {
                 "type": "status",
-                "provider_id": self._cfg.provider_id,
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "runtime": payload,
@@ -327,7 +329,6 @@ class LogosBridgeClient:
             ws,
             {
                 "type": "heartbeat",
-                "provider_id": self._cfg.provider_id,
                 "worker_id": self.worker_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
@@ -449,19 +450,27 @@ class LogosBridgeClient:
             result = await lane_manager.apply_lanes(lanes)
             if result.success:
                 try:
-                    save_lanes_config(lanes)
+                    save_lanes_state(lanes)
                 except OSError:
-                    logger.debug("Could not persist lane config (read-only filesystem)")
+                    logger.debug("Could not persist lane state")
             return result.model_dump(mode="json")
 
         if action == "add_lane":
             lane_config = LaneConfig(**params)
             status = await lane_manager.add_lane(lane_config)
+            try:
+                save_lanes_state(lane_manager.get_current_lane_configs())
+            except OSError:
+                logger.debug("Could not persist lane state after add_lane")
             return status.model_dump(mode="json")
 
         lane_id = str(params.get("lane_id", "")).strip()
         if action == "delete_lane":
             await lane_manager.remove_lane(lane_id)
+            try:
+                save_lanes_state(lane_manager.get_current_lane_configs())
+            except OSError:
+                logger.debug("Could not persist lane state after delete_lane")
             return {"ok": True, "lane_id": lane_id}
         if action == "sleep_lane":
             status = await lane_manager.sleep_lane(
@@ -481,8 +490,17 @@ class LogosBridgeClient:
         raise ValueError(f"Unsupported bridge command '{action}'")
 
     @staticmethod
-    def _lane_target_url(lane_status: dict[str, Any]) -> str:
-        endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
+    def _lane_target_url(
+        lane_status: dict[str, Any],
+        payload: dict[str, Any] | None = None,
+        request_path: str | None = None,
+    ) -> str:
+        # If the caller forwarded the original API path (e.g. "v1/embeddings",
+        # "v2/embed", "tokenize"), use it directly so vLLM decides what it supports.
+        if request_path:
+            endpoint = request_path.strip("/")
+        else:
+            endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
         return f"http://127.0.0.1:{lane_status['port']}/{endpoint}"
 
     async def _resolve_lane_for_infer(self, lane_id: str) -> dict[str, Any]:
@@ -501,7 +519,8 @@ class LogosBridgeClient:
             raise ValueError("payload must be an object")
 
         lane_status = await self._resolve_lane_for_infer(lane_id)
-        target_url = self._lane_target_url(lane_status)
+        request_path = params.get("request_path")
+        target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
 
         await lane_manager.increment_active_requests(lane_id)
         try:
@@ -533,7 +552,8 @@ class LogosBridgeClient:
 
         try:
             lane_status = await self._resolve_lane_for_infer(lane_id)
-            target_url = self._lane_target_url(lane_status)
+            request_path = params.get("request_path")
+            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
         except Exception as exc:  # noqa: BLE001
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": False, "error": str(exc)})
             return

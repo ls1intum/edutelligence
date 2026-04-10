@@ -11,7 +11,7 @@ Lecture ingestion sends your lecture materials to Iris's knowledge base, enablin
 When you ingest lectures, Iris processes:
 
 - **Slide content** — text and structure from attachment units (PDFs, slide decks)
-- **Video transcriptions** — if available, transcriptions from video units processed through Nebula
+- **Video transcriptions** — if available, transcriptions from video units
 
 This content is indexed and made available to Iris so it can reference specific slides, concepts, and explanations from your lectures when responding to students.
 

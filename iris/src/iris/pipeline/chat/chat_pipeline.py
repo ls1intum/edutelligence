@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Optional
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -9,42 +9,73 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
-from iris.common.memiris_setup import get_tenant_for_user
-from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
-from iris.domain.chat.interaction_suggestion_dto import (
-    InteractionSuggestionPipelineExecutionDTO,
-)
-from iris.domain.variant.chat_variant import ChatVariant
-from iris.llm import CompletionArguments, ModelVersionRequestHandler
-from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline.abstract_agent_pipeline import (
-    AbstractAgentPipeline,
-    AgentPipelineExecutionState,
-)
-from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
-from iris.pipeline.chat.interaction_suggestion_pipeline import (
-    InteractionSuggestionPipeline,
-)
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
-from iris.pipeline.shared.citation_pipeline import CitationPipeline, InformationType
-from iris.pipeline.shared.utils import datetime_to_string, format_custom_instructions
-from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
-from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
 from iris.tracing import observe
 from iris.web.status.status_update import StatusCallback
 
+from ...common.memiris_setup import get_tenant_for_user
+from ...common.pyris_message import IrisMessageRole, PyrisMessage
+from ...domain.chat.interaction_suggestion_dto import (
+    InteractionSuggestionPipelineExecutionDTO,
+)
+from ...domain.variant.variant import Dep, Variant
+from ...llm import (
+    CompletionArguments,
+    LlmRequestHandler,
+)
+from ...llm.langchain import IrisLangchainChatModel
+from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
+from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
+from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
+from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.mcq_generation_pipeline import McqGenerationPipeline
+from ..shared.utils import datetime_to_string, format_custom_instructions
+from .code_feedback_pipeline import CodeFeedbackPipeline
+from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
+from .mcq_chat_mixin import (
+    detect_mcq_intent,
+    mcq_execute_agent,
+    mcq_post_agent_hook,
+    mcq_pre_agent_hook,
+)
+
 logger = get_logger(__name__)
 
+_SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
+    IrisChatMode.COURSE: "course",
+    IrisChatMode.EXERCISE: "exercise",
+}
 
-class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant]):
+
+class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
     Replaces CourseChatPipeline / ExerciseChatPipeline / TextExerciseChatPipeline / LectureChatPipeline
     """
+
+    # TODO: REFACTORING ASLAN: ÜBERARBEITEN
+    PIPELINE_ID = "chat_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Uses a smaller model for faster responses."),
+        ("advanced", "Advanced", "Uses a larger model, balancing speed and quality."),
+    ]
+    DEPENDENCIES = [
+        Dep("citation_pipeline", variant="same"),
+        Dep("session_title_generation_pipeline"),
+        Dep("interaction_suggestion_pipeline", variant="course"),
+        Dep("interaction_suggestion_pipeline", variant="exercise"),
+        Dep("code_feedback_pipeline"),
+        Dep("mcq_generation_pipeline"),
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
 
     chat_mode: IrisChatMode
     event: Optional[str]
@@ -52,12 +83,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     citation_pipeline: CitationPipeline
     suggestion_pipeline: Optional[InteractionSuggestionPipeline]
     code_feedback_pipeline: Optional[CodeFeedbackPipeline]
+    mcq_pipeline: McqGenerationPipeline
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
 
     def __init__(self, chat_mode: IrisChatMode, local: bool = False):
-        super().__init__(implementation_id="chat_pipeline")
+        """
+        Initialize the exercise chat agent pipeline.
+        """
+        super().__init__(implementation_id=self.PIPELINE_ID)
 
         self.chat_mode = chat_mode
 
@@ -66,12 +101,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         # Initialize pipelines & retrievers
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
         self.citation_pipeline = CitationPipeline(local=local)
+        suggestion_variant = _SUGGESTION_VARIANT.get(self.chat_mode, "course")
         self.suggestion_pipeline = InteractionSuggestionPipeline(
-            variant=self.chat_mode, local=local
+            variant=suggestion_variant, local=local
         )
         self.code_feedback_pipeline = CodeFeedbackPipeline(
             local=local
         )  # TODO: Ungenutzt? Entfernen?
+        self.mcq_pipeline = McqGenerationPipeline(local=local)
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -93,29 +130,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
     def __str__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
-
-    @classmethod
-    def get_variants(cls) -> List[ChatVariant]:
-        return [
-            ChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-5-mini",
-                cloud_citation_model="gpt-5-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-            ChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-5.2",
-                cloud_citation_model="gpt-5-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-        ]
 
     def get_memiris_reference(self, dto: ChatPipelineExecutionDTO):
         """
@@ -155,7 +169,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
     def on_agent_step(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
         step: dict[str, Any],
     ) -> None:
         """
@@ -169,9 +183,38 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         if step.get("intermediate_steps"):
             state.callback.in_progress("Thinking ...")
 
+    def pre_agent_hook(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> None:
+        """Spawn parallel MCQ generation thread if intent was detected."""
+        if self.chat_mode not in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
+            return
+        lecture_id = (
+            state.dto.lecture.id if state.dto.lecture and state.dto.lecture.id else None
+        )
+        course_id = state.dto.course.id if state.dto.course else None
+        if course_id is None:
+            return
+        mcq_pre_agent_hook(
+            state=state,
+            mcq_pipeline=self.mcq_pipeline,
+            get_text_of_latest_user_message=self.get_text_of_latest_user_message,
+            db=state.db,
+            course_id=course_id,
+            chat_history=state.dto.chat_history,
+            lecture_id=lecture_id,
+        )
+
+    def execute_agent(self, state):
+        """Use a direct LLM call when MCQ parallel is active, else default agent."""
+        if getattr(state, "mcq_parallel", False):
+            return mcq_execute_agent(state)
+        return super().execute_agent(state)
+
     def post_agent_hook(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Process results after agent execution.
@@ -183,6 +226,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             The processed result string.
         """
         try:
+            # Handle MCQ placeholder replacement and parallel thread joining
+            mcq_post_agent_hook(
+                state=state,
+                mcq_pipeline=self.mcq_pipeline,
+                track_tokens=self._track_tokens,
+            )
+
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
@@ -220,11 +270,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
     def prepare_state(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> None:
         """
         Pre-compute tool availability flags once, so both build_system_message
         and get_tools can read them without redundant DB calls.
+        Also detects MCQ intent for COURSE and LECTURE modes.
         """
         dto = state.dto
         course_id = dto.course.id if dto.course else None
@@ -238,9 +289,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         )
         state.query_text = self.get_text_of_latest_user_message(state)
 
+        # Detect MCQ intent for modes that support it
+        if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
+            is_mcq, count = detect_mcq_intent(state.query_text)
+            if is_mcq:
+                state.mcq_parallel = True
+                state.mcq_count = count
+
     def get_tools(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> list[Callable]:
         """
         Create and return tools for the agent.
@@ -248,12 +306,18 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Iterates over all registered tool providers and collects the ones
         whose required data is present in the current state.
 
+        When MCQ parallel mode is active the agent only needs to write a
+        short intro — no tools required.
+
         Args:
             state: The current pipeline execution state.
 
         Returns:
             List of tool functions for the agent.
         """
+        if getattr(state, "mcq_parallel", False):
+            return []
+
         tools: list[Callable] = []
         for provider in CHAT_TOOL_PROVIDERS:
             tool = provider(state)
@@ -263,7 +327,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
     def build_system_message(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Build the system message/prompt for the agent.
@@ -337,12 +401,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
                 else ""
             ),
             "text_exercise_submission": dto.text_exercise_submission,
+            "mcq_parallel": getattr(state, "mcq_parallel", False),
         }
 
         return self.system_prompt_template.render(template_context)
 
     def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant]
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
     ) -> bool:
         """
         Return True if background memory creation should be enabled for this run.
@@ -360,7 +425,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
     def _add_citations(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
         result: str,
     ) -> str:
         """
@@ -425,7 +490,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
     def _generate_session_title(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
         output: str,
         dto: ChatPipelineExecutionDTO,
     ) -> Optional[str]:
@@ -445,7 +510,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     @observe(name="Response Refinement")
     def _refine_response(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Refine the agent response using the guide prompt. This is only available for programming exercises.
@@ -471,12 +536,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             )
 
             # Create small LLM for refinement
-            completion_args = CompletionArguments(temperature=0.5)
-            is_local = state.dto.settings is not None and state.dto.settings.is_local()
+            completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+            refinement_model = state.variant.model("chat", state.local)
             llm_small = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(
-                    version=("gpt-oss:120b" if is_local else "gpt-5-mini")
-                ),
+                request_handler=LlmRequestHandler(model_id=refinement_model),
                 completion_args=completion_args,
             )
 
@@ -505,7 +568,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
 
     def _generate_suggestions(
         self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant],
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
         result: str,
     ) -> None:
         """
@@ -553,7 +616,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     def __call__(
         self,
         dto: ChatPipelineExecutionDTO,
-        variant: ChatVariant,
+        variant: Variant,
         callback: StatusCallback,
         event: str | None = None,
     ):

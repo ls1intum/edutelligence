@@ -1,0 +1,46 @@
+# ----------------------------------------------------------------------------------------------------------------------
+# Setup for a Pyris production server that uses an externally-hosted Weaviate instance
+# (e.g. a managed Weaviate on a separate VM, reached over HTTPS/gRPC with an API key).
+# ----------------------------------------------------------------------------------------------------------------------
+# Identical to pyris-production.yml, but intentionally omits the bundled weaviate service.
+# The Weaviate host, ports, TLS flags, and API key must be configured in application.yml under
+# the ``weaviate:`` section (see iris/application.example.yml for the full list of fields).
+# ----------------------------------------------------------------------------------------------------------------------
+
+services:
+  pyris-app:
+    extends:
+      file: ./pyris.yml
+      service: pyris-app
+    image: ghcr.io/ls1intum/edutelligence/iris:${PYRIS_DOCKER_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    volumes:
+      - ${PYRIS_APPLICATION_YML_FILE}:/config/application.yml:ro
+      - ${PYRIS_LLM_CONFIG_YML_FILE}:/config/llm_config.yml:ro
+      - ${PYRIS_TRANSCRIPTION_DATA_DIR:-./transcription-data}:/data/transcription
+    networks:
+      - pyris
+
+  nginx:
+    extends:
+      file: ./nginx.yml
+      service: nginx
+    restart: always
+    depends_on:
+      pyris-app:
+        condition: service_started
+    volumes:
+      - type: bind
+        source: ${NGINX_PROXY_SSL_CERTIFICATE_PATH:-./nginx/certs/pyris-nginx+4.pem}
+        target: "/certs/fullchain.pem"
+      - type: bind
+        source: ${NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH:-./nginx/certs/pyris-nginx+4-key.pem}
+        target: "/certs/priv_key.pem"
+    networks:
+      - pyris
+
+networks:
+  pyris:
+    driver: "bridge"
+    name: pyris

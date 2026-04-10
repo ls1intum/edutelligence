@@ -36,7 +36,7 @@ def format_summary(results: list[FeatureResult]) -> str:
             missing_by_model[m].append(r.feature.value.lower())
 
     if missing_by_model:
-        lines.append("Missing models:")
+        lines.append("Missing models/configuration:")
         for model in sorted(missing_by_model):
             feats = ", ".join(sorted(set(missing_by_model[model])))
             lines.append(f"- {model} ({feats})")

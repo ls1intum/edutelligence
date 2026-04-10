@@ -4,7 +4,7 @@ import itertools
 import random
 from typing import List, Sequence, Tuple, TypeVar
 
-from langfuse._client.observe import observe
+from langfuse import observe
 
 T = TypeVar("T")
 

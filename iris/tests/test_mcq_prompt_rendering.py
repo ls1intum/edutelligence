@@ -36,6 +36,7 @@ def _minimal_course_chat_context() -> dict:
         "event": None,
         "custom_instructions": "",
         "course_name": "Test Course",
+        "mcq_parallel": False,
     }
 
 
@@ -50,62 +51,81 @@ def _minimal_lecture_chat_context() -> dict:
         "allow_memiris_tool": False,
         "has_chat_history": False,
         "custom_instructions": "",
+        "mcq_parallel": False,
     }
 
 
-def test_course_chat_prompt_contains_mcq_block():
+# --- Non-parallel mode: agent should see tool instructions ---
+
+
+def test_course_chat_prompt_references_mcq_tool():
     rendered = _render_template(
         "course_chat_system_prompt.j2", _minimal_course_chat_context()
     )
-    assert '"type": "mcq"' in rendered
-    assert '"correct": false' in rendered
-    assert '"correct": true' in rendered
-    assert "Rules for MCQ generation:" in rendered
+    assert "generate_mcq_questions" in rendered
+    # Old JSON blocks should no longer be present
+    assert '"type": "mcq"' not in rendered
+    assert "Rules for MCQ generation:" not in rendered
 
 
-def test_lecture_chat_prompt_contains_mcq_block():
+def test_lecture_chat_prompt_references_mcq_tool():
     rendered = _render_template(
         "lecture_chat_system_prompt.j2", _minimal_lecture_chat_context()
     )
-    assert '"type": "mcq"' in rendered
-    assert '"correct": false' in rendered
-    assert '"correct": true' in rendered
-    assert "Rules for MCQ generation:" in rendered
+    assert "generate_mcq_questions" in rendered
+    # Old JSON blocks should no longer be present
+    assert '"type": "mcq"' not in rendered
+    assert "Rules for MCQ generation:" not in rendered
 
 
-def test_course_chat_mcq_json_braces_not_interpreted_as_jinja():
-    rendered = _render_template(
-        "course_chat_system_prompt.j2", _minimal_course_chat_context()
-    )
-    assert '{"text": "Option A text", "correct": false}' in rendered
-    assert (
-        '"explanation": "A brief explanation of why the correct answer is correct."'
-        in rendered
-    )
-
-
-def test_lecture_chat_mcq_json_braces_not_interpreted_as_jinja():
-    rendered = _render_template(
-        "lecture_chat_system_prompt.j2", _minimal_lecture_chat_context()
-    )
-    assert '{"text": "Option A text", "correct": false}' in rendered
-    assert (
-        '"explanation": "A brief explanation of why the correct answer is correct."'
-        in rendered
-    )
-
-
-def test_course_chat_mcq_block_present_with_custom_instructions():
+def test_course_chat_mcq_tool_with_custom_instructions():
     context = _minimal_course_chat_context()
     context["custom_instructions"] = "Always be polite."
     rendered = _render_template("course_chat_system_prompt.j2", context)
-    assert '"type": "mcq"' in rendered
+    assert "generate_mcq_questions" in rendered
     assert "Always be polite." in rendered
 
 
-def test_lecture_chat_mcq_block_present_with_custom_instructions():
+def test_lecture_chat_mcq_tool_with_custom_instructions():
     context = _minimal_lecture_chat_context()
     context["custom_instructions"] = "Always be polite."
     rendered = _render_template("lecture_chat_system_prompt.j2", context)
-    assert '"type": "mcq"' in rendered
+    assert "generate_mcq_questions" in rendered
     assert "Always be polite." in rendered
+
+
+# --- Parallel mode: agent should NOT see tool instructions ---
+
+
+def test_course_chat_parallel_mode_hides_tool():
+    context = _minimal_course_chat_context()
+    context["mcq_parallel"] = True
+    rendered = _render_template("course_chat_system_prompt.j2", context)
+    assert "generate_mcq_questions" not in rendered
+    assert "being generated" in rendered
+    assert "MUST NOT" in rendered
+
+
+def test_lecture_chat_parallel_mode_hides_tool():
+    context = _minimal_lecture_chat_context()
+    context["mcq_parallel"] = True
+    rendered = _render_template("lecture_chat_system_prompt.j2", context)
+    assert "generate_mcq_questions" not in rendered
+    assert "being generated" in rendered
+    assert "MUST NOT" in rendered
+
+
+def test_course_chat_non_parallel_shows_tool():
+    context = _minimal_course_chat_context()
+    context["mcq_parallel"] = False
+    rendered = _render_template("course_chat_system_prompt.j2", context)
+    assert "generate_mcq_questions" in rendered
+    assert "ALWAYS use the tool" in rendered
+
+
+def test_lecture_chat_non_parallel_shows_tool():
+    context = _minimal_lecture_chat_context()
+    context["mcq_parallel"] = False
+    rendered = _render_template("lecture_chat_system_prompt.j2", context)
+    assert "generate_mcq_questions" in rendered
+    assert "ALWAYS use the tool" in rendered

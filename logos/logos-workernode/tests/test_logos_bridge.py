@@ -43,7 +43,6 @@ def test_derive_ws_url_uses_wss_for_https():
     cfg = LogosConfig(
         enabled=True,
         logos_url="https://logos.example:8080",
-        provider_id=7,
         shared_key="secret",
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
@@ -55,7 +54,6 @@ def test_derive_ws_url_uses_ws_for_http():
     cfg = LogosConfig(
         enabled=True,
         logos_url="http://logos.example:8080",
-        provider_id=7,
         shared_key="secret",
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
@@ -67,7 +65,6 @@ def test_derive_ws_url_allows_http_in_dev_mode():
         enabled=True,
         logos_url="http://logos.example:8080",
         allow_insecure_http=True,
-        provider_id=7,
         shared_key="secret",
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
@@ -80,9 +77,7 @@ async def test_authenticate_accepts_explicit_ws_url(monkeypatch):
     cfg = LogosConfig(
         enabled=True,
         logos_url="https://logos.example:8080",
-        provider_id=9,
         shared_key="secret",
-        worker_id="worker-9",
         capabilities_models=["model-a"],
     )
     client = LogosBridgeClient(_DummyApp(), cfg)
@@ -123,7 +118,7 @@ async def test_execute_infer_command_passthrough(monkeypatch):
     app.state.lane_manager = lane_manager
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
 
     class _Resp:
@@ -162,7 +157,7 @@ async def test_handle_message_runs_stream_command_in_background():
     app.state.lane_manager = object()
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
 
     started = asyncio.Event()
@@ -212,7 +207,7 @@ async def test_handle_message_runs_infer_command_in_background():
     app.state.lane_manager = object()
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
 
     started = asyncio.Event()
@@ -273,7 +268,7 @@ async def test_send_runtime_status_skips_unchanged_payload(monkeypatch):
     app.state.lane_manager = object()
     app.state.gpu_collector = object()
 
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
 
     runtime_payload = {
@@ -305,7 +300,7 @@ async def test_send_runtime_status_skips_unchanged_payload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_heartbeat_uses_lightweight_payload():
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=13, shared_key="secret")
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(_DummyApp(), cfg)
 
     sends: list[dict] = []
@@ -320,7 +315,7 @@ async def test_send_heartbeat_uses_lightweight_payload():
     assert len(sends) == 1
     payload = sends[0]
     assert payload["type"] == "heartbeat"
-    assert payload["provider_id"] == 13
+    assert "provider_id" not in payload
     assert payload["worker_id"] == client.worker_id
     assert isinstance(payload.get("timestamp"), str)
 
@@ -330,7 +325,6 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
     cfg = LogosConfig(
         enabled=True,
         logos_url="https://logos.example",
-        provider_id=13,
         shared_key="secret",
         heartbeat_interval_seconds=1,
     )
@@ -358,7 +352,7 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
 
 
 def test_runtime_has_transient_lanes_uses_last_payload():
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", provider_id=1, shared_key="secret")
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(_DummyApp(), cfg)
 
     client._last_runtime_payload = {"lanes": [{"lane_id": "lane-a", "runtime_state": "loaded"}]}  # noqa: SLF001

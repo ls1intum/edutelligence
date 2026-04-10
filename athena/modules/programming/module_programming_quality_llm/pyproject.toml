@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "module_programming_quality_llm"
-version = "0.0.1"
+version = "2.0.0"
 description = "Programming quality LLM module."
 authors = ["Aniruddh Zaveri <aniruddh.zaveri@tum.de>", "Konrad Weiß <konrad2002.weiss@tum.de>"]
 license = "MIT"
