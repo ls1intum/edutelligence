@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional
+from typing import Optional
 
 from iris.common.logging_config import get_logger
 from iris.config import settings
@@ -11,9 +11,8 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from iris.domain.variant.lecture_ingestion_update_variant import (
-    LectureIngestionUpdateVariant,
-)
+from iris.domain.variant.abstract_variant import find_variant
+from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -61,7 +60,7 @@ def _any_transcription_stage_needed(dto: IngestionPipelineExecutionDto) -> bool:
     return _needs_transcription_generation(dto) or _needs_slide_detection(dto)
 
 
-class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
+class LectureIngestionUpdatePipeline(Pipeline):
     """Unified pipeline: transcription generation + PDF/transcript ingestion.
 
     Artemis sends ONE request with all available data (video URL, PDF,
@@ -86,9 +85,28 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
     - Artemis saves these to PostgreSQL for retry.
     """
 
-    def __init__(self, dto: IngestionPipelineExecutionDto):
-        super().__init__()
+    PIPELINE_ID = "lecture_ingestion_update_pipeline"
+    ROLES: set[str] = set()
+    VARIANT_DEFS = [
+        ("default", "Default", "Default lecture ingestion update variant."),
+        ("advanced", "Advanced", "Advanced lecture ingestion update variant."),
+    ]
+    DEPENDENCIES = [
+        Dep("lecture_unit_page_ingestion_pipeline", variant="same"),
+        Dep("transcription_ingestion_pipeline"),
+        Dep("lecture_unit_pipeline"),
+        Dep("lecture_unit_segment_summary_pipeline"),
+        Dep("lecture_unit_summary_pipeline"),
+    ]
+
+    def __init__(
+        self,
+        dto: IngestionPipelineExecutionDto,
+        variant_id: str = "default",
+    ):
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.dto = dto
+        self.variant_id = variant_id
 
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
@@ -281,13 +299,25 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         language = ""
         tokens = []
 
+        variant_id = self.variant_id
+        is_local = bool(
+            self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
+        )
+
         # PDF page ingestion
         if (
             self.dto.lecture_unit.pdf_file_base64 is not None
             and self.dto.lecture_unit.pdf_file_base64 != ""
         ):
+            variant = find_variant(
+                LectureUnitPageIngestionPipeline.get_variants(), variant_id
+            )
             page_content_pipeline = LectureUnitPageIngestionPipeline(
-                client=client, dto=self.dto, callback=callback
+                client=client,
+                dto=self.dto,
+                callback=callback,
+                variant=variant,
+                local=is_local,
             )
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
@@ -305,7 +335,7 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             and self.dto.lecture_unit.transcription.segments is not None
         ):
             transcription_pipeline = TranscriptionIngestionPipeline(
-                client=client, dto=self.dto, callback=callback
+                client=client, dto=self.dto, callback=callback, local=is_local
             )
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
@@ -335,7 +365,6 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
             base_url=self.dto.settings.artemis_base_url,
         )
 
-        is_local = self.dto.settings is not None and self.dto.settings.is_local()
         tokens += LectureUnitPipeline(local=is_local, callback=callback)(
             lecture_unit=lecture_unit_dto
         )
@@ -401,26 +430,3 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
                 for seg in aligned_segments
             ],
         )
-
-    @classmethod
-    def get_variants(cls) -> List[LectureIngestionUpdateVariant]:
-        return [
-            LectureIngestionUpdateVariant(
-                variant_id="default",
-                name="Default",
-                description="Default lecture ingestion update variant using efficient models "
-                "for processing and embeddings.",
-                cloud_chat_model="gpt-5-mini",
-                local_chat_model="gpt-oss:120b",
-                embedding_model="text-embedding-3-small",
-            ),
-            LectureIngestionUpdateVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced lecture ingestion update variant using higher-quality models "
-                "for improved accuracy.",
-                cloud_chat_model="gpt-5.2",
-                local_chat_model="gpt-oss:120b",
-                embedding_model="text-embedding-3-large",
-            ),
-        ]
