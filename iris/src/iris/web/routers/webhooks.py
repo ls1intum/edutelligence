@@ -34,7 +34,9 @@ router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 ingestion_job_handler = IngestionJobHandler()
 
 
-def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
+def run_lecture_update_pipeline_worker(
+    dto: IngestionPipelineExecutionDto, variant_id: str
+):
     """Run the lecture unit ingestion pipeline in a separate thread.
 
     No concurrency throttling here — Artemis controls how many jobs are
@@ -42,7 +44,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
     starts immediately so Artemis has an accurate view of what's running.
     """
     try:
-        pipeline = LectureIngestionUpdatePipeline(dto)
+        pipeline = LectureIngestionUpdatePipeline(dto, variant_id=variant_id)
         pipeline()
     except Exception as e:
         logger.error(
@@ -141,9 +143,9 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
 @observe(name="POST /webhooks/lectures/ingest")
 def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """Webhook endpoint to trigger the lecture ingestion pipeline."""
-    validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
+    variant = validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
 
-    thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto,))
+    thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto, variant))
     ingestion_job_handler.add_job(
         process=thread,
         course_id=dto.lecture_unit.course_id,
