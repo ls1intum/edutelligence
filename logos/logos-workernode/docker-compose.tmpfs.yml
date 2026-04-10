@@ -6,7 +6,7 @@
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.tmpfs.yml up -d
 #
-# Set TMPFS_SIZE_BYTES in .env to the desired tmpfs size in bytes.
+# Set TMPFS_SIZE in .env to the desired tmpfs size in bytes.
 # Example: 107374182400 = 100 GB
 #
 # Also set LOGOS_TMPFS_CACHE_PATH=/mnt/ramcache in .env to enable the cache.
@@ -17,7 +17,7 @@ services:
       - type: tmpfs
         target: /mnt/ramcache
         tmpfs:
-          size: ${TMPFS_SIZE_BYTES:-0}
+          size: ${TMPFS_SIZE:-0}
 
   # Calibration one-shot also gets the tmpfs mount so calibration benefits
   # from RAM-cached models.
@@ -26,4 +26,4 @@ services:
       - type: tmpfs
         target: /mnt/ramcache
         tmpfs:
-          size: ${TMPFS_SIZE_BYTES:-0}
+          size: ${TMPFS_SIZE:-0}

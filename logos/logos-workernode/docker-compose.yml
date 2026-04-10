@@ -7,9 +7,9 @@
 #   ./data      — runtime state (bind-mounted, visible on host)
 #
 # tmpfs RAM cache (optional):
-#   Set LOGOS_TMPFS_CACHE_PATH=/mnt/ramcache and TMPFS_SIZE_BYTES=<bytes> in .env
+#   Set LOGOS_TMPFS_CACHE_PATH=/mnt/ramcache and TMPFS_SIZE=100g in .env
 #   to enable a tmpfs-backed RAM cache for faster model loading.
-#   When TMPFS_SIZE_BYTES is unset or "0", the tmpfs mount is a no-op (size=0).
+#   When TMPFS_SIZE is unset or "0", the tmpfs mount is a no-op (size=0).
 services:
   logos-workernode:
     image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:${IMAGE_TAG:-latest}
@@ -52,11 +52,11 @@ services:
       - ./data:/app/data
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
-      # tmpfs RAM cache — size=0 when TMPFS_SIZE_BYTES is unset (no-op mount)
+      # tmpfs RAM cache — size=0 when TMPFS_SIZE is unset (no-op mount)
       - type: tmpfs
         target: /mnt/ramcache
         tmpfs:
-          size: ${TMPFS_SIZE_BYTES:-0}
+          size: ${TMPFS_SIZE:-0}
     healthcheck:
       test:
         [
@@ -120,7 +120,7 @@ services:
       - type: tmpfs
         target: /mnt/ramcache
         tmpfs:
-          size: ${TMPFS_SIZE_BYTES:-0}
+          size: ${TMPFS_SIZE:-0}
 
 volumes:
   ollama-models:
