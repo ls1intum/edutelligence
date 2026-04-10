@@ -60,6 +60,7 @@ _PROFILES_FILE = "model_profiles.yml"
 _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # binary search precision and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
+_FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 
 # ---------------------------------------------------------------------------
 # KV-cache size parsing
@@ -94,6 +95,47 @@ def _format_kv_mb(mb: float) -> str:
 def _round_up_gb(mb: float) -> float:
     """Round *mb* up to the nearest whole gigabyte (1024 MB boundary)."""
     return math.ceil(mb / 1024.0) * 1024.0
+
+
+# ---------------------------------------------------------------------------
+# Failed-command blacklist
+# ---------------------------------------------------------------------------
+
+
+def _cmd_fingerprint(cmd: list[str]) -> str:
+    """Build a canonical one-line string from a vLLM command list.
+
+    Strips ``--host`` and ``--port`` (calibration infra, not model-specific)
+    so that retries on a different port aren't falsely considered "new".
+    """
+    filtered: list[str] = []
+    skip_next = False
+    for i, tok in enumerate(cmd):
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in ("--host", "--port"):
+            skip_next = True
+            continue
+        filtered.append(tok)
+    return " ".join(filtered)
+
+
+def _load_failed_commands(failed_path: Path) -> set[str]:
+    if not failed_path.exists():
+        return set()
+    return {
+        line.strip()
+        for line in failed_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+
+def _record_failed_command(failed_path: Path, fingerprint: str) -> None:
+    failed_path.parent.mkdir(parents=True, exist_ok=True)
+    with failed_path.open("a", encoding="utf-8") as f:
+        f.write(fingerprint + "\n")
+    logger.info("  Blacklisted command → %s", failed_path)
 
 
 # ---------------------------------------------------------------------------
@@ -198,14 +240,14 @@ def _post(
 # ---------------------------------------------------------------------------
 
 
-def spawn_vllm(
+def _build_vllm_cmd(
     plan: dict[str, Any],
     vllm_binary: str,
     host: str,
     port: int,
-    log_path: Path,
     kv_cache_memory_bytes: str,
-) -> subprocess.Popen[str]:
+) -> list[str]:
+    """Build the vLLM command list without spawning a process."""
     model = plan["model"]
     tp = int(plan.get("tensor_parallel_size", 1))
     dtype = str(plan.get("dtype", "auto"))
@@ -213,15 +255,8 @@ def spawn_vllm(
     max_model_len = plan.get("max_model_len")
     enforce_eager = bool(plan.get("enforce_eager", False))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
-    disable_nccl_p2p = bool(plan.get("disable_nccl_p2p", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
-
-    # When kv_cache_memory_bytes is set, omit --gpu-memory-utilization and let
-    # vLLM default to 0.9. kv_cache_memory_bytes controls the KV pool size
-    # directly; adding gpu_memory_utilization=0.1 caps total VRAM to 10% which
-    # prevents the model weights from loading at all.
-    # An explicit per-model override takes precedence.
     explicit_gmu = plan.get("gpu_memory_utilization")
 
     cmd = [
@@ -250,8 +285,23 @@ def spawn_vllm(
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
         cmd.append("--disable-custom-all-reduce")
-    # disable_nccl_p2p is applied via NCCL_P2P_DISABLE env var below (not a vLLM CLI flag)
     cmd.extend(extra_args)
+    return cmd
+
+
+def spawn_vllm(
+    plan: dict[str, Any],
+    vllm_binary: str,
+    host: str,
+    port: int,
+    log_path: Path,
+    kv_cache_memory_bytes: str,
+) -> tuple[subprocess.Popen[str], list[str]]:
+    """Spawn vLLM and return ``(process, cmd_list)``."""
+    tp = int(plan.get("tensor_parallel_size", 1))
+    disable_nccl_p2p = bool(plan.get("disable_nccl_p2p", False))
+
+    cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes)
 
     env = os.environ.copy()
     env["VLLM_SERVER_DEV_MODE"] = "1"
@@ -284,7 +334,7 @@ def spawn_vllm(
 
     logger.info("  Spawned PID=%d  log=%s", proc.pid, log_path)
     logger.info("  Command: %s", " ".join(cmd))
-    return proc
+    return proc, cmd
 
 
 def _kill_stale_vllm_workers() -> None:
@@ -554,13 +604,28 @@ def calibrate_model(
             kv_cache_sent_mb, _KV_CACHE_MIN_STEP_MB,
         )
 
+    failed_path = log_dir / _FAILED_COMMANDS_FILE
+    failed_commands = _load_failed_commands(failed_path)
+
     def _try_start(kv_mb: float) -> subprocess.Popen[str] | None:
         """Try to start vLLM with the given KV cache.  Returns the
         running process on success, ``None`` on failure (process is
-        cleaned up)."""
+        cleaned up).  Blacklisted commands are skipped immediately."""
         kv_str = _format_kv_mb(kv_mb)
-        proc = spawn_vllm(
-            {**plan, "kv_cache_memory_bytes": kv_str},
+        planned = {**plan, "kv_cache_memory_bytes": kv_str}
+        # Check the blacklist *before* spawning to avoid wasting time.
+        fingerprint = _cmd_fingerprint(
+            _build_vllm_cmd(planned, vllm_binary, host, port, kv_str)
+        )
+        if fingerprint in failed_commands:
+            logger.warning(
+                "        SKIP kv_cache=%s — command previously failed "
+                "(remove line from %s to retry)",
+                kv_str, failed_path,
+            )
+            return None
+        proc, _ = spawn_vllm(
+            planned,
             vllm_binary, host, port, log_path,
             kv_cache_memory_bytes=kv_str,
         )
@@ -585,6 +650,8 @@ def calibrate_model(
                 logger.warning("  -- vLLM log tail --\n%s", log_tail)
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
+            _record_failed_command(failed_path, fingerprint)
+            failed_commands.add(fingerprint)
             return None
 
     proc: subprocess.Popen[str] | None = None

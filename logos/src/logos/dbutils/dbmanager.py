@@ -527,6 +527,7 @@ class DBManager:
             "024_store_logosnode_runtime_payload.sql",
             "025_create_model_profiles_table.sql",
             "026_create_schema_migrations.sql",
+            "027_logosnode_dynamic_deployments.sql",
         ]
 
         # Ensure schema_migrations table exists
@@ -1540,6 +1541,101 @@ class DBManager:
 
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
 
+    def sync_logosnode_capabilities(self, provider_id: int, model_names: list[str]) -> None:
+        """Auto-sync models announced by a logosnode worker into the DB.
+
+        For each model name the worker advertises:
+        1. Ensure a row exists in ``models`` (create if missing).
+        2. Ensure a ``model_provider`` link exists for this provider.
+        3. Ensure ``profile_model_permissions`` exist for all profiles.
+        4. Ensure a ``logosnode_provider_keys`` row exists for this provider.
+
+        Stale ``model_provider`` links (models the worker no longer advertises)
+        are removed so that the deployment queries stay in sync with the worker's
+        actual capabilities.
+        """
+        pid = int(provider_id)
+
+        # Ensure logosnode_provider_keys entry exists for this provider
+        self.session.execute(
+            text("""
+                INSERT INTO logosnode_provider_keys (provider_id)
+                VALUES (:pid)
+                ON CONFLICT (provider_id) DO NOTHING
+            """),
+            {"pid": pid},
+        )
+
+        # Get current model_provider links for this logosnode provider
+        existing_rows = self.session.execute(
+            text("""
+                SELECT mp.model_id, m.name
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE mp.provider_id = :pid AND p.provider_type = 'logosnode'
+            """),
+            {"pid": pid},
+        ).fetchall()
+        existing_by_name: dict[str, int] = {row.name: row.model_id for row in existing_rows}
+
+        announced = set(model_names)
+        current = set(existing_by_name.keys())
+
+        # Remove stale links (models no longer announced)
+        for stale_name in current - announced:
+            stale_mid = existing_by_name[stale_name]
+            self.session.execute(
+                text("DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"),
+                {"pid": pid, "mid": stale_mid},
+            )
+
+        # Add missing models & links
+        for model_name in announced - current:
+            # Upsert model row
+            row = self.session.execute(
+                text("SELECT id FROM models WHERE name = :name"),
+                {"name": model_name},
+            ).fetchone()
+            if row is not None:
+                mid = row.id
+            else:
+                mid = self.session.execute(
+                    text("""
+                        INSERT INTO models (name, weight_privacy, weight_latency, weight_accuracy,
+                                            weight_cost, weight_quality, tags, parallel, description)
+                        VALUES (:name, 'LOCAL', 0, 0, 0, 0, '', 1, '')
+                        RETURNING id
+                    """),
+                    {"name": model_name},
+                ).fetchone().id
+
+            # Upsert model_provider link
+            self.session.execute(
+                text("""
+                    INSERT INTO model_provider (provider_id, model_id)
+                    VALUES (:pid, :mid)
+                    ON CONFLICT DO NOTHING
+                """),
+                {"pid": pid, "mid": mid},
+            )
+
+            # Ensure profile_model_permissions for all profiles
+            self.session.execute(
+                text("""
+                    INSERT INTO profile_model_permissions (profile_id, model_id)
+                    SELECT pr.id, :mid
+                    FROM profiles pr
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM profile_model_permissions pmp
+                        WHERE pmp.profile_id = pr.id AND pmp.model_id = :mid
+                    )
+                """),
+                {"mid": mid},
+            )
+
+        self.session.commit()
+
     def get_provider_config(
         self,
         provider_id: int
@@ -2494,6 +2590,9 @@ class DBManager:
         """
         Get a list of all authorized model deployments for a profile.
 
+        For cloud/azure providers: requires model_provider + model_api_keys (per-model credentials).
+        For logosnode providers: requires model_provider + logosnode_provider_keys (per-provider key).
+
         Returns: List of complete deployment dicts with:
             - model_id
             - provider_id
@@ -2512,7 +2611,22 @@ class DBManager:
                             JOIN process proc ON pr.process_id = proc.id
                    WHERE proc.logos_key = :logos_key
                      AND pr.id = :profile_id
-                   ORDER BY m.id, p.id
+                     AND p.provider_type != 'logosnode'
+                   UNION
+                   SELECT m.id               as model_id,
+                          p.id               as provider_id,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
+                            JOIN profile_model_permissions pmp ON m.id = pmp.model_id
+                            JOIN profiles pr ON pmp.profile_id = pr.id
+                            JOIN process proc ON pr.process_id = proc.id
+                   WHERE proc.logos_key = :logos_key
+                     AND pr.id = :profile_id
+                     AND p.provider_type = 'logosnode'
+                   ORDER BY model_id, provider_id
                    """)
         rows = self.session.execute(sql, {
             "logos_key": logos_key,
@@ -2525,6 +2639,9 @@ class DBManager:
     def get_all_deployments(self) -> list[Deployment]:
         """
         Get a list of ALL model deployments.
+
+        For cloud/azure providers: requires model_provider + model_api_keys (per-model credentials).
+        For logosnode providers: requires model_provider + logosnode_provider_keys (per-provider key).
 
         Returns: List of complete deployment dicts with:
             - model_id
@@ -2539,7 +2656,17 @@ class DBManager:
                             JOIN model_provider mp ON m.id = mp.model_id
                             JOIN providers p ON mp.provider_id = p.id
                             JOIN model_api_keys mak ON m.id = mak.model_id AND p.id = mak.provider_id
-                   ORDER BY m.id, p.id
+                   WHERE p.provider_type != 'logosnode'
+                   UNION
+                   SELECT m.id               as model_id,
+                          p.id               as provider_id,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
+                   WHERE p.provider_type = 'logosnode'
+                   ORDER BY model_id, provider_id
                    """)
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]

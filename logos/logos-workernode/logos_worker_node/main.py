@@ -58,12 +58,14 @@ async def _auto_calibrate_if_needed(
         elif profile.sleeping_residual_mb is None:
             reason = "sleeping_residual_mb is null"
         elif (
-            profile.residency_source in ("calibrated", "measured")
+            profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
             and abs(profile.base_residency_mb - profile.loaded_vram_mb) > 1.0
         ):
-            # Old-format profile: base_residency was stored as weights-only.
-            # New format stores full loaded VRAM. Force recalibration.
+            # Old-format calibrated profile: base_residency was stored as
+            # weights-only. New format stores full loaded VRAM. Force recalibration.
+            # Note: "measured" profiles intentionally differ (base=weights-only,
+            # loaded=weights+KV) and must NOT be flagged as stale.
             reason = f"stale format (base={profile.base_residency_mb:.0f} != loaded={profile.loaded_vram_mb:.0f})"
         if reason:
             logger.info("  %s needs calibration: %s", model_name, reason)
