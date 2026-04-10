@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from threading import Thread
 from typing import Any, Callable, Generic, List, Optional, TypeVar
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from memiris.domain.memory import Memory
 

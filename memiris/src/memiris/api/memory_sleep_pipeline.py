@@ -1,6 +1,6 @@
 from typing import overload
 
-from langfuse._client.observe import observe
+from langfuse import observe
 from weaviate.client import WeaviateClient
 
 from memiris.llm.abstract_language_model import AbstractLanguageModel

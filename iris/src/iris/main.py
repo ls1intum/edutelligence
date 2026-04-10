@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, ORJSONResponse
+from fastapi.responses import JSONResponse
 
 import iris.sentry as sentry
 from iris.common.logging_config import (
@@ -52,7 +52,7 @@ async def lifespan(_: FastAPI):
     logger.info("Scheduler stopped")
 
 
-app = FastAPI(default_response_class=ORJSONResponse, lifespan=lifespan)
+app = FastAPI(default_response_class=JSONResponse, lifespan=lifespan)
 
 
 def custom_openapi():

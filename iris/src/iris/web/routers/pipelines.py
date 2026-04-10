@@ -82,16 +82,15 @@ def run_exercise_chat_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = ExerciseChatAgentPipeline(local=is_local)
     except Exception as e:
-        logger.error("Error preparing exercise chat pipeline", exc_info=e)
+        logger.error("Error creating exercise chat callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = ExerciseChatAgentPipeline(local=is_local)
         variant = find_variant(ExerciseChatAgentPipeline.get_variants(), variant_id)
-
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
     except Exception as e:
         logger.error("Error running exercise chat pipeline", exc_info=e)
@@ -126,15 +125,15 @@ def run_course_chat_pipeline_worker(dto, variant_id, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        variant = find_variant(CourseChatPipeline.get_variants(), variant_id)
-        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = CourseChatPipeline(local=is_local)
     except Exception as e:
-        logger.error("Error preparing course chat pipeline", exc_info=e)
+        logger.error("Error creating course chat callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
+        variant = find_variant(CourseChatPipeline.get_variants(), variant_id)
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = CourseChatPipeline(local=is_local)
         pipeline(dto=dto, callback=callback, variant=variant)
     except Exception as e:
         logger.error("Error running course chat pipeline", exc_info=e)
@@ -168,15 +167,15 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        variant = find_variant(TextExerciseChatPipeline.get_variants(), variant_id)
-        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = TextExerciseChatPipeline(local=is_local)
     except Exception as e:
-        logger.error("Error preparing text exercise chat pipeline", exc_info=e)
+        logger.error("Error creating text exercise chat callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
+        variant = find_variant(TextExerciseChatPipeline.get_variants(), variant_id)
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = TextExerciseChatPipeline(local=is_local)
         pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
         logger.error("Error running text exercise chat pipeline", exc_info=e)
@@ -186,20 +185,20 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id, request_id: str):
 def run_lecture_chat_pipeline_worker(dto, variant_id, request_id: str):
     set_request_id(request_id)
     try:
-        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
         callback = LectureChatCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        variant = find_variant(LectureChatPipeline.get_variants(), variant_id)
-        pipeline = LectureChatPipeline(local=is_local)
     except Exception as e:
-        logger.error("Error preparing lecture chat pipeline", exc_info=e)
+        logger.error("Error creating lecture chat callback", exc_info=e)
         capture_exception(e)
         return
 
     try:
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        variant = find_variant(LectureChatPipeline.get_variants(), variant_id)
+        pipeline = LectureChatPipeline(local=is_local)
         pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
         logger.error("Error running lecture chat pipeline", exc_info=e)
@@ -246,6 +245,12 @@ def run_competency_extraction_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+    except Exception as e:
+        logger.error("Error creating competency extraction callback", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
         variant = find_variant(CompetencyExtractionPipeline.get_variants(), _variant)
         is_local = bool(
             getattr(dto.execution, "settings", None)
@@ -254,12 +259,6 @@ def run_competency_extraction_pipeline_worker(
         pipeline = CompetencyExtractionPipeline(
             callback=callback, variant=variant, local=is_local
         )
-    except Exception as e:
-        logger.error("Error preparing competency extraction pipeline", exc_info=e)
-        capture_exception(e)
-        return
-
-    try:
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running competency extraction pipeline", exc_info=e)
@@ -293,18 +292,18 @@ def run_rewriting_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+    except Exception as e:
+        logger.error("Error creating rewriting callback", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
         v = find_variant(RewritingPipeline.get_variants(), variant)
         is_local = bool(
             getattr(dto.execution, "settings", None)
             and dto.execution.settings.is_local()
         )
         pipeline = RewritingPipeline(callback=callback, variant=v, local=is_local)
-    except Exception as e:
-        logger.error("Error preparing rewriting pipeline", exc_info=e)
-        capture_exception(e)
-        return
-
-    try:
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running rewriting pipeline", exc_info=e)
@@ -339,6 +338,12 @@ def run_inconsistency_check_pipeline_worker(
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
+    except Exception as e:
+        logger.error("Error creating inconsistency check callback", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
         variant = find_variant(InconsistencyCheckPipeline.get_variants(), _variant)
         is_local = bool(
             getattr(dto.execution, "settings", None)
@@ -347,12 +352,6 @@ def run_inconsistency_check_pipeline_worker(
         pipeline = InconsistencyCheckPipeline(
             callback=callback, variant=variant, local=is_local
         )
-    except Exception as e:
-        logger.error("Error preparing inconsistency check pipeline", exc_info=e)
-        capture_exception(e)
-        return
-
-    try:
         pipeline(dto=dto)
     except Exception as e:
         logger.error("Error running inconsistency check pipeline", exc_info=e)
@@ -387,16 +386,16 @@ def run_communication_tutor_suggestions_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        variant = find_variant(TutorSuggestionPipeline.get_variants(), variant_id)
-        pipeline = TutorSuggestionPipeline()
     except Exception as e:
         logger.error(
-            "Error preparing communication tutor suggestions pipeline", exc_info=e
+            "Error creating communication tutor suggestions callback", exc_info=e
         )
         capture_exception(e)
         return
 
     try:
+        variant = find_variant(TutorSuggestionPipeline.get_variants(), variant_id)
+        pipeline = TutorSuggestionPipeline()
         pipeline(dto=dto, callback=callback, variant=variant)
     except Exception as e:
         logger.error(
@@ -433,18 +432,18 @@ def run_autonomous_tutor_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
+    except Exception as e:
+        logger.error("Error creating autonomous tutor callback", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
         for variant in AutonomousTutorPipeline.get_variants():
             if variant.id == variant_id:
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
         pipeline = AutonomousTutorPipeline()
-    except Exception as e:
-        logger.error("Error preparing autonomous tutor pipeline", exc_info=e)
-        capture_exception(e)
-        return
-
-    try:
         pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
         logger.error("Error running autonomous tutor pipeline", exc_info=e)

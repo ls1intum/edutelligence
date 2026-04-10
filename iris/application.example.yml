@@ -3,8 +3,13 @@ api_keys:
 
 weaviate:
   host: "localhost"
-  port: "8001"
-  grpc_port: "50051"
+  port: 8001
+  grpc_port: 50051
+  # Set to true when pointing at a TLS-terminated (reverse-proxied) Weaviate.
+  http_secure: false
+  grpc_secure: false
+  # Optional: Weaviate API key (omit or leave empty for anonymous access).
+  # api_key: "your-weaviate-api-key"
 
 memiris:
   enabled: true
@@ -163,6 +168,12 @@ llm_configuration:
   transcription_ingestion_pipeline:
     default:
       chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
+      # Vision-capable model used by the light transcription pipeline to
+      # detect slide-number changes from video frames. Must be a chat model
+      # that accepts image inputs (e.g. gpt-4.1-mini, gpt-5-mini).
+      vision_chat:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small

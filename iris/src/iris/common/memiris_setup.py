@@ -31,6 +31,10 @@ from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.llm import AzureOpenAIChatModel, OllamaModel
 from iris.llm.external.openai_chat import OpenAIChatModel
+from iris.llm.external.openai_embeddings import (
+    AzureOpenAIEmbeddingModel,
+    OpenAIEmbeddingModel,
+)
 from iris.llm.llm_manager import LlmManager
 from iris.tracing import observe
 from iris.vector_database.database import VectorDatabase
@@ -119,11 +123,21 @@ def _convert_iris_model_to_memiris_llm(
 
     if isinstance(model, OllamaModel):
         return OllamaLanguageModel(model.model, model.host, model.api_key)
-    elif isinstance(model, (OpenAIChatModel, AzureOpenAIChatModel)):
+    elif isinstance(
+        model,
+        (
+            OpenAIChatModel,
+            AzureOpenAIChatModel,
+            OpenAIEmbeddingModel,
+            AzureOpenAIEmbeddingModel,
+        ),
+    ):
+        is_azure = isinstance(model, (AzureOpenAIChatModel, AzureOpenAIEmbeddingModel))
         return OpenAiLanguageModel(
             model=model.model,
             api_key=model.api_key,
-            azure=isinstance(model, AzureOpenAIChatModel),
+            base_url=getattr(model, "base_url", None),
+            azure=is_azure,
             azure_endpoint=getattr(model, "endpoint", None),
             api_version=getattr(model, "api_version", None),
         )
