@@ -78,12 +78,6 @@ A comprehensive LLM Engineering Platform that provides centralized management an
 
 [More information](https://logos.ase.cit.tum.de/)
 
-### 🌌 [Nebula](./nebula/) - [In Development]
-
-_Documentation and features coming soon_
-
-**Technology Stack:** Python, Poetry
-
 ## 🚀 Quick Start
 
 ### Prerequisites

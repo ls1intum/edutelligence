@@ -99,7 +99,7 @@ class TranscriptionSettings(BaseModel):
 
     enabled: bool = Field(default=False, description="Enable video transcription")
     temp_dir: str = Field(
-        default="/tmp/nebula-transcription",  # nosec B108
+        default="/tmp/iris-transcription",  # nosec B108
         description="Directory for temporary video/audio files",
     )
     chunk_duration_seconds: int = Field(

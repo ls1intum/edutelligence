@@ -1,7 +1,7 @@
 """
 Detect slide-number change points from a video with minimal GPT Vision calls.
 
-Strategy (from Nebula production code):
+Strategy:
 - Probe sparse "anchors" (every ``anchor_stride`` segments) with GPT Vision.
 - When adjacent anchors disagree (or either is unknown), recursively probe the
   midpoint until the interval either stabilises or shrinks to ``min_stride``.
