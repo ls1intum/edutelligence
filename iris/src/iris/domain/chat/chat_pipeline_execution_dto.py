@@ -11,7 +11,7 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
-from iris.pipeline.chat.chat_context import ChatContext
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 
 class ChatPipelineExecutionDTO(PipelineExecutionDTO):
@@ -19,7 +19,7 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     Data Transfer Object for chat pipeline execution
     """
 
-    context: ChatContext
+    chat_mode: IrisChatMode = Field(alias="chatMode")
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
     user: Optional[UserDTO]

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class ExerciseDTO(BaseModel):
-    name: str  # TODO: name / title
+    name: str = Field(alias="title", default="")  # TODO: name / title
     id: int
     problem_statement: Optional[str] = Field(alias="problemStatement", default=None)
     start_date: Optional[datetime] = Field(alias="startDate", default=None)

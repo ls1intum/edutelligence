@@ -22,11 +22,11 @@ from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
-from iris.pipeline.chat.chat_context import ChatContext
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
 from iris.pipeline.chat.interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
@@ -46,7 +46,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     Replaces CourseChatPipeline / ExerciseChatPipeline / TextExerciseChatPipeline / LectureChatPipeline
     """
 
-    context: ChatContext
+    chat_mode: IrisChatMode
     event: Optional[str]
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
@@ -56,10 +56,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
     system_prompt_template: Any
     guide_prompt_template: Any
 
-    def __init__(self, context: ChatContext, local: bool = False):
+    def __init__(self, chat_mode: IrisChatMode, local: bool = False):
         super().__init__(implementation_id="chat_pipeline")
 
-        self.context = context
+        self.chat_mode = chat_mode
 
         self.event = None
 
@@ -67,7 +67,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
         self.citation_pipeline = CitationPipeline(local=local)
         self.suggestion_pipeline = InteractionSuggestionPipeline(
-            variant=self.context, local=local
+            variant=self.chat_mode, local=local
         )
         self.code_feedback_pipeline = CodeFeedbackPipeline(
             local=local
@@ -89,10 +89,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         )
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(context={self.context.value})"
+        return f"{self.__class__.__name__}(context={self.chat_mode.value})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(context={self.context.value})"
+        return f"{self.__class__.__name__}(context={self.chat_mode.value})"
 
     @classmethod
     def get_variants(cls) -> List[ChatVariant]:
@@ -186,7 +186,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
-            if self.context == ChatContext.EXERCISE:
+            if self.chat_mode == IrisChatMode.EXERCISE:
                 result = self._refine_response(state)
 
             # Add citations if applicable
@@ -205,9 +205,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
             )
 
             # Generate and send suggestions separately (async from user's perspective)
-            if self.context in [
-                ChatContext.COURSE,
-                ChatContext.EXERCISE,
+            if self.chat_mode in [
+                IrisChatMode.COURSE,
+                IrisChatMode.EXERCISE,
             ]:  # TODO: Suggestions: Text_Exercise? Lecture?
                 self._generate_suggestions(state, result)
 
@@ -353,7 +353,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         Returns:
             True if memory creation should be enabled, False otherwise.
         """
-        if self.context in {ChatContext.COURSE, ChatContext.LECTURE}:
+        if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
             return bool(state.dto.user and state.dto.user.memiris_enabled)
         else:
             return False
@@ -458,7 +458,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         """
         try:
             # Don't do anything if not programming exercise
-            if self.context is not ChatContext.EXERCISE:
+            if self.chat_mode is not IrisChatMode.EXERCISE:
                 return state.result
 
             state.callback.in_progress("Refining response ...")
@@ -509,13 +509,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, ChatVariant])
         result: str,
     ) -> None:
         """
-        Generate interaction suggestions. This is only available ChatContext.COURSE, ChatContext.EXERCISE.
+        Generate interaction suggestions. This is only available IrisChatMode.COURSE, IrisChatMode.EXERCISE.
 
         Args:
             state: The current pipeline execution state.
             result: The final result string.
         """
-        if self.context not in {ChatContext.COURSE, ChatContext.EXERCISE}:
+        if self.chat_mode not in {IrisChatMode.COURSE, IrisChatMode.EXERCISE}:
             return
 
         # Extract user language

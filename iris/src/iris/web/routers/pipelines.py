@@ -61,11 +61,11 @@ def run_chat_pipeline_worker(
         callback = ChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
-            context=dto.context,
+            chat_mode=dto.chat_mode,
             initial_stages=dto.initial_stages,
         )
         is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = ChatPipeline(context=dto.context, local=is_local)
+        pipeline = ChatPipeline(chat_mode=dto.chat_mode, local=is_local)
     except Exception as e:
         logger.error("Error preparing chat pipeline", exc_info=e)
         capture_exception(e)

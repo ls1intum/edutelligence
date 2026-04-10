@@ -27,7 +27,7 @@ from iris.domain.status.rewriting_status_update_dto import (
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
-from iris.pipeline.chat.chat_context import ChatContext
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 logger = get_logger(__name__)
 
@@ -246,8 +246,8 @@ class StatusCallback(ABC):
         self.on_status_update()
 
 
-_CHAT_CONTEXT_STAGES: dict[ChatContext, list[StageDTO]] = {
-    ChatContext.COURSE: [
+_CHAT_MODE_STAGES: dict[IrisChatMode, list[StageDTO]] = {
+    IrisChatMode.COURSE: [
         StageDTO(
             weight=STAGE_WEIGHT_THINKING_PRIMARY,
             state=StageStateEnum.NOT_STARTED,
@@ -266,7 +266,7 @@ _CHAT_CONTEXT_STAGES: dict[ChatContext, list[StageDTO]] = {
             internal=True,
         ),
     ],
-    ChatContext.EXERCISE: [
+    IrisChatMode.EXERCISE: [
         StageDTO(
             weight=STAGE_WEIGHT_THINKING,
             state=StageStateEnum.NOT_STARTED,
@@ -279,7 +279,7 @@ _CHAT_CONTEXT_STAGES: dict[ChatContext, list[StageDTO]] = {
             internal=True,
         ),
     ],
-    ChatContext.TEXT_EXERCISE: [
+    IrisChatMode.TEXT_EXERCISE: [
         StageDTO(
             weight=STAGE_WEIGHT_THINKING,
             state=StageStateEnum.NOT_STARTED,
@@ -291,7 +291,7 @@ _CHAT_CONTEXT_STAGES: dict[ChatContext, list[StageDTO]] = {
             name="Responding",
         ),
     ],
-    ChatContext.LECTURE: [
+    IrisChatMode.LECTURE: [
         StageDTO(
             weight=STAGE_WEIGHT_THINKING,
             state=StageStateEnum.NOT_STARTED,
@@ -314,13 +314,13 @@ class ChatStatusCallback(StatusCallback):
         self,
         run_id: str,
         base_url: str,
-        context: ChatContext,
+        chat_mode: IrisChatMode,
         initial_stages: List[StageDTO] = None,
     ):
         url = f"{base_url}/{self.api_url}/chat/runs/{run_id}/status"
         stages = initial_stages or []
         current_stage_index = len(stages)
-        stages += [stage.model_copy() for stage in _CHAT_CONTEXT_STAGES[context]]
+        stages += [stage.model_copy() for stage in _CHAT_MODE_STAGES[chat_mode]]
         status = ChatStatusUpdateDTO(stages=stages)
         super().__init__(
             url, run_id, status, stages[current_stage_index], current_stage_index
