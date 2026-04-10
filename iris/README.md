@@ -386,14 +386,14 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
   Modify configuration files as needed:
   - **Pyris Configuration**: Update `application.yml` and `llm_config.yml`.
-    - `application.yml` must include an `llm_configuration` section that maps pipeline `implementation_id`s to variant IDs and roles with `local`/`cloud` model names. Use `application.example.yml` as a template.
-    - Bulk-replace a model name across all `llm_configuration` entries:
+    - `application.yml` must include an `llm_configuration` section that maps pipeline `implementation_id`s to variant IDs and roles with `local`/`cloud` LLM IDs (matching `llm_config.yml` `id`). Use `application.example.yml` as a template.
+    - Bulk-replace an LLM ID across all `llm_configuration` entries:
 
       ```bash
       # adjust these three values
-      APP_YML=application.yml
-      OLD_MODEL=gpt-4.1-mini
-      NEW_MODEL=gpt-4o-mini
+      export APP_YML=application.yml
+      export OLD_MODEL=gpt-4.1-mini
+      export NEW_MODEL=gpt-4o-mini
 
       python - <<'PY'
       import os
