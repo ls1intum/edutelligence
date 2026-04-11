@@ -345,6 +345,20 @@ VARIANTS = (
             "mistral7": 200,
         },
     },
+    {
+        "name": "10m_hw3_even_random_1200",
+        "duration_ms": WINDOWS_MS["10m"],
+        "total_requests": 1200,
+        "archetype_keys": ("coder7", "coder14", "mistral7"),
+        "seed_suffix": "10m-hw3-even-random-1200",
+        "output_relpath": Path("10m") / "workload_explicit_hw3_even_random_1200_10m.csv",
+        "layout": LAYOUT_INTERLEAVED,
+        "counts_override": {
+            "coder7": 400,
+            "coder14": 400,
+            "mistral7": 400,
+        },
+    },
 )
 
 

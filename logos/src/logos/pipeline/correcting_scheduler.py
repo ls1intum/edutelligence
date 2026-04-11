@@ -96,6 +96,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         sorted by corrected_score descending.
         """
         scored = []
+        unavailable_fallbacks = []
         for model_id, weight, priority_int, parallel in candidates:
             deployment = next((d for d in deployments if d["model_id"] == model_id), None)
             if not deployment:
@@ -110,6 +111,19 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 logger.debug(
                     "Model %s unavailable: %s", model_id, ettft.reasoning,
                 )
+                # Keep as fallback — model may be transitioning (sleep→wake)
+                # and will become available shortly.  Better to queue and wait
+                # than to return 503 immediately.
+                fallback_ettft = EttftEstimate(
+                    ettft_ms=_DEFAULT_COLD_MS,
+                    tier=ReadinessTier.COLD,
+                    penalty=TIER_THRESHOLDS[ReadinessTier.COLD]["penalty"],
+                    reasoning=f"Fallback: {ettft.reasoning} — queueing as cold",
+                )
+                corrected = compute_corrected_score(weight, fallback_ettft.penalty if self._ettft_enabled else 0.0)
+                unavailable_fallbacks.append(
+                    (model_id, provider_id, provider_type, corrected, priority_int, fallback_ettft)
+                )
                 continue
 
             penalty = ettft.penalty if self._ettft_enabled else 0.0
@@ -118,6 +132,17 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             scored.append((model_id, provider_id, provider_type, corrected, priority_int, ettft))
 
         scored.sort(key=lambda x: x[3], reverse=True)
+
+        # If all candidates were UNAVAILABLE, use fallbacks so we queue
+        # instead of returning 503.  The capacity planner / wake cycle will
+        # make a lane available and the queued request will be dispatched.
+        if not scored and unavailable_fallbacks:
+            unavailable_fallbacks.sort(key=lambda x: x[3], reverse=True)
+            scored = unavailable_fallbacks
+            logger.info(
+                "All candidates unavailable — using %d fallback(s) for queueing",
+                len(scored),
+            )
 
         if scored and self._ettft_enabled:
             logger.info(
@@ -216,7 +241,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
 
         try:
-            timeout = request.timeout_s if request.timeout_s else 300
+            timeout = request.timeout_s if request.timeout_s else 1200  # 20 minutes for queue wait
             result = await asyncio.wait_for(future, timeout=timeout)
 
             # Attach ETTFT info to the dequeued result

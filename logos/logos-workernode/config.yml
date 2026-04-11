@@ -17,7 +17,12 @@ logos:
       kv_cache_memory_bytes: 4G
     - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
       tensor_parallel_size: 2
-      kv_cache_memory_bytes: 6G
+      kv_cache_memory_bytes: 4G
+    - model: solidrust/Mistral-7B-Instruct-v0.3-AWQ
+      tensor_parallel_size: 2
+      kv_cache_memory_bytes: 4G
+    # cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit — vLLM image (pr-489) lacks gemma4 arch support; needs newer transformers
+    # openai/gpt-oss-20b requires MXFP4 (SM 8.0+ / Ampere+), incompatible with Quadro RTX 5000 (SM 7.5)
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 
@@ -38,8 +43,16 @@ engines:
         enforce_eager: true
         disable_custom_all_reduce: true
         disable_nccl_p2p: true
+        gpu_memory_utilization: 0.85
       Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
         quantization: awq
         enforce_eager: true
         disable_custom_all_reduce: true
         disable_nccl_p2p: true
+        gpu_memory_utilization: 0.85
+      solidrust/Mistral-7B-Instruct-v0.3-AWQ:
+        quantization: awq
+        enforce_eager: true
+        disable_custom_all_reduce: true
+        disable_nccl_p2p: true
+        gpu_memory_utilization: 0.85
