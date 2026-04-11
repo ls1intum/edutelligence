@@ -267,12 +267,16 @@ class LogosBridgeClient:
             self._last_event_seq = len(events)
 
     async def _send_hello(self, ws) -> None:
+        max_lanes = 0
+        if hasattr(self._app, "state") and hasattr(self._app.state, "config"):
+            max_lanes = self._app.state.config.worker.max_lanes
         await self._send_json(
             ws,
             {
                 "type": "hello",
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
+                "max_lanes": max_lanes,
                 "actions": [
                     "infer",
                     "infer_stream",

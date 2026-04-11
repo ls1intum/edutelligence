@@ -4,11 +4,11 @@ Extracts the reusable calibration functions so they can be imported both by
 the standalone CLI tool (``tools/calibrate_vram_profiles.py``) and by the
 worker's startup flow (``main.py``).
 
-The calibration process binary-searches for the minimum KV cache each model
-needs (starting at ``_KV_CACHE_VRAM_CAP_RATIO`` of GPU VRAM, narrowing to
-±``_KV_CACHE_MIN_STEP_MB``), then adds ``_KV_CACHE_MIN_STEP_MB`` as a safety
-margin.  It measures real VRAM in awake and sleeping states and persists the
-results to ``model_profiles.yml``.
+The calibration process binary-searches upward for the maximum KV cache each
+model can use (starting at ``_KV_CACHE_MIN_STEP_MB`` floor, searching up to
+``_KV_CACHE_VRAM_CAP_RATIO`` of per-GPU VRAM with
+±``_KV_CACHE_MIN_STEP_MB`` precision).  It measures real VRAM in awake and
+sleeping states and persists the results to ``model_profiles.yml``.
 
 VRAM decomposition (exact, no guessing)::
 
@@ -574,13 +574,13 @@ def calibrate_model(
             "  Could not query GPU VRAM for KV cache cap: %s — no cap applied", exc,
         )
 
-    # Phase 2 — Find the minimum KV cache the model needs, then add margin.
+    # Phase 2 — Find the maximum KV cache the model can use.
     #
-    # 1. Try the ceiling (_KV_CACHE_VRAM_CAP_RATIO of GPU VRAM) to verify
-    #    the model can start at all.
-    # 2. Binary-search downward to find the minimum KV cache that still
-    #    allows vLLM to start (±_KV_CACHE_MIN_STEP_MB precision).
-    # 3. Add _KV_CACHE_MIN_STEP_MB as a safety margin on top.
+    # 1. Probe the floor (_KV_CACHE_MIN_STEP_MB) to verify the model can
+    #    start at all — if even the minimum KV cache OOMs, the model
+    #    weights themselves exceed available GPU VRAM.
+    # 2. Binary-search upward to find the maximum KV cache that still
+    #    fits (±_KV_CACHE_MIN_STEP_MB precision).
     #
     # A per-model override (plan["kv_cache_memory_bytes"]) skips the
     # search and uses the fixed value.
@@ -599,9 +599,9 @@ def calibrate_model(
         # Round down to whole GB
         kv_cache_sent_mb = math.floor(kv_cache_sent_mb / 1024.0) * 1024.0
         logger.info(
-            "  [2/6] Searching min KV cache (ceiling=%.0f MB, "
-            "step=%.0f MB)...",
-            kv_cache_sent_mb, _KV_CACHE_MIN_STEP_MB,
+            "  [2/6] Searching max KV cache (floor=%.0f MB, "
+            "ceiling=%.0f MB, step=%.0f MB)...",
+            _KV_CACHE_MIN_STEP_MB, kv_cache_sent_mb, _KV_CACHE_MIN_STEP_MB,
         )
 
     failed_path = log_dir / _FAILED_COMMANDS_FILE
@@ -657,50 +657,49 @@ def calibrate_model(
     proc: subprocess.Popen[str] | None = None
 
     if kv_search:
-        # First verify the model starts at all with the ceiling KV
-        search_lo = _KV_CACHE_MIN_STEP_MB
-        search_hi = kv_cache_sent_mb
+        search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
+        search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
 
-        proc = _try_start(search_hi)
+        # Phase 2a: Verify the model loads at all with minimum KV cache.
+        # If even 1 GB KV fails, the model simply doesn't fit.
+        logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
+        proc = _try_start(search_lo)
         if proc is None:
             partial.error = (
-                f"Model cannot start even with max KV cache "
-                f"{_format_kv_mb(search_hi)} on tp={tp}"
+                f"Model cannot start even with minimum KV cache "
+                f"{_format_kv_mb(search_lo)} on tp={tp}. "
+                f"Model weights likely exceed available GPU VRAM."
             )
             logger.warning("  ERROR: %s", partial.error)
             return partial
 
-        # Ceiling works — now binary-search for the minimum KV cache
+        # Floor works — now binary-search upward to find maximum KV cache that fits
         stop_vllm(proc)
         time.sleep(_VRAM_SETTLE_S)
         proc = None
-        best_kv = search_hi
+        best_kv = search_lo
 
         while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
             mid = _round_up_gb((search_lo + search_hi) / 2.0)
-            if mid >= search_hi:
+            if mid <= search_lo:
                 break
             proc = _try_start(mid)
             if proc is not None:
-                # Works at this size — try even lower
+                # Works at this size — try even higher
                 best_kv = mid
                 stop_vllm(proc)
                 time.sleep(_VRAM_SETTLE_S)
                 proc = None
-                search_hi = mid
+                search_lo = mid
             else:
-                # Too small — minimum is higher
-                search_lo = mid + _KV_CACHE_MIN_STEP_MB
+                # Too large — maximum is lower
+                search_hi = mid - _KV_CACHE_MIN_STEP_MB
 
-        # Add safety margin on top of the minimum
-        kv_cache_sent_mb = min(
-            best_kv + _KV_CACHE_MIN_STEP_MB,
-            max_kv_mb if max_kv_mb < float("inf") else best_kv + _KV_CACHE_MIN_STEP_MB,
-        )
+        kv_cache_sent_mb = best_kv
         logger.info(
-            "  KV cache search result: min_working=%.0f MB, "
-            "with %.0f MB safety margin -> final=%.0f MB",
-            best_kv, _KV_CACHE_MIN_STEP_MB, kv_cache_sent_mb,
+            "  KV cache search result: max_working=%.0f MB (search range exhausted, "
+            "precision=%.0f MB)",
+            best_kv, _KV_CACHE_MIN_STEP_MB,
         )
 
         # Start vLLM at the final KV size for measurement

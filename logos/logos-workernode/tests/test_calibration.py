@@ -22,6 +22,7 @@ import yaml
 from logos_worker_node.calibration import (
     CalibrationResult,
     _format_kv_mb,
+    _KV_CACHE_MIN_STEP_MB,
     _max_tp_for_plan,
     _parse_kv_to_mb,
     _round_up_gb,
@@ -601,12 +602,13 @@ def _patch_calibration_infra(
     """
     patches = {}
 
-    # spawn_vllm → returns a mock Popen
+    # spawn_vllm → returns (mock_popen, ["cmd"]) tuple
     mock_popen = MagicMock()
     mock_popen.pid = 12345
     mock_popen.poll.return_value = None
     patches["spawn"] = patch(
-        "logos_worker_node.calibration.spawn_vllm", return_value=mock_popen
+        "logos_worker_node.calibration.spawn_vllm",
+        return_value=(mock_popen, ["vllm", "serve"]),
     )
 
     # stop_vllm → no-op
@@ -646,6 +648,11 @@ def _patch_calibration_infra(
     # _kill_stale_vllm_workers → no-op (avoids scanning /proc in tests)
     patches["kill_stale"] = patch(
         "logos_worker_node.calibration._kill_stale_vllm_workers"
+    )
+
+    # _load_failed_commands → always empty (no cross-test contamination)
+    patches["load_failed"] = patch(
+        "logos_worker_node.calibration._load_failed_commands", return_value=set()
     )
 
     return patches
@@ -776,3 +783,239 @@ def test_profile_dict_has_calibration_kv_field():
 
     assert "calibration_kv_cache_memory_bytes" in d
     assert d["calibration_kv_cache_memory_bytes"] == "5G"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Group 9 — KV cache search direction (floor-to-ceiling)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _make_search_plan(model: str = "org/test-model", **overrides) -> dict:
+    """Plan WITHOUT kv_cache_memory_bytes so kv_search=True is triggered."""
+    plan: dict = {"model": model}
+    plan.update(overrides)
+    return plan
+
+
+def _patch_search_infra(
+    *,
+    wait_ready_side_effect,
+    sample_vram_sequence=None,
+    gpu_vram_total_mb: float = 48000.0,
+):
+    """Like _patch_calibration_infra but tailored for kv_search=True tests.
+
+    Returns patches dict.  ``wait_ready_side_effect`` controls which
+    _try_start probes succeed (None) or fail (RuntimeError).
+    """
+    patches = {}
+
+    # spawn_vllm → returns (mock_popen, ["cmd"]) tuple
+    mock_popen = MagicMock()
+    mock_popen.pid = 12345
+    mock_popen.poll.return_value = None
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration.spawn_vllm",
+        return_value=(mock_popen, ["vllm", "serve"]),
+    )
+
+    patches["stop"] = patch("logos_worker_node.calibration.stop_vllm")
+
+    patches["ready"] = patch(
+        "logos_worker_node.calibration.wait_ready",
+        side_effect=wait_ready_side_effect,
+    )
+
+    snap = _gpu_vram_snapshot(total_mb=gpu_vram_total_mb)
+    patches["gpu_vram"] = patch(
+        "logos_worker_node.calibration.query_gpu_vram", return_value=snap
+    )
+
+    if sample_vram_sequence is None:
+        sample_vram_sequence = [500.0, 7500.0, 600.0]  # baseline, awake, sleeping
+    patches["sample"] = patch(
+        "logos_worker_node.calibration.sample_vram_mb",
+        side_effect=sample_vram_sequence,
+    )
+
+    patches["sleep"] = patch("logos_worker_node.calibration.time.sleep")
+    patches["wait_sleep"] = patch("logos_worker_node.calibration.wait_sleep_state")
+    patches["post"] = patch(
+        "logos_worker_node.calibration._post", return_value=(200, {})
+    )
+    patches["kill_stale"] = patch(
+        "logos_worker_node.calibration._kill_stale_vllm_workers"
+    )
+
+    # _load_failed_commands → always empty (no cross-test contamination)
+    patches["load_failed"] = patch(
+        "logos_worker_node.calibration._load_failed_commands", return_value=set()
+    )
+
+    return patches
+
+
+def _run_search_calibrate(patches, plan=None):
+    """Enter all patches and call calibrate_model with a search plan."""
+    plan = plan or _make_search_plan()
+    log_dir = Path("/tmp/test-calibration-logs")
+
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    return result, managers
+
+
+def test_search_starts_from_floor_not_ceiling():
+    """First probe should be at the floor (1 GB), not the ceiling.
+
+    Mock: succeed at 1 GB and 4 GB, fail at 8 GB+.
+    GPU = 48 GB → ceiling = 48000*0.8 = 38400 → rounded down = 37888 MB (37 GB).
+    Search: floor=1024, ceiling=37888.
+    Mid = round_up_gb((1024+37888)/2) = round_up_gb(19456) = 19456 (already GB-aligned).
+    """
+    # We need enough side_effect entries for:
+    #  1. floor probe (1 GB) → OK
+    #  2. binary search probes → need to figure out exact midpoints
+    # With 48 GB GPU: ceiling = floor(48000*0.8/1024)*1024 = floor(37.5)*1024 = 37*1024 = 37888
+    # Actually: 48000 * 0.8 = 38400.  floor(38400/1024)*1024 = 37*1024 = 37888.
+    # Search: lo=1024, hi=37888.
+    #   mid=round_up_gb((1024+37888)/2)=round_up_gb(19456)=19456  → fail
+    #   hi = 19456-1024 = 18432
+    #   mid=round_up_gb((1024+18432)/2)=round_up_gb(9728)=10240   → fail
+    #   hi = 10240-1024 = 9216
+    #   mid=round_up_gb((1024+9216)/2)=round_up_gb(5120)=5120     → fail
+    #   hi = 5120-1024 = 4096
+    #   mid=round_up_gb((1024+4096)/2)=round_up_gb(2560)=3072     → OK, best_kv=3072
+    #   lo = 3072, hi = 4096
+    #   hi-lo = 1024 >= 1024 → continue
+    #   mid=round_up_gb((3072+4096)/2)=round_up_gb(3584)=4096     → OK, best_kv=4096
+    #   lo = 4096, hi = 4096 → hi-lo=0 < 1024, stop
+    # best_kv = 4096
+    # Final measurement probe at 4096 → OK.
+    # Total probes: floor(1024), 19456, 10240, 5120, 3072, 4096, final(4096) = 7 wait_ready calls
+    # Plus awake/sleeping measurement calls (wait_sleep_state etc.)
+
+    kv_calls = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes):
+        kv_calls.append(kv_cache_memory_bytes)
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    kv_fail_threshold_mb = 5120  # fail at 5 GB and above
+
+    def wait_ready_side_effect(*args, **kwargs):
+        # The last spawned process has the kv from kv_calls[-1]
+        last_kv = _parse_kv_to_mb(kv_calls[-1])
+        if last_kv >= kv_fail_threshold_mb:
+            raise RuntimeError("OOM")
+
+    patches = _patch_search_infra(
+        wait_ready_side_effect=wait_ready_side_effect,
+        gpu_vram_total_mb=48000.0,
+    )
+    # Override spawn and ready with our custom versions
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration.spawn_vllm",
+        side_effect=spawn_side_effect,
+    )
+    patches["ready"] = patch(
+        "logos_worker_node.calibration.wait_ready",
+        side_effect=wait_ready_side_effect,
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    # First probe must be at the floor (1 GB), NOT the ceiling
+    assert kv_calls[0] == "1G", f"First probe should be 1G (floor), got {kv_calls[0]}"
+    # best_kv should be 4096 MB (4 GB) — the highest that fits below 5 GB
+    assert result.kv_cache_sent_mb == pytest.approx(4096.0)
+
+
+def test_floor_failure_gives_clear_error():
+    """When even 1 GB KV cache fails, report that model weights exceed VRAM."""
+    patches = _patch_search_infra(
+        wait_ready_side_effect=[RuntimeError("OOM at floor")],
+        gpu_vram_total_mb=48000.0,
+    )
+
+    result, mocks = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert not result.success
+    assert "minimum kv cache" in result.error.lower()
+    assert "model weights likely exceed" in result.error.lower()
+    # Only one probe — the floor attempt
+    assert mocks["spawn"].call_count == 1
+
+
+def test_ceiling_reachable():
+    """When all probes succeed, best_kv should reach the ceiling value."""
+    # All wait_ready calls succeed (never raise)
+    # With 24 GB GPU: ceiling = floor(24000*0.8/1024)*1024 = floor(18.75)*1024 = 18*1024 = 18432
+    # The search will binary-search up and eventually reach 18432.
+
+    patches = _patch_search_infra(
+        wait_ready_side_effect=None,  # will be overridden below
+        gpu_vram_total_mb=24000.0,
+    )
+    # All probes succeed
+    patches["ready"] = patch(
+        "logos_worker_node.calibration.wait_ready",
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    # ceiling = floor(24000 * 0.8 / 1024) * 1024 = 18432
+    expected_ceiling = 18432.0
+    assert result.kv_cache_sent_mb == pytest.approx(expected_ceiling)
+
+
+def test_search_direction_never_probes_ceiling_first():
+    """Ensure the search NEVER probes the full ceiling as the first attempt.
+
+    This is the core behavioral guarantee: the old code probed the ceiling
+    first (which OOMed on large models), the new code probes the floor first.
+    """
+    kv_calls = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    patches = _patch_search_infra(
+        wait_ready_side_effect=None,
+        gpu_vram_total_mb=48000.0,
+    )
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration.spawn_vllm",
+        side_effect=spawn_side_effect,
+    )
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready")
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    # ceiling = floor(48000*0.8/1024)*1024 = 37888
+    ceiling = 37888.0
+    # First probe must be the floor (1024 MB), not the ceiling
+    assert kv_calls[0] == pytest.approx(_KV_CACHE_MIN_STEP_MB)
+    assert kv_calls[0] != pytest.approx(ceiling)

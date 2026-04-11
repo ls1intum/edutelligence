@@ -37,6 +37,10 @@ worker:
   # Identifier shown in Logos UI and logs.
   name: logos-workernode
 
+  # Maximum number of concurrent lanes this worker may run. 0 = unlimited
+  # (limited only by port range and VRAM). Set via config or MAX_LANES env var.
+  max_lanes: 0
+
 
 # ── Logos control-plane connection ───────────────────────────────────────────
 logos:
