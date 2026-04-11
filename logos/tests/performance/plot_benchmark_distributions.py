@@ -246,8 +246,8 @@ def plot_combined_distribution(
 
     # Percentile lines (overall)
     markers = [
-        ("Median (P50)", st["median"], COLOR_P50, "--", 2.2),
-        ("Mean", st["mean"], COLOR_MEAN, "-.", 2.0),
+        ("P50", st["median"], COLOR_P50, "--", 2.2),
+        ("Avg", st["mean"], COLOR_MEAN, "-.", 2.0),
         ("P95", st["p95"], COLOR_P95, "--", 2.2),
         ("P99", st["p99"], COLOR_P99, ":", 2.2),
     ]
@@ -284,8 +284,8 @@ def plot_combined_distribution(
     legend_elements.append(
         Line2D([0], [0], color="#111111", linestyle="-", lw=3.5, alpha=0.85, label="Overall")
     )
-    legend_elements.append(Line2D([0], [0], color=COLOR_P50, linestyle="--", lw=2, label=f"Median: {st['median']:{val_fmt}}{unit}"))
-    legend_elements.append(Line2D([0], [0], color=COLOR_MEAN, linestyle="-.", lw=2, label=f"Mean: {st['mean']:{val_fmt}}{unit}"))
+    legend_elements.append(Line2D([0], [0], color=COLOR_P50, linestyle="--", lw=2, label=f"P50: {st['median']:{val_fmt}}{unit}"))
+    legend_elements.append(Line2D([0], [0], color=COLOR_MEAN, linestyle="-.", lw=2, label=f"Avg: {st['mean']:{val_fmt}}{unit}"))
     legend_elements.append(Line2D([0], [0], color=COLOR_P95, linestyle="--", lw=2, label=f"P95: {st['p95']:{val_fmt}}{unit}"))
     legend_elements.append(Line2D([0], [0], color=COLOR_P99, linestyle=":", lw=2, label=f"P99: {st['p99']:{val_fmt}}{unit}"))
     ax.legend(handles=legend_elements, loc="center right", fontsize=7.5,

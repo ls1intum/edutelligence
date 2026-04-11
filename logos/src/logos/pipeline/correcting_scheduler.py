@@ -160,7 +160,13 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         if provider_type == "logosnode":
             try:
                 view = self._logosnode.get_model_scheduler_view(model_id, provider_id)
-            except (KeyError, Exception):
+            except KeyError:
+                view = None
+            except Exception:
+                logger.warning(
+                    "Unexpected error getting scheduler view for model %s provider %s",
+                    model_id, provider_id, exc_info=True,
+                )
                 view = None
             if view is None:
                 # No lanes visible — treat as COLD (capacity planner can cold-load

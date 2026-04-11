@@ -5,14 +5,14 @@ model_profiles:
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775917338.6451545
-    loaded_vram_mb: 19788.724841598327
+    last_measured_epoch: 1775928582.2312117
+    loaded_vram_mb: 19776.219472613862
     max_context_length: null
-    measurement_count: 2024
+    measurement_count: 3001
     min_gpu_memory_utilization_to_load: 0.85
     observed_gpu_memory_utilization: 0.85
     residency_source: calibrated
-    sleeping_residual_mb: 2044.5754071999993
+    sleeping_residual_mb: 1396.0
     tensor_parallel_size: 2
   Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
     base_residency_mb: 16752.0
@@ -20,14 +20,14 @@ model_profiles:
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775917338.730286
-    loaded_vram_mb: 15303.680270360921
+    last_measured_epoch: 1775928582.2916942
+    loaded_vram_mb: 15403.999533315036
     max_context_length: null
-    measurement_count: 2062
+    measurement_count: 3171
     min_gpu_memory_utilization_to_load: 0.85
     observed_gpu_memory_utilization: 0.85
     residency_source: calibrated
-    sleeping_residual_mb: 1488.0001808007914
+    sleeping_residual_mb: 1488.0000000000005
     tensor_parallel_size: 2
   cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit:
     base_residency_mb: null
@@ -80,12 +80,12 @@ model_profiles:
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775917338.7868435
-    loaded_vram_mb: 13597.663717619518
+    last_measured_epoch: 1775928582.3496428
+    loaded_vram_mb: 13703.999947663575
     max_context_length: null
-    measurement_count: 2543
+    measurement_count: 3821
     min_gpu_memory_utilization_to_load: 0.85
     observed_gpu_memory_utilization: 0.85
     residency_source: calibrated
-    sleeping_residual_mb: 1368.0
+    sleeping_residual_mb: 1368.0000000000218
     tensor_parallel_size: 2

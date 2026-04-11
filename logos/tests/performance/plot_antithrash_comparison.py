@@ -24,14 +24,12 @@ import numpy as np
 
 BASE = Path(__file__).resolve().parent
 
-BEFORE_CSV = sorted(
-    (BASE / "results/explicit/10m").glob("20260411_073057*/*detailed.csv")
-)[-1]
-AFTER_CSV = sorted(
-    (BASE / "results/explicit/10m").glob("20260411_125849*/*detailed.csv")
-)[-1]
+_before_matches = sorted((BASE / "results/legacy/explicit/10m").glob("20260411_073057*/*detailed.csv"))
+BEFORE_CSV = _before_matches[-1] if _before_matches else None
+_after_matches = sorted((BASE / "results/legacy/explicit/10m").glob("20260411_125849*/*detailed.csv"))
+AFTER_CSV = _after_matches[-1] if _after_matches else None
 
-OUT_DIR = BASE / "results_ollama_vs_vllm"
+OUT_DIR = BASE / "results/legacy/results_ollama_vs_vllm"
 
 # ── Colors ─────────────────────────────────────────────────────────────
 
@@ -169,46 +167,32 @@ def plot_comparison(
     y_max *= 1.35
 
     # Percentile lines
-    for val, ls, lw in [(before_st["median"], "--", 2.2), (before_st["p95"], "--", 2.0)]:
+    for val, ls, lw in [(before_st["median"], "--", 2.2), (before_st["p95"], "--", 2.0), (before_st["p99"], ":", 2.0)]:
         ax.axvline(val, color=BEFORE_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
-    for val, ls, lw in [(after_st["median"], "--", 2.2), (after_st["p95"], "--", 2.0)]:
+    for val, ls, lw in [(after_st["median"], "--", 2.2), (after_st["p95"], "--", 2.0), (after_st["p99"], ":", 2.0)]:
         ax.axvline(val, color=AFTER_COLOR, linestyle=ls, linewidth=lw, zorder=5, alpha=0.8)
 
     # Annotations — Before
-    ax.annotate(
-        f"Before P50\n{before_st['median']:,.1f}s",
-        xy=(before_st["median"], y_max * 0.92),
-        fontsize=8, fontweight="bold", color=BEFORE_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=BEFORE_COLOR, alpha=0.9),
-        zorder=6,
-    )
-    ax.annotate(
-        f"Before P95\n{before_st['p95']:,.1f}s",
-        xy=(before_st["p95"], y_max * 0.78),
-        fontsize=8, fontweight="bold", color=BEFORE_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=BEFORE_COLOR, alpha=0.9),
-        zorder=6,
-    )
+    for label, val, h in [("P50", before_st["median"], 0.92), ("P95", before_st["p95"], 0.78), ("P99", before_st["p99"], 0.64)]:
+        ax.annotate(
+            f"{label}\n{val:,.1f}s",
+            xy=(val, y_max * h),
+            fontsize=8, fontweight="bold", color=BEFORE_COLOR,
+            ha="center", va="top",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=BEFORE_COLOR, alpha=0.9),
+            zorder=6,
+        )
 
     # Annotations — After
-    ax.annotate(
-        f"After P50\n{after_st['median']:,.1f}s",
-        xy=(after_st["median"], y_max * 0.92),
-        fontsize=8, fontweight="bold", color=AFTER_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=AFTER_COLOR, alpha=0.9),
-        zorder=6,
-    )
-    ax.annotate(
-        f"After P95\n{after_st['p95']:,.1f}s",
-        xy=(after_st["p95"], y_max * 0.78),
-        fontsize=8, fontweight="bold", color=AFTER_COLOR,
-        ha="center", va="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=AFTER_COLOR, alpha=0.9),
-        zorder=6,
-    )
+    for label, val, h in [("P50", after_st["median"], 0.92), ("P95", after_st["p95"], 0.78), ("P99", after_st["p99"], 0.64)]:
+        ax.annotate(
+            f"{label}\n{val:,.1f}s",
+            xy=(val, y_max * h),
+            fontsize=8, fontweight="bold", color=AFTER_COLOR,
+            ha="center", va="top",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=AFTER_COLOR, alpha=0.9),
+            zorder=6,
+        )
 
     # Formatting
     ax.set_title(title, fontsize=15, fontweight="bold", pad=14)
