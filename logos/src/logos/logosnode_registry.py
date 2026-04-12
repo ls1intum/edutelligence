@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import logging
 import secrets
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 import uuid
 
 from fastapi import WebSocket
@@ -263,7 +263,10 @@ class ProviderSession:
 class LogosNodeRuntimeRegistry:
     """Tracks auth tickets, active worker sessions, and latest runtime state."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        on_capabilities_changed: Callable[[int, list[str]], None] | None = None,
+    ) -> None:
         self._tickets: dict[str, AuthTicket] = {}
         self._sessions: dict[int, ProviderSession] = {}
         self._lock = asyncio.Lock()
@@ -273,6 +276,20 @@ class LogosNodeRuntimeRegistry:
         # Lanes pre-marked as cold by the capacity planner — excluded from
         # scheduling so new requests don't route to lanes about to be stopped.
         self._cold_marked_lanes: set[tuple[int, str]] = set()
+        # Optional callback invoked when a worker's capabilities_models change.
+        # Signature: (provider_id, sorted_model_names) -> None
+        self._on_capabilities_changed = on_capabilities_changed
+
+    def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
+        if self._on_capabilities_changed is not None:
+            try:
+                self._on_capabilities_changed(provider_id, model_names)
+            except Exception:
+                session = self._sessions.get(provider_id)
+                worker_name = session.worker_id if session else str(provider_id)
+                logger.exception(
+                    "on_capabilities_changed callback failed for provider=%s", worker_name,
+                )
 
     def _session_diagnostic_lines(
         self,
@@ -289,7 +306,7 @@ class LogosNodeRuntimeRegistry:
         status_color = RED if status == "stale" else GREEN
 
         lines = [
-            f"provider={session.provider_id} worker={paint(session.worker_id, BOLD)} status={paint(status, status_color, BOLD)}",
+            f"provider={paint(session.worker_id, BOLD)} status={paint(status, status_color, BOLD)}",
             f"  reason: {headline}",
             f"  heartbeat_age={heartbeat_age_s:.1f}s last_heartbeat={session.last_heartbeat.isoformat()}",
             f"  pending_commands={len(session.pending_commands)} pending_streams={len(session.pending_streams)}",
@@ -406,12 +423,12 @@ class LogosNodeRuntimeRegistry:
                 and not old.is_stale(30)
             ):
                 raise LogosNodeSessionConflictError(
-                    f"provider {ticket.provider_id} is already connected as worker '{old.worker_id}'"
+                    f"provider '{ticket.worker_id}' is already connected as worker '{old.worker_id}'"
                 )
             self._sessions[ticket.provider_id] = session
         if old is not None:
             body_lines = [
-                f"provider={ticket.provider_id} worker={paint(ticket.worker_id, BOLD)} status={paint('reconnected', YELLOW, BOLD)}",
+                f"provider={paint(ticket.worker_id, BOLD)} status={paint('reconnected', YELLOW, BOLD)}",
                 *wrap_plain(
                     "capabilities: " + (", ".join(sorted(ticket.capabilities_models)) or "none"),
                     indent="  ",
@@ -429,7 +446,7 @@ class LogosNodeRuntimeRegistry:
             await self._close_session(old)
         else:
             body_lines = [
-                f"provider={ticket.provider_id} worker={paint(ticket.worker_id, BOLD)} status={paint('connected', GREEN, BOLD)}",
+                f"provider={paint(ticket.worker_id, BOLD)} status={paint('connected', GREEN, BOLD)}",
                 *wrap_plain(
                     "capabilities: " + (", ".join(sorted(ticket.capabilities_models)) or "none"),
                     indent="  ",
@@ -443,6 +460,9 @@ class LogosNodeRuntimeRegistry:
                     accent=GREEN,
                 )
             )
+        # Sync announced capabilities to DB on session attach
+        if session.capabilities_models:
+            self._fire_capabilities_changed(ticket.provider_id, sorted(session.capabilities_models))
         return session
 
     async def get_conflicting_session(
@@ -475,7 +495,7 @@ class LogosNodeRuntimeRegistry:
             render_section(
                 "Worker Session Update",
                 [
-                    f"provider={provider_id} worker={paint(session.worker_id, BOLD)} status={paint('disconnected', RED, BOLD)}",
+                    f"provider={paint(session.worker_id, BOLD)} status={paint('disconnected', RED, BOLD)}",
                     f"  pending_commands={pending_cmds} pending_streams={pending_streams}",
                     f"  {paint(f'remaining sessions: {len(self._sessions)}', DIM)}",
                 ],
@@ -511,7 +531,10 @@ class LogosNodeRuntimeRegistry:
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
         if capabilities_models is not None:
-            session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            if new_caps != session.capabilities_models:
+                session.capabilities_models = new_caps
+                self._fire_capabilities_changed(provider_id, sorted(new_caps))
 
     async def update_runtime(
         self,
@@ -530,7 +553,10 @@ class LogosNodeRuntimeRegistry:
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
         if capabilities_models is not None:
-            session.capabilities_models = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
+            if new_caps != session.capabilities_models:
+                session.capabilities_models = new_caps
+                self._fire_capabilities_changed(provider_id, sorted(new_caps))
 
         # Detect lane state and metric changes and log them as structured blocks.
         old_lanes = {
@@ -558,7 +584,7 @@ class LogosNodeRuntimeRegistry:
             )
 
             body_lines: list[str] = [
-                f"provider={provider_id} worker={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"
+                f"provider={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"
             ]
             for lid in added:
                 snapshot = new_lanes[lid]
@@ -884,7 +910,14 @@ class LogosNodeRuntimeRegistry:
 
     async def is_model_allowed(self, provider_id: int, model_name: str) -> bool:
         session = await self._get_session(provider_id)
-        if session is None or not session.capabilities_models:
+        if session is None:
+            # Worker is offline — do not advertise its models.
+            return False
+        if session.is_stale(30):
+            # Worker hasn't heartbeated recently — treat as offline.
+            return False
+        if not session.capabilities_models:
+            # Worker connected but hasn't declared capabilities yet — allow.
             return True
         return model_name in session.capabilities_models
 

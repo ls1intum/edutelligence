@@ -1,0 +1,1 @@
+If you create a migration in this folder, ensure it is also added to "run_all_migration.sh"!

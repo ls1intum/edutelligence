@@ -15,12 +15,6 @@ repos:
         additional_dependencies: ['click<8.3.0']
         files: "^athena/.*"
       - id: sub-pre-commit
-        alias: nebula
-        name: "pre-commit for nebula"
-        args: ["-p", "nebula"]
-        additional_dependencies: ['click<8.3.0']
-        files: "^nebula/.*"
-      - id: sub-pre-commit
         alias: memiris
         name: "pre-commit for memiris"
         args: ["-p", "memiris"]

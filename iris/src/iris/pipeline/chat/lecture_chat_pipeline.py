@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -16,30 +16,54 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
-from ...domain.variant.lecture_chat_variant import LectureChatVariant
+from ...domain.variant.variant import Dep, Variant
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...tools import (
     create_tool_faq_content_retrieval,
+    create_tool_generate_mcq_questions,
     create_tool_get_course_details,
     create_tool_lecture_content_retrieval,
 )
 from ...web.status.status_update import LectureChatCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.mcq_generation_pipeline import McqGenerationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
+from .mcq_chat_mixin import (
+    detect_mcq_intent,
+    mcq_execute_agent,
+    mcq_post_agent_hook,
+    mcq_pre_agent_hook,
+    retrieve_lecture_content_for_mcq,
+)
 
 logger = get_logger(__name__)
 
 
 class LectureChatPipeline(
-    AbstractAgentPipeline[LectureChatPipelineExecutionDTO, LectureChatVariant]
+    AbstractAgentPipeline[LectureChatPipelineExecutionDTO, Variant]
 ):
     """
     Lecture chat pipeline that answers course related questions from students.
     """
+
+    PIPELINE_ID = "lecture_chat_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Uses a smaller model for faster responses."),
+        ("advanced", "Advanced", "Uses a larger model, balancing speed and quality."),
+    ]
+    DEPENDENCIES = [
+        Dep("citation_pipeline", variant="same"),
+        Dep("session_title_generation_pipeline"),
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
 
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
@@ -49,9 +73,10 @@ class LectureChatPipeline(
     system_prompt_template: Any
 
     def __init__(self, local: bool = False):
-        super().__init__(implementation_id="lecture_chat_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
         self.citation_pipeline = CitationPipeline(local=local)
+        self.mcq_pipeline = McqGenerationPipeline(local=local)
         self.lecture_retriever = None
         self.faq_retriever = None
         template_dir = os.path.join(
@@ -75,9 +100,7 @@ class LectureChatPipeline(
 
     def is_memiris_memory_creation_enabled(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
     ) -> bool:
         """
         Return True if background memory creation should be enabled for this run.
@@ -89,9 +112,7 @@ class LectureChatPipeline(
 
     def get_tools(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
     ) -> list[Callable]:
         """
         Get the tools available for the agent pipeline.
@@ -123,9 +144,16 @@ class LectureChatPipeline(
             create_tool_get_course_details(state.dto.course, callback),
         ]
 
+        # When MCQ parallel mode is active the agent only needs to write a
+        # short intro — no tools required.  Returning an empty list prevents
+        # the agent from looping through unnecessary tool calls.
+        if getattr(state, "mcq_parallel", False):
+            return []
+
         query_text = self.get_text_of_latest_user_message(state)
+        is_local = state.dto.settings is not None and state.dto.settings.is_local()
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            self.lecture_retriever = LectureRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -141,7 +169,7 @@ class LectureChatPipeline(
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(state.db.client)
+            self.faq_retriever = FaqRetrieval(state.db.client, local=is_local)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -167,20 +195,54 @@ class LectureChatPipeline(
                 )
             )
 
+        # MCQ generation tool (non-parallel fallback)
+        if not hasattr(state, "mcq_result_storage"):
+            setattr(state, "mcq_result_storage", {})
+        user_language = "en"
+        if state.dto.user and state.dto.user.lang_key:
+            user_language = state.dto.user.lang_key
+        lecture_content, _ = retrieve_lecture_content_for_mcq(
+            state.db,
+            state.dto.course.id,
+            lecture_id=(
+                state.dto.lecture.id
+                if state.dto.lecture and state.dto.lecture.id
+                else None
+            ),
+        )
+        tool_list.append(
+            create_tool_generate_mcq_questions(
+                self.mcq_pipeline,
+                state.dto.chat_history,
+                callback,
+                getattr(state, "mcq_result_storage", {}),
+                user_language,
+                lecture_content=lecture_content,
+            )
+        )
+
         return tool_list
 
     def build_system_message(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
     ) -> str:
         """
         Return a system message for the chat prompt.
 
+        Also detects MCQ intent and sets flags on state BEFORE get_tools() runs,
+        since the abstract pipeline calls build_system_message before get_tools.
+
         Returns:
             str: The system message content
         """
+        # Detect MCQ intent early — flags must be set before get_tools() runs
+        user_message = self.get_text_of_latest_user_message(state)
+        is_mcq, count = detect_mcq_intent(user_message)
+        if is_mcq:
+            setattr(state, "mcq_parallel", True)
+            setattr(state, "mcq_count", count)
+
         # Extract user language with fallback
         user_language = "en"
         if state.dto.user and state.dto.user.lang_key:
@@ -208,6 +270,7 @@ class LectureChatPipeline(
             "allow_memiris_tool": allow_memiris_tool,
             "has_chat_history": bool(state.message_history),
             "custom_instructions": custom_instructions,
+            "mcq_parallel": getattr(state, "mcq_parallel", False),
         }
 
         return self.system_prompt_template.render(template_context)
@@ -245,11 +308,34 @@ class LectureChatPipeline(
             else "session-messages/unknown"
         )
 
+    def pre_agent_hook(
+        self,
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
+    ) -> None:
+        """Spawn parallel MCQ generation thread if intent was detected."""
+        mcq_pre_agent_hook(
+            state=state,
+            mcq_pipeline=self.mcq_pipeline,
+            get_text_of_latest_user_message=self.get_text_of_latest_user_message,
+            db=state.db,
+            course_id=state.dto.course.id,
+            chat_history=state.dto.chat_history,
+            lecture_id=(
+                state.dto.lecture.id
+                if state.dto.lecture and state.dto.lecture.id
+                else None
+            ),
+        )
+
+    def execute_agent(self, state):
+        """Use a direct LLM call when MCQ parallel is active, else default agent."""
+        if getattr(state, "mcq_parallel", False):
+            return mcq_execute_agent(state)
+        return super().execute_agent(state)
+
     def on_agent_step(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
         step: dict[str, Any],
     ) -> None:
         """
@@ -264,16 +350,16 @@ class LectureChatPipeline(
 
     def post_agent_hook(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
     ) -> str:
-        """
-        Post-processing after agent execution including citations.
+        """Post-processing after agent execution including citations and MCQ integration."""
+        # Handle non-parallel MCQ placeholder and parallel MCQ thread joining
+        mcq_post_agent_hook(
+            state=state,
+            mcq_pipeline=self.mcq_pipeline,
+            track_tokens=self._track_tokens,
+        )
 
-        Returns:
-            str: The final result
-        """
         if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
             state.result = self._process_citations(
                 state,
@@ -298,14 +384,12 @@ class LectureChatPipeline(
 
     def _process_citations(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
         dto: LectureChatPipelineExecutionDTO,
-        variant: LectureChatVariant,
+        variant: Variant,
     ) -> str:
         """
         Process citations for lecture content and FAQs.
@@ -355,9 +439,7 @@ class LectureChatPipeline(
 
     def _generate_session_title(
         self,
-        state: AgentPipelineExecutionState[
-            LectureChatPipelineExecutionDTO, LectureChatVariant
-        ],
+        state: AgentPipelineExecutionState[LectureChatPipelineExecutionDTO, Variant],
         output: str,
         dto: LectureChatPipelineExecutionDTO,
     ) -> Optional[str]:
@@ -378,7 +460,7 @@ class LectureChatPipeline(
     def __call__(
         self,
         dto: LectureChatPipelineExecutionDTO,
-        variant: LectureChatVariant,
+        variant: Variant,
         # course: CourseChatStatusCallback -> maybe adapt arcitecture later
         callback: LectureChatCallback,
     ):
@@ -404,26 +486,3 @@ class LectureChatPipeline(
                 "An error occurred while running the lecture chat pipeline.",
                 tokens=[],
             )
-
-    @classmethod
-    def get_variants(cls) -> List[LectureChatVariant]:
-        return [
-            LectureChatVariant(
-                variant_id="default",
-                name="Default",
-                description="Uses a smaller model for faster and cost-efficient responses.",
-                cloud_agent_model="gpt-5-mini",
-                cloud_citation_model="gpt-5-nano",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-            LectureChatVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Uses a larger chat model, balancing speed and quality.",
-                cloud_agent_model="gpt-5.2",
-                cloud_citation_model="gpt-5-mini",
-                local_agent_model="gpt-oss:120b",
-                local_citation_model="gpt-oss:120b",
-            ),
-        ]

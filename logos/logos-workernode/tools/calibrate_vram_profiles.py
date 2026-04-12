@@ -41,7 +41,6 @@ from pathlib import Path
 
 from logos_worker_node.calibration import (
     CalibrationResult,
-    _DEFAULT_KV_CACHE,
     _DEFAULT_VLLM,
     _HAS_YAML,
     _PROFILES_FILE,
@@ -120,11 +119,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--kv-cache-memory-bytes",
-        default=_DEFAULT_KV_CACHE,
+        default=None,
         help=(
-            f"KV cache size passed to vLLM during calibration (default: {_DEFAULT_KV_CACHE}). "
-            "This must be a known value so base_residency_mb = loaded_vram - kv_cache. "
-            "Use the same value your worker lanes use in production for the most accurate result. "
+            "Fixed KV cache size passed to vLLM during calibration. "
+            "When omitted, calibration auto-searches for the minimum KV cache "
+            "the model needs and adds a safety margin on top. "
             "Accepts suffixes: G (GiB), M (MiB), K (KiB), or raw bytes."
         ),
     )
@@ -188,6 +187,11 @@ def main() -> int:
     results: list[CalibrationResult] = []
 
     for plan in plans:
+        # When --kv-cache-memory-bytes is given on the CLI, inject it as a
+        # per-model override so calibrate_model uses the fixed value instead
+        # of auto-searching for the minimum.
+        if args.kv_cache_memory_bytes:
+            plan = {**plan, "kv_cache_memory_bytes": args.kv_cache_memory_bytes}
         result = calibrate_model(
             plan,
             vllm_binary=vllm_binary,
@@ -195,7 +199,6 @@ def main() -> int:
             log_dir=log_dir,
             sleep_level=args.sleep_level,
             ready_timeout_s=args.ready_timeout,
-            kv_cache_memory_bytes=args.kv_cache_memory_bytes,
         )
         results.append(result)
 

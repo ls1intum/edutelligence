@@ -4,9 +4,11 @@ Extracts the reusable calibration functions so they can be imported both by
 the standalone CLI tool (``tools/calibrate_vram_profiles.py``) and by the
 worker's startup flow (``main.py``).
 
-The calibration process loads each model via vLLM with an explicit
-``--kv-cache-memory-bytes``, measures real VRAM in awake and sleeping states,
-and persists the results to ``model_profiles.yml``.
+The calibration process binary-searches upward for the maximum KV cache each
+model can use (starting at ``_KV_CACHE_MIN_STEP_MB`` floor, searching up to
+``_KV_CACHE_VRAM_CAP_RATIO`` of per-GPU VRAM with
+±``_KV_CACHE_MIN_STEP_MB`` precision).  It measures real VRAM in awake and
+sleeping states and persists the results to ``model_profiles.yml``.
 
 VRAM decomposition (exact, no guessing)::
 
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -47,7 +50,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_VLLM = "vllm"
-_DEFAULT_KV_CACHE = "2G"
 _READY_TIMEOUT_S = 600.0
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
@@ -56,6 +58,9 @@ _VRAM_SAMPLE_COUNT = 3
 _VRAM_SAMPLE_INTERVAL_S = 1.0
 _PROFILES_FILE = "model_profiles.yml"
 _CALIBRATION_PORT = 11499
+_KV_CACHE_MIN_STEP_MB = 1024.0  # binary search precision and safety margin
+_KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
+_FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 
 # ---------------------------------------------------------------------------
 # KV-cache size parsing
@@ -75,6 +80,62 @@ def _parse_kv_to_mb(value: str) -> float:
     if v.endswith("K"):
         return float(v[:-1]) / 1024.0
     return float(v) / (1024.0 * 1024.0)  # raw bytes
+
+
+def _format_kv_mb(mb: float) -> str:
+    """Format a megabyte value as a human-friendly KV cache size string.
+
+    ``2048.0`` → ``'2G'``, ``1536.0`` → ``'1536M'``.
+    """
+    if mb >= 1024.0 and mb % 1024.0 == 0:
+        return f"{int(mb / 1024)}G"
+    return f"{int(mb)}M"
+
+
+def _round_up_gb(mb: float) -> float:
+    """Round *mb* up to the nearest whole gigabyte (1024 MB boundary)."""
+    return math.ceil(mb / 1024.0) * 1024.0
+
+
+# ---------------------------------------------------------------------------
+# Failed-command blacklist
+# ---------------------------------------------------------------------------
+
+
+def _cmd_fingerprint(cmd: list[str]) -> str:
+    """Build a canonical one-line string from a vLLM command list.
+
+    Strips ``--host`` and ``--port`` (calibration infra, not model-specific)
+    so that retries on a different port aren't falsely considered "new".
+    """
+    filtered: list[str] = []
+    skip_next = False
+    for i, tok in enumerate(cmd):
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in ("--host", "--port"):
+            skip_next = True
+            continue
+        filtered.append(tok)
+    return " ".join(filtered)
+
+
+def _load_failed_commands(failed_path: Path) -> set[str]:
+    if not failed_path.exists():
+        return set()
+    return {
+        line.strip()
+        for line in failed_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+
+def _record_failed_command(failed_path: Path, fingerprint: str) -> None:
+    failed_path.parent.mkdir(parents=True, exist_ok=True)
+    with failed_path.open("a", encoding="utf-8") as f:
+        f.write(fingerprint + "\n")
+    logger.info("  Blacklisted command → %s", failed_path)
 
 
 # ---------------------------------------------------------------------------
@@ -179,14 +240,14 @@ def _post(
 # ---------------------------------------------------------------------------
 
 
-def spawn_vllm(
+def _build_vllm_cmd(
     plan: dict[str, Any],
     vllm_binary: str,
     host: str,
     port: int,
-    log_path: Path,
-    kv_cache_memory_bytes: str = _DEFAULT_KV_CACHE,
-) -> subprocess.Popen[str]:
+    kv_cache_memory_bytes: str,
+) -> list[str]:
+    """Build the vLLM command list without spawning a process."""
     model = plan["model"]
     tp = int(plan.get("tensor_parallel_size", 1))
     dtype = str(plan.get("dtype", "auto"))
@@ -194,16 +255,8 @@ def spawn_vllm(
     max_model_len = plan.get("max_model_len")
     enforce_eager = bool(plan.get("enforce_eager", False))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
-    disable_nccl_p2p = bool(plan.get("disable_nccl_p2p", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
-    # Per-model override for kv cache size (takes precedence over CLI default)
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
-
-    # When kv_cache_memory_bytes is set, omit --gpu-memory-utilization and let
-    # vLLM default to 0.9. kv_cache_memory_bytes controls the KV pool size
-    # directly; adding gpu_memory_utilization=0.1 caps total VRAM to 10% which
-    # prevents the model weights from loading at all.
-    # An explicit per-model override takes precedence.
     explicit_gmu = plan.get("gpu_memory_utilization")
 
     cmd = [
@@ -232,8 +285,23 @@ def spawn_vllm(
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
         cmd.append("--disable-custom-all-reduce")
-    # disable_nccl_p2p is applied via NCCL_P2P_DISABLE env var below (not a vLLM CLI flag)
     cmd.extend(extra_args)
+    return cmd
+
+
+def spawn_vllm(
+    plan: dict[str, Any],
+    vllm_binary: str,
+    host: str,
+    port: int,
+    log_path: Path,
+    kv_cache_memory_bytes: str,
+) -> tuple[subprocess.Popen[str], list[str]]:
+    """Spawn vLLM and return ``(process, cmd_list)``."""
+    tp = int(plan.get("tensor_parallel_size", 1))
+    disable_nccl_p2p = bool(plan.get("disable_nccl_p2p", False))
+
+    cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes)
 
     env = os.environ.copy()
     env["VLLM_SERVER_DEV_MODE"] = "1"
@@ -258,25 +326,102 @@ def spawn_vllm(
     log_file = log_path.open("w", encoding="utf-8")
     try:
         proc = subprocess.Popen(
-            cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True
+            cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
+            start_new_session=True,
         )
     finally:
         log_file.close()
 
     logger.info("  Spawned PID=%d  log=%s", proc.pid, log_path)
     logger.info("  Command: %s", " ".join(cmd))
-    return proc
+    return proc, cmd
 
+
+def _kill_stale_vllm_workers() -> None:
+    """Kill any orphaned ``VLLM::Worker`` or ``vllm`` processes.
+
+    Scans ``/proc`` directly (no psutil dependency) for processes whose
+    ``/proc/<pid>/comm`` contains ``vllm`` (case-insensitive) — this
+    catches both the ``VLLM::Worker`` subprocesses and lingering ``vllm
+    serve`` parents.
+    """
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return  # not Linux
+    killed = 0
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().decode(
+                "utf-8", errors="replace"
+            )
+        except Exception:
+            continue
+        # Match both "vllm serve ..." parents and "VLLM::Worker" children
+        if "vllm" not in cmdline.lower():
+            continue
+        pid = int(entry.name)
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed += 1
+        except OSError:
+            pass
+    if killed:
+        logger.info("  Killed %d stale vLLM process(es)", killed)
+        time.sleep(_VRAM_SETTLE_S)  # let GPU memory release
+
+
+def _read_log_tail(log_path: Path, max_lines: int = 40) -> str:
+    """Read the last *max_lines* of a vLLM log file, or '' on failure."""
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = lines[-max_lines:] if len(lines) > max_lines else lines
+        return "\n".join(tail)
+    except Exception:
+        return ""
 
 def stop_vllm(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
-    proc.send_signal(signal.SIGTERM)
+    """Stop a vLLM process and all its child workers.
+
+    Uses process-group kill (enabled by ``start_new_session=True`` in
+    ``spawn_vllm``) so orphaned ``VLLM::Worker`` subprocesses are
+    cleaned up even when the parent has already crashed.
+    """
+    pgid: int | None = None
     try:
-        proc.wait(timeout=_VLLM_STOP_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        pass  # process already gone
+
+    if proc.poll() is None:
+        # Parent still running — try graceful shutdown first
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except OSError:
+                pass
+        else:
+            proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=_VLLM_STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            pass  # fall through to SIGKILL below
+
+    # Force-kill the entire process group to catch orphaned workers
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass  # already gone
+
+    # Reap the main process
+    try:
         proc.wait(timeout=10)
+    except Exception:
+        pass
 
 
 def wait_ready(
@@ -357,7 +502,6 @@ def calibrate_model(
     log_dir: Path,
     sleep_level: int,
     ready_timeout_s: float,
-    kv_cache_memory_bytes: str,
 ) -> CalibrationResult:
     model = plan["model"]
     gpu_devices = str(plan.get("gpu_devices") or "")
@@ -367,15 +511,11 @@ def calibrate_model(
     base_url = f"http://{host}:{port}"
     log_path = log_dir / f"{model.replace('/', '__')}.log"
 
-    # The KV cache size we will allocate — per-model override or global default
-    kv_bytes_str = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
-    kv_cache_sent_mb = _parse_kv_to_mb(kv_bytes_str)
-
     partial = CalibrationResult(
         model=model,
         tensor_parallel_size=tp,
         gpu_devices=gpu_devices,
-        kv_cache_sent_mb=kv_cache_sent_mb,
+        kv_cache_sent_mb=0.0,
         success=False,
     )
 
@@ -387,12 +527,12 @@ def calibrate_model(
         gpu_devices or "all",
         sleep_level,
     )
-    logger.info(
-        "  kv_cache_memory_bytes=%s (%.0f MB) — known, used to derive base_residency",
-        kv_bytes_str,
-        kv_cache_sent_mb,
-    )
     logger.info("-" * 60)
+
+    # Phase 0 — Kill any orphaned vLLM workers from previous runs.
+    # Without this, leaked GPU memory inflates the baseline and can cause
+    # subsequent calibrations to OOM or hang.
+    _kill_stale_vllm_workers()
 
     # Phase 1 — Baseline: measure before any model process exists.
     # Retry up to 3 times with a short delay — nvidia-smi can be temporarily
@@ -414,31 +554,180 @@ def calibrate_model(
         return partial
     logger.info("        baseline = %.0f MB", baseline_mb)
 
-    # Phase 2 — Spawn vLLM and wait for readiness
-    proc = spawn_vllm(
-        plan,
-        vllm_binary,
-        host,
-        port,
-        log_path,
-        kv_cache_memory_bytes=kv_bytes_str,
-    )
+    # Compute VRAM cap for KV cache search.
+    # Use per-GPU VRAM × tp so the cap reflects the GPUs actually used,
+    # not all GPUs visible on the host.
+    max_kv_mb = float("inf")
     try:
+        gpu_snap = query_gpu_vram(gpu_indices)
+        per_gpu_mb = min(v["total_mb"] for v in gpu_snap.values())
+        effective_gpu_mb = per_gpu_mb * tp
+        max_kv_mb = per_gpu_mb * _KV_CACHE_VRAM_CAP_RATIO
         logger.info(
-            "  [2/5] Waiting for vLLM ready (timeout=%.0fs)...", ready_timeout_s
+            "  GPU VRAM = %.0f MB/GPU × tp=%d = %.0f MB effective, "
+            "KV cache search cap (%.0f%%) = %.0f MB",
+            per_gpu_mb, tp, effective_gpu_mb,
+            _KV_CACHE_VRAM_CAP_RATIO * 100, max_kv_mb,
+        )
+    except Exception as exc:
+        logger.warning(
+            "  Could not query GPU VRAM for KV cache cap: %s — no cap applied", exc,
+        )
+
+    # Phase 2 — Find the maximum KV cache the model can use.
+    #
+    # 1. Probe the floor (_KV_CACHE_MIN_STEP_MB) to verify the model can
+    #    start at all — if even the minimum KV cache OOMs, the model
+    #    weights themselves exceed available GPU VRAM.
+    # 2. Binary-search upward to find the maximum KV cache that still
+    #    fits (±_KV_CACHE_MIN_STEP_MB precision).
+    #
+    # A per-model override (plan["kv_cache_memory_bytes"]) skips the
+    # search and uses the fixed value.
+    explicit_kv = plan.get("kv_cache_memory_bytes")
+    if explicit_kv:
+        # Per-model override — use as-is, no search
+        kv_cache_sent_mb = _parse_kv_to_mb(str(explicit_kv))
+        kv_search = False
+        logger.info(
+            "  [2/6] Using explicit kv_cache=%s (%.0f MB) — no search",
+            explicit_kv, kv_cache_sent_mb,
+        )
+    else:
+        kv_search = True
+        kv_cache_sent_mb = max_kv_mb if max_kv_mb < float("inf") else 4096.0
+        # Round down to whole GB
+        kv_cache_sent_mb = math.floor(kv_cache_sent_mb / 1024.0) * 1024.0
+        logger.info(
+            "  [2/6] Searching max KV cache (floor=%.0f MB, "
+            "ceiling=%.0f MB, step=%.0f MB)...",
+            _KV_CACHE_MIN_STEP_MB, kv_cache_sent_mb, _KV_CACHE_MIN_STEP_MB,
+        )
+
+    failed_path = log_dir / _FAILED_COMMANDS_FILE
+    failed_commands = _load_failed_commands(failed_path)
+
+    def _try_start(kv_mb: float) -> subprocess.Popen[str] | None:
+        """Try to start vLLM with the given KV cache.  Returns the
+        running process on success, ``None`` on failure (process is
+        cleaned up).  Blacklisted commands are skipped immediately."""
+        kv_str = _format_kv_mb(kv_mb)
+        planned = {**plan, "kv_cache_memory_bytes": kv_str}
+        # Check the blacklist *before* spawning to avoid wasting time.
+        fingerprint = _cmd_fingerprint(
+            _build_vllm_cmd(planned, vllm_binary, host, port, kv_str)
+        )
+        if fingerprint in failed_commands:
+            logger.warning(
+                "        SKIP kv_cache=%s — command previously failed "
+                "(remove line from %s to retry)",
+                kv_str, failed_path,
+            )
+            return None
+        proc, _ = spawn_vllm(
+            planned,
+            vllm_binary, host, port, log_path,
+            kv_cache_memory_bytes=kv_str,
+        )
+        logger.info(
+            "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
+            kv_str, kv_mb, ready_timeout_s,
         )
         t0 = time.perf_counter()
         try:
             wait_ready(base_url, ready_timeout_s, proc, gpu_indices)
-        except (TimeoutError, RuntimeError) as exc:
-            partial.error = str(exc)
+            logger.info(
+                "        OK kv_cache=%s ready in %.1fs",
+                kv_str, time.perf_counter() - t0,
+            )
+            return proc
+        except (RuntimeError, TimeoutError) as exc:
+            log_tail = _read_log_tail(log_path)
+            logger.warning(
+                "        FAIL kv_cache=%s: %s", kv_str, exc,
+            )
+            if log_tail:
+                logger.warning("  -- vLLM log tail --\n%s", log_tail)
+            stop_vllm(proc)
+            time.sleep(_VRAM_SETTLE_S)
+            _record_failed_command(failed_path, fingerprint)
+            failed_commands.add(fingerprint)
+            return None
+
+    proc: subprocess.Popen[str] | None = None
+
+    if kv_search:
+        search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
+        search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
+
+        # Phase 2a: Verify the model loads at all with minimum KV cache.
+        # If even 1 GB KV fails, the model simply doesn't fit.
+        logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
+        proc = _try_start(search_lo)
+        if proc is None:
+            partial.error = (
+                f"Model cannot start even with minimum KV cache "
+                f"{_format_kv_mb(search_lo)} on tp={tp}. "
+                f"Model weights likely exceed available GPU VRAM."
+            )
             logger.warning("  ERROR: %s", partial.error)
             return partial
-        logger.info("        Ready in %.1fs", time.perf_counter() - t0)
 
+        # Floor works — now binary-search upward to find maximum KV cache that fits
+        stop_vllm(proc)
+        time.sleep(_VRAM_SETTLE_S)
+        proc = None
+        best_kv = search_lo
+
+        while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+            mid = _round_up_gb((search_lo + search_hi) / 2.0)
+            if mid <= search_lo:
+                break
+            proc = _try_start(mid)
+            if proc is not None:
+                # Works at this size — try even higher
+                best_kv = mid
+                stop_vllm(proc)
+                time.sleep(_VRAM_SETTLE_S)
+                proc = None
+                search_lo = mid
+            else:
+                # Too large — maximum is lower
+                search_hi = mid - _KV_CACHE_MIN_STEP_MB
+
+        kv_cache_sent_mb = best_kv
+        logger.info(
+            "  KV cache search result: max_working=%.0f MB (search range exhausted, "
+            "precision=%.0f MB)",
+            best_kv, _KV_CACHE_MIN_STEP_MB,
+        )
+
+        # Start vLLM at the final KV size for measurement
+        proc = _try_start(kv_cache_sent_mb)
+        if proc is None:
+            partial.error = (
+                f"Model failed to start at final KV cache "
+                f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
+            )
+            logger.warning("  ERROR: %s", partial.error)
+            return partial
+    else:
+        # Fixed KV cache — single attempt
+        proc = _try_start(kv_cache_sent_mb)
+        if proc is None:
+            partial.error = (
+                f"Model failed to start with KV cache "
+                f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
+            )
+            logger.warning("  ERROR: %s", partial.error)
+            return partial
+
+    partial.kv_cache_sent_mb = kv_cache_sent_mb
+
+    try:
         # Phase 3 — Measure awake VRAM
         logger.info(
-            "  [3/5] Measuring awake VRAM (settling %.0fs)...", _VRAM_SETTLE_S
+            "  [3/6] Measuring awake VRAM (settling %.0fs)...", _VRAM_SETTLE_S
         )
         time.sleep(_VRAM_SETTLE_S)
         try:
@@ -463,16 +752,9 @@ def calibrate_model(
         )
 
         # Phase 4 — Sleep the model
-        logger.info("  [4/5] Sleeping model (level=%d)...", sleep_level)
-        sleep_url = (
-            f"{base_url}/sleep?"
-            f"{urllib.parse.urlencode({'level': str(sleep_level), 'mode': 'auto'})}"
-        )
+        logger.info("  [4/6] Sleeping model (level=%d)...", sleep_level)
+        sleep_url = f"{base_url}/sleep?level={sleep_level}"
         status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
-        if status not in (200, 204):
-            # Older vLLM: try without mode param
-            sleep_url = f"{base_url}/sleep?level={sleep_level}"
-            status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
         if status not in (200, 204):
             partial.error = f"/sleep returned HTTP {status}"
             logger.warning("  ERROR: %s", partial.error)
@@ -486,7 +768,7 @@ def calibrate_model(
 
         # Phase 5 — Measure sleeping VRAM (independent observation)
         logger.info(
-            "  [5/5] Measuring sleeping VRAM (settling %.0fs)...", _VRAM_SETTLE_S
+            "  [5/6] Measuring sleeping VRAM (settling %.0fs)...", _VRAM_SETTLE_S
         )
         time.sleep(_VRAM_SETTLE_S)
         try:
@@ -568,6 +850,8 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "residency_source": "calibrated",
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
+        # Discovered KV cache size for use by the lane manager at runtime
+        "calibration_kv_cache_memory_bytes": _format_kv_mb(r.kv_cache_sent_mb),
     }
 
 
@@ -657,6 +941,46 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
+    """Return the maximum tensor_parallel_size allowed for *plan*."""
+    gpu_devices = str(plan.get("gpu_devices") or "").strip().lower()
+    if not gpu_devices or gpu_devices == "all":
+        return available_gpus
+    return len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
+
+
+def _try_calibrate(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    sleep_level: int,
+    ready_timeout_s: float,
+) -> CalibrationResult:
+    """Call ``calibrate_model`` with exception → failure conversion."""
+    model_name = plan["model"]
+    try:
+        return calibrate_model(
+            plan,
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+        )
+    except Exception as exc:
+        logger.warning("Calibration failed for %s: %s", model_name, exc)
+        return CalibrationResult(
+            model=model_name,
+            tensor_parallel_size=int(plan.get("tensor_parallel_size", 1)),
+            gpu_devices=str(plan.get("gpu_devices") or ""),
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error=str(exc),
+        )
+
+
 def auto_calibrate_models(
     uncalibrated: list[str],
     config_path: Path,
@@ -665,13 +989,17 @@ def auto_calibrate_models(
     vllm_binary: str = _DEFAULT_VLLM,
     port: int = _CALIBRATION_PORT,
     sleep_level: int = 1,
-    kv_cache_memory_bytes: str = _DEFAULT_KV_CACHE,
     ready_timeout_s: float = _READY_TIMEOUT_S,
 ) -> dict[str, CalibrationResult]:
     """Calibrate a list of uncalibrated models and persist results.
 
     Returns a dict mapping model_name -> CalibrationResult.
     Only calibrates models in the *uncalibrated* list.
+
+    Uses a **max-first strategy**: each model is first tested with the
+    maximum available ``tensor_parallel_size`` to quickly verify it can
+    run at all.  If that succeeds, a binary search finds the smallest
+    tp that still works, saving GPU resources at runtime.
     """
     # Load plans from config
     if config_path.exists():
@@ -696,12 +1024,20 @@ def auto_calibrate_models(
         logger.info("No uncalibrated models to calibrate.")
         return {}
 
+    # Detect available GPU count for tp escalation
+    try:
+        gpu_snap = query_gpu_vram()
+        available_gpus = len(gpu_snap)
+    except Exception:
+        available_gpus = 1
+
     profiles_path = state_dir / _PROFILES_FILE
     existing_profiles = load_existing_profiles(profiles_path)
     log_dir = state_dir / "calibration_logs"
 
     logger.info(
-        "Auto-calibration: %d model(s) to calibrate", len(plans)
+        "Auto-calibration: %d model(s) to calibrate, %d GPU(s) available",
+        len(plans), available_gpus,
     )
     for p in plans:
         logger.info(
@@ -711,35 +1047,109 @@ def auto_calibrate_models(
             p.get("gpu_devices") or "all",
         )
 
+    cal_kwargs = dict(
+        vllm_binary=vllm_binary,
+        port=port,
+        log_dir=log_dir,
+        sleep_level=sleep_level,
+        ready_timeout_s=ready_timeout_s,
+    )
+
     results: dict[str, CalibrationResult] = {}
 
     for plan in plans:
         model_name = plan["model"]
-        try:
-            result = calibrate_model(
-                plan,
-                vllm_binary=vllm_binary,
-                port=port,
-                log_dir=log_dir,
-                sleep_level=sleep_level,
-                ready_timeout_s=ready_timeout_s,
-                kv_cache_memory_bytes=kv_cache_memory_bytes,
+        original_tp = int(plan.get("tensor_parallel_size", 1))
+        max_tp = _max_tp_for_plan(plan, available_gpus)
+
+        # ----------------------------------------------------------
+        # Strategy: "max-first, then search down"
+        #
+        # 1. Try with max tp first to quickly verify whether the
+        #    model can run at all.  A model that cannot even load
+        #    with all GPUs available will never work — fail fast.
+        # 2. If max tp succeeds, binary-search downward to find the
+        #    smallest tp that still works (to save GPU resources at
+        #    runtime).
+        # 3. If max tp == original tp (only one option), just try it.
+        # ----------------------------------------------------------
+
+        tp = max_tp
+        current_plan = {**plan, "tensor_parallel_size": tp}
+        result = _try_calibrate(current_plan, **cal_kwargs)
+
+        # Auto-retry with --trust-remote-code when vLLM demands it.
+        _err = result.error or ""
+        if not result.success and "trust_remote_code=True" in _err:
+            logger.info(
+                "  %s requires trust_remote_code — adding flag and retrying",
+                model_name,
             )
-        except Exception as exc:
-            logger.warning(
-                "Calibration failed for %s: %s", model_name, exc
-            )
-            results[model_name] = CalibrationResult(
-                model=model_name,
-                tensor_parallel_size=int(
-                    plan.get("tensor_parallel_size", 1)
-                ),
-                gpu_devices=str(plan.get("gpu_devices") or ""),
-                kv_cache_sent_mb=0.0,
-                success=False,
-                error=str(exc),
-            )
+            extra = list(plan.get("extra_args") or [])
+            if "--trust-remote-code" not in extra:
+                extra.append("--trust-remote-code")
+            plan = {**plan, "extra_args": extra}
+            current_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(current_plan, **cal_kwargs)
+
+        # If even max tp fails, the model cannot run — skip it.
+        _fatal = (
+            "does not recognize this architecture" in (result.error or "")
+            or "Cannot access gated repo" in (result.error or "")
+        )
+        if not result.success or _fatal:
+            if tp > original_tp:
+                logger.warning(
+                    "  %s failed even with max tp=%d — skipping",
+                    model_name, tp,
+                )
+            results[model_name] = result
+            if not result.success:
+                logger.warning(
+                    "Calibration unsuccessful for %s: %s",
+                    model_name,
+                    result.error,
+                )
             continue
+
+        # Max tp succeeded — now binary-search down to find minimum tp.
+        if tp > original_tp:
+            logger.info(
+                "  %s works at tp=%d — searching for minimum tp (from %d)",
+                model_name, tp, original_tp,
+            )
+        best_result = result
+        best_tp = tp
+
+        # Binary search: try progressively smaller tp values.
+        # tp must be a power of 2 in vLLM, so we halve each step.
+        low_tp = original_tp
+        high_tp = tp
+        while low_tp < high_tp:
+            mid_tp = high_tp // 2
+            if mid_tp < low_tp:
+                break
+            logger.info(
+                "  %s trying tp=%d (search range %d–%d)",
+                model_name, mid_tp, low_tp, high_tp,
+            )
+            mid_plan = {**plan, "tensor_parallel_size": mid_tp}
+            mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+            if mid_result.success:
+                best_result = mid_result
+                best_tp = mid_tp
+                high_tp = mid_tp
+            else:
+                low_tp = mid_tp * 2
+
+        result = best_result
+        tp = best_tp
+
+        if tp != int(plan.get("tensor_parallel_size", 1)):
+            logger.info(
+                "  %s optimal tp=%d (configured=%d, max=%d)",
+                model_name, tp, original_tp, max_tp,
+            )
 
         results[model_name] = result
 

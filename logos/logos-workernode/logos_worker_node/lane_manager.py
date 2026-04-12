@@ -207,6 +207,8 @@ class LaneManager:
         per_gpu_vram_mb: Callable[[], float] | None = None,
         gpu_snapshot: Callable[[], Awaitable[DeviceSummary]] | None = None,
         gpu_force_poll: Callable[[], Awaitable[None]] | None = None,
+        max_lanes: int = 0,
+        model_cache: Any | None = None,
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
@@ -215,6 +217,8 @@ class LaneManager:
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
         self._gpu_snapshot = gpu_snapshot
         self._gpu_force_poll = gpu_force_poll
+        self._max_lanes = max_lanes
+        self._model_cache = model_cache
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -299,6 +303,10 @@ class LaneManager:
 
         Returns a result with all actions taken and final lane statuses.
         """
+        if self._max_lanes > 0 and len(desired) > self._max_lanes:
+            raise ValueError(
+                f"Desired lane count ({len(desired)}) exceeds MAX_LANES limit ({self._max_lanes})"
+            )
         self._validate_vllm_runtime_requirements(desired)
         async with self._lock:
             actions: list[LaneAction] = []
@@ -440,6 +448,10 @@ class LaneManager:
         """Add a single lane."""
         lid = _lane_id_from_config(lane_config)
         self._validate_vllm_runtime_requirements([lane_config])
+        if self._max_lanes > 0 and len(self._handles) >= self._max_lanes:
+            raise ValueError(
+                f"MAX_LANES limit reached ({self._max_lanes})"
+            )
         async with self._lock:
             if lid in self._handles:
                 raise ValueError(f"Lane '{lid}' already exists")
@@ -486,6 +498,11 @@ class LaneManager:
     async def sleep_lane(self, lane_id: str, level: int = 1, mode: str = "wait") -> LaneStatus:
         """Put a running vLLM lane into sleep mode."""
         async with self._lock:
+            if len(self._handles) == 1:
+                logger.warning(
+                    "Sleeping the only active lane '%s' — worker will have zero serving capacity",
+                    lane_id,
+                )
             handle = self._handles.get(lane_id)
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")
@@ -601,6 +618,14 @@ class LaneManager:
     async def get_lane_status(self, lane_id: str) -> LaneStatus:
         async with self._lock:
             return await self._get_status_unlocked(lane_id)
+
+    def get_current_lane_configs(self) -> list[LaneConfig]:
+        """Return the LaneConfig for every active lane (for state persistence)."""
+        configs: list[LaneConfig] = []
+        for handle in self._handles.values():
+            if handle.lane_config is not None:
+                configs.append(handle.lane_config)
+        return configs
 
     def get_handle(self, lane_id: str) -> ProcessHandle | None:
         return self._handles.get(lane_id)
@@ -978,6 +1003,20 @@ class LaneManager:
         return lane_config.model_copy(update={"gpu_devices": selector})
 
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
+        if self._max_lanes > 0 and len(self._handles) >= self._max_lanes:
+            raise ValueError(
+                f"MAX_LANES limit reached ({self._max_lanes})"
+            )
+        # Ensure model is in RAM cache if available
+        hf_home_override: str | None = None
+        if (
+            self._model_cache is not None
+            and getattr(self._model_cache, "enabled", False)
+            and lane_config.vllm
+        ):
+            effective = await self._model_cache.ensure_cached(lane_config.model)
+            if effective:
+                hf_home_override = effective
         lane_config = self._apply_model_vllm_overrides(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
@@ -989,6 +1028,8 @@ class LaneManager:
             self._vllm_engine_config,
             lane_config,
         )
+        if hf_home_override and hasattr(handle, "hf_home_override"):
+            handle.hf_home_override = hf_home_override
         try:
             await handle.init()
             status = await handle.spawn(lane_config)

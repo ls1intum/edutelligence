@@ -20,6 +20,7 @@ from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_profiles import ModelProfileRegistry
+from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.runtime import SERVICE_VERSION
 from logos_worker_node.calibration import auto_calibrate_models
 
@@ -58,12 +59,14 @@ async def _auto_calibrate_if_needed(
         elif profile.sleeping_residual_mb is None:
             reason = "sleeping_residual_mb is null"
         elif (
-            profile.residency_source in ("calibrated", "measured")
+            profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
             and abs(profile.base_residency_mb - profile.loaded_vram_mb) > 1.0
         ):
-            # Old-format profile: base_residency was stored as weights-only.
-            # New format stores full loaded VRAM. Force recalibration.
+            # Old-format calibrated profile: base_residency was stored as
+            # weights-only. New format stores full loaded VRAM. Force recalibration.
+            # Note: "measured" profiles intentionally differ (base=weights-only,
+            # loaded=weights+KV) and must NOT be flagged as stale.
             reason = f"stale format (base={profile.base_residency_mb:.0f} != loaded={profile.loaded_vram_mb:.0f})"
         if reason:
             logger.info("  %s needs calibration: %s", model_name, reason)
@@ -173,6 +176,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _auto_calibrate_if_needed(cfg, model_profiles, get_state_dir())
 
+    # ── tmpfs RAM cache ──────────────────────────────────────────────────
+    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
+    model_cache = create_model_cache(
+        tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
+        hf_home=hf_home,
+    )
+    if model_cache.enabled:
+        caps = list(cfg.logos.capabilities_models) if cfg.logos else []
+        if caps:
+            # Priority: models with calibration profiles first, then smallest first
+            def _sort_key(m: str) -> tuple[int, int]:
+                p = model_profiles.get_profile(m)
+                has_profile = int(p is not None and (p.base_residency_mb or 0) > 0)
+                size = model_cache.model_size_bytes(m)
+                return (-has_profile, size)
+            caps_sorted = sorted(caps, key=_sort_key)
+            logger.info("Pre-populating RAM cache with %d models: %s", len(caps_sorted), caps_sorted)
+            effective_paths = await model_cache.cache_models_by_priority(caps_sorted)
+            for m, p in effective_paths.items():
+                if p == str(model_cache._cache_hub.parent):
+                    logger.info("  %s → RAM cache", m)
+                else:
+                    logger.info("  %s → source filesystem", m)
+
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,
         vllm_engine_config=cfg.engines.vllm,
@@ -184,6 +211,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         per_gpu_vram_mb=lambda: gpu_collector.per_gpu_vram_mb,
         gpu_snapshot=gpu_collector.get_snapshot,
         gpu_force_poll=gpu_collector.force_poll,
+        max_lanes=cfg.worker.max_lanes,
+        model_cache=model_cache,
     )
 
     # Validate capabilities models at startup (warnings only)
@@ -213,19 +242,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if cfg.logos and cfg.logos.capabilities_overrides:
                 model_profiles.add_overrides(cfg.logos.capabilities_overrides)
             model_profiles.seed_capabilities(caps, engine="vllm")
+            ready_caps: list[str] = []
             for cap_model in caps:
                 p = model_profiles.get_profile(cap_model)
                 if p:
                     src = p.residency_source or "unknown"
-                    src_icon = {
-                        "measured": "\033[32m●\033[0m",   # green  — observed
-                        "cached": "\033[33m●\033[0m",     # yellow — from config
-                        "override": "\033[36m●\033[0m",   # cyan   — manual
-                    }.get(src, "\033[31m●\033[0m")         # red    — estimated
+                    has_profile = (p.base_residency_mb or 0) > 0
+                    if has_profile:
+                        src_icon = {
+                            "calibrated": "\033[32m●\033[0m",  # green  — calibrated
+                            "measured": "\033[32m●\033[0m",    # green  — observed
+                            "override": "\033[36m●\033[0m",    # cyan   — manual
+                        }.get(src, "\033[33m●\033[0m")          # yellow — other
+                        label = src.upper()
+                        ready_caps.append(cap_model)
+                    else:
+                        src_icon = "\033[31m●\033[0m"           # red    — no data
+                        label = "UNCALIBRATED"
                     logger.info(
                         "  %s %s [%s]: base_residency=%.0f MB | "
                         "disk=%.1f GB | kv_per_token=%s B | max_ctx=%s | engine=%s",
-                        src_icon, cap_model, src.upper(),
+                        src_icon, cap_model, label,
                         p.base_residency_mb or 0,
                         (p.disk_size_bytes or 0) / (1024**3),
                         p.kv_per_token_bytes,
@@ -233,10 +270,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         p.engine,
                     )
 
+            # Only advertise models with actual profile data to the server
+            if len(ready_caps) < len(caps):
+                skipped = set(caps) - set(ready_caps)
+                logger.warning(
+                    "Excluding %d uncalibrated model(s) from capabilities: %s",
+                    len(skipped), sorted(skipped),
+                )
+                cfg.logos.capabilities_models = ready_caps
+
     app.state.config = cfg
     app.state.gpu_collector = gpu_collector
     app.state.lane_manager = lane_manager
     app.state.model_profiles = model_profiles
+    app.state.model_cache = model_cache
     logos_bridge = LogosBridgeClient(app, cfg.logos)
     app.state.logos_bridge = logos_bridge
     await logos_bridge.start()

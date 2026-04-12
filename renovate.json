@@ -3,6 +3,44 @@
   "extends": [
     "config:recommended"
   ],
+  "packageRules": [
+    {
+      "groupName": "athena",
+      "matchFileNames": ["athena/**"],
+      "commitMessagePrefix": "`Athena`:"
+    },
+    {
+      "groupName": "atlas",
+      "matchFileNames": ["atlas/**"],
+      "commitMessagePrefix": "`Atlas`:"
+    },
+    {
+      "groupName": "hyperion",
+      "matchFileNames": ["hyperion/**"],
+      "commitMessagePrefix": "`Hyperion`:"
+    },
+    {
+      "groupName": "iris",
+      "matchFileNames": ["iris/**"],
+      "commitMessagePrefix": "`Iris`:"
+    },
+    {
+      "groupName": "logos",
+      "matchFileNames": ["logos/**"],
+      "commitMessagePrefix": "`Logos`:"
+    },
+    {
+      "groupName": "memiris",
+      "matchFileNames": ["memiris/**"],
+      "commitMessagePrefix": "`Memiris`:"
+    },
+    {
+      "groupName": "shared",
+      "matchFileNames": ["shared/**"],
+      "commitMessagePrefix": "`Shared`:"
+    }
+  ],
   "timezone": "Europe/Berlin",
-  "schedule": ["* 0-4 * * *"]
+  "schedule": ["* 0-4 * * *"],
+  "updateNotScheduled": false
 }

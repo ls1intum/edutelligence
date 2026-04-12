@@ -6,8 +6,7 @@ from uuid import UUID
 
 import langfuse
 from jinja2 import Template
-from langfuse import observe
-from langfuse._client.client import Langfuse
+from langfuse import Langfuse, observe
 from ollama import Message
 
 from memiris.dlo.memory_connection_dlo import MemoryConnectionDLO

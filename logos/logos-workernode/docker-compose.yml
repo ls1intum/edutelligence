@@ -5,6 +5,11 @@
 #   config.yml  — hardware & tuning (Ansible-managed, mounted read-only)
 #   .env        — identity & credentials (GitHub secrets/variables)
 #   ./data      — runtime state (bind-mounted, visible on host)
+#
+# tmpfs RAM cache (optional):
+#   Set LOGOS_TMPFS_CACHE_PATH=/mnt/ramcache and TMPFS_SIZE=100g in .env
+#   to enable a tmpfs-backed RAM cache for faster model loading.
+#   When TMPFS_SIZE is unset or "0", the tmpfs mount is a no-op (size=0).
 services:
   logos-workernode:
     image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:${IMAGE_TAG:-latest}
@@ -18,6 +23,10 @@ services:
       LOGOS_URL: ${LOGOS_URL:-}
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      MAX_LANES: ${MAX_LANES:-}
+      # ── tmpfs RAM cache ────────────────────────────────────────────────
+      LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       # ── Auto-calibration ───────────────────────────────────────────────
       # Set to "1" to skip auto-calibration on startup (use manual calibrate.sh instead)
       LOGOS_SKIP_AUTO_CALIBRATION: ${LOGOS_SKIP_AUTO_CALIBRATION:-}
@@ -43,6 +52,11 @@ services:
       - ./data:/app/data
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
+      # tmpfs RAM cache — size=0 when TMPFS_SIZE is unset (no-op mount)
+      - type: tmpfs
+        target: /mnt/ramcache
+        tmpfs:
+          size: ${TMPFS_SIZE:-0}
     healthcheck:
       test:
         [
@@ -82,7 +96,9 @@ services:
     environment:
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
+      HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
       VLLM_SERVER_DEV_MODE: "1"
@@ -100,6 +116,11 @@ services:
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./tools:/app/tools:ro
       - ./calibration_logs:/app/calibration_logs
+      # tmpfs RAM cache for calibration — models load faster from RAM
+      - type: tmpfs
+        target: /mnt/ramcache
+        tmpfs:
+          size: ${TMPFS_SIZE:-0}
 
 volumes:
   ollama-models:

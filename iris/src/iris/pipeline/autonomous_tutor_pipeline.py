@@ -7,7 +7,7 @@ from iris.common.logging_config import get_logger
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
-from iris.domain.variant.autonomous_tutor_variant import AutonomousTutorVariant
+from iris.domain.variant.variant import Dep, Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -17,6 +17,7 @@ from iris.pipeline.shared.confidence_scoring import (
     parse_confidence_response,
 )
 from iris.pipeline.shared.utils import (
+    REDACTED_ANSWER_PLACEHOLDER,
     format_post_discussion,
     get_current_utc_datetime_string,
 )
@@ -39,17 +40,33 @@ logger = get_logger(__name__)
 
 
 class AutonomousTutorPipeline(
-    AbstractAgentPipeline[AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant]
+    AbstractAgentPipeline[AutonomousTutorPipelineExecutionDTO, Variant]
 ):
     """
     The AutonomousTutorPipeline autonomously responds to student posts.
     It analyzes the post and generates a helpful response based on available context.
     """
 
+    PIPELINE_ID = "autonomous_tutor_pipeline"
+    ROLES = {"chat"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Default autonomous tutor variant.",
+        ),
+    ]
+    DEPENDENCIES = [
+        Dep("lecture_retrieval_pipeline"),
+        Dep("lecture_unit_segment_retrieval_pipeline"),
+        Dep("lecture_transcriptions_retrieval_pipeline"),
+        Dep("faq_retrieval_pipeline"),
+    ]
+
     DIRECT_POST_CONFIDENCE_THRESHOLD = 0.95
 
     def __init__(self):
-        super().__init__(implementation_id="autonomous_tutor_pipeline")
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
         self.faq_retriever = None
 
@@ -76,7 +93,7 @@ class AutonomousTutorPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> list[Callable]:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -157,7 +174,7 @@ class AutonomousTutorPipeline(
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> str:
         post = state.dto.post
@@ -213,28 +230,41 @@ class AutonomousTutorPipeline(
     def is_memiris_memory_creation_enabled(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> bool:
         """Memory creation is disabled for autonomous tutor pipeline."""
         return False
 
+    NO_RESPONSE_MARKER = "NO_RESPONSE_NEEDED"
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> str:
         """Send the final response back to Artemis with confidence score."""
+        if state.result and self.NO_RESPONSE_MARKER in state.result:
+            logger.info("Post does not require a tutoring response, skipping.")
+            state.callback.done(
+                "No response needed",
+                final_result=None,
+                tokens=self.tokens,
+                confidence=0.0,
+                should_post_directly=False,
+            )
+            return ""
+
         confidence = self._estimate_confidence(state)
         should_post_directly = confidence >= self.DIRECT_POST_CONFIDENCE_THRESHOLD
 
+        logger.info("Generated response: %s", state.result)
         logger.info(
             "Confidence score | score=%.4f should_post_directly=%s",
             confidence,
             should_post_directly,
         )
-        logger.info("Generated response: %s", state.result)
 
         state.callback.done(
             "Response generated",
@@ -248,7 +278,7 @@ class AutonomousTutorPipeline(
     def _estimate_confidence(
         self,
         state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, AutonomousTutorVariant
+            AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> float:
         """Parse the verbalized confidence score from the agent's response.
@@ -278,7 +308,9 @@ class AutonomousTutorPipeline(
             return ""
         responses = []
         for answer in post.answers:
-            if answer.content:
+            if answer.redacted:
+                responses.append(f"- {REDACTED_ANSWER_PLACEHOLDER}")
+            elif answer.content:
                 responses.append(f"- {answer.content}")
         return "\n".join(responses)
 
@@ -286,7 +318,7 @@ class AutonomousTutorPipeline(
     def __call__(
         self,
         dto: AutonomousTutorPipelineExecutionDTO,
-        variant: AutonomousTutorVariant,
+        variant: Variant,
         callback: AutonomousTutorCallback,
     ):
         """Run the autonomous tutor pipeline."""
@@ -302,16 +334,3 @@ class AutonomousTutorPipeline(
                 "An error occurred while running the autonomous tutor pipeline.",
                 tokens=self.tokens,
             )
-
-    @classmethod
-    def get_variants(cls) -> List[AutonomousTutorVariant]:
-        """Returns available variants for the AutonomousTutorPipeline."""
-        return [
-            AutonomousTutorVariant(
-                variant_id="default",
-                name="Default",
-                description="Default autonomous tutor variant using the OpenAI GPT-OSS 120B model.",
-                cloud_agent_model="gpt-oss:120b",
-                local_agent_model="gpt-oss:120b",
-            ),
-        ]

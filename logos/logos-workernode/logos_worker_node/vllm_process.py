@@ -79,6 +79,7 @@ class VllmProcessHandle:
         self._stuck_vram: bool = False
         self._known_child_pids: set[int] = set()
         self._process_group_id: int | None = None
+        self.hf_home_override: str | None = None
 
     async def init(self) -> None:
         self._http = httpx.AsyncClient(
@@ -679,9 +680,16 @@ class VllmProcessHandle:
                     env["CUDA_HOME"] = candidate
                     break
 
+        # HuggingFace token — needed for gated models (e.g. gemma)
+        hf_token = os.environ.get("HF_TOKEN", "")
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+
         # HuggingFace cache — use same location as Ollama models for consistency
         # (though vLLM uses HF format, not GGUF)
-        if "HF_HOME" not in os.environ:
+        if self.hf_home_override:
+            env["HF_HOME"] = self.hf_home_override
+        elif "HF_HOME" not in os.environ:
             env["HF_HOME"] = self._resolve_hf_home(gc.models_path)
 
         if lane_config.vllm_config is None:

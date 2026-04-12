@@ -288,7 +288,8 @@ class CapacityPlanner:
         for pid in provider_ids:
             snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
             if snap is None:
-                lines.append(f"{paint('⊘', RED)} provider={pid} {paint('offline', DIM)}")
+                name = self._facade.get_provider_name(pid) or "?"
+                lines.append(f"{paint('⊘', RED)} provider={paint(name, BOLD)} {paint('offline', DIM)}")
                 continue
 
             connected += 1
@@ -310,7 +311,7 @@ class CapacityPlanner:
             worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
 
             lines.append(
-                f"{paint('●', worker_color)} provider={pid} worker={paint(str(worker_id), BOLD)} "
+                f"{paint('●', worker_color)} provider={paint(str(worker_id), BOLD)} "
                 f"status={paint('active', worker_color)} hb={heartbeat_age_s:.0f}s "
                 f"vram={paint(f'{total_vram - free_vram:.0f}/{total_vram:.0f}MB', BOLD)} ({used_pct:.0f}%)"
             )
@@ -441,9 +442,10 @@ class CapacityPlanner:
         }
         for action in actions:
             color = action_colors.get(action.action, CYAN)
+            pname = self._facade.get_provider_name(action.provider_id) or str(action.provider_id)
             lines.append(
                 f"{paint('→', color)} {paint(action.action, color, BOLD)} "
-                f"provider={action.provider_id} lane={action.lane_id}"
+                f"provider={pname} lane={action.lane_id}"
             )
             lines.extend(wrap_plain(f"model: {action.model_name}", indent="    "))
             lines.extend(wrap_plain(f"reason: {action.reason}", indent="    "))
@@ -564,7 +566,7 @@ class CapacityPlanner:
         profile = self._safe_get_profiles(provider_id).get(model_name)
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
-            logger.debug("No capacity info for provider %s, cannot cold-load %s", provider_id, model_name)
+            logger.debug("No capacity info for provider %s, cannot cold-load %s", self._facade.get_provider_name(provider_id) or provider_id, model_name)
             return None
 
         # No early feasibility bail-out here — the reclaim loop below will
@@ -661,14 +663,14 @@ class CapacityPlanner:
             if not ok:
                 logger.info(
                     "Cannot reclaim enough VRAM for cold load of %s on provider %s",
-                    model_name, provider_id,
+                    model_name, self._facade.get_provider_name(provider_id) or provider_id,
                 )
                 return None
 
-        logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, provider_id, lane_id)
+        logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id)
         async with self._lane_lock(provider_id, lane_id):
             loaded = await self._execute_action_with_confirmation(
-                load_action, timeout_seconds=max(timeout_seconds, 180.0),
+                load_action, timeout_seconds=max(timeout_seconds, 300.0),
             )
         if not loaded:
             return None
@@ -1125,6 +1127,21 @@ class CapacityPlanner:
         """
         now = time.time()
         actions = []
+
+        # Never sleep the only usable lane on a worker — it would leave
+        # the worker with zero serving capacity.
+        active_lanes = [
+            l for l in lanes
+            if l.runtime_state not in ("stopped", "error", "cold")
+        ]
+        if len(active_lanes) <= 1:
+            if active_lanes:
+                logger.info(
+                    "Skipping idle sleep for provider %s: only 1 active lane (%s)",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    active_lanes[0].lane_id,
+                )
+            return []
 
         for lane in lanes:
             key = self._lane_key(provider_id, lane.lane_id)
@@ -1724,12 +1741,12 @@ class CapacityPlanner:
         if candidates:
             logger.info(
                 "Preemptive sleep candidates for provider=%s: %s",
-                provider_id,
+                self._facade.get_provider_name(provider_id) or provider_id,
                 ", ".join(f"{name}(demand={score:.2f}, residual={profile.sleeping_residual_mb:.0f}MB)"
                           for score, name, profile in candidates),
             )
         else:
-            logger.info("Preemptive sleep: no candidates for provider=%s (no stopped models with known residual and demand>0)", provider_id)
+            logger.info("Preemptive sleep: no candidates for provider=%s (no stopped models with known residual and demand>0)", self._facade.get_provider_name(provider_id) or provider_id)
 
         now = time.time()
 
@@ -2778,7 +2795,7 @@ class CapacityPlanner:
                     - self.get_pending_vram_mb(provider_id)
                 )
             except Exception:
-                logger.debug("Cannot check VRAM for provider %s, rejecting %s", provider_id, action.action)
+                logger.debug("Cannot check VRAM for provider %s, rejecting %s", self._facade.get_provider_name(provider_id) or provider_id, action.action)
                 continue
 
             try:
@@ -3638,7 +3655,8 @@ class CapacityPlanner:
                 try:
                     await self._registry.send_command(
                         action.provider_id, "add_lane", action.params,
-                        timeout_seconds=int(timeout_seconds),
+                        timeout_seconds=int(max(timeout_seconds, 300)),
+                        stale_after_seconds=360,
                     )
                     self._registry.update_desired_lane_add(
                         action.provider_id, action.params,
@@ -3664,7 +3682,8 @@ class CapacityPlanner:
                     result = await self._registry.send_command(
                         action.provider_id, "apply_lanes",
                         {"lanes": desired},
-                        timeout_seconds=int(timeout_seconds),
+                        timeout_seconds=int(max(timeout_seconds, 300)),
+                        stale_after_seconds=360,
                     )
                     rolled_back = isinstance(result, dict) and result.get("rolled_back")
                     if rolled_back:
