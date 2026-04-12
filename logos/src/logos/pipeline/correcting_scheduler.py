@@ -340,13 +340,50 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             reasoning=f"Unknown provider type: {provider_type}",
         )
 
+    # Tiers where the model lane is NOT loaded/running — try_reserve_capacity
+    # will always fail for these because _is_model_lane_ready() requires
+    # "loaded" or "running".  When ECCS is enabled and the best-scored
+    # candidate is in one of these tiers, we should queue for it (let the
+    # capacity planner wake/load it) rather than falling through to a
+    # lower-scored warm model.
+    _NOT_READY_TIERS = frozenset({
+        ReadinessTier.SLEEPING,
+        ReadinessTier.SLEEPING_RECLAIM,
+        ReadinessTier.COLD,
+        ReadinessTier.COLD_RECLAIM,
+    })
+
     def _try_immediate_select(self, scored: list, request_id: str):
         """Try to reserve capacity on the best available candidate.
 
-        Returns the winning tuple or None if no candidate can be reserved immediately.
+        Returns the winning tuple or None if no candidate can be reserved
+        immediately.
+
+        When ECCS is enabled and the highest-scored candidate is sleeping or
+        cold, returns None so the caller queues for that candidate — the
+        corrected score already accounts for the wake/load cost, so the
+        capacity planner should handle it rather than silently downgrading
+        to a lower-scored warm model.
         """
-        for model_id, provider_id, provider_type, score, priority_int, ettft in scored:
+        for idx, (model_id, provider_id, provider_type, score, priority_int, ettft) in enumerate(scored):
             if provider_type == "logosnode":
+                # ECCS-aware: if this candidate is not ready (sleeping/cold)
+                # and it's the top-scored candidate, don't fall through to a
+                # worse warm model — queue for this one instead.
+                if (
+                    self._ettft_enabled
+                    and ettft.tier in self._NOT_READY_TIERS
+                    and idx == 0
+                ):
+                    logger.info(
+                        "ECCS queue-for-best: top candidate model %s provider %s "
+                        "is %s (score=%.2f, wait=%.1fs) — deferring to queue path "
+                        "instead of downgrading to a lower-scored warm model",
+                        model_id, provider_id, ettft.tier.value,
+                        score, ettft.expected_wait_s,
+                    )
+                    return None
+
                 try:
                     reserved = self._logosnode.try_reserve_capacity(model_id, provider_id, request_id)
                 except (KeyError, Exception):

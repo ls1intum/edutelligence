@@ -96,6 +96,12 @@ class VllmConfig(BaseModel):
         "e.g. {\"enable_thinking\": false} to disable Qwen3/3.5 thinking mode.",
     )
     extra_args: list[str] = Field(default_factory=list)
+    env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra environment variables for this vLLM process. "
+        "e.g. {\"VLLM_USE_V1\": \"0\"} to force V0 engine for models "
+        "whose head dimensions exceed V1 attention kernel limits.",
+    )
 
     @field_validator("kv_cache_memory_bytes")
     @classmethod

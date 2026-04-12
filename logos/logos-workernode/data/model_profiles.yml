@@ -1,18 +1,33 @@
 model_profiles:
+  Alibaba-NLP/gte-Qwen2-1.5B-instruct:
+    base_residency_mb: 3924.0
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 2048.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1776014410.1409748
+    loaded_vram_mb: 3898.226543730413
+    max_context_length: null
+    measurement_count: 47
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
+    residency_source: calibrated
+    sleeping_residual_mb: 676.0
+    tensor_parallel_size: 2
   Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
     base_residency_mb: 21484.0
     disk_size_bytes: null
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775928582.2312117
-    loaded_vram_mb: 19776.219472613862
+    last_measured_epoch: 1776014410.256216
+    loaded_vram_mb: 19768.509699686816
     max_context_length: null
-    measurement_count: 3001
-    min_gpu_memory_utilization_to_load: 0.85
-    observed_gpu_memory_utilization: 0.85
+    measurement_count: 33
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
     residency_source: calibrated
-    sleeping_residual_mb: 1396.0
+    sleeping_residual_mb: 1392.0
     tensor_parallel_size: 2
   Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
     base_residency_mb: 16752.0
@@ -20,29 +35,44 @@ model_profiles:
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775928582.2916942
-    loaded_vram_mb: 15403.999533315036
+    last_measured_epoch: 1776014410.0119305
+    loaded_vram_mb: 15269.841607801714
     max_context_length: null
-    measurement_count: 3171
-    min_gpu_memory_utilization_to_load: 0.85
-    observed_gpu_memory_utilization: 0.85
+    measurement_count: 45
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
     residency_source: calibrated
-    sleeping_residual_mb: 1488.0000000000005
+    sleeping_residual_mb: 1487.9867068277717
     tensor_parallel_size: 2
-  cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit:
-    base_residency_mb: null
+  casperhansen/deepseek-r1-distill-llama-8b-awq:
+    base_residency_mb: 16552.0
     disk_size_bytes: null
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 0.0
-    loaded_vram_mb: null
+    last_measured_epoch: 1776014410.0814703
+    loaded_vram_mb: 15119.686803175828
     max_context_length: null
-    measurement_count: 0
-    min_gpu_memory_utilization_to_load: null
-    observed_gpu_memory_utilization: null
-    residency_source: cached
-    sleeping_residual_mb: null
+    measurement_count: 53
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
+    residency_source: calibrated
+    sleeping_residual_mb: 1384.0
+    tensor_parallel_size: 2
+  cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit:
+    base_residency_mb: 27232.0
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 2048.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1776000248.9140139
+    loaded_vram_mb: 27154.359999999993
+    max_context_length: null
+    measurement_count: 11
+    min_gpu_memory_utilization_to_load: 0.85
+    observed_gpu_memory_utilization: 0.85
+    residency_source: calibrated
+    sleeping_residual_mb: 752.0
     tensor_parallel_size: 2
   openai/gpt-oss-20b:
     base_residency_mb: null
@@ -80,12 +110,12 @@ model_profiles:
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775928582.3496428
-    loaded_vram_mb: 13703.999947663575
+    last_measured_epoch: 1776014410.1965282
+    loaded_vram_mb: 13580.381725594885
     max_context_length: null
-    measurement_count: 3821
-    min_gpu_memory_utilization_to_load: 0.85
-    observed_gpu_memory_utilization: 0.85
+    measurement_count: 29
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
     residency_source: calibrated
-    sleeping_residual_mb: 1368.0000000000218
+    sleeping_residual_mb: 1368.0
     tensor_parallel_size: 2

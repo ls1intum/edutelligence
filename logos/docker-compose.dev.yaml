@@ -186,7 +186,7 @@ services:
       - extern
 
   logos-workernode:
-    image: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:pr-489
+    image: logos-workernode-vllm:gemma4  # local image with transformers 5.5.3 for gemma4 arch support (based on pr-489)
     container_name: logos-workernode-dev
     init: true
     restart: unless-stopped

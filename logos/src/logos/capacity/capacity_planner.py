@@ -3032,13 +3032,24 @@ class CapacityPlanner:
                 current_vram = self._estimate_model_loaded_vram(profile)
             residual_vram = float(profile.sleeping_residual_mb or 0.0) if profile is not None else 0.0
 
-            # Sleeping vLLM lanes hold only their residual (~1-2 GB) in actual
-            # device memory — model weights are freed to the CUDA pool and show
-            # as free in nvidia-smi.  Stopping a sleeping lane frees negligible
-            # VRAM (verified: ~12 MB in practice) while destroying the fast-wake
-            # benefit (~2-3s wake vs 30-60s cold load).  Never use sleeping lanes
-            # as reclaim candidates — only loaded/running lanes can free VRAM.
+            # Sleeping vLLM lanes hold their residual (~0.7-1.5 GB) in actual
+            # device memory.  Stopping a sleeping lane frees that residual but
+            # destroys the fast-wake benefit (~2-3s vs 30-60s cold load).
+            # Add as last-resort stop candidates (high penalty) — only chosen
+            # when sleeping awake lanes can't free enough VRAM.
             if lane.is_vllm and lane.runtime_state == "sleeping":
+                if residual_vram > 0 and not in_cooldown:
+                    stop_candidates.append((
+                        residual_vram,
+                        CapacityPlanAction(
+                            action="stop",
+                            provider_id=provider_id,
+                            lane_id=lane.lane_id,
+                            model_name=lane.model_name,
+                            params={"_stop_penalty": 2},
+                            reason=f"Request-time reclaim (stop sleeping) for {target.model_name}",
+                        ),
+                    ))
                 continue
 
             if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":

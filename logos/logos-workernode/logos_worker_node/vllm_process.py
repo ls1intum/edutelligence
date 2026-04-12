@@ -754,6 +754,11 @@ class VllmProcessHandle:
             if self._vllm_engine_config.nccl_debug_subsys:
                 env["NCCL_DEBUG_SUBSYS"] = self._vllm_engine_config.nccl_debug_subsys
 
+        # Per-model environment overrides (e.g. VLLM_USE_V1=0 for models
+        # whose head dimensions exceed V1 attention kernel limits on SM 7.5).
+        if vc.env_overrides:
+            env.update(vc.env_overrides)
+
         return env
 
     def _build_process_env(
