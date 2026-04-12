@@ -1,9 +1,18 @@
 # src/logos/pipeline/ettft_estimator.py
 """
-Estimated Time To First Token (ETTFT) estimation module.
+Estimated Time To First Token (ETTFT) estimation and range-scaled correction.
 
 Pure-function module with no state — fully unit-testable.
-Maps runtime signals to latency estimates and scheduling penalties.
+Maps runtime signals to latency estimates and range-scaled scheduling penalties.
+
+Design: Range-scaled additive correction
+  corrected = classification_weight - penalty
+  penalty = min(expected_wait_s / NORMALIZATION_HORIZON_S, 1.0)
+            × weight_span × CORRECTION_STRENGTH
+
+This preserves same-state ordering (two models in the same infrastructure state
+get identical penalty → classification ordering preserved) while making the
+correction proportional to the weight span of the candidate set.
 """
 
 from dataclasses import dataclass
@@ -13,179 +22,278 @@ from typing import Optional
 from logos.sdi.models import ModelSchedulerView, AzureCapacity
 
 
+# ── Correction tuning knobs ─────────────────────────────────────────────
+
+NORMALIZATION_HORIZON_S = 60.0      # Maximum expected wait before penalty saturates
+CORRECTION_STRENGTH = 1.5           # Multiplier on the penalty fraction
+
+# ── Infrastructure overhead constants (seconds) ────────────────────────
+
+OVERHEAD_WARM_S = 0.0               # Loaded model → serve immediately
+OVERHEAD_SLEEPING_S = 2.5           # Sleep → wake transition
+OVERHEAD_COLD_S = 45.0              # Cold load from disk
+OVERHEAD_RECLAIM_S = 8.0            # Additional cost when VRAM eviction needed
+CLOUD_OVERHEAD_S = 0.3              # Azure/cloud baseline latency
+CLOUD_LOW_HEADROOM_S = 5.0          # Azure near rate limit
+
+# ── Weight span floor ──────────────────────────────────────────────────
+
+MIN_SPAN_FRACTION = 0.2             # Floor as fraction of max(|w_max|, |w_min|)
+MIN_SPAN_FLOOR = 1.0                # Absolute floor for weight span
+
+# ── Queue estimation ───────────────────────────────────────────────────
+
+DEFAULT_GENERATION_TIME_S = 3.0     # Fallback generation time per request
+
+
 class ReadinessTier(Enum):
-    WARM = "warm"           # loaded, low queue → penalty 0
-    SLEEPING = "sleeping"   # sleeping lane, 0.5-3s wake → penalty 2
-    BUSY = "busy"           # loaded but queue pressure → penalty 8
-    COLD = "cold"           # not loaded, 30-90s load → penalty 20
-    UNAVAILABLE = "unavailable"  # no lanes / error → penalty inf
+    WARM = "warm"                          # loaded, serve immediately
+    SLEEPING = "sleeping"                  # sleeping lane, ~2.5s wake
+    BUSY = "busy"                          # legacy compat: loaded + queue pressure
+    COLD = "cold"                          # not loaded, ~45s load
+    COLD_RECLAIM = "cold_reclaim"          # cold + must evict another model first
+    SLEEPING_RECLAIM = "sleeping_reclaim"  # sleeping + must reclaim KV cache first
+    UNAVAILABLE = "unavailable"            # no lanes / error
 
 
 @dataclass(frozen=True)
 class EttftEstimate:
-    ettft_ms: float
+    """ETTFT estimation result with infrastructure-aware wait decomposition."""
+
+    expected_wait_s: float
     tier: ReadinessTier
-    penalty: float
     reasoning: str
+    state_overhead_s: float = 0.0
+    queue_wait_s: float = 0.0
+    needs_reclaim: bool = False
+
+    @property
+    def ettft_ms(self) -> float:
+        """Backward-compatible ETTFT in milliseconds."""
+        if self.expected_wait_s == float("inf"):
+            return float("inf")
+        return self.expected_wait_s * 1000.0
 
 
-# Configurable tier thresholds (tuning knobs for thesis Chapter 6)
-TIER_THRESHOLDS = {
-    ReadinessTier.WARM:        {"max_ms": 500.0,    "penalty": 0.0},
-    ReadinessTier.SLEEPING:    {"max_ms": 3000.0,   "penalty": 2.0},
-    ReadinessTier.BUSY:        {"max_ms": 10000.0,  "penalty": 8.0},
-    ReadinessTier.COLD:        {"max_ms": 60000.0,  "penalty": 20.0},
-    ReadinessTier.UNAVAILABLE: {"max_ms": float("inf"), "penalty": float("inf")},
-}
-
-# Default ETTFT values for states where measurement is unavailable
-_DEFAULT_WARM_MS = 200.0
-_DEFAULT_SLEEPING_MS = 2000.0
-_DEFAULT_COLD_MS = 45000.0
-_BUSY_QUEUE_MULTIPLIER = 1.0  # legacy linear multiplier (unused, kept for reference)
-_BUSY_QUEUE_EXPONENT_BASE = 1.3  # exponential backoff: penalty = base_ttft * (1.3^depth - 1)
+# ── Weight span computation ────────────────────────────────────────────
 
 
-def classify_tier(ettft_ms: float) -> tuple[ReadinessTier, float]:
-    """Map raw ETTFT (ms) to tier and penalty.
+def compute_weight_span(weights: list[float]) -> float:
+    """Compute the dynamic range of classification weights.
 
-    Iterates through tiers in warmth order; first whose max_ms >= ettft_ms wins.
+    Handles: negative weights, identical weights, single candidate, empty list.
+    The span is floored to prevent trivially small corrections.
+
+    Returns max(spread, abs_floor, MIN_SPAN_FLOOR) where:
+    - spread = max(weights) - min(weights)
+    - abs_floor = max(|w_max|, |w_min|) × MIN_SPAN_FRACTION
     """
-    for tier in (ReadinessTier.WARM, ReadinessTier.SLEEPING, ReadinessTier.BUSY, ReadinessTier.COLD):
-        if ettft_ms <= TIER_THRESHOLDS[tier]["max_ms"]:
-            return tier, TIER_THRESHOLDS[tier]["penalty"]
-    return ReadinessTier.UNAVAILABLE, TIER_THRESHOLDS[ReadinessTier.UNAVAILABLE]["penalty"]
+    if not weights:
+        return MIN_SPAN_FLOOR
+    w_max = max(weights)
+    w_min = min(weights)
+    spread = w_max - w_min
+    abs_floor = max(abs(w_max), abs(w_min)) * MIN_SPAN_FRACTION
+    return max(spread, abs_floor, MIN_SPAN_FLOOR)
 
 
-def compute_corrected_score(classification_weight: float, penalty: float) -> float:
-    """corrected_score = classification_weight - penalty."""
-    if penalty == float("inf"):
-        return float("-inf")
+# ── Corrected score computation ────────────────────────────────────────
+
+
+def compute_corrected_score(
+    classification_weight: float,
+    expected_wait_s: float,
+    weight_span: float,
+) -> float:
+    """Range-scaled additive correction.
+
+    corrected = classification_weight - penalty
+    penalty = min(expected_wait_s / NORMALIZATION_HORIZON_S, 1.0)
+              × weight_span × CORRECTION_STRENGTH
+
+    Properties:
+    - Same-state ordering: two models with identical expected_wait_s get
+      the same penalty → classification ordering preserved.
+    - Bounded: maximum penalty = weight_span × CORRECTION_STRENGTH.
+    - Zero pass-through: expected_wait_s ≤ 0 → no penalty.
+    - Infinite wait: expected_wait_s = inf → full-span penalty.
+    """
+    if weight_span <= 0 or expected_wait_s <= 0:
+        return classification_weight
+    if expected_wait_s == float("inf"):
+        return classification_weight - weight_span * CORRECTION_STRENGTH
+    penalty_fraction = min(expected_wait_s / NORMALIZATION_HORIZON_S, 1.0)
+    penalty = penalty_fraction * weight_span * CORRECTION_STRENGTH
     return classification_weight - penalty
+
+
+# ── Queue wait estimation ──────────────────────────────────────────────
+
+
+def _estimate_queue_wait_s(
+    scheduler_queue_depth: int,
+    effective_parallel: int,
+    generation_time_s: float,
+) -> float:
+    """Estimate queue wait from depth, parallelism, and generation time.
+
+    queue_rounds = scheduler_queue_depth / effective_parallel
+    queue_wait_s = queue_rounds × generation_time_s
+    """
+    if scheduler_queue_depth <= 0:
+        return 0.0
+    parallel = max(effective_parallel, 1)
+    queue_rounds = scheduler_queue_depth / parallel
+    return queue_rounds * generation_time_s
+
+
+# ── Local (logosnode) estimation ───────────────────────────────────────
 
 
 def estimate_ettft_local(
     view: ModelSchedulerView,
-    eviction_cost_ms: float = 0.0,
+    effective_parallel: int = 1,
+    generation_time_s: float = DEFAULT_GENERATION_TIME_S,
+    available_vram_mb: float = float("inf"),
+    model_vram_mb: float = 0.0,
+    kv_budget_mb: float = 0.0,
+    scheduler_queue_depth: int = 0,
 ) -> EttftEstimate:
     """Estimate ETTFT for a local (logosnode) model from its scheduler view.
 
-    Args:
-        view: Current model scheduler state.
-        eviction_cost_ms: Additional latency if loading this model requires
-            evicting another lane to free VRAM. Only applied to COLD tier.
-
     Decision tree:
     1. No lanes or all stopped/error → UNAVAILABLE
-    2. All lanes cold/starting → COLD (~45s + eviction_cost_ms)
-    3. Best lane sleeping → SLEEPING (~2s wake time)
-    4. Best lane loaded, queue_waiting > 0 → BUSY (TTFT * (1 + queue_depth))
-    5. Best lane loaded, low queue → WARM (measured TTFT or 200ms default)
+    2. All lanes cold/starting:
+       a. model_vram_mb > available_vram_mb → COLD_RECLAIM (45s + 8s)
+       b. otherwise → COLD (45s)
+    3. Best lane sleeping:
+       a. kv_budget_mb > available_vram_mb → SLEEPING_RECLAIM (2.5s + 8s)
+       b. otherwise → SLEEPING (2.5s)
+    4. Best lane loaded/running → WARM (0s)
+    5. Queue penalty added in all non-UNAVAILABLE cases:
+       queue_wait_s = (scheduler_queue_depth / effective_parallel) × generation_time_s
     """
     if not view.lanes:
         return EttftEstimate(
-            ettft_ms=float("inf"),
+            expected_wait_s=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
-            penalty=TIER_THRESHOLDS[ReadinessTier.UNAVAILABLE]["penalty"],
             reasoning="No lanes available",
         )
 
-    # Check if all lanes are in terminal non-routable states
     active_states = {s.runtime_state for s in view.lanes}
     if active_states <= {"stopped", "error"}:
         return EttftEstimate(
-            ettft_ms=float("inf"),
+            expected_wait_s=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
-            penalty=TIER_THRESHOLDS[ReadinessTier.UNAVAILABLE]["penalty"],
             reasoning=f"All lanes in non-routable states: {active_states}",
         )
 
     best_state = view.best_lane_state
-
-    # Cold: no loaded/running lanes
-    if best_state in ("cold", "starting"):
-        ettft_ms = _DEFAULT_COLD_MS + eviction_cost_ms
-        eviction_note = f" +{eviction_cost_ms:.0f}ms eviction" if eviction_cost_ms > 0 else ""
-        tier, penalty = classify_tier(ettft_ms)
-        return EttftEstimate(
-            ettft_ms=ettft_ms,
-            tier=tier,
-            penalty=penalty,
-            reasoning=f"Best lane state is '{best_state}', cold-start estimated at {ettft_ms:.0f}ms{eviction_note}",
-        )
-
-    # Sleeping: best lane is sleeping, needs wake
-    if best_state == "sleeping":
-        ettft_ms = _DEFAULT_SLEEPING_MS
-        tier, penalty = classify_tier(ettft_ms)
-        return EttftEstimate(
-            ettft_ms=ettft_ms,
-            tier=tier,
-            penalty=penalty,
-            reasoning=f"Best lane is sleeping (sleep_state={view.best_sleep_state}), wake ~{ettft_ms:.0f}ms",
-        )
-
-    # Loaded or running — check queue pressure
-    base_ttft_ms = (view.warmest_ttft_p95_seconds * 1000) if view.warmest_ttft_p95_seconds > 0 else _DEFAULT_WARM_MS
-
-    if view.aggregate_queue_waiting > 0:
-        # Exponential backoff: penalty grows super-linearly with queue depth.
-        # Cap at _DEFAULT_COLD_MS so hot+queued never scores worse than cold start.
-        queue_depth = view.aggregate_queue_waiting
-        queue_delay = base_ttft_ms * (_BUSY_QUEUE_EXPONENT_BASE ** queue_depth - 1)
-        queue_delay = min(queue_delay, _DEFAULT_COLD_MS)
-        ettft_ms = base_ttft_ms + queue_delay
-        tier, penalty = classify_tier(ettft_ms)
-        return EttftEstimate(
-            ettft_ms=ettft_ms,
-            tier=tier,
-            penalty=penalty,
-            reasoning=f"Loaded with queue_waiting={queue_depth:.0f}, "
-                      f"base_ttft={base_ttft_ms:.0f}ms, queue_penalty={queue_delay:.0f}ms, total={ettft_ms:.0f}ms",
-        )
-
-    # Warm: loaded, no queue pressure
-    ettft_ms = base_ttft_ms
-    tier, penalty = classify_tier(ettft_ms)
-    return EttftEstimate(
-        ettft_ms=ettft_ms,
-        tier=tier,
-        penalty=penalty,
-        reasoning=f"Loaded and warm, ttft_p95={base_ttft_ms:.0f}ms",
+    queue_wait_s = _estimate_queue_wait_s(
+        scheduler_queue_depth, effective_parallel, generation_time_s,
     )
+
+    # ── Cold: no loaded/running lanes ──────────────────────────────────
+    if best_state in ("cold", "starting"):
+        needs_reclaim = model_vram_mb > 0 and model_vram_mb > available_vram_mb
+        if needs_reclaim:
+            overhead = OVERHEAD_COLD_S + OVERHEAD_RECLAIM_S
+            tier = ReadinessTier.COLD_RECLAIM
+            reason = (
+                f"Cold + reclaim: model needs {model_vram_mb:.0f}MB, "
+                f"available {available_vram_mb:.0f}MB"
+            )
+        else:
+            overhead = OVERHEAD_COLD_S
+            tier = ReadinessTier.COLD
+            reason = f"Best lane state is '{best_state}', cold-start ~{OVERHEAD_COLD_S:.0f}s"
+
+        expected = overhead + queue_wait_s
+        if queue_wait_s > 0:
+            reason += f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p)"
+
+        return EttftEstimate(
+            expected_wait_s=expected,
+            tier=tier,
+            reasoning=reason,
+            state_overhead_s=overhead,
+            queue_wait_s=queue_wait_s,
+            needs_reclaim=needs_reclaim,
+        )
+
+    # ── Sleeping: best lane is sleeping, needs wake ────────────────────
+    if best_state == "sleeping":
+        needs_reclaim = kv_budget_mb > 0 and kv_budget_mb > available_vram_mb
+        if needs_reclaim:
+            overhead = OVERHEAD_SLEEPING_S + OVERHEAD_RECLAIM_S
+            tier = ReadinessTier.SLEEPING_RECLAIM
+            reason = (
+                f"Sleeping + reclaim: KV cache needs {kv_budget_mb:.0f}MB, "
+                f"available {available_vram_mb:.0f}MB"
+            )
+        else:
+            overhead = OVERHEAD_SLEEPING_S
+            tier = ReadinessTier.SLEEPING
+            reason = f"Best lane is sleeping, wake ~{OVERHEAD_SLEEPING_S:.1f}s"
+
+        expected = overhead + queue_wait_s
+        if queue_wait_s > 0:
+            reason += f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p)"
+
+        return EttftEstimate(
+            expected_wait_s=expected,
+            tier=tier,
+            reasoning=reason,
+            state_overhead_s=overhead,
+            queue_wait_s=queue_wait_s,
+            needs_reclaim=needs_reclaim,
+        )
+
+    # ── Loaded or running → WARM ──────────────────────────────────────
+    overhead = OVERHEAD_WARM_S
+    expected = overhead + queue_wait_s
+    reason = "Loaded and warm"
+    if queue_wait_s > 0:
+        reason += f", queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p)"
+
+    return EttftEstimate(
+        expected_wait_s=expected,
+        tier=ReadinessTier.WARM,
+        reasoning=reason,
+        state_overhead_s=overhead,
+        queue_wait_s=queue_wait_s,
+    )
+
+
+# ── Azure estimation ──────────────────────────────────────────────────
 
 
 def estimate_ettft_azure(capacity: Optional[AzureCapacity]) -> EttftEstimate:
     """Estimate ETTFT for an Azure model from rate limit state.
 
-    - has_capacity=True, remaining_requests > 10 → WARM (300ms, penalty=0)
-    - has_capacity=True, remaining_requests <= 10 → BUSY (5000ms, penalty=8)
+    - has_capacity=True, remaining_requests > 10 → WARM (0.3s)
+    - has_capacity=True, remaining_requests ≤ 10 → WARM (5.0s, low headroom)
     - has_capacity=False or None → UNAVAILABLE
     """
     if capacity is None or not capacity.has_capacity:
         return EttftEstimate(
-            ettft_ms=float("inf"),
+            expected_wait_s=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
-            penalty=TIER_THRESHOLDS[ReadinessTier.UNAVAILABLE]["penalty"],
             reasoning="Azure: no capacity or rate-limited",
         )
 
     remaining = capacity.rate_limit_remaining_requests
     if remaining is not None and remaining <= 10:
-        ettft_ms = 5000.0
-        tier, penalty = classify_tier(ettft_ms)
         return EttftEstimate(
-            ettft_ms=ettft_ms,
-            tier=tier,
-            penalty=penalty,
+            expected_wait_s=CLOUD_LOW_HEADROOM_S,
+            tier=ReadinessTier.WARM,
             reasoning=f"Azure: low headroom (remaining_requests={remaining})",
+            state_overhead_s=CLOUD_LOW_HEADROOM_S,
         )
 
-    ettft_ms = 300.0
-    tier, penalty = classify_tier(ettft_ms)
     return EttftEstimate(
-        ettft_ms=ettft_ms,
-        tier=tier,
-        penalty=penalty,
+        expected_wait_s=CLOUD_OVERHEAD_S,
+        tier=ReadinessTier.WARM,
         reasoning=f"Azure: healthy capacity (remaining_requests={remaining})",
+        state_overhead_s=CLOUD_OVERHEAD_S,
     )

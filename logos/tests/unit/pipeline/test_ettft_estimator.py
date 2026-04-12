@@ -1,10 +1,21 @@
-"""Tests for ETTFT estimation and tier classification."""
+"""Tests for ETTFT estimation, range-scaled correction, and weight span."""
+
+import math
 
 from logos.pipeline.ettft_estimator import (
     ReadinessTier,
     EttftEstimate,
-    TIER_THRESHOLDS,
-    classify_tier,
+    NORMALIZATION_HORIZON_S,
+    CORRECTION_STRENGTH,
+    OVERHEAD_WARM_S,
+    OVERHEAD_SLEEPING_S,
+    OVERHEAD_COLD_S,
+    OVERHEAD_RECLAIM_S,
+    CLOUD_OVERHEAD_S,
+    CLOUD_LOW_HEADROOM_S,
+    DEFAULT_GENERATION_TIME_S,
+    MIN_SPAN_FLOOR,
+    compute_weight_span,
     compute_corrected_score,
     estimate_ettft_local,
     estimate_ettft_azure,
@@ -56,43 +67,67 @@ def _make_view(
 
 
 # ---------------------------------------------------------------------------
-# classify_tier tests
+# compute_weight_span tests
 # ---------------------------------------------------------------------------
 
 
-def test_classify_tier_warm():
-    tier, penalty = classify_tier(200.0)
-    assert tier == ReadinessTier.WARM
-    assert penalty == 0.0
+def test_weight_span_empty():
+    assert compute_weight_span([]) == MIN_SPAN_FLOOR
 
 
-def test_classify_tier_warm_boundary():
-    tier, penalty = classify_tier(500.0)
-    assert tier == ReadinessTier.WARM
+def test_weight_span_single():
+    """Single weight: spread=0, floor from abs value."""
+    span = compute_weight_span([5.0])
+    # max(0, 5*0.2, 1.0) = max(0, 1.0, 1.0) = 1.0
+    assert span == 1.0
 
 
-def test_classify_tier_sleeping():
-    tier, penalty = classify_tier(501.0)
-    assert tier == ReadinessTier.SLEEPING
-    assert penalty == TIER_THRESHOLDS[ReadinessTier.SLEEPING]["penalty"]
+def test_weight_span_single_large():
+    """Single large weight: abs_floor dominates."""
+    span = compute_weight_span([20.0])
+    # max(0, 20*0.2, 1.0) = max(0, 4.0, 1.0) = 4.0
+    assert span == 4.0
 
 
-def test_classify_tier_busy():
-    tier, penalty = classify_tier(5000.0)
-    assert tier == ReadinessTier.BUSY
-    assert penalty == 8.0
+def test_weight_span_spread_dominates():
+    """When spread > abs_floor, spread wins."""
+    span = compute_weight_span([5.0, 10.0])
+    # max(5, 10*0.2, 1.0) = max(5, 2.0, 1.0) = 5.0
+    assert span == 5.0
 
 
-def test_classify_tier_cold():
-    tier, penalty = classify_tier(45000.0)
-    assert tier == ReadinessTier.COLD
-    assert penalty == 20.0
+def test_weight_span_abs_floor_dominates():
+    """When weights are close but large, abs_floor wins."""
+    span = compute_weight_span([12.0, 13.0])
+    # max(1, 13*0.2, 1.0) = max(1, 2.6, 1.0) = 2.6
+    assert span == 2.6
 
 
-def test_classify_tier_unavailable():
-    tier, penalty = classify_tier(100000.0)
-    assert tier == ReadinessTier.UNAVAILABLE
-    assert penalty == float("inf")
+def test_weight_span_negative_weights():
+    """Handles negative weights correctly."""
+    span = compute_weight_span([-3.0, 5.0])
+    # max(8, max(3,5)*0.2, 1.0) = max(8, 1.0, 1.0) = 8.0
+    assert span == 8.0
+
+
+def test_weight_span_all_negative():
+    """All negative weights."""
+    span = compute_weight_span([-3.0, -1.0])
+    # max(2, max(3,1)*0.2, 1.0) = max(2, 0.6, 1.0) = 2.0
+    assert span == 2.0
+
+
+def test_weight_span_identical():
+    """Identical weights: spread=0, abs_floor applies."""
+    span = compute_weight_span([7.0, 7.0])
+    # max(0, 7*0.2, 1.0) = max(0, 1.4, 1.0) = 1.4
+    assert abs(span - 1.4) < 1e-9
+
+
+def test_weight_span_zeros():
+    """All zeros: falls to MIN_SPAN_FLOOR."""
+    span = compute_weight_span([0.0, 0.0])
+    assert span == MIN_SPAN_FLOOR
 
 
 # ---------------------------------------------------------------------------
@@ -100,53 +135,163 @@ def test_classify_tier_unavailable():
 # ---------------------------------------------------------------------------
 
 
-def test_corrected_score_basic():
-    assert compute_corrected_score(12.0, 2.0) == 10.0
+def test_corrected_score_no_wait():
+    """Zero wait → no penalty."""
+    assert compute_corrected_score(10.0, 0.0, 5.0) == 10.0
 
 
-def test_corrected_score_zero_penalty():
-    assert compute_corrected_score(15.0, 0.0) == 15.0
+def test_corrected_score_negative_wait():
+    """Negative wait → no penalty."""
+    assert compute_corrected_score(10.0, -1.0, 5.0) == 10.0
 
 
-def test_corrected_score_inf_penalty():
-    result = compute_corrected_score(15.0, float("inf"))
-    assert result == float("-inf")
+def test_corrected_score_zero_span():
+    """Zero span → no penalty."""
+    assert compute_corrected_score(10.0, 30.0, 0.0) == 10.0
+
+
+def test_corrected_score_half_horizon():
+    """Wait = half horizon → 50% of max penalty."""
+    half = NORMALIZATION_HORIZON_S / 2
+    score = compute_corrected_score(10.0, half, 5.0)
+    expected = 10.0 - 0.5 * 5.0 * CORRECTION_STRENGTH
+    assert abs(score - expected) < 1e-9
+
+
+def test_corrected_score_full_horizon():
+    """Wait = full horizon → 100% of max penalty."""
+    score = compute_corrected_score(10.0, NORMALIZATION_HORIZON_S, 5.0)
+    expected = 10.0 - 1.0 * 5.0 * CORRECTION_STRENGTH
+    assert abs(score - expected) < 1e-9
+
+
+def test_corrected_score_beyond_horizon():
+    """Wait > horizon → clamped to max penalty."""
+    score = compute_corrected_score(10.0, NORMALIZATION_HORIZON_S * 2, 5.0)
+    expected = 10.0 - 1.0 * 5.0 * CORRECTION_STRENGTH
+    assert abs(score - expected) < 1e-9
+
+
+def test_corrected_score_inf_wait():
+    """Infinite wait → full-span penalty."""
+    score = compute_corrected_score(10.0, float("inf"), 5.0)
+    expected = 10.0 - 5.0 * CORRECTION_STRENGTH
+    assert abs(score - expected) < 1e-9
+
+
+def test_corrected_score_negative_weight():
+    """Negative classification weight: penalty still subtracts."""
+    score = compute_corrected_score(-3.0, 45.0, 8.0)
+    penalty = min(45.0 / NORMALIZATION_HORIZON_S, 1.0) * 8.0 * CORRECTION_STRENGTH
+    expected = -3.0 - penalty
+    assert abs(score - expected) < 1e-9
+
+
+def test_corrected_score_same_state_ordering():
+    """Two models with same wait: classification ordering preserved."""
+    score_a = compute_corrected_score(12.0, 2.5, 5.0)
+    score_b = compute_corrected_score(10.0, 2.5, 5.0)
+    # Both get identical penalty, so 12 > 10 holds
+    assert score_a > score_b
+
+
+def test_corrected_score_cold_vs_warm():
+    """Cold model (45s) penalized more than warm model (0s)."""
+    warm_score = compute_corrected_score(10.0, 0.0, 5.0)
+    cold_score = compute_corrected_score(13.0, 45.0, 5.0)
+    # Warm: 10, Cold: 13 - (0.75 × 5 × 1.5) = 13 - 5.625 = 7.375
+    assert warm_score > cold_score
 
 
 # ---------------------------------------------------------------------------
-# estimate_ettft_local tests
+# EttftEstimate dataclass tests
+# ---------------------------------------------------------------------------
+
+
+def test_ettft_ms_property():
+    est = EttftEstimate(expected_wait_s=45.0, tier=ReadinessTier.COLD, reasoning="test")
+    assert est.ettft_ms == 45000.0
+
+
+def test_ettft_ms_zero():
+    est = EttftEstimate(expected_wait_s=0.0, tier=ReadinessTier.WARM, reasoning="test")
+    assert est.ettft_ms == 0.0
+
+
+def test_ettft_ms_inf():
+    est = EttftEstimate(expected_wait_s=float("inf"), tier=ReadinessTier.UNAVAILABLE, reasoning="test")
+    assert est.ettft_ms == float("inf")
+
+
+def test_ettft_estimate_fields():
+    est = EttftEstimate(
+        expected_wait_s=53.0,
+        tier=ReadinessTier.COLD_RECLAIM,
+        reasoning="test",
+        state_overhead_s=53.0,
+        queue_wait_s=0.0,
+        needs_reclaim=True,
+    )
+    assert est.needs_reclaim is True
+    assert est.state_overhead_s == 53.0
+    assert est.queue_wait_s == 0.0
+
+
+# ---------------------------------------------------------------------------
+# estimate_ettft_local: WARM tier
 # ---------------------------------------------------------------------------
 
 
 def test_local_warm_loaded_no_queue():
-    """Loaded model with no queue pressure → WARM."""
+    """Loaded model with no queue → WARM, 0s wait."""
     view = _make_view(
         best_lane_state="loaded",
         is_loaded=True,
-        aggregate_queue_waiting=0.0,
         warmest_ttft_p95_seconds=0.15,
     )
-    est = estimate_ettft_local(view)
+    est = estimate_ettft_local(view, effective_parallel=4)
     assert est.tier == ReadinessTier.WARM
-    assert est.penalty == 0.0
-    assert est.ettft_ms == 150.0  # 0.15s * 1000
+    assert est.expected_wait_s == 0.0
+    assert est.state_overhead_s == 0.0
+    assert est.queue_wait_s == 0.0
 
 
-def test_local_warm_default_ttft():
-    """Loaded model with no measured TTFT → uses 200ms default."""
+def test_local_warm_running():
+    """Running model → WARM."""
     view = _make_view(
         best_lane_state="running",
         is_loaded=True,
-        aggregate_queue_waiting=0.0,
-        warmest_ttft_p95_seconds=0.0,
     )
-    est = estimate_ettft_local(view)
+    est = estimate_ettft_local(view, effective_parallel=4)
     assert est.tier == ReadinessTier.WARM
-    assert est.ettft_ms == 200.0
+    assert est.expected_wait_s == 0.0
+
+
+def test_local_warm_with_queue():
+    """Loaded model with scheduler queue → WARM + queue penalty."""
+    view = _make_view(
+        best_lane_state="loaded",
+        is_loaded=True,
+    )
+    # 8 requests in queue, 4 parallel, 3s per generation
+    est = estimate_ettft_local(
+        view, effective_parallel=4, generation_time_s=3.0,
+        scheduler_queue_depth=8,
+    )
+    assert est.tier == ReadinessTier.WARM
+    assert est.state_overhead_s == 0.0
+    # queue_wait = (8/4) × 3.0 = 6.0
+    assert est.queue_wait_s == 6.0
+    assert est.expected_wait_s == 6.0
+
+
+# ---------------------------------------------------------------------------
+# estimate_ettft_local: SLEEPING tier
+# ---------------------------------------------------------------------------
 
 
 def test_local_sleeping():
-    """Sleeping lane → SLEEPING tier."""
+    """Sleeping lane → SLEEPING tier, ~2.5s overhead."""
     view = _make_view(
         best_lane_state="sleeping",
         best_sleep_state="sleeping",
@@ -154,47 +299,73 @@ def test_local_sleeping():
     )
     est = estimate_ettft_local(view)
     assert est.tier == ReadinessTier.SLEEPING
-    assert est.penalty == TIER_THRESHOLDS[ReadinessTier.SLEEPING]["penalty"]
-    assert est.ettft_ms == 2000.0
+    assert est.state_overhead_s == OVERHEAD_SLEEPING_S
+    assert est.expected_wait_s == OVERHEAD_SLEEPING_S
+    assert est.needs_reclaim is False
 
 
-def test_local_busy_high_queue():
-    """Loaded model with queue pressure → exponential penalty."""
+def test_local_sleeping_with_queue():
+    """Sleeping + queue → overhead + queue penalty."""
     view = _make_view(
-        best_lane_state="loaded",
-        is_loaded=True,
-        aggregate_queue_waiting=5.0,
-        warmest_ttft_p95_seconds=0.2,
+        best_lane_state="sleeping",
+        best_sleep_state="sleeping",
+        is_loaded=False,
     )
-    est = estimate_ettft_local(view)
-    # base=200ms, queue_penalty=200*(1.3^5 - 1)=200*(3.71-1)=200*2.71=542ms, total≈742ms
-    assert est.ettft_ms > 700.0  # exponential: significantly higher than base
-    assert est.ettft_ms < 1000.0  # but not extreme for 5 queued
+    est = estimate_ettft_local(
+        view, effective_parallel=4, generation_time_s=3.0,
+        scheduler_queue_depth=4,
+    )
+    assert est.tier == ReadinessTier.SLEEPING
+    # overhead=2.5 + queue=(4/4)*3.0=3.0 = 5.5
+    assert abs(est.expected_wait_s - 5.5) < 1e-9
 
-    # With higher queue — exponential grows faster
-    view2 = _make_view(
-        best_lane_state="loaded",
-        is_loaded=True,
-        aggregate_queue_waiting=20.0,
-        warmest_ttft_p95_seconds=0.3,
+
+def test_local_sleeping_reclaim():
+    """Sleeping but KV cache needs more VRAM than available → SLEEPING_RECLAIM."""
+    view = _make_view(
+        best_lane_state="sleeping",
+        best_sleep_state="sleeping",
+        is_loaded=False,
     )
-    est2 = estimate_ettft_local(view2)
-    # base=300ms, penalty=300*(1.3^20 - 1) → capped at _DEFAULT_COLD_MS (45000ms)
-    # total=300+45000=45300ms → COLD tier
-    assert est2.ettft_ms > 10000.0  # very high queue = significant penalty
-    assert est2.penalty > 0
+    est = estimate_ettft_local(
+        view, available_vram_mb=1000.0, kv_budget_mb=2000.0,
+    )
+    assert est.tier == ReadinessTier.SLEEPING_RECLAIM
+    assert est.state_overhead_s == OVERHEAD_SLEEPING_S + OVERHEAD_RECLAIM_S
+    assert est.needs_reclaim is True
+    assert est.expected_wait_s == OVERHEAD_SLEEPING_S + OVERHEAD_RECLAIM_S
+
+
+def test_local_sleeping_no_reclaim_when_vram_sufficient():
+    """Sleeping with sufficient VRAM for KV cache → plain SLEEPING."""
+    view = _make_view(
+        best_lane_state="sleeping",
+        best_sleep_state="sleeping",
+        is_loaded=False,
+    )
+    est = estimate_ettft_local(
+        view, available_vram_mb=5000.0, kv_budget_mb=2000.0,
+    )
+    assert est.tier == ReadinessTier.SLEEPING
+    assert est.needs_reclaim is False
+
+
+# ---------------------------------------------------------------------------
+# estimate_ettft_local: COLD tier
+# ---------------------------------------------------------------------------
 
 
 def test_local_cold():
-    """Cold model → COLD tier."""
+    """Cold model → COLD tier, ~45s overhead."""
     view = _make_view(
         best_lane_state="cold",
         is_loaded=False,
     )
     est = estimate_ettft_local(view)
     assert est.tier == ReadinessTier.COLD
-    assert est.penalty == 20.0
-    assert est.ettft_ms == 45000.0
+    assert est.state_overhead_s == OVERHEAD_COLD_S
+    assert est.expected_wait_s == OVERHEAD_COLD_S
+    assert est.ettft_ms == OVERHEAD_COLD_S * 1000
 
 
 def test_local_starting():
@@ -205,6 +376,54 @@ def test_local_starting():
     )
     est = estimate_ettft_local(view)
     assert est.tier == ReadinessTier.COLD
+
+
+def test_local_cold_reclaim():
+    """Cold model needs more VRAM than available → COLD_RECLAIM."""
+    view = _make_view(
+        best_lane_state="cold",
+        is_loaded=False,
+    )
+    est = estimate_ettft_local(
+        view, available_vram_mb=3000.0, model_vram_mb=5000.0,
+    )
+    assert est.tier == ReadinessTier.COLD_RECLAIM
+    assert est.state_overhead_s == OVERHEAD_COLD_S + OVERHEAD_RECLAIM_S
+    assert est.needs_reclaim is True
+    assert est.expected_wait_s == OVERHEAD_COLD_S + OVERHEAD_RECLAIM_S
+
+
+def test_local_cold_no_reclaim_when_vram_sufficient():
+    """Cold with sufficient VRAM → plain COLD."""
+    view = _make_view(
+        best_lane_state="cold",
+        is_loaded=False,
+    )
+    est = estimate_ettft_local(
+        view, available_vram_mb=10000.0, model_vram_mb=5000.0,
+    )
+    assert est.tier == ReadinessTier.COLD
+    assert est.needs_reclaim is False
+
+
+def test_local_cold_with_queue():
+    """Cold + queue → overhead + queue penalty."""
+    view = _make_view(
+        best_lane_state="cold",
+        is_loaded=False,
+    )
+    est = estimate_ettft_local(
+        view, effective_parallel=2, generation_time_s=3.0,
+        scheduler_queue_depth=6,
+    )
+    assert est.tier == ReadinessTier.COLD
+    # overhead=45 + queue=(6/2)*3=9 = 54
+    assert abs(est.expected_wait_s - 54.0) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# estimate_ettft_local: UNAVAILABLE tier
+# ---------------------------------------------------------------------------
 
 
 def test_local_unavailable_no_lanes():
@@ -218,7 +437,7 @@ def test_local_unavailable_no_lanes():
     )
     est = estimate_ettft_local(view)
     assert est.tier == ReadinessTier.UNAVAILABLE
-    assert est.penalty == float("inf")
+    assert est.expected_wait_s == float("inf")
 
 
 def test_local_unavailable_all_stopped():
@@ -243,6 +462,60 @@ def test_local_unavailable_all_stopped():
 
 
 # ---------------------------------------------------------------------------
+# estimate_ettft_local: queue penalty scaling
+# ---------------------------------------------------------------------------
+
+
+def test_queue_penalty_scales_with_depth():
+    """Queue penalty increases linearly with depth."""
+    view = _make_view(best_lane_state="loaded", is_loaded=True)
+    est_4 = estimate_ettft_local(view, effective_parallel=4, scheduler_queue_depth=4)
+    est_8 = estimate_ettft_local(view, effective_parallel=4, scheduler_queue_depth=8)
+    assert est_8.queue_wait_s == 2 * est_4.queue_wait_s
+
+
+def test_queue_penalty_inversely_proportional_to_parallel():
+    """Higher parallelism reduces queue wait."""
+    view = _make_view(best_lane_state="loaded", is_loaded=True)
+    est_2p = estimate_ettft_local(view, effective_parallel=2, scheduler_queue_depth=8)
+    est_4p = estimate_ettft_local(view, effective_parallel=4, scheduler_queue_depth=8)
+    assert est_2p.queue_wait_s == 2 * est_4p.queue_wait_s
+
+
+def test_queue_penalty_zero_depth():
+    """Zero queue depth → zero queue wait."""
+    view = _make_view(best_lane_state="loaded", is_loaded=True)
+    est = estimate_ettft_local(view, scheduler_queue_depth=0)
+    assert est.queue_wait_s == 0.0
+
+
+def test_queue_penalty_with_custom_generation_time():
+    """Custom generation time affects queue wait."""
+    view = _make_view(best_lane_state="loaded", is_loaded=True)
+    est = estimate_ettft_local(
+        view, effective_parallel=1, generation_time_s=5.0,
+        scheduler_queue_depth=3,
+    )
+    # (3/1) × 5.0 = 15.0
+    assert est.queue_wait_s == 15.0
+
+
+# ---------------------------------------------------------------------------
+# estimate_ettft_local: VRAM-aware warm ignores VRAM constraints
+# ---------------------------------------------------------------------------
+
+
+def test_warm_ignores_vram_constraints():
+    """Warm (loaded) model is not affected by VRAM limits."""
+    view = _make_view(best_lane_state="loaded", is_loaded=True)
+    est = estimate_ettft_local(
+        view, available_vram_mb=0.0, model_vram_mb=99999.0,
+    )
+    assert est.tier == ReadinessTier.WARM
+    assert est.expected_wait_s == 0.0
+
+
+# ---------------------------------------------------------------------------
 # estimate_ettft_azure tests
 # ---------------------------------------------------------------------------
 
@@ -261,12 +534,12 @@ def test_azure_warm_healthy():
     )
     est = estimate_ettft_azure(cap)
     assert est.tier == ReadinessTier.WARM
-    assert est.penalty == 0.0
-    assert est.ettft_ms == 300.0
+    assert est.expected_wait_s == CLOUD_OVERHEAD_S
+    assert est.ettft_ms == CLOUD_OVERHEAD_S * 1000
 
 
-def test_azure_busy_low_headroom():
-    """Azure with low remaining requests → BUSY."""
+def test_azure_low_headroom():
+    """Azure with low remaining requests → WARM with higher wait."""
     cap = AzureCapacity(
         deployment_name="gpt4o",
         rate_limit_remaining_requests=5,
@@ -278,8 +551,8 @@ def test_azure_busy_low_headroom():
         has_capacity=True,
     )
     est = estimate_ettft_azure(cap)
-    assert est.tier == ReadinessTier.BUSY
-    assert est.penalty == 8.0
+    assert est.tier == ReadinessTier.WARM
+    assert est.expected_wait_s == CLOUD_LOW_HEADROOM_S
 
 
 def test_azure_unavailable_no_capacity():
@@ -305,44 +578,70 @@ def test_azure_unavailable_none():
 
 
 # ---------------------------------------------------------------------------
-# Tier boundary tests
+# Integration: same-state ordering invariant
 # ---------------------------------------------------------------------------
 
 
-def test_tier_boundary_warm_sleeping():
-    """500ms → WARM, 501ms → SLEEPING."""
-    tier_500, _ = classify_tier(500.0)
-    tier_501, _ = classify_tier(500.1)
-    assert tier_500 == ReadinessTier.WARM
-    assert tier_501 == ReadinessTier.SLEEPING
+def test_same_state_ordering_two_warm():
+    """Two warm models: higher weight wins (identical penalty=0)."""
+    view_a = _make_view(model_id=1, best_lane_state="loaded", is_loaded=True)
+    view_b = _make_view(model_id=2, best_lane_state="loaded", is_loaded=True)
+
+    est_a = estimate_ettft_local(view_a, effective_parallel=4)
+    est_b = estimate_ettft_local(view_b, effective_parallel=4)
+
+    span = compute_weight_span([10.0, 15.0])
+    score_a = compute_corrected_score(10.0, est_a.expected_wait_s, span)
+    score_b = compute_corrected_score(15.0, est_b.expected_wait_s, span)
+
+    assert score_b > score_a  # Higher weight wins
 
 
-def test_tier_boundary_sleeping_busy():
-    """3000ms → SLEEPING, 3001ms → BUSY."""
-    tier_3000, _ = classify_tier(3000.0)
-    tier_3001, _ = classify_tier(3000.1)
-    assert tier_3000 == ReadinessTier.SLEEPING
-    assert tier_3001 == ReadinessTier.BUSY
+def test_same_state_ordering_two_cold():
+    """Two cold models: higher weight wins (identical penalty)."""
+    view_a = _make_view(model_id=1, best_lane_state="cold", is_loaded=False)
+    view_b = _make_view(model_id=2, best_lane_state="cold", is_loaded=False)
+
+    est_a = estimate_ettft_local(view_a)
+    est_b = estimate_ettft_local(view_b)
+
+    # Same state → same expected_wait → same penalty → classification preserved
+    assert est_a.expected_wait_s == est_b.expected_wait_s
+
+    span = compute_weight_span([10.0, 15.0])
+    score_a = compute_corrected_score(10.0, est_a.expected_wait_s, span)
+    score_b = compute_corrected_score(15.0, est_b.expected_wait_s, span)
+
+    assert score_b > score_a  # Higher weight wins
 
 
-# ---------------------------------------------------------------------------
-# Phase 2B: Eviction cost in ETTFT
-# ---------------------------------------------------------------------------
+def test_cross_state_warm_beats_cold():
+    """Warm model (lower weight) beats cold model (higher weight)."""
+    view_warm = _make_view(best_lane_state="loaded", is_loaded=True)
+    view_cold = _make_view(best_lane_state="cold", is_loaded=False)
+
+    est_warm = estimate_ettft_local(view_warm, effective_parallel=4)
+    est_cold = estimate_ettft_local(view_cold)
+
+    span = compute_weight_span([12.0, 13.0])
+    score_warm = compute_corrected_score(12.0, est_warm.expected_wait_s, span)
+    score_cold = compute_corrected_score(13.0, est_cold.expected_wait_s, span)
+
+    assert score_warm > score_cold
 
 
-def test_cold_with_eviction_cost():
-    """Cold model with eviction cost adds to ETTFT."""
-    view = _make_view(best_lane_state="cold", is_loaded=False)
-    est_no_evict = estimate_ettft_local(view)
-    est_evict = estimate_ettft_local(view, eviction_cost_ms=10000.0)
+def test_sleeping_beats_cold():
+    """Sleeping (2.5s) beats cold (45s) when weights are close."""
+    view_sleep = _make_view(best_lane_state="sleeping", is_loaded=False)
+    view_cold = _make_view(best_lane_state="cold", is_loaded=False)
 
-    assert est_evict.ettft_ms == est_no_evict.ettft_ms + 10000.0
-    assert "eviction" in est_evict.reasoning
+    est_sleep = estimate_ettft_local(view_sleep)
+    est_cold = estimate_ettft_local(view_cold)
 
+    span = compute_weight_span([10.0, 12.0])
+    score_sleep = compute_corrected_score(10.0, est_sleep.expected_wait_s, span)
+    score_cold = compute_corrected_score(12.0, est_cold.expected_wait_s, span)
 
-def test_warm_ignores_eviction_cost():
-    """Warm model should not be affected by eviction_cost_ms."""
-    view = _make_view(best_lane_state="loaded", is_loaded=True, warmest_ttft_p95_seconds=0.1)
-    est = estimate_ettft_local(view, eviction_cost_ms=10000.0)
-    assert est.tier == ReadinessTier.WARM
-    assert est.ettft_ms == 100.0  # No eviction cost added
+    # Sleeping penalty ≈ 0.15, Cold penalty ≈ 2.7
+    # sleep: 10-0.15=9.85, cold: 12-2.7=9.3 → sleep wins
+    assert score_sleep > score_cold
