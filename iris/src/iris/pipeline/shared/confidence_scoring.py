@@ -1,14 +1,8 @@
 import re
 
-_LARGE_MODEL_PATTERNS = [
-    "70b",
-    "72b",
-    "110b",
-    "32b",
-    "gpt-4",
-    "gpt-5",
-    "gpt-oss",
-]
+_LARGE_MODEL_FAMILIES = ("gpt-4", "gpt-5", "gpt-oss")
+
+_SIZE_TOKEN_RE = re.compile(r"(\d+)\s*b\b", re.IGNORECASE)
 
 _ANSWER_PREFIX_RE = re.compile(
     r"^(?:answer|guess)\s*:\s*",
@@ -24,12 +18,22 @@ _PROBABILITY_LINE_RE = re.compile(
 def is_large_model(model_id: str) -> bool:
     """Return True if the model should use the combo confidence prompt.
 
-    Large models include any GPT-4/GPT-5 generation model (including mini
-    variants and gpt-oss) and open-source models with ≥32B parameters.
+    A model is considered large when:
+    - It belongs to a known large-model family (GPT-4, GPT-5, gpt-oss), OR
+    - Its name contains a numeric parameter size ≥ 32 followed by "b"
+      (e.g. "llama-3-70b", "codellama-34b", "mixtral-65b-instruct").
     Everything else is treated as small.
     """
     lower = model_id.lower()
-    return any(pattern in lower for pattern in _LARGE_MODEL_PATTERNS)
+
+    if any(family in lower for family in _LARGE_MODEL_FAMILIES):
+        return True
+
+    for match in _SIZE_TOKEN_RE.finditer(lower):
+        if int(match.group(1)) >= 32:
+            return True
+
+    return False
 
 
 def parse_confidence_response(raw_response: str) -> tuple[str, float]:
