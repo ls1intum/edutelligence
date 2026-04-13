@@ -11,10 +11,9 @@ from typing import Callable, Optional
 
 from iris.common.logging_config import get_logger
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
-from iris.domain.variant.chat_variant import ChatVariant
+from iris.domain.variant.variant import Variant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
 from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
-from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.tools import (
@@ -36,7 +35,7 @@ from iris.tools import (
 
 logger = get_logger(__name__)
 
-State = AgentPipelineExecutionState[ChatPipelineExecutionDTO, ChatVariant]
+State = AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
 
 # ---------------------------------------------------------------------------
 # Course-related providers
@@ -213,11 +212,6 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
     lecture_content, _ = retrieve_lecture_content_for_mcq(
         state.db, course_id, lecture_id=lecture_id
     )
-
-    # Lazily create pipeline instance once per state
-    if not hasattr(state, "mcq_pipeline"):
-        is_local = state.dto.settings is not None and state.dto.settings.is_local()
-        state.mcq_pipeline = McqGenerationPipeline(local=is_local)
 
     return create_tool_generate_mcq_questions(
         state.mcq_pipeline,

@@ -318,6 +318,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         if getattr(state, "mcq_parallel", False):
             return []
 
+        state.mcq_pipeline = self.mcq_pipeline
+
         tools: list[Callable] = []
         for provider in CHAT_TOOL_PROVIDERS:
             tool = provider(state)
@@ -345,18 +347,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         if dto.user and dto.user.lang_key:
             user_language = dto.user.lang_key
 
-        # Custom instructions
-        custom_instructions = format_custom_instructions(dto.custom_instructions or "")
-
-        course_name = ""
-        if dto.course and dto.course.name:
-            course_name = dto.course.name
-        elif dto.exercise and dto.exercise.course:
-            course_name = dto.exercise.course.name
-
         metrics_enabled = bool(
             dto.metrics
-            and dto.course
             and dto.course.competencies
             and dto.course.student_analytics_dashboard_enabled
         )
@@ -367,8 +359,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         template_context: dict[str, Any] = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "user_language": user_language,
-            "custom_instructions": custom_instructions,
-            "course_name": course_name,
+            "custom_instructions": format_custom_instructions(
+                dto.custom_instructions or ""
+            ),
+            "course_name": dto.course.name,
             "allow_lecture_tool": state.allow_lecture_tool,
             "allow_faq_tool": state.allow_faq_tool,
             "allow_memiris_tool": state.allow_memiris_tool,
@@ -402,6 +396,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ),
             "text_exercise_submission": dto.text_exercise_submission,
             "mcq_parallel": getattr(state, "mcq_parallel", False),
+            "event": self.event,
         }
 
         return self.system_prompt_template.render(template_context)

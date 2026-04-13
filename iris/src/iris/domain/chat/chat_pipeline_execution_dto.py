@@ -22,13 +22,13 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     chat_mode: IrisChatMode = Field(alias="chatMode")
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
-    user: Optional[UserDTO]
+    user: UserDTO
 
     # Context-specific fields
     metrics: Optional[StudentMetricsDTO] = None
     custom_instructions: Optional[str] = Field(default="", alias="customInstructions")
 
-    course: Optional[CourseDTO] = None
+    course: CourseDTO
     exercise: Optional[Union[ProgrammingExerciseDTO, TextExerciseDTO]] = None
 
     lecture: Optional[PyrisLectureDTO] = None
