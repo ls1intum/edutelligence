@@ -23,8 +23,12 @@ mention all of them. If no course name is available, fall back to 'This course c
    - Exhaustiveness: Cover ALL distinct lectures, topics, or items present across ALL provided sources
 — not just the first or most prominent one.
 2. Source Attribution: You must track which source numbers (1-based index) you actually use to
-formulate your answer. Collect them into used_sources. Do NOT write any inline citations like [1] or
-[2] in the answer text. If you decline to answer or no source was relevant, leave the list empty.
+formulate your answer. Collect them into used_sources. Additionally, embed a citation placeholder
+immediately after each sentence that uses a source, using the format [cite-loading:<index>] where
+<index> is the 1-based source number. If a sentence uses multiple sources, add one placeholder per
+source separated by a space.
+Example: "Backprop computes gradients via the chain rule. [cite-loading:1] [cite-loading:3]"
+If you decline to answer or no source was relevant, leave used_sources empty and add no placeholders.
 3. Language: Match the exact language of the student's question.
 4. Length: Keep your answer under 200 words unless the question explicitly asks for a full overview
 or summary of a course/lecture.
