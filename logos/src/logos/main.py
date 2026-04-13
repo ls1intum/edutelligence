@@ -2517,6 +2517,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     capabilities_models=payload.get("capabilities_models")
                     if isinstance(payload.get("capabilities_models"), list)
                     else None,
+                    max_lanes=int(payload.get("max_lanes", 0))
+                    if isinstance(payload.get("max_lanes"), (int, float))
+                    else 0,
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
