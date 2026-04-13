@@ -12,6 +12,10 @@ from iris.domain.search.lecture_search_dto import (
 )
 from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
+from iris.vector_database.lecture_transcription_schema import (
+    LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
+)
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
@@ -38,6 +42,7 @@ class LectureGlobalSearchRetrieval:
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
+        self.transcription_collection = init_lecture_transcription_schema(client)
 
     def search(self, query: str, limit: int) -> list[LectureSearchResultDTO]:
         """
@@ -93,12 +98,54 @@ class LectureGlobalSearchRetrieval:
         )
         lu_by_id = self._fetch_lecture_units(unit_ids)
 
+        unit_page_pairs = [
+            (
+                obj.properties[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value],
+                obj.properties[LectureUnitSegmentSchema.PAGE_NUMBER.value],
+            )
+            for obj in results
+            if obj.properties.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
+            is not None
+            and obj.properties.get(LectureUnitSegmentSchema.PAGE_NUMBER.value)
+            is not None
+        ]
+        start_times = self._fetch_transcription_start_times(unit_page_pairs)
+
         search_results = []
         for obj in results:
-            result = self._to_search_result_dto(obj.properties, lu_by_id)
+            result = self._to_search_result_dto(obj.properties, lu_by_id, start_times)
             if result is not None:
                 search_results.append(result)
         return search_results
+
+    def _fetch_transcription_start_times(
+        self, unit_page_pairs: list[tuple[int, int]]
+    ) -> dict[tuple[int, int], int]:
+        """Fetch the earliest start_time (seconds) from LectureTranscriptions for each (unit_id, page_number) pair."""
+        if not unit_page_pairs:
+            return {}
+        requested = set(unit_page_pairs)
+        unit_ids = list({uid for uid, _ in unit_page_pairs})
+        transcriptions = self.transcription_collection.query.fetch_objects(
+            filters=Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).contains_any(unit_ids),
+            limit=500,
+        ).objects
+        times: dict[tuple[int, int], int] = {}
+        for t in transcriptions:
+            props = t.properties
+            uid = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
+            page = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
+            start = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
+            if uid is None or page is None or start is None:
+                continue
+            key = (uid, page)
+            if key not in requested:
+                continue
+            if key not in times or start < times[key]:
+                times[key] = int(start)
+        return times
 
     def _fetch_lecture_units(self, unit_ids: list[int]) -> dict[int, Any]:
         """Fetch lecture unit metadata for the given IDs in a single Weaviate query."""
@@ -117,7 +164,9 @@ class LectureGlobalSearchRetrieval:
 
     @staticmethod
     def _to_search_result_dto(
-        segment_props: dict[str, Any], lu_by_id: dict[int, Any]
+        segment_props: dict[str, Any],
+        lu_by_id: dict[int, Any],
+        start_times: dict[tuple[int, int], int],
     ) -> LectureSearchResultDTO | None:
         """Map segment properties to a result DTO using pre-fetched lecture unit metadata."""
         snippet = segment_props[LectureUnitSegmentSchema.SEGMENT_SUMMARY.value]
@@ -131,6 +180,8 @@ class LectureGlobalSearchRetrieval:
 
         course_id = segment_props[LectureUnitSegmentSchema.COURSE_ID.value]
         lecture_id = segment_props[LectureUnitSegmentSchema.LECTURE_ID.value]
+        page_number = segment_props[LectureUnitSegmentSchema.PAGE_NUMBER.value]
+        start_time = start_times.get((unit_id, page_number))
 
         return LectureSearchResultDTO(
             course=CourseInfo(
@@ -145,7 +196,8 @@ class LectureGlobalSearchRetrieval:
                 id=unit_id,
                 name=lu[LectureUnitSchema.LECTURE_UNIT_NAME.value],
                 link=f"/courses/{course_id}/lectures/{lecture_id}",
-                pageNumber=segment_props[LectureUnitSegmentSchema.PAGE_NUMBER.value],
+                pageNumber=page_number,
+                startTime=start_time,
             ),
             snippet=snippet,
         )
