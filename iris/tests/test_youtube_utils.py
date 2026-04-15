@@ -1,7 +1,12 @@
+import json
+import subprocess
+from unittest.mock import patch
+
 import pytest
 
 from iris.pipeline.shared.transcription.youtube_utils import (
     YouTubeDownloadError,
+    validate_youtube_video,
 )
 
 
@@ -15,3 +20,103 @@ def test_error_is_raisable():
     with pytest.raises(YouTubeDownloadError) as excinfo:
         raise YouTubeDownloadError("YOUTUBE_LIVE", "live stream not supported")
     assert excinfo.value.error_code == "YOUTUBE_LIVE"
+
+
+def _metadata_json(**overrides) -> str:
+    base = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Test Video",
+        "duration": 120,
+        "is_live": False,
+        "availability": "public",
+        "formats": [],
+    }
+    base.update(overrides)
+    return json.dumps(base)
+
+
+def _mock_run_ok(metadata_json: str):
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=metadata_json, stderr=""
+    )
+    return patch("subprocess.run", return_value=completed)
+
+
+def _mock_run_fail(stderr: str, returncode: int = 1):
+    err = subprocess.CalledProcessError(
+        returncode=returncode, cmd=["yt-dlp"], stderr=stderr
+    )
+    return patch("subprocess.run", side_effect=err)
+
+
+def test_valid_video_returns_metadata():
+    with _mock_run_ok(_metadata_json()):
+        meta = validate_youtube_video(
+            "https://youtu.be/dQw4w9WgXcQ", max_duration_seconds=3600
+        )
+    assert meta["id"] == "dQw4w9WgXcQ"
+    assert meta["duration"] == 120
+
+
+def test_live_stream_rejected():
+    with _mock_run_ok(_metadata_json(is_live=True)):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video(
+                "https://youtu.be/X", max_duration_seconds=3600
+            )
+    assert excinfo.value.error_code == "YOUTUBE_LIVE"
+
+
+def test_too_long_rejected():
+    with _mock_run_ok(_metadata_json(duration=10000)):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video(
+                "https://youtu.be/X", max_duration_seconds=3600
+            )
+    assert excinfo.value.error_code == "YOUTUBE_TOO_LONG"
+
+
+def test_private_video_rejected():
+    # yt-dlp marks private videos with a specific stderr pattern
+    private_stderr = (
+        "ERROR: [youtube] X: Private video. "
+        "Sign in if you've been granted access to this video"
+    )
+    with _mock_run_fail(private_stderr):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video(
+                "https://youtu.be/X", max_duration_seconds=3600
+            )
+    assert excinfo.value.error_code == "YOUTUBE_PRIVATE"
+
+
+def test_unavailable_video_rejected():
+    with _mock_run_fail("ERROR: [youtube] X: Video unavailable"):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video(
+                "https://youtu.be/X", max_duration_seconds=3600
+            )
+    assert excinfo.value.error_code == "YOUTUBE_UNAVAILABLE"
+
+
+def test_unknown_yt_dlp_error_treated_as_download_failed():
+    # Novel stderr pattern — default to DOWNLOAD_FAILED (retryable per spec
+    # lines 88-91), NOT UNAVAILABLE. An unknown stderr could be transient
+    # (network, yt-dlp bug); terminalizing it as UNAVAILABLE would forbid
+    # retries forever.
+    with _mock_run_fail("ERROR: some new yt-dlp error text"):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video(
+                "https://youtu.be/X", max_duration_seconds=3600
+            )
+    assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
+
+
+def test_timeout_raises_download_failed():
+    timeout_err = subprocess.TimeoutExpired(cmd=["yt-dlp"], timeout=30)
+    with patch("subprocess.run", side_effect=timeout_err):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video(
+                "https://youtu.be/X", max_duration_seconds=3600
+            )
+    assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
