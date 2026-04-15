@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Optional
 
 from iris.common.logging_config import get_logger
@@ -7,6 +8,7 @@ from iris.domain.data.metrics.transcription_dto import (
     TranscriptionDTO,
     TranscriptionSegmentDTO,
 )
+from iris.domain.data.video_source_type import VideoSourceType
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -16,6 +18,11 @@ from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from iris.pipeline.shared.transcription.youtube_utils import (
+    YouTubeDownloadError,
+    download_youtube_video,
+    validate_youtube_video,
+)
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
@@ -24,6 +31,20 @@ from iris.vector_database.database import VectorDatabase
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 logger = get_logger(__name__)
+
+
+def _translate_transcription_exception_to_error_code(
+    exc: BaseException,
+) -> str:
+    """Map any exception from heavy/light phases to a wire error code.
+
+    YouTubeDownloadError already carries a structured ``error_code``;
+    everything else collapses to TRANSCRIPTION_FAILED so Artemis can surface
+    a generic "transcript unavailable" message with a retry affordance.
+    """
+    if isinstance(exc, YouTubeDownloadError):
+        return exc.error_code
+    return "TRANSCRIPTION_FAILED"
 
 
 def _needs_transcription_generation(dto: IngestionPipelineExecutionDto) -> bool:
@@ -142,7 +163,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 e,
                 exc_info=True,
             )
-            callback.error(str(e), exception=e)
+            error_code = _translate_transcription_exception_to_error_code(e)
+            callback.error(str(e), exception=e, error_code=error_code)
 
     def _run_full_transcription(self, callback: IngestionStatusCallback) -> None:
         """Run heavy + light transcription phases with temp file management."""
@@ -168,7 +190,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 storage=storage,
             )
-            raw_transcript = heavy(video_url, lecture_unit_id)
+            raw_transcript = heavy(
+                video_url,
+                lecture_unit_id,
+                video_source_type=self.dto.lecture_unit.video_source_type,
+            )
 
             # Checkpoint 1: complete the "Transcribing" stage with raw
             # transcript attached — one atomic HTTP call.
@@ -229,9 +255,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         from iris.pipeline.shared.transcription.temp_storage import (
             TranscriptionTempStorage,
         )
-        from iris.pipeline.shared.transcription.video_utils import (
-            download_video,
-        )
+        from iris.pipeline.shared.transcription.video_utils import download_video
 
         lecture_unit_id = self.dto.lecture_unit.lecture_unit_id
         video_url = self.dto.lecture_unit.video_link
@@ -263,12 +287,27 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 "[Lecture %d] Re-downloading video for slide detection",
                 lecture_unit_id,
             )
-            download_video(
-                video_url,
-                storage.video_path,
-                timeout=settings.transcription.download_timeout_seconds,
-                lecture_unit_id=lecture_unit_id,
-            )
+            video_source_type = self.dto.lecture_unit.video_source_type
+            if video_source_type == VideoSourceType.YOUTUBE:
+                ts = settings.transcription
+                max_dur = ts.youtube_max_duration_seconds
+                yt_timeout = ts.youtube_download_timeout_seconds
+                validate_youtube_video(
+                    video_url,
+                    max_duration_seconds=max_dur,
+                )
+                download_youtube_video(
+                    video_url,
+                    Path(storage.video_path),
+                    timeout=yt_timeout,
+                )
+            else:  # TUM_LIVE (default, includes None)
+                download_video(
+                    video_url,
+                    storage.video_path,
+                    timeout=settings.transcription.download_timeout_seconds,
+                    lecture_unit_id=lecture_unit_id,
+                )
 
             # Light phase: slide detection → alignment
             light = LightTranscriptionPipeline(
