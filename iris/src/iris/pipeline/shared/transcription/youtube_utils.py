@@ -7,9 +7,11 @@ Artemis in the status-update callback for instructor-visible messaging.
 import json
 import re
 import subprocess  # nosec B404
+from pathlib import Path
 from typing import Any, Dict
 
 from iris.common.logging_config import get_logger
+from iris.tracing import observe
 
 logger = get_logger(__name__)
 
@@ -112,3 +114,59 @@ def validate_youtube_video(
             f"Video duration {duration}s exceeds max {max_duration_seconds}s",
         )
     return metadata
+
+
+@observe(name="Download YouTube Video")
+def download_youtube_video(
+    url: str,
+    output_path: Path,
+    timeout: int,
+) -> Path:
+    """Download a YouTube video as an MP4 to ``output_path``.
+
+    Uses ``yt-dlp -f bestvideo+bestaudio/best --merge-output-format mp4``.
+
+    Raises:
+        YouTubeDownloadError: with error_code="YOUTUBE_DOWNLOAD_FAILED" on
+        timeout, non-zero exit, or a successful exit that nonetheless
+        produced no output file.
+    """
+    output_path = Path(output_path)
+    command = [
+        "yt-dlp",
+        "-f",
+        "bestvideo+bestaudio/best",
+        "--merge-output-format",
+        "mp4",
+        "--no-warnings",
+        "-o",
+        str(output_path),
+        url,
+    ]
+    logger.info("Downloading YouTube video %s -> %s", url, output_path)
+    try:
+        subprocess.run(  # nosec B603
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp download timed out after {timeout}s for {url}",
+        ) from e
+    except subprocess.CalledProcessError as e:
+        stderr_text = (e.stderr or "").strip()
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp download failed (exit {e.returncode}): {stderr_text}",
+        ) from e
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp reported success but no output at {output_path}",
+        )
+    return output_path

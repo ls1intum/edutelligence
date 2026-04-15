@@ -6,6 +6,7 @@ import pytest
 
 from iris.pipeline.shared.transcription.youtube_utils import (
     YouTubeDownloadError,
+    download_youtube_video,
     validate_youtube_video,
 )
 
@@ -119,4 +120,64 @@ def test_timeout_raises_download_failed():
             validate_youtube_video(
                 "https://youtu.be/X", max_duration_seconds=3600
             )
+    assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
+
+
+def test_download_success_returns_output_path(tmp_path, monkeypatch):
+    output = tmp_path / "video.mp4"
+
+    def _fake_run(*args, **_):
+        output.write_bytes(b"\x00")
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    result = download_youtube_video(
+        "https://youtu.be/X", output, timeout=600
+    )
+    assert result == output
+    assert output.exists()
+
+
+def test_download_timeout_raises_download_failed(tmp_path, monkeypatch):
+    timeout_err = subprocess.TimeoutExpired(cmd=["yt-dlp"], timeout=1)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(timeout_err),
+    )
+    with pytest.raises(YouTubeDownloadError) as excinfo:
+        download_youtube_video(
+            "https://youtu.be/X", tmp_path / "out.mp4", timeout=1
+        )
+    assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
+
+
+def test_download_nonzero_exit_raises_download_failed(tmp_path, monkeypatch):
+    err = subprocess.CalledProcessError(
+        returncode=1, cmd=["yt-dlp"], stderr="network error"
+    )
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(err),
+    )
+    with pytest.raises(YouTubeDownloadError) as excinfo:
+        download_youtube_video(
+            "https://youtu.be/X", tmp_path / "out.mp4", timeout=600
+        )
+    assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
+
+
+def test_download_output_missing_raises_download_failed(tmp_path, monkeypatch):
+    # subprocess returns success but no file materialized — yt-dlp quirk
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            args=a, returncode=0, stdout="", stderr=""
+        ),
+    )
+    with pytest.raises(YouTubeDownloadError) as excinfo:
+        download_youtube_video(
+            "https://youtu.be/X", tmp_path / "missing.mp4", timeout=600
+        )
     assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
