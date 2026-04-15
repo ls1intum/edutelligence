@@ -129,6 +129,15 @@ class TranscriptionSettings(BaseModel):
         default=600,
         description="Timeout for audio extraction via FFmpeg (default: 10 min)",
     )
+    youtube_max_duration_seconds: int = Field(
+        default=21600,
+        description="Max YouTube video duration in seconds (default: 6 hours). "
+        "Videos longer than this are rejected with YOUTUBE_TOO_LONG.",
+    )
+    youtube_download_timeout_seconds: int = Field(
+        default=600,
+        description="Timeout for yt-dlp download of a YouTube video (default: 10 min).",
+    )
     no_speech_filter_threshold: float = Field(
         default=0.8,
         description=(
