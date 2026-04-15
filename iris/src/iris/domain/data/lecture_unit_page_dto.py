@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from iris.domain.data.metrics.transcription_dto import TranscriptionDTO
+from iris.domain.data.video_source_type import VideoSourceType
 
 
 class LectureUnitPageDTO(BaseModel):
@@ -9,6 +10,8 @@ class LectureUnitPageDTO(BaseModel):
     Mirrors the Artemis PyrisLectureUnitWebhookDTO structure.
     Used for ingestion and deletion pipelines.
     """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     pdf_file_base64: str = Field(default="", alias="pdfFile")
     attachment_version: int = Field(default=0, alias="attachmentVersion")
@@ -22,3 +25,6 @@ class LectureUnitPageDTO(BaseModel):
     course_name: str = Field(default="", alias="courseName")
     course_description: str = Field(default="", alias="courseDescription")
     video_link: str = Field(default="", alias="videoLink")
+    video_source_type: VideoSourceType = Field(
+        default=VideoSourceType.TUM_LIVE, alias="videoSourceType"
+    )
