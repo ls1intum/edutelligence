@@ -17,16 +17,12 @@ def test_error_code_round_trips_through_snake_case_field_name():
 def test_error_code_accepts_wire_alias_error_code():
     # Pyris sends snake_case on the wire per spec; Jackson-side uses
     # @JsonProperty("error_code") on the Artemis DTO. Accept both on input.
-    dto = StatusUpdateDTO(
-        stages=[], tokens=[], **{"error_code": "YOUTUBE_LIVE"}
-    )
+    dto = StatusUpdateDTO(stages=[], tokens=[], **{"error_code": "YOUTUBE_LIVE"})
     assert dto.error_code == "YOUTUBE_LIVE"
 
 
 def test_error_code_serialized_under_snake_case_wire_key():
-    dto = StatusUpdateDTO(
-        stages=[], tokens=[], error_code="YOUTUBE_TOO_LONG"
-    )
+    dto = StatusUpdateDTO(stages=[], tokens=[], error_code="YOUTUBE_TOO_LONG")
     # Must dump with snake_case `error_code` to match Jackson contract.
     dumped = dto.model_dump(by_alias=True, exclude_none=True)
     assert dumped.get("error_code") == "YOUTUBE_TOO_LONG"

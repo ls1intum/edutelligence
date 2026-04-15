@@ -62,18 +62,14 @@ def test_valid_video_returns_metadata():
 def test_live_stream_rejected():
     with _mock_run_ok(_metadata_json(is_live=True)):
         with pytest.raises(YouTubeDownloadError) as excinfo:
-            validate_youtube_video(
-                "https://youtu.be/X", max_duration_seconds=3600
-            )
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
     assert excinfo.value.error_code == "YOUTUBE_LIVE"
 
 
 def test_too_long_rejected():
     with _mock_run_ok(_metadata_json(duration=10000)):
         with pytest.raises(YouTubeDownloadError) as excinfo:
-            validate_youtube_video(
-                "https://youtu.be/X", max_duration_seconds=3600
-            )
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
     assert excinfo.value.error_code == "YOUTUBE_TOO_LONG"
 
 
@@ -85,18 +81,14 @@ def test_private_video_rejected():
     )
     with _mock_run_fail(private_stderr):
         with pytest.raises(YouTubeDownloadError) as excinfo:
-            validate_youtube_video(
-                "https://youtu.be/X", max_duration_seconds=3600
-            )
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
     assert excinfo.value.error_code == "YOUTUBE_PRIVATE"
 
 
 def test_unavailable_video_rejected():
     with _mock_run_fail("ERROR: [youtube] X: Video unavailable"):
         with pytest.raises(YouTubeDownloadError) as excinfo:
-            validate_youtube_video(
-                "https://youtu.be/X", max_duration_seconds=3600
-            )
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
     assert excinfo.value.error_code == "YOUTUBE_UNAVAILABLE"
 
 
@@ -107,9 +99,7 @@ def test_unknown_yt_dlp_error_treated_as_download_failed():
     # retries forever.
     with _mock_run_fail("ERROR: some new yt-dlp error text"):
         with pytest.raises(YouTubeDownloadError) as excinfo:
-            validate_youtube_video(
-                "https://youtu.be/X", max_duration_seconds=3600
-            )
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
     assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
 
 
@@ -117,9 +107,7 @@ def test_timeout_raises_download_failed():
     timeout_err = subprocess.TimeoutExpired(cmd=["yt-dlp"], timeout=30)
     with patch("subprocess.run", side_effect=timeout_err):
         with pytest.raises(YouTubeDownloadError) as excinfo:
-            validate_youtube_video(
-                "https://youtu.be/X", max_duration_seconds=3600
-            )
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
     assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
 
 
@@ -133,9 +121,7 @@ def test_download_success_returns_output_path(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr("subprocess.run", _fake_run)
-    result = download_youtube_video(
-        "https://youtu.be/X", output, timeout=600
-    )
+    result = download_youtube_video("https://youtu.be/X", output, timeout=600)
     assert result == output
     assert output.exists()
 
@@ -147,9 +133,7 @@ def test_download_timeout_raises_download_failed(tmp_path, monkeypatch):
         lambda *a, **kw: (_ for _ in ()).throw(timeout_err),
     )
     with pytest.raises(YouTubeDownloadError) as excinfo:
-        download_youtube_video(
-            "https://youtu.be/X", tmp_path / "out.mp4", timeout=1
-        )
+        download_youtube_video("https://youtu.be/X", tmp_path / "out.mp4", timeout=1)
     assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
 
 
@@ -162,9 +146,7 @@ def test_download_nonzero_exit_raises_download_failed(tmp_path, monkeypatch):
         lambda *a, **kw: (_ for _ in ()).throw(err),
     )
     with pytest.raises(YouTubeDownloadError) as excinfo:
-        download_youtube_video(
-            "https://youtu.be/X", tmp_path / "out.mp4", timeout=600
-        )
+        download_youtube_video("https://youtu.be/X", tmp_path / "out.mp4", timeout=600)
     assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
 
 

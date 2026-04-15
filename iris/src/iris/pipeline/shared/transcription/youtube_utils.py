@@ -57,9 +57,7 @@ def _classify_yt_dlp_error(stderr: str) -> str:
     return "YOUTUBE_DOWNLOAD_FAILED"
 
 
-def validate_youtube_video(
-    url: str, max_duration_seconds: int
-) -> Dict[str, Any]:
+def validate_youtube_video(url: str, max_duration_seconds: int) -> Dict[str, Any]:
     """Validate a YouTube URL by fetching metadata via ``yt-dlp --dump-json``.
 
     Performs no download; only network cost is the metadata fetch.
@@ -104,9 +102,7 @@ def validate_youtube_video(
         ) from e
 
     if metadata.get("is_live"):
-        raise YouTubeDownloadError(
-            "YOUTUBE_LIVE", "Live streams cannot be transcribed"
-        )
+        raise YouTubeDownloadError("YOUTUBE_LIVE", "Live streams cannot be transcribed")
     duration = metadata.get("duration")
     if duration is not None and duration > max_duration_seconds:
         raise YouTubeDownloadError(

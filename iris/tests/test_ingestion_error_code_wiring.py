@@ -23,9 +23,7 @@ def test_youtube_error_forwarded_with_structured_code():
     # Simulate the handler Task 11 adds: YouTubeDownloadError caught at the
     # orchestrator level and forwarded to callback.error(error_code=...).
     err = YouTubeDownloadError("YOUTUBE_LIVE", "live stream")
-    assert (
-        _translate_transcription_exception_to_error_code(err) == "YOUTUBE_LIVE"
-    )
+    assert _translate_transcription_exception_to_error_code(err) == "YOUTUBE_LIVE"
 
 
 def test_generic_exception_becomes_transcription_failed():
@@ -39,11 +37,9 @@ def test_generic_exception_becomes_transcription_failed():
 
 def test_slide_detection_only_branches_on_video_source_type():
     """Resume-from-checkpoint: must use yt-dlp for YouTube, not FFmpeg/HLS."""
-    with patch(_HLS) as dl_hls, \
-         patch(f"{_MOD}.download_youtube_video") as dl_yt, \
-         patch(f"{_MOD}.validate_youtube_video") as v_yt, \
-         patch(_LIGHT), \
-         patch(_TEMP) as storage_cls:
+    with patch(_HLS) as dl_hls, patch(f"{_MOD}.download_youtube_video") as dl_yt, patch(
+        f"{_MOD}.validate_youtube_video"
+    ) as v_yt, patch(_LIGHT), patch(_TEMP) as storage_cls:
         storage_cls.return_value.__enter__.return_value = MagicMock()
         v_yt.return_value = {"duration": 120}
 
@@ -89,8 +85,7 @@ def test_youtube_source_type_passed_through_to_heavy_pipeline():
         heavy_cls.return_value = heavy
 
         # Short-circuit light + ingestion so we assert the heavy-call only.
-        with patch(_LIGHT), \
-             patch(_TEMP) as storage_cls:
+        with patch(_LIGHT), patch(_TEMP) as storage_cls:
             storage_cls.return_value.__enter__.return_value = MagicMock()
 
             pipeline = LectureIngestionUpdatePipeline.__new__(

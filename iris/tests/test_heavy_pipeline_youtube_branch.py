@@ -47,9 +47,7 @@ def mock_pipeline(tmp_path):
         wc_cls.return_value = wc
         with patch(f"{_MOD}.extract_audio"):
             yield (
-                HeavyTranscriptionPipeline(
-                    callback=callback, storage=storage
-                ),
+                HeavyTranscriptionPipeline(callback=callback, storage=storage),
                 storage,
                 callback,
                 _materialize_video,
@@ -65,9 +63,7 @@ def test_tum_live_branch_uses_ffmpeg_download(mock_pipeline):
         dl_yt = stack.enter_context(
             patch(f"{_MOD}.download_youtube_video", side_effect=materialize)
         )
-        v_yt = stack.enter_context(
-            patch(f"{_MOD}.validate_youtube_video")
-        )
+        v_yt = stack.enter_context(patch(f"{_MOD}.validate_youtube_video"))
         pipeline(
             "https://live.rbg.tum.de/foo.m3u8",
             lecture_unit_id=1,
@@ -87,9 +83,7 @@ def test_youtube_branch_validates_then_downloads_via_yt_dlp(mock_pipeline):
         dl_yt = stack.enter_context(
             patch(f"{_MOD}.download_youtube_video", side_effect=materialize)
         )
-        v_yt = stack.enter_context(
-            patch(f"{_MOD}.validate_youtube_video")
-        )
+        v_yt = stack.enter_context(patch(f"{_MOD}.validate_youtube_video"))
         v_yt.return_value = {"duration": 120, "title": "t"}
         pipeline(
             "https://youtu.be/dQw4w9WgXcQ",
