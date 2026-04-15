@@ -23,6 +23,38 @@ def test_error_is_raisable():
     assert excinfo.value.error_code == "YOUTUBE_LIVE"
 
 
+def test_validate_command_includes_no_playlist_and_double_dash():
+    """Hardening: playlist URLs must not expand; URLs must not be parsed as opts."""
+    with _mock_run_ok(_metadata_json()) as run_mock:
+        validate_youtube_video(
+            "https://www.youtube.com/watch?v=X&list=PL123", max_duration_seconds=3600
+        )
+    cmd = run_mock.call_args.args[0]
+    assert "--no-playlist" in cmd
+    # URL must come after a `--` option terminator
+    assert "--" in cmd
+    assert cmd.index("--") < cmd.index("https://www.youtube.com/watch?v=X&list=PL123")
+
+
+def test_download_command_includes_no_playlist_and_double_dash(tmp_path, monkeypatch):
+    output = tmp_path / "video.mp4"
+    captured = {}
+
+    def _fake_run(*args, **_):
+        captured["cmd"] = args[0]
+        output.write_bytes(b"\x00")
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    download_youtube_video("https://youtu.be/X", output, timeout=60)
+    cmd = captured["cmd"]
+    assert "--no-playlist" in cmd
+    assert "--" in cmd
+    assert cmd.index("--") < cmd.index("https://youtu.be/X")
+
+
 def _metadata_json(**overrides) -> str:
     base = {
         "id": "dQw4w9WgXcQ",

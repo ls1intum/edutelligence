@@ -65,7 +65,7 @@ def validate_youtube_video(url: str, max_duration_seconds: int) -> Dict[str, Any
     Raises:
         YouTubeDownloadError: with a structured ``error_code`` on any failure.
     """
-    command = ["yt-dlp", "--dump-json", "--no-warnings", url]
+    command = ["yt-dlp", "--dump-json", "--no-warnings", "--no-playlist", "--", url]
     try:
         result = subprocess.run(  # nosec B603
             command,
@@ -135,8 +135,10 @@ def download_youtube_video(
         "--merge-output-format",
         "mp4",
         "--no-warnings",
+        "--no-playlist",
         "-o",
         str(output_path),
+        "--",
         url,
     ]
     logger.info("Downloading YouTube video %s -> %s", url, output_path)

@@ -17,6 +17,8 @@ _HEAVY = "iris.pipeline.shared.transcription.heavy_pipeline.HeavyTranscriptionPi
 _LIGHT = "iris.pipeline.shared.transcription.light_pipeline.LightTranscriptionPipeline"
 _TEMP = "iris.pipeline.shared.transcription.temp_storage.TranscriptionTempStorage"
 _HLS = "iris.pipeline.shared.transcription.video_utils.download_video"
+_YT_DL = "iris.pipeline.shared.transcription.youtube_utils.download_youtube_video"
+_YT_VAL = "iris.pipeline.shared.transcription.youtube_utils.validate_youtube_video"
 
 
 def test_youtube_error_forwarded_with_structured_code():
@@ -37,9 +39,9 @@ def test_generic_exception_becomes_transcription_failed():
 
 def test_slide_detection_only_branches_on_video_source_type():
     """Resume-from-checkpoint: must use yt-dlp for YouTube, not FFmpeg/HLS."""
-    with patch(_HLS) as dl_hls, patch(f"{_MOD}.download_youtube_video") as dl_yt, patch(
-        f"{_MOD}.validate_youtube_video"
-    ) as v_yt, patch(_LIGHT), patch(_TEMP) as storage_cls:
+    with patch(_HLS) as dl_hls, patch(_YT_DL) as dl_yt, patch(_YT_VAL) as v_yt, patch(
+        _LIGHT
+    ), patch(_TEMP) as storage_cls:
         storage_cls.return_value.__enter__.return_value = MagicMock()
         v_yt.return_value = {"duration": 120}
 

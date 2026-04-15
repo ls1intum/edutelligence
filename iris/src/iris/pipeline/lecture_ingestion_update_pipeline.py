@@ -18,11 +18,6 @@ from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
-from iris.pipeline.shared.transcription.youtube_utils import (
-    YouTubeDownloadError,
-    download_youtube_video,
-    validate_youtube_video,
-)
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
@@ -42,6 +37,11 @@ def _translate_transcription_exception_to_error_code(
     everything else collapses to TRANSCRIPTION_FAILED so Artemis can surface
     a generic "transcript unavailable" message with a retry affordance.
     """
+    # pylint: disable=import-outside-toplevel
+    from iris.pipeline.shared.transcription.youtube_utils import (
+        YouTubeDownloadError,
+    )
+
     if isinstance(exc, YouTubeDownloadError):
         return exc.error_code
     return "TRANSCRIPTION_FAILED"
@@ -148,12 +148,29 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
         try:
             # ── Phase 1: Transcription generation (conditional) ──────────
-            if needs_generation:
-                self._run_full_transcription(callback)
-            elif needs_slides:
-                self._run_slide_detection_only(callback)
+            # Failures here get classified via the transcription error-code
+            # translator (YouTubeDownloadError → structured code, else
+            # TRANSCRIPTION_FAILED) so Artemis can render user-actionable
+            # messages.
+            try:
+                if needs_generation:
+                    self._run_full_transcription(callback)
+                elif needs_slides:
+                    self._run_slide_detection_only(callback)
+            except Exception as e:
+                logger.error(
+                    "[Lecture %d] Transcription failed: %s",
+                    self.dto.lecture_unit.lecture_unit_id,
+                    e,
+                    exc_info=True,
+                )
+                error_code = _translate_transcription_exception_to_error_code(e)
+                callback.error(str(e), exception=e, error_code=error_code)
+                return
 
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
+            # Ingestion-phase failures (vector DB, PDF, summary) are NOT
+            # transcription failures and must not be labeled as such.
             self._run_ingestion(callback)
 
         except Exception as e:
@@ -163,8 +180,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 e,
                 exc_info=True,
             )
-            error_code = _translate_transcription_exception_to_error_code(e)
-            callback.error(str(e), exception=e, error_code=error_code)
+            callback.error(str(e), exception=e)
 
     def _run_full_transcription(self, callback: IngestionStatusCallback) -> None:
         """Run heavy + light transcription phases with temp file management."""
@@ -256,6 +272,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
             TranscriptionTempStorage,
         )
         from iris.pipeline.shared.transcription.video_utils import download_video
+        from iris.pipeline.shared.transcription.youtube_utils import (
+            download_youtube_video,
+            validate_youtube_video,
+        )
 
         lecture_unit_id = self.dto.lecture_unit.lecture_unit_id
         video_url = self.dto.lecture_unit.video_link
