@@ -194,7 +194,8 @@ def provide_find_similar_memories(state: State) -> Optional[Callable]:
 
 
 def provide_mcq_generation(state: State) -> Optional[Callable]:
-    if not state.dto.course:
+    # MCQ generation is only supported in course and lecture chat, not exercise chat
+    if state.dto.programming_exercise or state.dto.text_exercise:
         return None
     course_id = state.dto.course.id
 
