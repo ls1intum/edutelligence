@@ -354,6 +354,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         )
 
         query = self.get_latest_user_message(state)
+        exercise = dto.programming_exercise or dto.text_exercise
 
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
@@ -372,27 +373,20 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "has_exercises": bool(dto.course and dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
-            "exercise_title": (dto.exercise.name if dto.exercise else ""),
-            "problem_statement": (
-                dto.exercise.problem_statement if dto.exercise else ""
-            ),
+            "exercise_title": exercise.title if exercise else "",
+            "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
-                dto.exercise.programming_language.lower()
-                if dto.exercise
-                and hasattr(dto.exercise, "programming_language")
-                and dto.exercise.programming_language
+                dto.programming_exercise.programming_language.lower()
+                if dto.programming_exercise
+                and dto.programming_exercise.programming_language
                 else ""
             ),
-            "exercise_id": (dto.exercise.id if dto.exercise else ""),
+            "exercise_id": exercise.id if exercise else "",
             "start_date": (
-                str(dto.exercise.start_date)
-                if dto.exercise and dto.exercise.start_date
-                else ""
+                str(exercise.start_date) if exercise and exercise.start_date else ""
             ),
             "end_date": (
-                str(dto.exercise.end_date)
-                if dto.exercise and dto.exercise.end_date
-                else ""
+                str(exercise.end_date) if exercise and exercise.end_date else ""
             ),
             "text_exercise_submission": dto.text_exercise_submission,
             "mcq_parallel": getattr(state, "mcq_parallel", False),
@@ -523,9 +517,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             state.callback.in_progress("Refining response ...")
 
-            problem_statement = (
-                state.dto.exercise.problem_statement if state.dto.exercise else ""
-            )
+            exercise = state.dto.programming_exercise or state.dto.text_exercise
+            problem_statement = exercise.problem_statement if exercise else ""
             guide_prompt_rendered = self.guide_prompt_template.render(
                 {"problem_statement": problem_statement}
             )

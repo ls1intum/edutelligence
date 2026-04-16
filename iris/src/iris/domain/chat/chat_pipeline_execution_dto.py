@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from pydantic import Field
 
@@ -20,19 +20,21 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     """
 
     chat_mode: IrisChatMode = Field(alias="chatMode")
+    user: UserDTO
+    course: CourseDTO
+
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
-    user: UserDTO
-
-    # Context-specific fields
     metrics: Optional[StudentMetricsDTO] = None
-    custom_instructions: Optional[str] = Field(default="", alias="customInstructions")
+    custom_instructions: Optional[str] = Field(alias="customInstructions", default="")
 
-    course: CourseDTO
-    exercise: Optional[Union[ProgrammingExerciseDTO, TextExerciseDTO]] = None
-
+    programming_exercise: Optional[ProgrammingExerciseDTO] = Field(
+        alias="programmingExercise", default=None
+    )
+    text_exercise: Optional[TextExerciseDTO] = Field(alias="textExercise", default=None)
     lecture: Optional[PyrisLectureDTO] = None
     lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
-
-    programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = None
+    programming_exercise_submission: Optional[ProgrammingSubmissionDTO] = Field(
+        alias="programmingExerciseSubmission", default=None
+    )
     text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")

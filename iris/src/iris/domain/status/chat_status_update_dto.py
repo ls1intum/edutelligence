@@ -9,6 +9,6 @@ from iris.domain.status.status_update_dto import StatusUpdateDTO
 class ChatStatusUpdateDTO(StatusUpdateDTO):
     result: Optional[str] = None
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
-    suggestions: List[str] = []
+    suggestions: Optional[List[str]] = Field(default_factory=list)
     accessed_memories: List[MemoryDTO] = Field(alias="accessedMemories", default=[])
     created_memories: List[MemoryDTO] = Field(alias="createdMemories", default=[])

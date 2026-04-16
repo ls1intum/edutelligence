@@ -199,10 +199,13 @@ class TracingContext:
             ctx.course_name = getattr(dto.course, "name", None)
 
         # Extract exercise info
-        if hasattr(dto, "exercise") and dto.exercise:
-            ctx.exercise_id = getattr(dto.exercise, "id", None)
-            ctx.exercise_title = getattr(dto.exercise, "title", None)
-            ctx.exercise_type = getattr(dto.exercise, "type", None)
+        exercise = getattr(dto, "programming_exercise", None) or getattr(
+            dto, "text_exercise", None
+        )
+        if exercise:
+            ctx.exercise_id = exercise.id
+            ctx.exercise_title = exercise.title
+            ctx.exercise_type = getattr(exercise, "type", None)
 
         # Extract lecture info
         if hasattr(dto, "lecture") and dto.lecture:

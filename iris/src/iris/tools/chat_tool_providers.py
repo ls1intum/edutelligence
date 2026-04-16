@@ -84,11 +84,10 @@ def provide_submission_details(state: State) -> Callable[[], dict] | None:
 
 
 def provide_additional_exercise_details(state: State) -> Callable[[], dict] | None:
-    if not state.dto.exercise:
+    exercise = state.dto.programming_exercise or state.dto.text_exercise
+    if not exercise:
         return None
-    return create_tool_get_additional_exercise_details(
-        state.dto.exercise, state.callback
-    )
+    return create_tool_get_additional_exercise_details(exercise, state.callback)
 
 
 def provide_build_logs_analysis(state: State) -> Callable[[], str] | None:
