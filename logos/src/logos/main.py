@@ -15,6 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
+from logos.role_auth import require_logos_admin_key
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
@@ -1176,9 +1177,7 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
 
 def _require_root_access(logos_key: str) -> None:
     with DBManager() as db:
-        if not db.check_authorization(logos_key):
-            raise HTTPException(status_code=403, detail="Root authorization required")
-
+        require_logos_admin_key(logos_key, db)
 
 def _normalize_provider_type(provider_type: str | None) -> str:
     return normalize_provider_type(provider_type)
@@ -2673,10 +2672,14 @@ async def set_log(data: SetLogRequest):
         check, code = db.get_process_id(data.dict()["logos_key"])
         if "error" in check:
             return check, code
-        if check["result"] != data.dict()["process_id"] and not db.check_authorization(data.dict()["logos_key"]):
+        if check["result"] != data.dict()["process_id"] and _fetch_role(data.dict()["logos_key"]) != "logos_admin":
             return {"error": "Missing authentication to set log"}
         return db.set_process_log(data.dict()["process_id"], data.dict()["set_log"])
 
+def _fetch_role(logos_key: str) -> str | None:
+    with DBManager() as db:
+        user = db.get_user_by_logos_key(logos_key)
+    return user["role"] if user else None
 
 @app.post("/logosdb/add_provider", tags=["admin"])
 async def add_provider(data: AddProviderRequest):
@@ -2820,6 +2823,34 @@ async def get_process_id(data: GetProcessIdRequest):
     with DBManager() as db:
         return db.get_process_id(data.logos_key)
 
+@app.get("/me", tags=["users"])
+async def get_me(request: Request):
+    logos_key, _ = authenticate_logos_key(dict(request.headers))
+    with DBManager() as db:
+        user = db.get_user_by_logos_key(logos_key)
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No user linked to this key. Service keys cannot log into the UI."
+        )
+    return {
+        "user_id": user["id"],
+        "username": user["username"],
+        "email": user["email"],
+        "role": user["role"],
+        "teams": user["teams"],
+    }
+
+@app.patch("/users/{user_id}/role", tags=["users"])
+async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Request):
+    """Change a user's role (for Logos Admin only)"""
+    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    with DBManager() as db:
+        require_logos_admin_key(logos_key, db)
+        result, status = db.set_user_role(user_id, body.role)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
 
 @app.post("/logosdb/get_role", tags=["admin"])
 async def get_role(data: GetRole):
