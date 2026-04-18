@@ -447,8 +447,10 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
             return False
 
         @staticmethod
-        def check_authorization(logos_key: str) -> bool:
-            return logos_key == "root-key"
+        def get_user_by_logos_key(logos_key: str):
+            if logos_key == "root-key":
+                return {"role": "logos_admin"}
+            return None
 
         @staticmethod
         def add_provider(**kwargs):
