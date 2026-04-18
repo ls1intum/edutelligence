@@ -3236,6 +3236,55 @@ class DBManager:
                             """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
+    def get_user_by_logos_key(self, logos_key: str):
+        """ Return user info for given logos_key. Returns None when the key is a service key (no linked user)"""
+        sql = text("""
+                   SELECT u.id,
+                          u.username,
+                          u.email,
+                          u.role,
+                          COALESCE(
+                                  json_agg(
+                                          json_build_object('id', t.id, 'name', t.name)
+                                  ) FILTER(WHERE t.id IS NOT NULL),
+                                  '[]' ::json
+                          ) AS teams
+                   FROM process p
+                            JOIN users u ON p.user_id = u.id
+                            LEFT JOIN team_members tm ON u.id = tm.user_id
+                            LEFT JOIN teams t ON tm.team_id = t.id
+                   WHERE p.logos_key = :logos_key
+                   GROUP BY u.id, u.username, u.email, u.role
+                   """)
+        row = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
+        if row is None:
+            return None
+
+        data = dict(row._mapping)
+
+        teams = data.get("teams", [])
+        if isinstance(teams, str):
+            import json
+            teams = json.loads(teams)
+        data["teams"] = teams
+
+        return data
+
+    def set_user_role(self, user_id: int, role: str):
+        valid = {"app_developer", "app_admin", "logos_admin"}
+        if role not in valid:
+            return {"error": f"Invalid role '{role}'. Must be one of: {sorted(valid)}"}, 400
+        sql = text("""
+                   UPDATE users
+                   SET role = :role
+                   WHERE id = :user_id RETURNING id
+                   """)
+        row = self.session.execute(sql, {"role": role, "user_id": user_id}).fetchone()
+        if row is None:
+            return {"error": f"User {user_id} not found"}, 404
+        self.session.commit()
+        return {"result": "Role updated"}, 200
+
     def __enter__(self):
         self.engine = _init_engine()
         _ensure_metadata(self.engine)
