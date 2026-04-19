@@ -357,6 +357,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
+            "chat_mode": self.chat_mode,
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "user_language": user_language,
             "custom_instructions": format_custom_instructions(

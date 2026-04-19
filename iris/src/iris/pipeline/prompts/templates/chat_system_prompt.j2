@@ -77,8 +77,14 @@ The lecture belongs to the course "{{ course_name }}".
 - **Start Date**: {{ start_date }}
 - **End Date**: {{ end_date }}
 - **Problem Statement**: {{ problem_statement }}
+
+{% if programming_language %}
 - **Programming Language**: {{ programming_language }}
+{% endif %}
+
+{% if text_exercise_submission %}
 - **Student's Current Text Exercise Submission**: {{ text_exercise_submission }}
+{% endif %}
 {% endif %}
 
 
@@ -255,7 +261,8 @@ Now you can start the conversation, the student might benefit from your help.
 
 {% endif %}
 
-{# MCQ Generation Block #}
+{# MCQ Generation Block (Currently only available for course & lecture modes #}
+{% if chat_mode == "COURSE_CHAT" or chat_mode == "LECTURE_CHAT" %}
 {% if mcq_parallel %}
 The student has asked for quiz questions. An interactive quiz widget is being generated
 automatically and will appear directly in your message. You do NOT need to generate questions yourself.
@@ -278,6 +285,7 @@ CRITICAL rules for MCQ generation:
 • The tool generates an interactive quiz widget. If you also write the question as text, the student sees it twice.
 • You may write a short intro before (e.g., "Here's a question about...") and a brief follow-up after (e.g., "Let me know if you'd like another!").
 • Keep your surrounding text short — do NOT repeat or summarize the question content.
+{% endif %}
 {% endif %}
 
 {# Reminder #}
