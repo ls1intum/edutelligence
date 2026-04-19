@@ -165,6 +165,8 @@ class LectureChatPipeline(
                     getattr(state, "lecture_content_storage", {}),
                     lecture_id=state.dto.lecture.id if state.dto.lecture else None,
                     lecture_unit_id=state.dto.lecture_unit_id,
+                    current_pdf_page=state.dto.current_pdf_page,
+                    current_video_timestamp=state.dto.current_video_timestamp,
                 )
             )
 
@@ -265,6 +267,8 @@ class LectureChatPipeline(
             "user_language": user_language,
             "lecture_name": state.dto.lecture.title if state.dto.lecture else None,
             "course_name": state.dto.course.name if state.dto.course else None,
+            "current_pdf_page": state.dto.current_pdf_page,
+            "current_video_timestamp": state.dto.current_video_timestamp,
             "allow_lecture_tool": allow_lecture_tool,
             "allow_faq_tool": allow_faq_tool,
             "allow_memiris_tool": allow_memiris_tool,
