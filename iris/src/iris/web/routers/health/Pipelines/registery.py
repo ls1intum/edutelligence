@@ -35,4 +35,3 @@ PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
     Features.FAQ_INGESTION: FaqIngestionPipeline,
     Features.AUTONOMOUS_TUTOR: AutonomousTutorPipeline,
 }
-# TODO: REFACTORING ASLAN: CHECK

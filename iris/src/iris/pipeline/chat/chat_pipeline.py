@@ -54,10 +54,9 @@ _SUGGESTION_VARIANT: dict[IrisChatMode, str] = {
 
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
-    Replaces CourseChatPipeline / ExerciseChatPipeline / TextExerciseChatPipeline / LectureChatPipeline
+    Unified chat pipeline for course, exercise, text exercise, and lecture chat contexts.
     """
 
-    # TODO: REFACTORING ASLAN: ÜBERARBEITEN
     PIPELINE_ID = "chat_pipeline"
     ROLES = {"chat"}
     VARIANT_DEFS = [
@@ -258,7 +257,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             if self.chat_mode in [
                 IrisChatMode.COURSE,
                 IrisChatMode.EXERCISE,
-            ]:  # TODO: Suggestions: Text_Exercise? Lecture?
+            ]:
                 self._generate_suggestions(state, result)
 
             return result
