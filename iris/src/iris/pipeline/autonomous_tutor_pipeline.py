@@ -63,8 +63,6 @@ class AutonomousTutorPipeline(
         Dep("faq_retrieval_pipeline"),
     ]
 
-    DIRECT_POST_CONFIDENCE_THRESHOLD = 0.95
-
     def __init__(self):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
@@ -252,26 +250,19 @@ class AutonomousTutorPipeline(
                 final_result=None,
                 tokens=self.tokens,
                 confidence=0.0,
-                should_post_directly=False,
             )
             return ""
 
         confidence = self._estimate_confidence(state)
-        should_post_directly = confidence >= self.DIRECT_POST_CONFIDENCE_THRESHOLD
 
         logger.info("Generated response: %s", state.result)
-        logger.info(
-            "Confidence score | score=%.4f should_post_directly=%s",
-            confidence,
-            should_post_directly,
-        )
+        logger.info("Confidence score | score=%.4f", confidence)
 
         state.callback.done(
             "Response generated",
             final_result=state.result,
             tokens=self.tokens,
             confidence=confidence,
-            should_post_directly=should_post_directly,
         )
         return state.result
 
