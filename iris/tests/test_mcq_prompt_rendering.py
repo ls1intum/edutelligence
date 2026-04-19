@@ -27,6 +27,7 @@ def _base_context() -> dict:
         "current_date": "2026-03-11",
         "user_language": "en",
         "course_name": "Test Course",
+        "chat_mode": "COURSE_CHAT",
         "allow_lecture_tool": False,
         "allow_faq_tool": False,
         "allow_memiris_tool": False,
@@ -55,6 +56,7 @@ def _minimal_course_chat_context() -> dict:
 
 def _minimal_lecture_chat_context() -> dict:
     context = _base_context()
+    context["chat_mode"] = "LECTURE_CHAT"
     context["lecture_name"] = "Test Lecture"
     return context
 

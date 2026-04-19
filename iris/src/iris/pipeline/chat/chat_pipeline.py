@@ -225,13 +225,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             The processed result string.
         """
         try:
-            # Handle MCQ placeholder replacement and parallel thread joining
-            mcq_post_agent_hook(
-                state=state,
-                mcq_pipeline=self.mcq_pipeline,
-                track_tokens=self._track_tokens,
-            )
-
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
@@ -243,6 +236,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             # Generate title
             session_title = self._generate_session_title(state, result, state.dto)
+
+            # Handle MCQ placeholder replacement and parallel thread joining
+            mcq_post_agent_hook(
+                state=state,
+                mcq_pipeline=self.mcq_pipeline,
+                track_tokens=self._track_tokens,
+            )
+
+            result = state.result
 
             # Send the result first so the user sees the message immediately
             state.callback.done(
