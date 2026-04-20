@@ -7,7 +7,7 @@ export type MenuItem = {
   roles: UserRole[];
 };
 
-const ALL_ROLES: UserRole[] = ["app_developer", "app_admin", "logos_admin"];
+export const ALL_ROLES: UserRole[] = ["app_developer", "app_admin", "logos_admin"];
 const ADMIN_AND_ABOVE: UserRole[] = ["app_admin", "logos_admin"];
 
 export const MENU_ITEMS: MenuItem[] = [
