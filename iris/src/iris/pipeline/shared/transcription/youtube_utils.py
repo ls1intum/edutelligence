@@ -33,15 +33,35 @@ class YouTubeDownloadError(Exception):
 # Timeout for `yt-dlp --dump-json`. Metadata fetch is fast; 30 s is generous.
 _VALIDATE_TIMEOUT_SECONDS = 30
 
-_PRIVATE_PATTERNS = (
-    re.compile(r"private video", re.IGNORECASE),
-    re.compile(r"sign in", re.IGNORECASE),
-)
+# Cap download resolution. Transcription/slide-detection is fine at 1080p;
+# an uncapped "bestvideo+bestaudio" can pull 4K/8K and balloon disk, bandwidth,
+# and merge time — and increase the chance of hitting the download timeout.
+_FORMAT_SELECTOR = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+
+# yt-dlp exposes two signals for livestreams:
+#   * metadata["is_live"] — bool, true while a stream is live
+#   * metadata["live_status"] — string, one of:
+#       "not_live"      — regular VOD, safe to transcribe
+#       "is_live"       — currently live, reject
+#       "is_upcoming"   — scheduled future stream/premiere, reject
+#       "post_live"     — stream just ended, not yet a clean VOD, reject
+#       "was_live"      — formerly-live VOD; we treat it as a stream artifact
+#                         and reject, since the policy is "normal uploads only"
+# Anything other than `"not_live"` (or missing/None, which we treat as VOD for
+# backwards compat with older yt-dlp outputs) is rejected as YOUTUBE_LIVE.
+_LIVE_REJECT_STATUSES = frozenset({"is_live", "is_upcoming", "post_live", "was_live"})
+
+# Private patterns are intentionally narrow: a bare "sign in" message also
+# appears in age-restricted / geo-blocked errors, which are UNAVAILABLE, not
+# PRIVATE. So we match "Private video" explicitly and leave the broader
+# auth-gated cases to UNAVAILABLE classification below.
+_PRIVATE_PATTERNS = (re.compile(r"private video", re.IGNORECASE),)
 _UNAVAILABLE_PATTERNS = (
     re.compile(r"video unavailable", re.IGNORECASE),
     re.compile(r"removed", re.IGNORECASE),
     re.compile(r"age[- ]restricted", re.IGNORECASE),
     re.compile(r"not available in your country", re.IGNORECASE),
+    re.compile(r"sign in", re.IGNORECASE),
 )
 
 
@@ -55,6 +75,15 @@ def _classify_yt_dlp_error(stderr: str) -> str:
     # An unrecognized stderr could be a transient network/yt-dlp issue;
     # UNAVAILABLE is terminal and would block instructor-initiated retries.
     return "YOUTUBE_DOWNLOAD_FAILED"
+
+
+def _is_stream(metadata: Dict[str, Any]) -> bool:
+    """True if the video is any kind of livestream (live, upcoming, or
+    formerly-live VOD). Only fully non-stream uploads are accepted."""
+    if metadata.get("is_live"):
+        return True
+    live_status = metadata.get("live_status")
+    return live_status in _LIVE_REJECT_STATUSES
 
 
 def validate_youtube_video(url: str, max_duration_seconds: int) -> Dict[str, Any]:
@@ -101,8 +130,12 @@ def validate_youtube_video(url: str, max_duration_seconds: int) -> Dict[str, Any
             f"yt-dlp returned non-JSON output for {url}",
         ) from e
 
-    if metadata.get("is_live"):
-        raise YouTubeDownloadError("YOUTUBE_LIVE", "Live streams cannot be transcribed")
+    if _is_stream(metadata):
+        raise YouTubeDownloadError(
+            "YOUTUBE_LIVE",
+            "Livestreams and stream-derived VODs cannot be transcribed; "
+            "only regular uploads are supported",
+        )
     duration = metadata.get("duration")
     if duration is not None and duration > max_duration_seconds:
         raise YouTubeDownloadError(
@@ -120,7 +153,8 @@ def download_youtube_video(
 ) -> Path:
     """Download a YouTube video as an MP4 to ``output_path``.
 
-    Uses ``yt-dlp -f bestvideo+bestaudio/best --merge-output-format mp4``.
+    Uses a 1080p-capped format selector so long videos don't unexpectedly
+    pull multi-GB 4K/8K sources and blow the timeout/disk budget.
 
     Raises:
         YouTubeDownloadError: with error_code="YOUTUBE_DOWNLOAD_FAILED" on
@@ -131,7 +165,7 @@ def download_youtube_video(
     command = [
         "yt-dlp",
         "-f",
-        "bestvideo+bestaudio/best",
+        _FORMAT_SELECTOR,
         "--merge-output-format",
         "mp4",
         "--no-warnings",

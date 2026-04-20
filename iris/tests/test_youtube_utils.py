@@ -53,6 +53,11 @@ def test_download_command_includes_no_playlist_and_double_dash(tmp_path, monkeyp
     assert "--no-playlist" in cmd
     assert "--" in cmd
     assert cmd.index("--") < cmd.index("https://youtu.be/X")
+    # Format must be capped at 1080p so long videos don't silently pull
+    # 4K/8K sources and exhaust the download timeout/disk budget.
+    assert "-f" in cmd
+    fmt = cmd[cmd.index("-f") + 1]
+    assert "height<=1080" in fmt
 
 
 def _metadata_json(**overrides) -> str:
@@ -96,6 +101,50 @@ def test_live_stream_rejected():
         with pytest.raises(YouTubeDownloadError) as excinfo:
             validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
     assert excinfo.value.error_code == "YOUTUBE_LIVE"
+
+
+@pytest.mark.parametrize(
+    "live_status",
+    ["is_live", "is_upcoming", "post_live", "was_live"],
+)
+def test_stream_states_rejected_via_live_status(live_status):
+    # yt-dlp sometimes leaves is_live=False while live_status signals the
+    # video is (or was) a stream. Policy is "only normal, done uploads",
+    # so every non-"not_live" status must be terminal YOUTUBE_LIVE rather
+    # than falling through to download + retryable DOWNLOAD_FAILED.
+    with _mock_run_ok(_metadata_json(is_live=False, live_status=live_status)):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
+    assert excinfo.value.error_code == "YOUTUBE_LIVE"
+
+
+def test_regular_vod_accepted_with_not_live_status():
+    with _mock_run_ok(_metadata_json(live_status="not_live")):
+        meta = validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
+    assert meta["id"] == "dQw4w9WgXcQ"
+
+
+def test_regular_vod_accepted_with_missing_live_status():
+    # Older yt-dlp releases may omit live_status entirely; that must not
+    # be interpreted as a stream.
+    payload = _metadata_json()  # no live_status key
+    with _mock_run_ok(payload):
+        meta = validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
+    assert meta["id"] == "dQw4w9WgXcQ"
+
+
+def test_age_restricted_classified_as_unavailable_not_private():
+    # yt-dlp age-restriction errors contain the phrase "sign in"; those
+    # must be UNAVAILABLE (terminal) rather than mislabeled as PRIVATE so
+    # instructor-facing messaging stays accurate.
+    stderr = (
+        "ERROR: [youtube] X: Sign in to confirm your age. "
+        "This video may be inappropriate for some users."
+    )
+    with _mock_run_fail(stderr):
+        with pytest.raises(YouTubeDownloadError) as excinfo:
+            validate_youtube_video("https://youtu.be/X", max_duration_seconds=3600)
+    assert excinfo.value.error_code == "YOUTUBE_UNAVAILABLE"
 
 
 def test_too_long_rejected():
