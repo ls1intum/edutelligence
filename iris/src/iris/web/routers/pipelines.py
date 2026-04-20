@@ -367,6 +367,7 @@ def run_prompt_user_pipeline_worker(
         variant = find_variant(PromptUserAgentPipeline.get_variants(), variant_id)
         pipeline = PromptUserAgentPipeline()
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
+
     except Exception as e:
         logger.error("Error running prompt user pipeline", exc_info=e)
         callback.fail("Fatal error.", exception=e)
