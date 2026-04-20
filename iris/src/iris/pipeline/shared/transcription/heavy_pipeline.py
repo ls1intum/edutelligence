@@ -7,13 +7,19 @@ but no slide numbers).
 """
 
 import os
+from pathlib import Path
 from typing import Any, Dict
 
 from iris.common.logging_config import get_logger
 from iris.config import settings
+from iris.domain.data.video_source_type import VideoSourceType
 from iris.pipeline.shared.transcription.temp_storage import TranscriptionTempStorage
 from iris.pipeline.shared.transcription.video_utils import download_video, extract_audio
 from iris.pipeline.shared.transcription.whisper_client import WhisperClient
+from iris.pipeline.shared.transcription.youtube_utils import (
+    download_youtube_video,
+    validate_youtube_video,
+)
 from iris.tracing import observe
 from iris.web.status.status_update import StatusCallback
 
@@ -50,12 +56,21 @@ class HeavyTranscriptionPipeline:
         )
 
     @observe(name="Heavy Transcription Pipeline")
-    def __call__(self, video_url: str, lecture_unit_id: int) -> Dict[str, Any]:
+    def __call__(
+        self,
+        video_url: str,
+        lecture_unit_id: int,
+        video_source_type: VideoSourceType = VideoSourceType.TUM_LIVE,
+    ) -> Dict[str, Any]:
         """Run the heavy pipeline.
 
         Args:
-            video_url: Direct HLS stream URL (not a webpage).
+            video_url: URL of the video to download. For TUM_LIVE this is a
+                direct HLS stream URL; for YOUTUBE it is a YouTube watch/share
+                URL.
             lecture_unit_id: For logging and Whisper log prefixing.
+            video_source_type: Determines which download path to use.
+                Defaults to ``TUM_LIVE`` for backward compatibility.
 
         Returns:
             Dict with "segments" (list of dicts with start/end/text)
@@ -63,18 +78,38 @@ class HeavyTranscriptionPipeline:
 
         Raises:
             RuntimeError: If any step fails (FFmpeg or Whisper).
+            YouTubeDownloadError: If the YouTube branch fails validation or
+                download.
         """
         prefix = f"[Lecture {lecture_unit_id}]"
 
         # Stage 1: Download video
         self.callback.in_progress("Downloading video...")
         logger.info("%s Downloading video to %s", prefix, self.storage.video_path)
-        download_video(
-            video_url,
-            self.storage.video_path,
-            timeout=settings.transcription.download_timeout_seconds,
-            lecture_unit_id=lecture_unit_id,
-        )
+        if video_source_type == VideoSourceType.YOUTUBE:
+            yt_cfg = settings.transcription
+            metadata = validate_youtube_video(
+                video_url,
+                max_duration_seconds=yt_cfg.youtube_max_duration_seconds,
+            )
+            logger.info(
+                "%s YouTube metadata OK: title=%r duration=%ss",
+                prefix,
+                metadata.get("title"),
+                metadata.get("duration"),
+            )
+            download_youtube_video(
+                video_url,
+                Path(self.storage.video_path),
+                timeout=yt_cfg.youtube_download_timeout_seconds,
+            )
+        else:  # TUM_LIVE (default)
+            download_video(
+                video_url,
+                self.storage.video_path,
+                timeout=settings.transcription.download_timeout_seconds,
+                lecture_unit_id=lecture_unit_id,
+            )
         size_mb = os.path.getsize(self.storage.video_path) / (1024 * 1024)
         self.callback.done(f"Video downloaded ({size_mb:.0f} MB)")
         logger.info("%s Video downloaded: %.0f MB", prefix, size_mb)
