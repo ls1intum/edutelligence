@@ -158,7 +158,7 @@ export default function UserManagement() {
                     User Management
                 </Text>
                 <Text className="text-center text-gray-500 dark:text-gray-300">
-                    Administrate Users.
+                    Administrate users.
                 </Text>
             </VStack>
 
