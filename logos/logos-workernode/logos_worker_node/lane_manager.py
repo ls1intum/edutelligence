@@ -1340,8 +1340,9 @@ class LaneManager:
             statuses.append(status)
             self._record_profile_from_status(status)
 
-        # Check for stuck vLLM lanes (no token generation progress while requests active)
-        await self._check_stuck_lanes(statuses)
+        # Check for stuck vLLM lanes (no token generation progress while requests active).
+        # auto_restart=False because this method is called with self._lock held.
+        await self._check_stuck_lanes(statuses, auto_restart=False)
         return statuses
 
     @staticmethod
@@ -1356,12 +1357,21 @@ class LaneManager:
             )
         )
 
-    async def _check_stuck_lanes(self, statuses: list[LaneStatus]) -> None:
+    async def _check_stuck_lanes(
+        self,
+        statuses: list[LaneStatus],
+        *,
+        auto_restart: bool = True,
+    ) -> None:
         """Detect vLLM lanes that have stopped generating tokens while requests are active.
 
         If ``generation_tokens_total`` doesn't increase for several consecutive
         polls while ``requests_running > 0``, the lane is likely stuck in an
         NCCL deadlock or similar hang.  Kill and log the event.
+
+        When *auto_restart* is True (the default), the lane is automatically
+        restarted with its previous configuration.  Pass ``False`` when the
+        caller already holds ``self._lock`` to avoid a deadlock.
         """
         for status in statuses:
             lid = status.lane_id
@@ -1398,16 +1408,46 @@ class LaneManager:
                                        details=f"gen_tokens={gen_tokens}, running={requests_running}, polls={count}")
                     self._stuck_polls.pop(lid, None)
                     self._last_gen_tokens.pop(lid, None)
-                    # Kill the stuck lane (outside the lock since stop acquires it)
+                    # Kill the stuck lane and attempt automatic restart
                     handle = self._handles.get(lid)
                     if handle is not None:
+                        lane_config = handle.lane_config
                         try:
                             await handle.stop()
                             logger.info("Lane '%s' stopped after stuck detection", lid)
                         except Exception:
                             logger.warning("Failed to stop stuck lane '%s'", lid, exc_info=True)
+
+                        # Attempt automatic restart with the same config
+                        if auto_restart and lane_config is not None:
+                            await self._restart_stuck_lane(lid, lane_config)
             else:
                 self._stuck_polls.pop(lid, None)
+
+    async def _restart_stuck_lane(self, lane_id: str, lane_config: LaneConfig) -> None:
+        """Attempt to restart a lane that was killed by stuck detection."""
+        logger.info("Lane '%s': attempting automatic restart after stuck detection", lane_id)
+        self._record_event(lane_id, "stuck_restart_attempt", model=lane_config.model)
+        try:
+            async with self._lock:
+                if lane_id not in self._handles:
+                    logger.warning(
+                        "Lane '%s' was removed before stuck restart could begin — skipping",
+                        lane_id,
+                    )
+                    return
+                await self._restart_lane_unlocked(lane_id, lane_config)
+            logger.info("Lane '%s': automatic restart after stuck detection succeeded", lane_id)
+            self._record_event(lane_id, "stuck_restart_ok", model=lane_config.model)
+        except Exception:
+            logger.error(
+                "Lane '%s': automatic restart after stuck detection failed",
+                lane_id,
+                exc_info=True,
+            )
+            self._record_event(
+                lane_id, "stuck_restart_failed", model=lane_config.model,
+            )
 
     def _record_profile_from_status(self, status: LaneStatus) -> None:
         """Update model profile with VRAM measurements from lane status."""
