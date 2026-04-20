@@ -13,6 +13,7 @@ from logos_worker_node.models import (
     DeviceInfo,
     DeviceSummary,
     LaneConfig,
+    LaneStatus,
     OllamaConfig,
     ProcessState,
     ProcessStatus,
@@ -876,3 +877,248 @@ def test_cpu_offload_only_when_explicit_per_lane():
     # Explicit value = offload enabled
     lc_explicit = LaneConfig(model="big-model", vllm=True, vllm_config=VllmConfig(cpu_offload_gb=20.0))
     assert lc_explicit.vllm_config.cpu_offload_gb == 20.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Stuck-lane detection and automatic restart
+# ---------------------------------------------------------------------------
+
+
+def _make_vllm_lane_status(
+    lane_id: str,
+    model: str = "Qwen/Qwen3-Embedding-8B",
+    *,
+    gen_tokens: float = 100.0,
+    requests_running: float = 2.0,
+) -> LaneStatus:
+    """Helper to build a minimal vLLM LaneStatus with backend_metrics."""
+    return LaneStatus(
+        lane_id=lane_id,
+        lane_uid=f"vllm:{lane_id}",
+        model=model,
+        port=15000,
+        vllm=True,
+        process=ProcessStatus(state=ProcessState.RUNNING, pid=12345),
+        runtime_state="running",
+        backend_metrics={
+            "generation_tokens_total": gen_tokens,
+            "requests_running": requests_running,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
+    """After stuck detection kills a lane, it should be restarted automatically."""
+    lane_id = "planner-Qwen_Qwen3-Embedding-8B"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    call_log: list[str] = []
+
+    class FakeStuckHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+        async def stop(self) -> ProcessStatus:
+            call_log.append("stop")
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+        async def destroy(self) -> None:
+            call_log.append("destroy")
+
+        async def close(self) -> None:
+            call_log.append("close")
+
+    class FakeNewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            call_log.append("init")
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            call_log.append("spawn")
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    stuck_handle = FakeStuckHandle()
+    manager._handles[lane_id] = stuck_handle  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
+
+    def _fake_create_handle(
+        lid: str, port: int, _gc, _vec, _lc,
+    ) -> FakeNewHandle:
+        return FakeNewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+
+    # Simulate stuck detection: prime the counters so the next poll trips the threshold
+    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    await manager._check_stuck_lanes([status])  # noqa: SLF001
+
+    # Lane should have been stopped then restarted
+    assert "stop" in call_log
+    assert "destroy" in call_log  # _restart_lane_unlocked destroys old handle
+    assert "init" in call_log
+    assert "spawn" in call_log
+    # New handle should now be in _handles
+    new_handle = manager._handles.get(lane_id)  # noqa: SLF001
+    assert isinstance(new_handle, FakeNewHandle)
+    assert new_handle.lane_config == lane_config
+
+
+@pytest.mark.asyncio
+async def test_stuck_lane_no_restart_when_auto_restart_false(monkeypatch) -> None:
+    """When auto_restart=False (lock held), stuck lane is stopped but NOT restarted."""
+    lane_id = "planner-Qwen_Qwen3-Embedding-8B"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    stopped = False
+
+    class FakeStuckHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+        async def stop(self) -> ProcessStatus:
+            nonlocal stopped
+            stopped = True
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+    manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
+    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
+
+    assert stopped is True
+    # Handle should still be the original (stopped) one — no restart attempted
+    assert isinstance(manager._handles.get(lane_id), FakeStuckHandle)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
+    """If the restart after stuck detection fails, the error is logged but doesn't propagate."""
+    lane_id = "planner-Qwen_Qwen3-Embedding-8B"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    class FakeStuckHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+        async def stop(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FailingNewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            raise RuntimeError("GPU out of memory")
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc) -> FailingNewHandle:
+        return FailingNewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+
+    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    # Should not raise — error is caught internally
+    await manager._check_stuck_lanes([status])  # noqa: SLF001
+
+    # Lane should have been removed from handles (restart_lane_unlocked pops on failure)
+    assert lane_id not in manager._handles  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_stuck_detection_resets_after_token_progress() -> None:
+    """Stuck poll counter resets when generation tokens make progress."""
+    lane_id = "planner-Qwen_Qwen3-Embedding-8B"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+    manager._stuck_poll_threshold = 3  # noqa: SLF001
+
+    # Poll 1: no progress (gen_tokens=100, prev=None → baseline, no increment)
+    s1 = _make_vllm_lane_status(lane_id, gen_tokens=100.0, requests_running=2.0)
+    await manager._check_stuck_lanes([s1], auto_restart=False)  # noqa: SLF001
+    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001 — first poll sets baseline
+
+    # Poll 2: still stuck at 100
+    s2 = _make_vllm_lane_status(lane_id, gen_tokens=100.0, requests_running=2.0)
+    await manager._check_stuck_lanes([s2], auto_restart=False)  # noqa: SLF001
+    assert manager._stuck_polls.get(lane_id, 0) == 1  # noqa: SLF001
+
+    # Poll 3: tokens increased → counter should reset
+    s3 = _make_vllm_lane_status(lane_id, gen_tokens=200.0, requests_running=2.0)
+    await manager._check_stuck_lanes([s3], auto_restart=False)  # noqa: SLF001
+    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
