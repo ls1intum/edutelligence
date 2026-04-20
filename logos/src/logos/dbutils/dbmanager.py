@@ -3285,6 +3285,90 @@ class DBManager:
         self.session.commit()
         return {"result": "Role updated"}, 200
 
+    def list_users(self) -> list[dict]:
+        sql = text("""
+                   SELECT u.id,
+                          u.username,
+                          u.prename,
+                          u.name,
+                          u.email,
+                          u.role,
+                          COALESCE(
+                                  json_agg(
+                                          json_build_object('id', t.id, 'name', t.name)
+                                  ) FILTER(WHERE t.id IS NOT NULL),
+                                  '[]' ::json
+                          ) AS teams
+                   FROM users u
+                            LEFT JOIN team_members tm ON u.id = tm.user_id
+                            LEFT JOIN teams t ON tm.team_id = t.id
+                   GROUP BY u.id, u.username, u.prename, u.name, u.email, u.role
+                   ORDER BY u.id DESC
+                   """)
+        rows = self.session.execute(sql).fetchall()
+        result = []
+        for row in rows:
+            data = dict(row._mapping)
+            teams = data.get("teams", [])
+            if isinstance(teams, str):
+                import json as _json
+                teams = _json.loads(teams)
+            data["teams"] = teams
+            result.append(data)
+        return result
+
+    def create_user(self, username: str, prename: str, name: str, email: str, role: str) -> tuple:
+        if self.session.execute(
+                text("SELECT id FROM users WHERE lower(email) = lower(:email)"),
+                {"email": email},
+        ).fetchone():
+            return {"error": "Email already in use"}, None, 409
+
+        if self.session.execute(
+                text("SELECT id FROM users WHERE username = :username"),
+                {"username": username},
+        ).fetchone():
+            return {"error": "Username already in use"}, None, 409
+
+        logos_key = generate_logos_api_key(username)
+
+        user_id = self.insert("users", {
+            "username": username,
+            "prename": prename,
+            "name": name,
+            "email": email,
+            "role": role,
+        })
+        process_id = self.insert("process", {
+            "logos_key": logos_key,
+            "name": username,
+            "user_id": user_id,
+        })
+        self.insert("profiles", {
+            "name": f"{username}-default",
+            "process_id": process_id,
+        })
+
+        return {
+            "id": user_id,
+            "username": username,
+            "prename": prename,
+            "name": name,
+            "email": email,
+            "role": role,
+            "teams": [],
+        }, logos_key, 200
+
+    def delete_user(self, user_id: int) -> tuple[dict, int]:
+        sql = text("""DELETE
+                      FROM users
+                      WHERE id = :user_id RETURNING id""")
+        row = self.session.execute(sql, {"user_id": user_id}).fetchone()
+        if row is None:
+            return {"error": f"User {user_id} not found"}, 404
+        self.session.commit()
+        return {"result": "User deleted"}, 200
+
     def __enter__(self):
         self.engine = _init_engine()
         _ensure_metadata(self.engine)
