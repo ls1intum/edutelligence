@@ -30,7 +30,7 @@ from ...tools import (
     create_tool_repository_files,
 )
 from ...web.status.status_update import PromptUserStatusCallback
-from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
+from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState, DTO, VARIANT
 from ..shared.utils import datetime_to_string
 
 logger = logging.getLogger()
@@ -229,7 +229,7 @@ class PromptUserAgentPipeline(
             "problem_statement": problem_statement,
             "programming_language": programming_language,
             "event": self.event,
-            "has_chat_history": len(state.message_history) > 0
+            "use_chat_history": self.chat_history_needed and len(state.message_history) > 0
         }
 
         return self.system_prompt_template.render(template_context)
@@ -425,6 +425,16 @@ class PromptUserAgentPipeline(
             state.callback.error("Assessing answer failed.")
 
 
+    def assemble_prompt_with_history(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
+    ) -> ChatPromptTemplate:
+        if not self.chat_history_needed:
+            state.message_history = []
+
+        return super().assemble_prompt_with_history(state, system_prompt)
+
+
+
     @traceable(name="Prompt User Agent Pipeline")
     def __call__(
             self,
@@ -445,6 +455,8 @@ class PromptUserAgentPipeline(
             logger.info("Running prompt user pipeline...")
 
             self.event = event
+            # chat history is only needed when generating a question
+            self.chat_history_needed = not self.event or self.event == "first_question"
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)

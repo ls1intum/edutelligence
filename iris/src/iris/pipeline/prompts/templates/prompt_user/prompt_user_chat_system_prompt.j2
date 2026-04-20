@@ -28,7 +28,7 @@ Remember: Show encouragement, ask probing questions, and offer positive reinforc
 Ideally, your messages should be concise, clear, and focused.
 
 {# Chat history context #}
-{% if has_chat_history and not event %}
+{% if use_chat_history %}
     The following messages represent the chat history of your conversation with the student so far.
     Use it to keep your questions consistent and informed.
     Avoid repeating or reusing previous messages; always in all circumstances craft new and original responses and questions.
@@ -66,6 +66,7 @@ Ideally, your messages should be concise, clear, and focused.
 {% elif event == "first_question" %}
     The user started prompting mode, and you just explained the rules of the quiz.
     Now generate the first question.
+
     {% include "generation_rules.j2" %}
 {% elif event == "timer_ran_out" %}
     The user did not submit an answer within the allowed time limit. The answer must therefore be treated as incorrect.

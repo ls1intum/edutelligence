@@ -4,7 +4,7 @@
     1. Thank the user for completing the quiz and for their time and effort.
     2. Provide a short, general feedback summary: The given answers are not sufficient. Tell the user you are not sure if they wrote the submitted code themselves,
     and you have to tell the course instructor to have a closer look.
-    3. Do not include anything else in your message!
+    3. NOT include anything else!
 
     Style Guidelines:
 
@@ -23,7 +23,7 @@
     1. Thank the user for completing the quiz and for their time and effort.
     2. Provide a short, general feedback summary: The given answers were sufficient. The user's answers show comprehension of the submitted code and its functionality.
     The points of the exercise are now verified and do count.
-    3. Do not include anything else in your message!
+    3. NOT include anything else!
 
     Style Guidelines:
 
@@ -35,7 +35,9 @@
     Example Output:
     “Thanks for completing the quiz! I really appreciate your effort. You did a great job overall — nice work! The points of the exercise now count toward your grade”
 {% elif verdict == "next_question" %}
+    
     The last answer by the student was insufficient because it was either too vague or maybe the student asked about the meaning of your question.
     Now, continue the prompting by asking the student another question.
+
     {% include "generation_rules.j2" %}
 {% endif %}
