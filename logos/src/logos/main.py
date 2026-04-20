@@ -2852,6 +2852,44 @@ async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Reques
         raise HTTPException(status_code=status, detail=result.get("error"))
     return result
 
+@app.get("/users", tags=["users"])
+async def list_users(request: Request):
+    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    with DBManager() as db:
+        require_logos_admin_key(logos_key, db)
+        users = db.list_users()
+    return users
+
+
+@app.post("/users", tags=["users"])
+async def create_user(body: CreateUserRequest, request: Request):
+    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    valid_roles = {"app_developer", "app_admin", "logos_admin"}
+    if body.role not in valid_roles:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid role. Must be one of: {sorted(valid_roles)}",
+        )
+    with DBManager() as db:
+        require_logos_admin_key(logos_key, db)
+        user_dict, new_key, status = db.create_user(
+            body.username, body.prename, body.name, body.email, body.role
+        )
+    if status != 200:
+        raise HTTPException(status_code=status, detail=user_dict.get("error"))
+    return {**user_dict, "logos_key": new_key}
+
+
+@app.delete("/users/{user_id}", tags=["users"])
+async def delete_user(user_id: int, request: Request):
+    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    with DBManager() as db:
+        require_logos_admin_key(logos_key, db)
+        result, status = db.delete_user(user_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
 @app.post("/logosdb/get_role", tags=["admin"])
 async def get_role(data: GetRole):
     with DBManager() as db:

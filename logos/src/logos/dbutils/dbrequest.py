@@ -209,3 +209,10 @@ class LogosNodeReconfigureLaneRequest(LogosKeyModel):
 
 class UpdateRoleRequest(BaseModel):
     role: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    prename: str
+    name: str
+    email: str
+    role: str
