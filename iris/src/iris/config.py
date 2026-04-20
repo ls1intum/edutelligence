@@ -135,8 +135,11 @@ class TranscriptionSettings(BaseModel):
         "Videos longer than this are rejected with YOUTUBE_TOO_LONG.",
     )
     youtube_download_timeout_seconds: int = Field(
-        default=600,
-        description="Timeout for yt-dlp download of a YouTube video (default: 10 min).",
+        default=3600,
+        description="Timeout for yt-dlp download of a YouTube video (default: 1 hour). "
+        "Must be large enough to cover the slowest download up to "
+        "``youtube_max_duration_seconds``; increase this if long videos start "
+        "failing with YOUTUBE_DOWNLOAD_FAILED due to timeout.",
     )
     no_speech_filter_threshold: float = Field(
         default=0.8,

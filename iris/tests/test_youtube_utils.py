@@ -182,6 +182,22 @@ def test_download_nonzero_exit_raises_download_failed(tmp_path, monkeypatch):
     assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
 
 
+def test_download_missing_yt_dlp_binary_raises_download_failed(tmp_path, monkeypatch):
+    # subprocess.run raises FileNotFoundError when the executable isn't on PATH
+    # — the function must translate that into a structured YouTubeDownloadError
+    # so callers get the documented error_code contract.
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            FileNotFoundError("[Errno 2] No such file or directory: 'yt-dlp'")
+        ),
+    )
+    with pytest.raises(YouTubeDownloadError) as excinfo:
+        download_youtube_video("https://youtu.be/X", tmp_path / "out.mp4", timeout=600)
+    assert excinfo.value.error_code == "YOUTUBE_DOWNLOAD_FAILED"
+    assert "yt-dlp" in str(excinfo.value)
+
+
 def test_download_output_missing_raises_download_failed(tmp_path, monkeypatch):
     # subprocess returns success but no file materialized — yt-dlp quirk
     monkeypatch.setattr(

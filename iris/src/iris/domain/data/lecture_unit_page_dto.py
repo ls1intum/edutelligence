@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from iris.domain.data.metrics.transcription_dto import TranscriptionDTO
 from iris.domain.data.video_source_type import VideoSourceType
@@ -28,3 +28,11 @@ class LectureUnitPageDTO(BaseModel):
     video_source_type: VideoSourceType = Field(
         default=VideoSourceType.TUM_LIVE, alias="videoSourceType"
     )
+
+    @field_validator("video_source_type", mode="before")
+    @classmethod
+    def _coerce_null_video_source_type(cls, value):
+        # Pydantic v2 rejects explicit None on a non-Optional Enum field before
+        # defaults apply, so older Artemis deployments that emit
+        # ``"videoSourceType": null`` would break unless we coerce here.
+        return VideoSourceType.TUM_LIVE if value is None else value

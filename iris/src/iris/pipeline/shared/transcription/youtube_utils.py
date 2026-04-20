@@ -124,8 +124,8 @@ def download_youtube_video(
 
     Raises:
         YouTubeDownloadError: with error_code="YOUTUBE_DOWNLOAD_FAILED" on
-        timeout, non-zero exit, or a successful exit that nonetheless
-        produced no output file.
+        timeout, non-zero exit, a successful exit that nonetheless produced
+        no output file, or the ``yt-dlp`` binary being absent from PATH.
     """
     output_path = Path(output_path)
     command = [
@@ -150,6 +150,11 @@ def download_youtube_video(
             check=True,
             timeout=timeout,
         )
+    except FileNotFoundError as e:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            "yt-dlp binary not found on PATH",
+        ) from e
     except subprocess.TimeoutExpired as e:
         raise YouTubeDownloadError(
             "YOUTUBE_DOWNLOAD_FAILED",
