@@ -339,8 +339,20 @@ def spawn_vllm(
         env["CUDA_VISIBLE_DEVICES"] = gpu_devices
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("w", encoding="utf-8")
+    # Append mode — preserves logs from earlier calibration attempts so the
+    # full search history is visible in a single file, not just the last probe.
+    log_file = log_path.open("a", encoding="utf-8")
     try:
+        kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
+        _sep = "=" * 72
+        log_file.write(
+            f"\n{_sep}\n"
+            f"  Calibration probe — {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"  KV cache: {kv_bytes}  TP: {tp}\n"
+            f"  Command: {' '.join(cmd)}\n"
+            f"{_sep}\n\n"
+        )
+        log_file.flush()
         proc = subprocess.Popen(
             cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
             start_new_session=True,
@@ -390,7 +402,7 @@ def _kill_stale_vllm_workers() -> None:
         time.sleep(_VRAM_SETTLE_S)  # let GPU memory release
 
 
-def _read_log_tail(log_path: Path, max_lines: int = 40) -> str:
+def _read_log_tail(log_path: Path, max_lines: int = 80) -> str:
     """Read the last *max_lines* of a vLLM log file, or '' on failure."""
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -919,6 +931,10 @@ def calibrate_model(
     finally:
         logger.info("  Stopping vLLM...")
         stop_vllm(proc)
+        # Kill any orphaned TP workers left behind by CUDA/NCCL crashes during
+        # the binary search.  Process-group kill handles the happy path, but
+        # crashes can leave detached workers holding GPU memory.
+        _kill_stale_vllm_workers()
         # Let the GPU release memory before the next model
         logger.info("  Waiting %.0fs for GPU memory release...", _VRAM_SETTLE_S)
         time.sleep(_VRAM_SETTLE_S)
@@ -1217,17 +1233,23 @@ def auto_calibrate_models(
             current_plan = {**plan, "tensor_parallel_size": tp}
             result = _try_calibrate(current_plan, **model_cal_kwargs)
 
-        # If even max tp fails, the model cannot run — skip it.
+        # If max tp fails, try the configured (original) tp before giving up.
+        # Models may have attention-head counts that aren't divisible by max_tp
+        # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
         _fatal = (
             "does not recognize this architecture" in (result.error or "")
             or "Cannot access gated repo" in (result.error or "")
         )
+        if not result.success and not _fatal and tp > original_tp:
+            logger.info(
+                "  %s failed at max tp=%d — falling back to configured tp=%d",
+                model_name, tp, original_tp,
+            )
+            tp = original_tp
+            current_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(current_plan, **model_cal_kwargs)
+
         if not result.success or _fatal:
-            if tp > original_tp:
-                logger.warning(
-                    "  %s failed even with max tp=%d — skipping",
-                    model_name, tp,
-                )
             results[model_name] = result
             if not result.success:
                 logger.warning(

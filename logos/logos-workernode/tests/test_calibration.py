@@ -402,8 +402,8 @@ def test_auto_calibrate_models_continues_on_failure(tmp_path):
             ["model-a", "model-b"], config_path, state_dir,
         )
 
-    # model-a: tp=1 fail + tp=2 fail = 2 calls, model-b: tp=1 success = 1 call
-    assert mock_cm.call_count == 3
+    # model-a: tp=2 fail + tp=1 fallback fail = 2, model-b: tp=2 ok + tp=1 search = 2
+    assert mock_cm.call_count == 4
     assert not results["model-a"].success
     assert results["model-b"].success
     # Only model-b should have a persisted profile
