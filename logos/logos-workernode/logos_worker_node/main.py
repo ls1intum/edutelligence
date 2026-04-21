@@ -99,11 +99,13 @@ async def _auto_calibrate_if_needed(
     t0 = time.perf_counter()
 
     # Run synchronous calibration in a thread to avoid blocking the event loop
+    nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
     results = await asyncio.to_thread(
         auto_calibrate_models,
         uncalibrated,
         config_path,
         state_dir,
+        nccl_p2p_available=nccl_p2p,
     )
 
     elapsed = time.perf_counter() - t0

@@ -523,16 +523,21 @@ async def test_lifespan_calls_auto_calibrate(tmp_path):
     mock_bridge.start = AsyncMock()
     mock_bridge.stop = AsyncMock()
 
+    mock_cache = MagicMock()
+    mock_cache.enabled = False
+
     with patch("logos_worker_node.main.load_config", return_value=cfg), \
          patch("logos_worker_node.main.get_state_dir", return_value=tmp_path), \
          patch("logos_worker_node.main.GpuMetricsCollector", return_value=mock_gpu), \
          patch("logos_worker_node.main.ModelProfileRegistry") as mock_reg_cls, \
          patch("logos_worker_node.main._auto_calibrate_if_needed", new_callable=AsyncMock) as mock_autocal, \
+         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache), \
          patch("logos_worker_node.main.LaneManager") as mock_lm_cls, \
          patch("logos_worker_node.main.LogosBridgeClient", return_value=mock_bridge), \
          patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}):
 
         mock_reg = MagicMock()
+        mock_reg.get_profile.return_value = None
         mock_reg_cls.return_value = mock_reg
 
         mock_lm = AsyncMock()
@@ -745,7 +750,8 @@ def test_vram_cap_uses_per_gpu_times_tp():
     # The important thing: it didn't try to use 48000*0.8=38400 as cap
 
 
-def test_calibration_output_honored_on_startup(tmp_path):
+@pytest.mark.asyncio
+async def test_calibration_output_honored_on_startup(tmp_path):
     """Ensure that calibration output is honored — no recalibration triggered."""
     # Simulate a model that was successfully calibrated.
     # In real calibration: base_residency_mb == loaded_vram_mb (full loaded footprint).
@@ -768,9 +774,7 @@ def test_calibration_output_honored_on_startup(tmp_path):
     cfg = _make_cfg(["model-a"])
 
     with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        asyncio.get_event_loop().run_until_complete(
-            worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-        )
+        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
     # Already calibrated → no recalibration
     mock_cal.assert_not_called()
@@ -909,7 +913,7 @@ def test_search_starts_from_floor_not_ceiling():
 
     kv_calls = []
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -994,7 +998,7 @@ def test_search_direction_never_probes_ceiling_first():
     """
     kv_calls = []
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
         mock_proc = MagicMock()
         mock_proc.pid = 12345

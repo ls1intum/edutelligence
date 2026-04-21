@@ -296,10 +296,11 @@ def spawn_vllm(
     port: int,
     log_path: Path,
     kv_cache_memory_bytes: str,
+    *,
+    nccl_p2p_available: bool = False,
 ) -> tuple[subprocess.Popen[str], list[str]]:
     """Spawn vLLM and return ``(process, cmd_list)``."""
     tp = int(plan.get("tensor_parallel_size", 1))
-    disable_nccl_p2p = bool(plan.get("disable_nccl_p2p", False))
 
     cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes)
 
@@ -309,14 +310,17 @@ def spawn_vllm(
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
 
+    # NCCL P2P: disabled by default (PCIe-only assumed).
+    # Set nccl_p2p_available=True for NVLink setups.
+    if not nccl_p2p_available:
+        env.setdefault("NCCL_P2P_DISABLE", "1")
+
     # For tensor-parallel calibration runs (tp > 1), mirror the NCCL env vars
     # used by regular vLLM lanes so calibration matches production behaviour.
     if tp > 1:
         env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
         env.setdefault("NCCL_CUMEM_ENABLE", "0")   # unreliable in Docker without NUMA config
         env.setdefault("NCCL_TIMEOUT", "1800")
-        if disable_nccl_p2p:
-            env.setdefault("NCCL_P2P_DISABLE", "1")    # PCIe GPUs without NVLink hang on P2P init
 
     gpu_devices = str(plan.get("gpu_devices") or "")
     if gpu_devices and gpu_devices.lower() not in ("all", ""):
@@ -502,6 +506,7 @@ def calibrate_model(
     log_dir: Path,
     sleep_level: int,
     ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
 ) -> CalibrationResult:
     model = plan["model"]
     gpu_devices = str(plan.get("gpu_devices") or "")
@@ -628,6 +633,7 @@ def calibrate_model(
             planned,
             vllm_binary, host, port, log_path,
             kv_cache_memory_bytes=kv_str,
+            nccl_p2p_available=nccl_p2p_available,
         )
         logger.info(
             "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
@@ -927,7 +933,6 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
                 "enforce_eager",
                 "max_model_len",
                 "disable_custom_all_reduce",
-                "disable_nccl_p2p",
             ):
                 plan.setdefault(k, v)
 
@@ -957,6 +962,7 @@ def _try_calibrate(
     log_dir: Path,
     sleep_level: int,
     ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -968,6 +974,7 @@ def _try_calibrate(
             log_dir=log_dir,
             sleep_level=sleep_level,
             ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -990,6 +997,7 @@ def auto_calibrate_models(
     port: int = _CALIBRATION_PORT,
     sleep_level: int = 1,
     ready_timeout_s: float = _READY_TIMEOUT_S,
+    nccl_p2p_available: bool = False,
 ) -> dict[str, CalibrationResult]:
     """Calibrate a list of uncalibrated models and persist results.
 
@@ -1053,6 +1061,7 @@ def auto_calibrate_models(
         log_dir=log_dir,
         sleep_level=sleep_level,
         ready_timeout_s=ready_timeout_s,
+        nccl_p2p_available=nccl_p2p_available,
     )
 
     results: dict[str, CalibrationResult] = {}

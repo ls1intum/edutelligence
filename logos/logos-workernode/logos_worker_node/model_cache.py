@@ -118,12 +118,13 @@ class ModelRamCache:
             if model_name in self._cached_models:
                 cached = self._cache_hub / _hf_model_dir_name(model_name)
                 if cached.exists():
+                    logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                     return str(self._cache_hub.parent)
                 self._cached_models.discard(model_name)
 
             size = await asyncio.to_thread(self.model_size_bytes, model_name)
             if size <= 0:
-                logger.warning("Model %s not found on source filesystem", model_name)
+                logger.warning("Model %s not found on source filesystem — loading from disk", model_name)
                 return str(self._source_hub.parent)
 
             available = self.available_space_bytes()
@@ -132,7 +133,8 @@ class ModelRamCache:
 
             if available - size < safety_floor:
                 logger.warning(
-                    "Skipping RAM cache for %s: need %d MB, available %d MB (safety floor %d MB)",
+                    "Skipping RAM cache for %s: need %d MB, available %d MB "
+                    "(safety floor %d MB) — loading from disk",
                     model_name, size // (1024 * 1024),
                     available // (1024 * 1024), safety_floor // (1024 * 1024),
                 )
@@ -141,7 +143,9 @@ class ModelRamCache:
             ok = await self._copy_model(model_name)
             if ok:
                 self._cached_models.add(model_name)
+                logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
+            logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
             return str(self._source_hub.parent)
 
     async def cache_models_by_priority(self, models: list[str]) -> dict[str, str]:
@@ -169,7 +173,9 @@ class ModelRamCache:
         if model_name in self._cached_models:
             cached = self._cache_hub / _hf_model_dir_name(model_name)
             if cached.exists():
+                logger.debug("Model %s: using tmpfs RAM cache path", model_name)
                 return str(self._cache_hub.parent)
+        logger.debug("Model %s: using source filesystem path", model_name)
         return str(self._source_hub.parent)
 
     @property
@@ -231,8 +237,12 @@ class ModelRamCache:
         if partial.exists():
             shutil.rmtree(partial, ignore_errors=True)
 
+        size_mb = self.model_size_bytes(model_name) / (1024 * 1024)
         t0 = time.monotonic()
-        logger.info("Copying %s into RAM cache (%s -> %s)", model_name, src, partial)
+        logger.info(
+            "Copying %s into RAM cache (%.0f MB, %s -> %s)",
+            model_name, size_mb, src, partial,
+        )
 
         try:
             rsync_available = shutil.which("rsync") is not None
@@ -368,11 +378,14 @@ def create_model_cache(
         )
         return _DisabledModelRamCache()
 
-    logger.info(
-        "Initializing tmpfs RAM cache: tmpfs=%s, source_hub=%s",
-        tmpfs_path, source_hub,
-    )
-    return ModelRamCache(
+    cache = ModelRamCache(
         tmpfs_path=tmpfs_path,
         source_hf_hub_path=source_hub,
     )
+    total_mb = cache._total_tmpfs_bytes() / (1024 * 1024)
+    avail_mb = cache.available_space_bytes() / (1024 * 1024)
+    logger.info(
+        "Initializing tmpfs RAM cache: tmpfs=%s (%.0f MB total, %.0f MB available), source_hub=%s",
+        tmpfs_path, total_mb, avail_mb, source_hub,
+    )
+    return cache
