@@ -253,7 +253,7 @@ def _build_vllm_cmd(
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
     max_model_len = plan.get("max_model_len")
-    enforce_eager = bool(plan.get("enforce_eager", False))
+    enforce_eager = bool(plan.get("enforce_eager", True))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
