@@ -532,6 +532,7 @@ def calibrate_model(
     ready_timeout_s: float,
     nccl_p2p_available: bool = False,
     hf_home: str | None = None,
+    model_cache: Any | None = None,
 ) -> CalibrationResult:
     # Always force eager mode for calibration: CUDA graph capture is not
     # needed for VRAM measurement and can add 10-30 minutes of startup time.
@@ -646,10 +647,15 @@ def calibrate_model(
     failed_path = log_dir / _FAILED_COMMANDS_FILE
     failed_commands = _load_failed_commands(failed_path)
 
+    # Lazy RAM-cache flag: only cache the model into tmpfs on the first
+    # actual vLLM spawn (not on blacklist-skipped probes).
+    _ram_cached = hf_home is not None  # already cached if hf_home was passed
+
     def _try_start(kv_mb: float) -> subprocess.Popen[str] | None:
         """Try to start vLLM with the given KV cache.  Returns the
         running process on success, ``None`` on failure (process is
         cleaned up).  Blacklisted commands are skipped immediately."""
+        nonlocal hf_home, _ram_cached
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
         # Check the blacklist *before* spawning to avoid wasting time.
@@ -663,6 +669,18 @@ def calibrate_model(
                 kv_str, failed_path,
             )
             return None
+        # Lazy RAM cache: copy model into tmpfs on first real spawn.
+        if not _ram_cached and model_cache is not None:
+            logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
+            _hf = model_cache.ensure_cached_sync(model) or None
+            if _hf:
+                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
+                if is_tmpfs:
+                    hf_home = _hf
+                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
+                else:
+                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+            _ram_cached = True
         proc, _ = spawn_vllm(
             planned,
             vllm_binary, host, port, log_path,
@@ -1087,6 +1105,7 @@ def _try_calibrate(
     ready_timeout_s: float,
     nccl_p2p_available: bool = False,
     hf_home: str | None = None,
+    model_cache: Any | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -1100,6 +1119,7 @@ def _try_calibrate(
             ready_timeout_s=ready_timeout_s,
             nccl_p2p_available=nccl_p2p_available,
             hf_home=hf_home,
+            model_cache=model_cache,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -1197,21 +1217,12 @@ def auto_calibrate_models(
         original_tp = int(plan.get("tensor_parallel_size", 1))
         max_tp = _max_tp_for_plan(plan, available_gpus)
 
-        # Cache this model in tmpfs before calibration so vLLM loads from RAM.
-        # Only one model is ever in the cache at a time — evict after calibration.
-        hf_home: str | None = None
-        if model_cache is not None and getattr(model_cache, "enabled", False):
-            logger.info("  [RAM cache] Caching %s into tmpfs before calibration...", model_name)
-            hf_home = model_cache.ensure_cached_sync(model_name) or None
-            if hf_home:
-                is_tmpfs_path = hasattr(model_cache, "_cache_hub") and hf_home == str(model_cache._cache_hub.parent)
-                if is_tmpfs_path:
-                    logger.info("  [RAM cache] %s → loading from tmpfs (calibration will be faster)", model_name)
-                else:
-                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full or model not found)", model_name)
-                    hf_home = None  # don't override HF_HOME if we're not using tmpfs
-
-        model_cal_kwargs = {**cal_kwargs, "hf_home": hf_home}
+        # RAM caching is deferred: calibrate_model triggers it on the first
+        # actual vLLM spawn so we don't waste time copying when all probes are
+        # blacklisted.  Pass the cache object through; it will call
+        # ensure_cached_sync only when needed.
+        _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+        model_cal_kwargs = {**cal_kwargs, "model_cache": _mc}
 
         # ----------------------------------------------------------
         # Strategy: "max-first, then search down"
@@ -1267,9 +1278,6 @@ def auto_calibrate_models(
                     model_name,
                     result.error,
                 )
-            if model_cache is not None and getattr(model_cache, "enabled", False):
-                logger.info("  [RAM cache] Evicting %s from tmpfs (calibration done)", model_name)
-                model_cache.evict(model_name)
             continue
 
         # Max tp succeeded — now binary-search down to find minimum tp.
@@ -1324,10 +1332,6 @@ def auto_calibrate_models(
                 model_name,
                 result.error,
             )
-
-        if model_cache is not None and getattr(model_cache, "enabled", False):
-            logger.info("  [RAM cache] Evicting %s from tmpfs (calibration done, freeing space)", model_name)
-            model_cache.evict(model_name)
 
     ok = [r for r in results.values() if r.success]
     fail = [r for r in results.values() if not r.success]

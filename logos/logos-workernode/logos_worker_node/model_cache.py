@@ -212,22 +212,35 @@ class ModelRamCache:
         size_mb = self.model_size_bytes(model_name) / (1024 * 1024)
         t0 = time.monotonic()
         logger.info(
-            "Copying %s into RAM cache (%.0f MB) [sync] ...",
-            model_name, size_mb,
+            "Copying %s into RAM cache (%.0f MB, %s -> %s)",
+            model_name, size_mb, src, partial,
         )
 
         try:
             rsync_available = shutil.which("rsync") is not None
             if rsync_available:
-                result = subprocess.run(  # noqa: S603
-                    ["rsync", "-aL", "--delete", str(src) + "/", str(partial) + "/"],
-                    capture_output=True, text=True,
+                proc = subprocess.Popen(  # noqa: S603
+                    ["rsync", "-aL", "--delete", "--info=progress2", "--no-inc-recursive",
+                     str(src) + "/", str(partial) + "/"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 )
-                if result.returncode != 0:
+                _last_log = time.monotonic()
+                _LOG_INTERVAL = 30.0  # log progress every 30s
+                for line in proc.stdout or []:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    now = time.monotonic()
+                    if now - _last_log >= _LOG_INTERVAL:
+                        # rsync --info=progress2 emits lines like:
+                        #   1,234,567,890  42%  123.45MB/s  0:01:23
+                        logger.info("  [RAM cache] %s — %s", model_name, line)
+                        _last_log = now
+                proc.wait()
+                if proc.returncode != 0:
                     logger.error(
-                        "rsync failed for %s (rc=%d): %s",
-                        model_name, result.returncode,
-                        (result.stderr or "")[:500],
+                        "rsync failed for %s (rc=%d)",
+                        model_name, proc.returncode,
                     )
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
