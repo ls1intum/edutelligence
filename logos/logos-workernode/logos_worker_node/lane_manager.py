@@ -41,6 +41,7 @@ _HANDLE_DESTROY_TIMEOUT = 45
 _HANDLE_CLOSE_TIMEOUT = 10
 _GPU_PLACEMENT_HEADROOM_RATIO = 0.10
 _GPU_PLACEMENT_MIN_HEADROOM_MB = 1024.0
+_CRASH_RESTART_COOLDOWN_S = 30.0
 
 
 class PortAllocator:
@@ -238,6 +239,7 @@ class LaneManager:
         self._stuck_polls: dict[str, int] = {}  # consecutive polls with no progress
         _STUCK_POLL_THRESHOLD = 6  # ~30s at 5s heartbeat
         self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
+        self._last_crash_restart_attempt_at: dict[str, float] = {}
 
     def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
         """Check which capabilities_models are available locally.
@@ -463,6 +465,12 @@ class LaneManager:
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
             await self._remove_lane_unlocked(lane_id)
+            # Refresh GPU snapshot immediately after the process exits so the next
+            # status heartbeat to logos-server carries accurate free-VRAM numbers.
+            # Without this the server-side planner would see phantom VRAM (lanes=0
+            # but VRAM still reported as occupied) for up to the poll interval.
+            if self._gpu_force_poll is not None:
+                await self._gpu_force_poll()
             prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
 
     async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
@@ -612,7 +620,54 @@ class LaneManager:
             statuses.append(status)
             self._record_profile_from_status(status)
         await self._check_stuck_lanes(statuses)
+        await self._recover_dead_lanes(statuses)
         return statuses
+
+    async def _recover_dead_lanes(self, statuses: list[LaneStatus]) -> None:
+        """Best-effort restart for lanes whose process died unexpectedly.
+
+        Keep this outside the status lock path and apply a cooldown so repeated
+        startup failures don't thrash the host.
+        """
+        now = asyncio.get_running_loop().time()
+        for status in statuses:
+            if status.runtime_state not in {"stopped", "error"}:
+                continue
+            lane_config = status.lane_config
+            if lane_config is None:
+                continue
+            lid = status.lane_id
+            last_attempt = self._last_crash_restart_attempt_at.get(lid, 0.0)
+            if now - last_attempt < _CRASH_RESTART_COOLDOWN_S:
+                continue
+
+            self._last_crash_restart_attempt_at[lid] = now
+            self._record_event(
+                lid,
+                "crash_restart_attempt",
+                model=lane_config.model,
+                details=f"runtime_state={status.runtime_state}",
+                port=status.port,
+            )
+            logger.warning(
+                "Lane '%s' process is %s; attempting automatic restart",
+                lid,
+                status.runtime_state,
+            )
+            try:
+                async with self._lock:
+                    handle = self._handles.get(lid)
+                    if handle is None:
+                        continue
+                    current = handle.status()
+                    if current.state not in {ProcessState.STOPPED, ProcessState.ERROR}:
+                        continue
+                    current_lc = handle.lane_config or lane_config
+                    await self._restart_lane_unlocked(lid, current_lc)
+                self._record_event(lid, "crash_restart_ok", model=current_lc.model, port=status.port)
+            except Exception:
+                logger.error("Lane '%s' automatic crash recovery failed", lid, exc_info=True)
+                self._record_event(lid, "crash_restart_failed", model=lane_config.model, port=status.port)
 
     async def get_lane_status(self, lane_id: str) -> LaneStatus:
         async with self._lock:
@@ -1132,8 +1187,12 @@ class LaneManager:
             except Exception:
                 pass
             await new_handle.close()
-            # Lane is now dead — remove it from handles so it doesn't linger
+            # Lane is now dead — remove it from handles and release all
+            # bookkeeping so the dead lane is not reported as active.
             self._handles.pop(lane_id, None)
+            self._port_alloc.release(lane_id)
+            self._active_requests.pop(lane_id, None)
+            self._starting_deadlines.pop(lane_id, None)
             raise
 
         # Success

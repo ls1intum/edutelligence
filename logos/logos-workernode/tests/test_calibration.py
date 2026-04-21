@@ -402,8 +402,8 @@ def test_auto_calibrate_models_continues_on_failure(tmp_path):
             ["model-a", "model-b"], config_path, state_dir,
         )
 
-    # model-a: tp=1 fail + tp=2 fail = 2 calls, model-b: tp=1 success = 1 call
-    assert mock_cm.call_count == 3
+    # model-a: tp=2 fail + tp=1 fallback fail = 2, model-b: tp=2 ok + tp=1 search = 2
+    assert mock_cm.call_count == 4
     assert not results["model-a"].success
     assert results["model-b"].success
     # Only model-b should have a persisted profile
@@ -493,10 +493,18 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
 
 
 def test_max_tp_for_plan():
+    # Power-of-2 rounding: 4 GPUs → tp=4, 3 GPUs → tp=2, 5 → 4, 7 → 4
     assert _max_tp_for_plan({"model": "x"}, available_gpus=4) == 4
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=3) == 2
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=5) == 4
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=7) == 4
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=8) == 8
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=1) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1"}, available_gpus=4) == 2
+    assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1,2"}, available_gpus=4) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0"}, available_gpus=4) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=4) == 4
+    assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=3) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": ""}, available_gpus=4) == 4
 
 
@@ -655,9 +663,19 @@ def _patch_calibration_infra(
         "logos_worker_node.calibration._kill_stale_vllm_workers"
     )
 
-    # _load_failed_commands → always empty (no cross-test contamination)
+    # _load_failed_commands / _load_succeeded_commands → always empty
+    # (no cross-test contamination)
     patches["load_failed"] = patch(
         "logos_worker_node.calibration._load_failed_commands", return_value=set()
+    )
+    patches["load_succeeded"] = patch(
+        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
+    )
+    patches["record_succeeded"] = patch(
+        "logos_worker_node.calibration._record_succeeded_command"
+    )
+    patches["remove_failed"] = patch(
+        "logos_worker_node.calibration._remove_failed_command"
     )
 
     return patches
@@ -851,9 +869,19 @@ def _patch_search_infra(
         "logos_worker_node.calibration._kill_stale_vllm_workers"
     )
 
-    # _load_failed_commands → always empty (no cross-test contamination)
+    # _load_failed_commands / _load_succeeded_commands → always empty
+    # (no cross-test contamination)
     patches["load_failed"] = patch(
         "logos_worker_node.calibration._load_failed_commands", return_value=set()
+    )
+    patches["load_succeeded"] = patch(
+        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
+    )
+    patches["record_succeeded"] = patch(
+        "logos_worker_node.calibration._record_succeeded_command"
+    )
+    patches["remove_failed"] = patch(
+        "logos_worker_node.calibration._remove_failed_command"
     )
 
     return patches

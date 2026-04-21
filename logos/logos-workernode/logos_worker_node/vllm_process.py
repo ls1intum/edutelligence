@@ -38,6 +38,7 @@ from logos_worker_node.models import (
     ProcessState,
     ProcessStatus,
     VllmEngineConfig,
+    _DEFAULT_LANE_CONTEXT_LENGTH,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -455,7 +456,10 @@ class VllmProcessHandle:
         # prevents the model weights from loading at all.
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
-        elif lane_config.context_length > 0:
+        # For vLLM lanes, context_length defaults to 4096 from shared lane
+        # schema. Treat that sentinel default as "unset" so vLLM can use the
+        # model's native maximum context unless an explicit override is given.
+        elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])

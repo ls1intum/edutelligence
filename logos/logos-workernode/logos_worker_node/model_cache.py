@@ -212,22 +212,35 @@ class ModelRamCache:
         size_mb = self.model_size_bytes(model_name) / (1024 * 1024)
         t0 = time.monotonic()
         logger.info(
-            "Copying %s into RAM cache (%.0f MB) [sync] ...",
-            model_name, size_mb,
+            "Copying %s into RAM cache (%.0f MB, %s -> %s)",
+            model_name, size_mb, src, partial,
         )
 
         try:
             rsync_available = shutil.which("rsync") is not None
             if rsync_available:
-                result = subprocess.run(  # noqa: S603
-                    ["rsync", "-aL", "--delete", str(src) + "/", str(partial) + "/"],
-                    capture_output=True, text=True,
+                proc = subprocess.Popen(  # noqa: S603
+                    ["rsync", "-aL", "--delete", "--info=progress2", "--no-inc-recursive",
+                     str(src) + "/", str(partial) + "/"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 )
-                if result.returncode != 0:
+                _last_log = time.monotonic()
+                _LOG_INTERVAL = 30.0  # log progress every 30s
+                for line in proc.stdout or []:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    now = time.monotonic()
+                    if now - _last_log >= _LOG_INTERVAL:
+                        # rsync --info=progress2 emits lines like:
+                        #   1,234,567,890  42%  123.45MB/s  0:01:23
+                        logger.info("  [RAM cache] %s — %s", model_name, line)
+                        _last_log = now
+                proc.wait()
+                if proc.returncode != 0:
                     logger.error(
-                        "rsync failed for %s (rc=%d): %s",
-                        model_name, result.returncode,
-                        (result.stderr or "")[:500],
+                        "rsync failed for %s (rc=%d)",
+                        model_name, proc.returncode,
                     )
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
@@ -354,18 +367,25 @@ class ModelRamCache:
         try:
             rsync_available = shutil.which("rsync") is not None
             if rsync_available:
-                proc = await asyncio.create_subprocess_exec(
-                    "rsync", "-aL", "--delete",
+                progress_cmd = [
+                    "rsync", "-aL", "--delete", "--info=progress2",
                     str(src) + "/", str(partial) + "/",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _stdout, stderr = await proc.communicate()
-                if proc.returncode != 0:
+                ]
+                rc, tail = await self._run_rsync_with_feedback(progress_cmd, model_name, t0)
+                if rc != 0:
+                    logger.warning(
+                        "rsync copy with progress flags failed for %s; retrying without progress flags",
+                        model_name,
+                    )
+                    shutil.rmtree(partial, ignore_errors=True)
+                    fallback_cmd = ["rsync", "-aL", "--delete", str(src) + "/", str(partial) + "/"]
+                    rc, tail = await self._run_rsync_with_feedback(fallback_cmd, model_name, t0)
+                if rc != 0:
                     logger.error(
                         "rsync failed for %s (rc=%d): %s",
-                        model_name, proc.returncode,
-                        stderr.decode(errors="replace")[:500],
+                        model_name,
+                        rc,
+                        tail[:500],
                     )
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
@@ -397,6 +417,65 @@ class ModelRamCache:
             size_mb / elapsed if elapsed > 0 else 0,
         )
         return True
+
+    async def _run_rsync_with_feedback(self, cmd: list[str], model_name: str, started_at: float) -> tuple[int, str]:
+        """Run rsync command while emitting periodic feedback and collecting output tail."""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+        log_interval_s = 30.0
+        last_progress_line = ""
+        output_tail: list[str] = []
+
+        async def _drain_output() -> None:
+            nonlocal last_progress_line
+            if proc.stdout is None:
+                return
+            buffer = ""
+            while True:
+                chunk = await proc.stdout.read(4096)
+                if not chunk:
+                    break
+                buffer += chunk.decode(errors="replace")
+                buffer = buffer.replace("\r", "\n")
+                parts = buffer.split("\n")
+                buffer = parts.pop() if parts else ""
+                for raw in parts:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    output_tail.append(line)
+                    if len(output_tail) > 20:
+                        output_tail.pop(0)
+                    last_progress_line = line
+            trailing = buffer.strip()
+            if trailing:
+                output_tail.append(trailing)
+                if len(output_tail) > 20:
+                    output_tail.pop(0)
+                last_progress_line = trailing
+
+        drain_task = asyncio.create_task(_drain_output())
+        while True:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=log_interval_s)
+                break
+            except TimeoutError:
+                elapsed_s = time.monotonic() - started_at
+                if last_progress_line:
+                    logger.info("  [RAM cache] %s — %s", model_name, last_progress_line)
+                else:
+                    logger.info(
+                        "  [RAM cache] %s — copy in progress (%.1fs elapsed)",
+                        model_name,
+                        elapsed_s,
+                    )
+
+        await drain_task
+        return proc.returncode or 0, " | ".join(output_tail[-3:])
 
     def _is_stale(self, src: Path, cached: Path) -> bool:
         """Check if source is newer than cached copy by comparing mtimes."""

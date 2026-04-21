@@ -1929,6 +1929,10 @@ class CapacityPlanner:
             reason="Request-time lane preparation",
         )
 
+        # Tracks when we first detected phantom VRAM (lanes=0, VRAM still occupied
+        # by a recently-killed process whose CUDA context hasn't been freed yet).
+        _phantom_wait_started: Optional[float] = None
+
         while True:
             capacity = self._safe_get_capacity(provider_id)
             if capacity is None:
@@ -2037,14 +2041,47 @@ class CapacityPlanner:
                 )
                 return True
 
+            lanes_now = self._safe_get_lanes(provider_id)
             reclaim = self._next_request_reclaim_action(
                 provider_id=provider_id,
                 target=target,
-                lanes=self._safe_get_lanes(provider_id),
+                lanes=lanes_now,
                 profiles=self._safe_get_profiles(provider_id),
                 required_free_mb=shortfall,
             )
             if reclaim is None:
+                # Phantom-VRAM path: no lanes exist but VRAM is still occupied by
+                # a recently-killed process whose CUDA context hasn't been released
+                # by the driver yet.  Wait up to 60 s for the driver to free memory
+                # before giving up — the worker will re-report fresh VRAM numbers
+                # on each heartbeat cycle.
+                total_vram = float(getattr(capacity, "total_vram_mb", 0) or 0)
+                phantom_mb = total_vram - available
+                if (
+                    not lanes_now
+                    and total_vram > 0
+                    and phantom_mb > needed * 0.5
+                ):
+                    if _phantom_wait_started is None:
+                        _phantom_wait_started = time.monotonic()
+                        logger.info(
+                            "ensure_capacity provider=%s model=%s: "
+                            "phantom VRAM detected (%.0f MB occupied, 0 lanes) — "
+                            "waiting up to 60 s for CUDA driver to release contexts",
+                            provider_id, target.model_name, phantom_mb,
+                        )
+                    elapsed = time.monotonic() - _phantom_wait_started
+                    if elapsed < 60.0:
+                        await asyncio.sleep(2.0)
+                        capacity = self._safe_get_capacity(provider_id)
+                        if capacity is None:
+                            return False
+                        continue
+                    logger.info(
+                        "ensure_capacity provider=%s model=%s: "
+                        "phantom VRAM still present after %.0f s — giving up",
+                        provider_id, target.model_name, elapsed,
+                    )
                 logger.info(
                     "No idle reclaim action available for provider=%s model=%s "
                     "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
