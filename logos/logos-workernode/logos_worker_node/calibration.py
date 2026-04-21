@@ -298,6 +298,7 @@ def spawn_vllm(
     kv_cache_memory_bytes: str,
     *,
     nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
 ) -> tuple[subprocess.Popen[str], list[str]]:
     """Spawn vLLM and return ``(process, cmd_list)``."""
     tp = int(plan.get("tensor_parallel_size", 1))
@@ -310,10 +311,21 @@ def spawn_vllm(
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
 
+    # Override HF_HOME to load from tmpfs RAM cache if provided.
+    if hf_home:
+        env["HF_HOME"] = hf_home
+        logger.info("  HF_HOME=%s (tmpfs RAM cache)", hf_home)
+
     # NCCL P2P: disabled by default (PCIe-only assumed).
     # Set nccl_p2p_available=True for NVLink setups.
     if not nccl_p2p_available:
         env.setdefault("NCCL_P2P_DISABLE", "1")
+        logger.info(
+            "  NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+            "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)"
+        )
+    else:
+        logger.info("  NCCL P2P enabled (NVLink topology)")
 
     # For tensor-parallel calibration runs (tp > 1), mirror the NCCL env vars
     # used by regular vLLM lanes so calibration matches production behaviour.
@@ -507,7 +519,17 @@ def calibrate_model(
     sleep_level: int,
     ready_timeout_s: float,
     nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
 ) -> CalibrationResult:
+    # Always force eager mode for calibration: CUDA graph capture is not
+    # needed for VRAM measurement and can add 10-30 minutes of startup time.
+    # The per-model production enforce_eager setting is irrelevant here.
+    if not plan.get("enforce_eager"):
+        logger.info(
+            "  enforce_eager=True (forced for calibration — CUDA graph capture skipped)"
+        )
+        plan = {**plan, "enforce_eager": True}
+
     model = plan["model"]
     gpu_devices = str(plan.get("gpu_devices") or "")
     tp = int(plan.get("tensor_parallel_size", 1))
@@ -634,6 +656,7 @@ def calibrate_model(
             vllm_binary, host, port, log_path,
             kv_cache_memory_bytes=kv_str,
             nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
         )
         logger.info(
             "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
@@ -963,6 +986,7 @@ def _try_calibrate(
     sleep_level: int,
     ready_timeout_s: float,
     nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -975,6 +999,7 @@ def _try_calibrate(
             sleep_level=sleep_level,
             ready_timeout_s=ready_timeout_s,
             nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -998,6 +1023,7 @@ def auto_calibrate_models(
     sleep_level: int = 1,
     ready_timeout_s: float = _READY_TIMEOUT_S,
     nccl_p2p_available: bool = False,
+    model_cache: Any | None = None,
 ) -> dict[str, CalibrationResult]:
     """Calibrate a list of uncalibrated models and persist results.
 
@@ -1071,6 +1097,22 @@ def auto_calibrate_models(
         original_tp = int(plan.get("tensor_parallel_size", 1))
         max_tp = _max_tp_for_plan(plan, available_gpus)
 
+        # Cache this model in tmpfs before calibration so vLLM loads from RAM.
+        # Only one model is ever in the cache at a time — evict after calibration.
+        hf_home: str | None = None
+        if model_cache is not None and getattr(model_cache, "enabled", False):
+            logger.info("  [RAM cache] Caching %s into tmpfs before calibration...", model_name)
+            hf_home = model_cache.ensure_cached_sync(model_name) or None
+            if hf_home:
+                is_tmpfs_path = hasattr(model_cache, "_cache_hub") and hf_home == str(model_cache._cache_hub.parent)
+                if is_tmpfs_path:
+                    logger.info("  [RAM cache] %s → loading from tmpfs (calibration will be faster)", model_name)
+                else:
+                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full or model not found)", model_name)
+                    hf_home = None  # don't override HF_HOME if we're not using tmpfs
+
+        model_cal_kwargs = {**cal_kwargs, "hf_home": hf_home}
+
         # ----------------------------------------------------------
         # Strategy: "max-first, then search down"
         #
@@ -1085,7 +1127,7 @@ def auto_calibrate_models(
 
         tp = max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **cal_kwargs)
+        result = _try_calibrate(current_plan, **model_cal_kwargs)
 
         # Auto-retry with --trust-remote-code when vLLM demands it.
         _err = result.error or ""
@@ -1099,7 +1141,7 @@ def auto_calibrate_models(
                 extra.append("--trust-remote-code")
             plan = {**plan, "extra_args": extra}
             current_plan = {**plan, "tensor_parallel_size": tp}
-            result = _try_calibrate(current_plan, **cal_kwargs)
+            result = _try_calibrate(current_plan, **model_cal_kwargs)
 
         # If even max tp fails, the model cannot run — skip it.
         _fatal = (
@@ -1119,6 +1161,9 @@ def auto_calibrate_models(
                     model_name,
                     result.error,
                 )
+            if model_cache is not None and getattr(model_cache, "enabled", False):
+                logger.info("  [RAM cache] Evicting %s from tmpfs (calibration done)", model_name)
+                model_cache.evict(model_name)
             continue
 
         # Max tp succeeded — now binary-search down to find minimum tp.
@@ -1143,7 +1188,7 @@ def auto_calibrate_models(
                 model_name, mid_tp, low_tp, high_tp,
             )
             mid_plan = {**plan, "tensor_parallel_size": mid_tp}
-            mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+            mid_result = _try_calibrate(mid_plan, **model_cal_kwargs)
             if mid_result.success:
                 best_result = mid_result
                 best_tp = mid_tp
@@ -1173,6 +1218,10 @@ def auto_calibrate_models(
                 model_name,
                 result.error,
             )
+
+        if model_cache is not None and getattr(model_cache, "enabled", False):
+            logger.info("  [RAM cache] Evicting %s from tmpfs (calibration done, freeing space)", model_name)
+            model_cache.evict(model_name)
 
     ok = [r for r in results.values() if r.success]
     fail = [r for r in results.values() if not r.success]

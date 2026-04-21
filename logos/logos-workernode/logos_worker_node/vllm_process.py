@@ -732,6 +732,13 @@ class VllmProcessHandle:
         # Set engines.vllm.nccl_p2p_available=true in config.yml for NVLink setups.
         if not self._vllm_engine_config.nccl_p2p_available:
             env["NCCL_P2P_DISABLE"] = "1"
+            logger.info(
+                "[%s] NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+                "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)",
+                self.lane_id,
+            )
+        else:
+            logger.info("[%s] NCCL P2P enabled (NVLink topology)", self.lane_id)
 
         # NCCL defaults for tensor-parallel lanes (TP > 1).
         # IMPORTANT: Do NOT set NCCL transport tuning vars (P2P_LEVEL,
