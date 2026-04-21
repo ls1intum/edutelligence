@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
+_DEFAULT_LANE_CONTEXT_LENGTH = 4096
 
 
 def _normalize_gpu_devices(raw: str) -> str:
@@ -236,7 +237,7 @@ class LaneConfig(BaseModel):
     model: str
     vllm: bool = False
     num_parallel: int = Field(default=4, ge=1)
-    context_length: int = Field(default=4096, ge=128)
+    context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
     keep_alive: str = "5m"
     kv_cache_type: str = "q8_0"
     flash_attention: bool = True

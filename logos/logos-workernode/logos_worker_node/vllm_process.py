@@ -38,6 +38,7 @@ from logos_worker_node.models import (
     ProcessState,
     ProcessStatus,
     VllmEngineConfig,
+    _DEFAULT_LANE_CONTEXT_LENGTH,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -46,7 +47,6 @@ _READY_TIMEOUT = 300  # vLLM startup can be slow (model download + compilation)
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
-_DEFAULT_LANE_CONTEXT_LENGTH = 4096
 _SCRUBBED_ENV_VARS = (
     "LOCAL_RANK",
     "RANK",
