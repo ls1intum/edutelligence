@@ -663,9 +663,19 @@ def _patch_calibration_infra(
         "logos_worker_node.calibration._kill_stale_vllm_workers"
     )
 
-    # _load_failed_commands → always empty (no cross-test contamination)
+    # _load_failed_commands / _load_succeeded_commands → always empty
+    # (no cross-test contamination)
     patches["load_failed"] = patch(
         "logos_worker_node.calibration._load_failed_commands", return_value=set()
+    )
+    patches["load_succeeded"] = patch(
+        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
+    )
+    patches["record_succeeded"] = patch(
+        "logos_worker_node.calibration._record_succeeded_command"
+    )
+    patches["remove_failed"] = patch(
+        "logos_worker_node.calibration._remove_failed_command"
     )
 
     return patches
@@ -859,9 +869,19 @@ def _patch_search_infra(
         "logos_worker_node.calibration._kill_stale_vllm_workers"
     )
 
-    # _load_failed_commands → always empty (no cross-test contamination)
+    # _load_failed_commands / _load_succeeded_commands → always empty
+    # (no cross-test contamination)
     patches["load_failed"] = patch(
         "logos_worker_node.calibration._load_failed_commands", return_value=set()
+    )
+    patches["load_succeeded"] = patch(
+        "logos_worker_node.calibration._load_succeeded_commands", return_value=set()
+    )
+    patches["record_succeeded"] = patch(
+        "logos_worker_node.calibration._record_succeeded_command"
+    )
+    patches["remove_failed"] = patch(
+        "logos_worker_node.calibration._remove_failed_command"
     )
 
     return patches
