@@ -1060,11 +1060,21 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 
 
 def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
-    """Return the maximum tensor_parallel_size allowed for *plan*."""
+    """Return the maximum tensor_parallel_size allowed for *plan*.
+
+    TP must be a power of 2 for most model architectures (attention heads
+    must be evenly divisible).  Round down to the largest power of 2 that
+    fits within the available GPUs.
+    """
     gpu_devices = str(plan.get("gpu_devices") or "").strip().lower()
     if not gpu_devices or gpu_devices == "all":
-        return available_gpus
-    return len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
+        n = available_gpus
+    else:
+        n = len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
+    # Largest power of 2 ≤ n  (e.g. 3 → 2, 5 → 4, 7 → 4, 8 → 8)
+    if n < 1:
+        return 1
+    return 1 << (n.bit_length() - 1)
 
 
 def _try_calibrate(

@@ -493,10 +493,18 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
 
 
 def test_max_tp_for_plan():
+    # Power-of-2 rounding: 4 GPUs → tp=4, 3 GPUs → tp=2, 5 → 4, 7 → 4
     assert _max_tp_for_plan({"model": "x"}, available_gpus=4) == 4
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=3) == 2
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=5) == 4
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=7) == 4
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=8) == 8
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=1) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1"}, available_gpus=4) == 2
+    assert _max_tp_for_plan({"model": "x", "gpu_devices": "0,1,2"}, available_gpus=4) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "0"}, available_gpus=4) == 1
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=4) == 4
+    assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=3) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": ""}, available_gpus=4) == 4
 
 
