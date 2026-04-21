@@ -253,7 +253,7 @@ def _build_vllm_cmd(
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
     max_model_len = plan.get("max_model_len")
-    enforce_eager = bool(plan.get("enforce_eager", False))
+    enforce_eager = bool(plan.get("enforce_eager", True))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
@@ -296,10 +296,12 @@ def spawn_vllm(
     port: int,
     log_path: Path,
     kv_cache_memory_bytes: str,
+    *,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
 ) -> tuple[subprocess.Popen[str], list[str]]:
     """Spawn vLLM and return ``(process, cmd_list)``."""
     tp = int(plan.get("tensor_parallel_size", 1))
-    disable_nccl_p2p = bool(plan.get("disable_nccl_p2p", False))
 
     cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes)
 
@@ -309,14 +311,28 @@ def spawn_vllm(
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
 
+    # Override HF_HOME to load from tmpfs RAM cache if provided.
+    if hf_home:
+        env["HF_HOME"] = hf_home
+        logger.info("  HF_HOME=%s (tmpfs RAM cache)", hf_home)
+
+    # NCCL P2P: disabled by default (PCIe-only assumed).
+    # Set nccl_p2p_available=True for NVLink setups.
+    if not nccl_p2p_available:
+        env.setdefault("NCCL_P2P_DISABLE", "1")
+        logger.info(
+            "  NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+            "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)"
+        )
+    else:
+        logger.info("  NCCL P2P enabled (NVLink topology)")
+
     # For tensor-parallel calibration runs (tp > 1), mirror the NCCL env vars
     # used by regular vLLM lanes so calibration matches production behaviour.
     if tp > 1:
         env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
         env.setdefault("NCCL_CUMEM_ENABLE", "0")   # unreliable in Docker without NUMA config
         env.setdefault("NCCL_TIMEOUT", "1800")
-        if disable_nccl_p2p:
-            env.setdefault("NCCL_P2P_DISABLE", "1")    # PCIe GPUs without NVLink hang on P2P init
 
     gpu_devices = str(plan.get("gpu_devices") or "")
     if gpu_devices and gpu_devices.lower() not in ("all", ""):
@@ -502,7 +518,18 @@ def calibrate_model(
     log_dir: Path,
     sleep_level: int,
     ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
 ) -> CalibrationResult:
+    # Always force eager mode for calibration: CUDA graph capture is not
+    # needed for VRAM measurement and can add 10-30 minutes of startup time.
+    # The per-model production enforce_eager setting is irrelevant here.
+    if not plan.get("enforce_eager"):
+        logger.info(
+            "  enforce_eager=True (forced for calibration — CUDA graph capture skipped)"
+        )
+        plan = {**plan, "enforce_eager": True}
+
     model = plan["model"]
     gpu_devices = str(plan.get("gpu_devices") or "")
     tp = int(plan.get("tensor_parallel_size", 1))
@@ -628,6 +655,8 @@ def calibrate_model(
             planned,
             vllm_binary, host, port, log_path,
             kv_cache_memory_bytes=kv_str,
+            nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
         )
         logger.info(
             "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
@@ -659,45 +688,119 @@ def calibrate_model(
     if kv_search:
         search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
         search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
+        original_ceiling = search_hi
 
-        # Phase 2a: Verify the model loads at all with minimum KV cache.
-        # If even 1 GB KV fails, the model simply doesn't fit.
+        # Phase 2a: Find the maximum KV cache the model can start with.
+        #
+        # The floor probe can fail for two distinct reasons:
+        #   a) Model weights alone exceed GPU VRAM (truly doesn't fit).
+        #   b) The model's native max_position_embeddings requires more KV
+        #      cache than the floor — vLLM refuses to start because it
+        #      cannot serve even one full-length request in the KV pool.
+        #
+        # When the floor fails, probe the ceiling to distinguish (a)/(b).
+        # If the ceiling also fails (weights + full KV exceeds VRAM), the
+        # working range lies strictly in between — search inward.
         logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
-        proc = _try_start(search_lo)
-        if proc is None:
-            partial.error = (
-                f"Model cannot start even with minimum KV cache "
-                f"{_format_kv_mb(search_lo)} on tp={tp}. "
-                f"Model weights likely exceed available GPU VRAM."
+        floor_proc = _try_start(search_lo)
+
+        if floor_proc is not None:
+            # Floor works — binary-search upward from floor to ceiling.
+            stop_vllm(floor_proc)
+            time.sleep(_VRAM_SETTLE_S)
+            best_kv = search_lo
+
+            while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                mid = _round_up_gb((search_lo + search_hi) / 2.0)
+                if mid <= search_lo:
+                    break
+                proc = _try_start(mid)
+                if proc is not None:
+                    best_kv = mid
+                    stop_vllm(proc)
+                    time.sleep(_VRAM_SETTLE_S)
+                    proc = None
+                    search_lo = mid
+                else:
+                    search_hi = mid - _KV_CACHE_MIN_STEP_MB
+        else:
+            # Floor failed — probe the ceiling before giving up.
+            logger.info(
+                "        Floor probe failed — probing ceiling kv_cache=%s "
+                "to check if model fits with more KV cache...",
+                _format_kv_mb(search_hi),
             )
-            logger.warning("  ERROR: %s", partial.error)
-            return partial
+            ceil_proc = _try_start(search_hi)
 
-        # Floor works — now binary-search upward to find maximum KV cache that fits
-        stop_vllm(proc)
-        time.sleep(_VRAM_SETTLE_S)
-        proc = None
-        best_kv = search_lo
-
-        while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
-            mid = _round_up_gb((search_lo + search_hi) / 2.0)
-            if mid <= search_lo:
-                break
-            proc = _try_start(mid)
-            if proc is not None:
-                # Works at this size — try even higher
-                best_kv = mid
-                stop_vllm(proc)
+            if ceil_proc is not None:
+                # Ceiling works — it is already the maximum.
+                stop_vllm(ceil_proc)
                 time.sleep(_VRAM_SETTLE_S)
-                proc = None
-                search_lo = mid
+                best_kv = search_hi
             else:
-                # Too large — maximum is lower
-                search_hi = mid - _KV_CACHE_MIN_STEP_MB
+                # Both extremes failed.  Floor: KV too small for
+                # max_position_embeddings.  Ceiling: KV + weights exceeds
+                # VRAM.  The working range lies strictly between them.
+                #
+                # Strategy: probe a handful of interior points to find ANY
+                # working KV size, then binary-search upward from there to
+                # find the maximum.
+                logger.info(
+                    "        Both floor and ceiling failed — searching "
+                    "middle range for a working KV size...",
+                )
+                best_kv = None
+                frac_candidates = [0.5, 0.75, 0.25, 0.625, 0.375, 0.875, 0.125]
+                span = original_ceiling - _KV_CACHE_MIN_STEP_MB
+                candidates = []
+                seen: set[float] = set()
+                for frac in frac_candidates:
+                    c = _round_up_gb(_KV_CACHE_MIN_STEP_MB + span * frac)
+                    if c not in seen and _KV_CACHE_MIN_STEP_MB < c < original_ceiling:
+                        candidates.append(c)
+                        seen.add(c)
+
+                for kv in candidates:
+                    logger.info(
+                        "        Trying interior kv_cache=%s...",
+                        _format_kv_mb(kv),
+                    )
+                    p = _try_start(kv)
+                    if p is not None:
+                        best_kv = kv
+                        stop_vllm(p)
+                        time.sleep(_VRAM_SETTLE_S)
+                        break
+
+                if best_kv is None:
+                    partial.error = (
+                        f"No working KV cache size found between "
+                        f"{_format_kv_mb(_KV_CACHE_MIN_STEP_MB)} and "
+                        f"{_format_kv_mb(original_ceiling)} on tp={tp}. "
+                        f"Model weights likely exceed available GPU VRAM."
+                    )
+                    logger.warning("  ERROR: %s", partial.error)
+                    return partial
+
+                # Found a working point — binary-search upward for the max.
+                search_lo = best_kv
+                search_hi = original_ceiling
+                while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                    mid = _round_up_gb((search_lo + search_hi) / 2.0)
+                    if mid <= search_lo:
+                        break
+                    p = _try_start(mid)
+                    if p is not None:
+                        best_kv = mid
+                        stop_vllm(p)
+                        time.sleep(_VRAM_SETTLE_S)
+                        search_lo = mid
+                    else:
+                        search_hi = mid - _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
         logger.info(
-            "  KV cache search result: max_working=%.0f MB (search range exhausted, "
+            "  KV cache search result: best_working=%.0f MB (search range exhausted, "
             "precision=%.0f MB)",
             best_kv, _KV_CACHE_MIN_STEP_MB,
         )
@@ -927,7 +1030,6 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
                 "enforce_eager",
                 "max_model_len",
                 "disable_custom_all_reduce",
-                "disable_nccl_p2p",
             ):
                 plan.setdefault(k, v)
 
@@ -957,6 +1059,8 @@ def _try_calibrate(
     log_dir: Path,
     sleep_level: int,
     ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -968,6 +1072,8 @@ def _try_calibrate(
             log_dir=log_dir,
             sleep_level=sleep_level,
             ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -990,6 +1096,8 @@ def auto_calibrate_models(
     port: int = _CALIBRATION_PORT,
     sleep_level: int = 1,
     ready_timeout_s: float = _READY_TIMEOUT_S,
+    nccl_p2p_available: bool = False,
+    model_cache: Any | None = None,
 ) -> dict[str, CalibrationResult]:
     """Calibrate a list of uncalibrated models and persist results.
 
@@ -1053,6 +1161,7 @@ def auto_calibrate_models(
         log_dir=log_dir,
         sleep_level=sleep_level,
         ready_timeout_s=ready_timeout_s,
+        nccl_p2p_available=nccl_p2p_available,
     )
 
     results: dict[str, CalibrationResult] = {}
@@ -1061,6 +1170,22 @@ def auto_calibrate_models(
         model_name = plan["model"]
         original_tp = int(plan.get("tensor_parallel_size", 1))
         max_tp = _max_tp_for_plan(plan, available_gpus)
+
+        # Cache this model in tmpfs before calibration so vLLM loads from RAM.
+        # Only one model is ever in the cache at a time — evict after calibration.
+        hf_home: str | None = None
+        if model_cache is not None and getattr(model_cache, "enabled", False):
+            logger.info("  [RAM cache] Caching %s into tmpfs before calibration...", model_name)
+            hf_home = model_cache.ensure_cached_sync(model_name) or None
+            if hf_home:
+                is_tmpfs_path = hasattr(model_cache, "_cache_hub") and hf_home == str(model_cache._cache_hub.parent)
+                if is_tmpfs_path:
+                    logger.info("  [RAM cache] %s → loading from tmpfs (calibration will be faster)", model_name)
+                else:
+                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full or model not found)", model_name)
+                    hf_home = None  # don't override HF_HOME if we're not using tmpfs
+
+        model_cal_kwargs = {**cal_kwargs, "hf_home": hf_home}
 
         # ----------------------------------------------------------
         # Strategy: "max-first, then search down"
@@ -1076,7 +1201,7 @@ def auto_calibrate_models(
 
         tp = max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **cal_kwargs)
+        result = _try_calibrate(current_plan, **model_cal_kwargs)
 
         # Auto-retry with --trust-remote-code when vLLM demands it.
         _err = result.error or ""
@@ -1090,7 +1215,7 @@ def auto_calibrate_models(
                 extra.append("--trust-remote-code")
             plan = {**plan, "extra_args": extra}
             current_plan = {**plan, "tensor_parallel_size": tp}
-            result = _try_calibrate(current_plan, **cal_kwargs)
+            result = _try_calibrate(current_plan, **model_cal_kwargs)
 
         # If even max tp fails, the model cannot run — skip it.
         _fatal = (
@@ -1110,6 +1235,9 @@ def auto_calibrate_models(
                     model_name,
                     result.error,
                 )
+            if model_cache is not None and getattr(model_cache, "enabled", False):
+                logger.info("  [RAM cache] Evicting %s from tmpfs (calibration done)", model_name)
+                model_cache.evict(model_name)
             continue
 
         # Max tp succeeded — now binary-search down to find minimum tp.
@@ -1134,7 +1262,7 @@ def auto_calibrate_models(
                 model_name, mid_tp, low_tp, high_tp,
             )
             mid_plan = {**plan, "tensor_parallel_size": mid_tp}
-            mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+            mid_result = _try_calibrate(mid_plan, **model_cal_kwargs)
             if mid_result.success:
                 best_result = mid_result
                 best_tp = mid_tp
@@ -1164,6 +1292,10 @@ def auto_calibrate_models(
                 model_name,
                 result.error,
             )
+
+        if model_cache is not None and getattr(model_cache, "enabled", False):
+            logger.info("  [RAM cache] Evicting %s from tmpfs (calibration done, freeing space)", model_name)
+            model_cache.evict(model_name)
 
     ok = [r for r in results.values() if r.success]
     fail = [r for r in results.values() if not r.success]

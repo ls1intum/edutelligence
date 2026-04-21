@@ -9,7 +9,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import uvicorn
 from fastapi import FastAPI
@@ -38,6 +38,7 @@ async def _auto_calibrate_if_needed(
     cfg: "AppConfig",
     model_profiles: ModelProfileRegistry,
     state_dir: "Path",
+    model_cache: Any | None = None,
 ) -> None:
     """Check for uncalibrated capabilities models and calibrate them on startup."""
     if os.getenv("LOGOS_SKIP_AUTO_CALIBRATION", "").strip().lower() in ("1", "true", "yes"):
@@ -99,11 +100,15 @@ async def _auto_calibrate_if_needed(
     t0 = time.perf_counter()
 
     # Run synchronous calibration in a thread to avoid blocking the event loop
+    nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
+    _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
     results = await asyncio.to_thread(
         auto_calibrate_models,
         uncalibrated,
         config_path,
         state_dir,
+        nccl_p2p_available=nccl_p2p,
+        model_cache=_mc,
     )
 
     elapsed = time.perf_counter() - t0
@@ -174,14 +179,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model_profile_overrides=cfg.model_profile_overrides,
     )
 
-    await _auto_calibrate_if_needed(cfg, model_profiles, get_state_dir())
-
-    # ── tmpfs RAM cache ──────────────────────────────────────────────────
+    # ── tmpfs RAM cache (created before calibration so models can be loaded
+    # from RAM during VRAM measurement, then evicted to free space) ──────────
     hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
     )
+
+    await _auto_calibrate_if_needed(cfg, model_profiles, get_state_dir(), model_cache=model_cache)
+
     if model_cache.enabled:
         caps = list(cfg.logos.capabilities_models) if cfg.logos else []
         if caps:
@@ -191,14 +198,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 has_profile = int(p is not None and (p.base_residency_mb or 0) > 0)
                 size = model_cache.model_size_bytes(m)
                 return (-has_profile, size)
-            caps_sorted = sorted(caps, key=_sort_key)
-            logger.info("Pre-populating RAM cache with %d models: %s", len(caps_sorted), caps_sorted)
-            effective_paths = await model_cache.cache_models_by_priority(caps_sorted)
-            for m, p in effective_paths.items():
-                if p == str(model_cache._cache_hub.parent):
-                    logger.info("  %s → RAM cache", m)
-                else:
-                    logger.info("  %s → source filesystem", m)
+
+            # Only pre-populate RAM cache for models with a valid calibration profile.
+            # Uncalibrated models (base_residency_mb absent/0) will be excluded from
+            # capabilities anyway, so caching them wastes precious tmpfs space.
+            def _has_valid_profile(m: str) -> bool:
+                p = model_profiles.get_profile(m)
+                return p is not None and (p.base_residency_mb or 0) > 0
+
+            caps_to_cache = sorted([m for m in caps if _has_valid_profile(m)], key=_sort_key)
+            caps_skipped = [m for m in caps if not _has_valid_profile(m)]
+            if caps_skipped:
+                logger.info(
+                    "Skipping RAM cache for %d uncalibrated model(s) (no profile data — "
+                    "will not be served): %s",
+                    len(caps_skipped), caps_skipped,
+                )
+            if caps_to_cache:
+                logger.info(
+                    "Pre-populating RAM cache with %d calibrated model(s): %s",
+                    len(caps_to_cache), caps_to_cache,
+                )
+                effective_paths = await model_cache.cache_models_by_priority(caps_to_cache)
+                for m, p in effective_paths.items():
+                    if p == str(model_cache._cache_hub.parent):
+                        logger.info("  %s → tmpfs RAM cache", m)
+                    else:
+                        logger.info("  %s → source filesystem (RAM cache full or model not found)", m)
+            else:
+                logger.info("No calibrated models to pre-populate into RAM cache")
 
     lane_manager = LaneManager(
         global_config=cfg.engines.ollama,

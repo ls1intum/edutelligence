@@ -78,7 +78,6 @@ class VllmConfig(BaseModel):
     )
     enable_prefix_caching: bool = True
     disable_custom_all_reduce: bool = False
-    disable_nccl_p2p: bool = False
     enable_sleep_mode: bool = False
     server_dev_mode: bool = False
     cuda_graph_sizes: str = Field(
@@ -125,6 +124,12 @@ class VllmEngineConfig(BaseModel):
     flashinfer_logdest: str = Field(
         default="",
         description="FlashInfer log destination: stdout, stderr, or a file path. Empty = FlashInfer default.",
+    )
+    nccl_p2p_available: bool = Field(
+        default=False,
+        description="Set to true when GPUs are connected via NVLink and NCCL peer-to-peer "
+        "communication is available. Default false (PCIe-only topology) disables "
+        "NCCL P2P globally for all TP>1 lanes to prevent hangs.",
     )
     nccl_debug: str = Field(
         default="",

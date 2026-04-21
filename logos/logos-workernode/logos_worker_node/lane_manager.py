@@ -167,7 +167,6 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
         or cv.enforce_eager != dv.enforce_eager
         or cv.attention_backend != dv.attention_backend
         or cv.disable_custom_all_reduce != dv.disable_custom_all_reduce
-        or cv.disable_nccl_p2p != dv.disable_nccl_p2p
         or cv.cpu_offload_gb != dv.cpu_offload_gb
         or cv.extra_args != dv.extra_args
         or current.gpu_devices != desired.gpu_devices
@@ -1017,6 +1016,12 @@ class LaneManager:
             effective = await self._model_cache.ensure_cached(lane_config.model)
             if effective:
                 hf_home_override = effective
+                is_tmpfs = hasattr(self._model_cache, "_cache_hub") and effective == str(self._model_cache._cache_hub.parent)
+                logger.info(
+                    "Lane '%s' model=%s: HF_HOME=%s (%s)",
+                    lane_id, lane_config.model, effective,
+                    "tmpfs RAM cache" if is_tmpfs else "source filesystem",
+                )
         lane_config = self._apply_model_vllm_overrides(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)

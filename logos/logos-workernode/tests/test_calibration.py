@@ -523,16 +523,21 @@ async def test_lifespan_calls_auto_calibrate(tmp_path):
     mock_bridge.start = AsyncMock()
     mock_bridge.stop = AsyncMock()
 
+    mock_cache = MagicMock()
+    mock_cache.enabled = False
+
     with patch("logos_worker_node.main.load_config", return_value=cfg), \
          patch("logos_worker_node.main.get_state_dir", return_value=tmp_path), \
          patch("logos_worker_node.main.GpuMetricsCollector", return_value=mock_gpu), \
          patch("logos_worker_node.main.ModelProfileRegistry") as mock_reg_cls, \
          patch("logos_worker_node.main._auto_calibrate_if_needed", new_callable=AsyncMock) as mock_autocal, \
+         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache), \
          patch("logos_worker_node.main.LaneManager") as mock_lm_cls, \
          patch("logos_worker_node.main.LogosBridgeClient", return_value=mock_bridge), \
          patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}):
 
         mock_reg = MagicMock()
+        mock_reg.get_profile.return_value = None
         mock_reg_cls.return_value = mock_reg
 
         mock_lm = AsyncMock()
@@ -745,7 +750,8 @@ def test_vram_cap_uses_per_gpu_times_tp():
     # The important thing: it didn't try to use 48000*0.8=38400 as cap
 
 
-def test_calibration_output_honored_on_startup(tmp_path):
+@pytest.mark.asyncio
+async def test_calibration_output_honored_on_startup(tmp_path):
     """Ensure that calibration output is honored — no recalibration triggered."""
     # Simulate a model that was successfully calibrated.
     # In real calibration: base_residency_mb == loaded_vram_mb (full loaded footprint).
@@ -768,9 +774,7 @@ def test_calibration_output_honored_on_startup(tmp_path):
     cfg = _make_cfg(["model-a"])
 
     with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        asyncio.get_event_loop().run_until_complete(
-            worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-        )
+        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
 
     # Already calibrated → no recalibration
     mock_cal.assert_not_called()
@@ -909,7 +913,7 @@ def test_search_starts_from_floor_not_ceiling():
 
     kv_calls = []
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(kv_cache_memory_bytes)
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -947,20 +951,104 @@ def test_search_starts_from_floor_not_ceiling():
     assert result.kv_cache_sent_mb == pytest.approx(4096.0)
 
 
-def test_floor_failure_gives_clear_error():
-    """When even 1 GB KV cache fails, report that model weights exceed VRAM."""
+def test_floor_fails_ceiling_succeeds_uses_ceiling():
+    """When the floor probe fails but the ceiling succeeds, the ceiling is
+    the maximum KV cache — use it directly (no downward search needed)."""
+    kv_calls = []
+    kv_min_threshold_mb = 5120  # model needs >= 5 GB KV
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(kv_cache_memory_bytes)
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*args, **kwargs):
+        last_kv = _parse_kv_to_mb(kv_calls[-1])
+        if last_kv < kv_min_threshold_mb:
+            raise RuntimeError("KV cache too small for max_position_embeddings")
+
     patches = _patch_search_infra(
-        wait_ready_side_effect=[RuntimeError("OOM at floor")],
+        wait_ready_side_effect=wait_ready_side_effect,
+        gpu_vram_total_mb=24000.0,
+    )
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration.spawn_vllm",
+        side_effect=spawn_side_effect,
+    )
+    patches["ready"] = patch(
+        "logos_worker_node.calibration.wait_ready",
+        side_effect=wait_ready_side_effect,
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    assert kv_calls[0] == "1G"  # floor probed first
+    # ceiling = floor(24000*0.8/1024)*1024 = 18432
+    # Ceiling works and is the max — no further search.
+    assert result.kv_cache_sent_mb == pytest.approx(18432.0)
+
+
+def test_both_fail_searches_middle_range():
+    """When floor AND ceiling both fail, search interior points to find the
+    working KV range (floor too small for context, ceiling too large for VRAM),
+    then binary-search upward for the maximum."""
+    # GPU = 48 GB → ceiling = floor(48000*0.8/1024)*1024 = 37888
+    # Model: needs >= 6 GB KV (context), but OOMs above 32 GB (VRAM).
+    kv_calls = []
+    kv_min_mb = 6144.0   # 6 GB — min KV for max_position_embeddings
+    kv_max_mb = 32768.0  # 32 GB — max KV before OOM
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(kv_cache_memory_bytes)
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*args, **kwargs):
+        last_kv = _parse_kv_to_mb(kv_calls[-1])
+        if last_kv < kv_min_mb:
+            raise RuntimeError("KV cache too small for max_position_embeddings")
+        if last_kv > kv_max_mb:
+            raise RuntimeError("OOM: KV + weights exceeds VRAM")
+
+    patches = _patch_search_infra(
+        wait_ready_side_effect=wait_ready_side_effect,
+        gpu_vram_total_mb=48000.0,
+    )
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration.spawn_vllm",
+        side_effect=spawn_side_effect,
+    )
+    patches["ready"] = patch(
+        "logos_worker_node.calibration.wait_ready",
+        side_effect=wait_ready_side_effect,
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    # Should find a KV cache within the working range [6G, 32G]
+    assert result.kv_cache_sent_mb >= kv_min_mb
+    assert result.kv_cache_sent_mb <= kv_max_mb
+    # Should have found the maximum (or close to it, ±1 GB precision)
+    assert result.kv_cache_sent_mb >= kv_max_mb - _KV_CACHE_MIN_STEP_MB
+
+
+def test_all_interior_points_fail_gives_error():
+    """When floor, ceiling, AND all interior probes fail, report clear error."""
+    patches = _patch_search_infra(
+        wait_ready_side_effect=RuntimeError("always fails"),
         gpu_vram_total_mb=48000.0,
     )
 
-    result, mocks = _run_search_calibrate(patches, plan=_make_search_plan())
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
 
     assert not result.success
-    assert "minimum kv cache" in result.error.lower()
-    assert "model weights likely exceed" in result.error.lower()
-    # Only one probe — the floor attempt
-    assert mocks["spawn"].call_count == 1
+    assert "no working kv cache size" in result.error.lower()
 
 
 def test_ceiling_reachable():
@@ -994,7 +1082,7 @@ def test_search_direction_never_probes_ceiling_first():
     """
     kv_calls = []
 
-    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes):
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
         kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
         mock_proc = MagicMock()
         mock_proc.pid = 12345

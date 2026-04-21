@@ -11,8 +11,8 @@ Key differences from Ollama:
 - No ``num_parallel`` — continuous batching handles all concurrency.
 - ``num_ctx`` equivalent is ``--max-model-len``.
 - GPU pinning via ``CUDA_VISIBLE_DEVICES`` or ``--tensor-parallel-size``.
-- Optional stability controls are exposed via lane config:
-  ``disable_custom_all_reduce`` and ``disable_nccl_p2p``.
+- Optional stability controls: ``disable_custom_all_reduce`` (per-lane)
+  and ``nccl_p2p_available`` (global engine config, default False).
 """
 
 from __future__ import annotations
@@ -728,8 +728,17 @@ class VllmProcessHandle:
             if detected_arch:
                 env["TORCH_CUDA_ARCH_LIST"] = detected_arch
 
-        if vc.disable_nccl_p2p:
+        # NCCL P2P: disabled globally by default (PCIe-only assumed).
+        # Set engines.vllm.nccl_p2p_available=true in config.yml for NVLink setups.
+        if not self._vllm_engine_config.nccl_p2p_available:
             env["NCCL_P2P_DISABLE"] = "1"
+            logger.info(
+                "[%s] NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+                "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)",
+                self.lane_id,
+            )
+        else:
+            logger.info("[%s] NCCL P2P enabled (NVLink topology)", self.lane_id)
 
         # NCCL defaults for tensor-parallel lanes (TP > 1).
         # IMPORTANT: Do NOT set NCCL transport tuning vars (P2P_LEVEL,
