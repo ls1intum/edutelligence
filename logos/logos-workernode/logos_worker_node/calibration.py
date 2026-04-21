@@ -65,6 +65,62 @@ _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
 
 # ---------------------------------------------------------------------------
+# ANSI colours for calibration search visualisation
+# ---------------------------------------------------------------------------
+
+_C_RESET = "\033[0m"
+_C_GREEN = "\033[32m"       # success / best
+_C_RED = "\033[31m"         # failure
+_C_YELLOW = "\033[33m"      # blacklisted (skipped)
+_C_CYAN = "\033[36m"        # whitelisted (instant OK)
+_C_DIM = "\033[2m"          # untested
+_C_BOLD = "\033[1m"
+_C_GREEN_BG = "\033[42;30m"  # best marker
+
+
+def _render_search_bar(
+    floor_mb: float,
+    ceiling_mb: float,
+    step_mb: float,
+    probes: dict[float, str],  # kv_mb → "ok" | "fail" | "skip" | "whitelist" | "best"
+    best_kv: float | None = None,
+) -> str:
+    """Render a coloured ASCII bar showing the KV cache search state.
+
+    Example output::
+
+      1G [··✗··✓··✓·✗★·✗··✗···] 38G   best=18G
+           ↑fail  ↑ok      ↑best
+    """
+    slots: list[float] = []
+    kv = floor_mb
+    while kv <= ceiling_mb:
+        slots.append(kv)
+        kv += step_mb
+
+    bar_chars: list[str] = []
+    for s in slots:
+        status = probes.get(s)
+        if best_kv is not None and s == best_kv:
+            bar_chars.append(f"{_C_GREEN_BG}★{_C_RESET}")
+        elif status == "ok" or status == "whitelist":
+            c = _C_CYAN if status == "whitelist" else _C_GREEN
+            bar_chars.append(f"{c}✓{_C_RESET}")
+        elif status == "fail":
+            bar_chars.append(f"{_C_RED}✗{_C_RESET}")
+        elif status == "skip":
+            bar_chars.append(f"{_C_YELLOW}─{_C_RESET}")
+        else:
+            bar_chars.append(f"{_C_DIM}·{_C_RESET}")
+
+    bar = "".join(bar_chars)
+    lo_label = _format_kv_mb(floor_mb)
+    hi_label = _format_kv_mb(ceiling_mb)
+    best_label = f"  best={_C_BOLD}{_C_GREEN}{_format_kv_mb(best_kv)}{_C_RESET}" if best_kv else ""
+    return f"  {lo_label} [{bar}] {hi_label}{best_label}"
+
+
+# ---------------------------------------------------------------------------
 # KV-cache size parsing
 # ---------------------------------------------------------------------------
 
@@ -716,10 +772,10 @@ def calibrate_model(
         # Blacklist: known-bad, skip.
         if fingerprint in failed_commands:
             logger.warning(
-                "        SKIP kv_cache=%s — command previously failed "
-                "(remove line from %s to retry)",
-                kv_str, failed_path,
+                "        SKIP kv_cache=%s — blacklisted",
+                kv_str,
             )
+            _probes[kv_mb] = "skip"
             return None
         # Lazy RAM cache: copy model into tmpfs on first real spawn.
         if not _ram_cached and model_cache is not None:
@@ -783,18 +839,45 @@ def calibrate_model(
         search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
         original_ceiling = search_hi
 
-        # Phase 2a: Find the maximum KV cache the model can start with.
-        # Whitelisted probes (known-good from previous runs) are treated as
-        # instant successes by _try_start, so the binary search skips them
-        # instead of wasting minutes re-spawning vLLM.
+        # Track probe results for the visual search bar.
+        # Key: kv_mb, Value: "ok" | "fail" | "skip" | "whitelist"
+        _probes: dict[float, str] = {}
+        _best_kv_viz: float | None = None
+
         def _stop_if_real(result: object) -> None:
             """Stop the vLLM process unless it's a whitelist sentinel."""
             if result is not _WHITELIST_HIT and result is not None:
                 stop_vllm(result)  # type: ignore[arg-type]
                 time.sleep(_VRAM_SETTLE_S)
 
+        def _record_probe(kv_mb: float, result: object) -> None:
+            """Record probe result and log the visual search bar."""
+            nonlocal _best_kv_viz
+            if result is _WHITELIST_HIT:
+                _probes[kv_mb] = "whitelist"
+            elif result is not None:
+                _probes[kv_mb] = "ok"
+            elif kv_mb in _probes:
+                pass  # already recorded (e.g. blacklist skip)
+            else:
+                _probes[kv_mb] = "fail"
+            if result is not None:
+                _best_kv_viz = max(_best_kv_viz or 0, kv_mb)
+            bar = _render_search_bar(
+                _KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB,
+                _probes, _best_kv_viz,
+            )
+            logger.info(bar)
+
+        logger.info(
+            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  "
+            "%s✓%s=whitelisted  %s★%s=best  %s·%s=untested",
+            _C_GREEN, _C_RESET, _C_RED, _C_RESET, _C_YELLOW, _C_RESET,
+            _C_CYAN, _C_RESET, _C_GREEN_BG, _C_RESET, _C_DIM, _C_RESET,
+        )
         logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
         floor_proc = _try_start(search_lo)
+        _record_probe(search_lo, floor_proc)
 
         if floor_proc is not None:
             # Floor works — binary-search upward from floor to ceiling.
@@ -806,6 +889,7 @@ def calibrate_model(
                 if mid <= search_lo:
                     break
                 p = _try_start(mid)
+                _record_probe(mid, p)
                 if p is not None:
                     best_kv = mid
                     _stop_if_real(p)
@@ -815,24 +899,19 @@ def calibrate_model(
         else:
             # Floor failed — probe the ceiling before giving up.
             logger.info(
-                "        Floor probe failed — probing ceiling kv_cache=%s "
-                "to check if model fits with more KV cache...",
+                "        Floor probe failed — probing ceiling kv_cache=%s...",
                 _format_kv_mb(search_hi),
             )
             ceil_proc = _try_start(search_hi)
+            _record_probe(search_hi, ceil_proc)
 
             if ceil_proc is not None:
                 # Ceiling works — it is already the maximum.
                 _stop_if_real(ceil_proc)
                 best_kv = search_hi
             else:
-                # Both extremes failed.  The working range lies strictly
-                # between them.  Probe interior points, then binary-search
-                # upward from the first hit.
-                logger.info(
-                    "        Both floor and ceiling failed — searching "
-                    "middle range for a working KV size...",
-                )
+                # Both extremes failed — search interior points.
+                logger.info("        Both extremes failed — searching middle range...")
                 best_kv = None
                 frac_candidates = [0.5, 0.75, 0.25, 0.625, 0.375, 0.875, 0.125]
                 span = original_ceiling - _KV_CACHE_MIN_STEP_MB
@@ -845,11 +924,8 @@ def calibrate_model(
                         seen.add(c)
 
                 for kv in candidates:
-                    logger.info(
-                        "        Trying interior kv_cache=%s...",
-                        _format_kv_mb(kv),
-                    )
                     p = _try_start(kv)
+                    _record_probe(kv, p)
                     if p is not None:
                         best_kv = kv
                         _stop_if_real(p)
@@ -873,6 +949,7 @@ def calibrate_model(
                     if mid <= search_lo:
                         break
                     p = _try_start(mid)
+                    _record_probe(mid, p)
                     if p is not None:
                         best_kv = mid
                         _stop_if_real(p)
@@ -882,9 +959,18 @@ def calibrate_model(
 
         kv_cache_sent_mb = best_kv
         logger.info(
-            "  KV cache search result: best_working=%.0f MB "
-            "(search range exhausted, precision=%.0f MB)",
-            best_kv, _KV_CACHE_MIN_STEP_MB,
+            "  KV cache search result: %s%sbest_working=%s%s "
+            "(precision=%.0f MB)",
+            _C_BOLD, _C_GREEN, _format_kv_mb(best_kv), _C_RESET,
+            _KV_CACHE_MIN_STEP_MB,
+        )
+        # Final search bar
+        _best_kv_viz = best_kv
+        logger.info(
+            _render_search_bar(
+                _KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB,
+                _probes, _best_kv_viz,
+            )
         )
 
         # Start vLLM at the final KV size for VRAM measurement.
