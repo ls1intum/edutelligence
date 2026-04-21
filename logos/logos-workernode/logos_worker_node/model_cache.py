@@ -367,18 +367,25 @@ class ModelRamCache:
         try:
             rsync_available = shutil.which("rsync") is not None
             if rsync_available:
-                proc = await asyncio.create_subprocess_exec(
-                    "rsync", "-aL", "--delete",
+                progress_cmd = [
+                    "rsync", "-aL", "--delete", "--info=progress2",
                     str(src) + "/", str(partial) + "/",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _stdout, stderr = await proc.communicate()
-                if proc.returncode != 0:
+                ]
+                rc, tail = await self._run_rsync_with_feedback(progress_cmd, model_name, t0)
+                if rc != 0:
+                    logger.warning(
+                        "rsync copy with progress flags failed for %s; retrying without progress flags",
+                        model_name,
+                    )
+                    shutil.rmtree(partial, ignore_errors=True)
+                    fallback_cmd = ["rsync", "-aL", "--delete", str(src) + "/", str(partial) + "/"]
+                    rc, tail = await self._run_rsync_with_feedback(fallback_cmd, model_name, t0)
+                if rc != 0:
                     logger.error(
                         "rsync failed for %s (rc=%d): %s",
-                        model_name, proc.returncode,
-                        stderr.decode(errors="replace")[:500],
+                        model_name,
+                        rc,
+                        tail[:500],
                     )
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
@@ -410,6 +417,65 @@ class ModelRamCache:
             size_mb / elapsed if elapsed > 0 else 0,
         )
         return True
+
+    async def _run_rsync_with_feedback(self, cmd: list[str], model_name: str, started_at: float) -> tuple[int, str]:
+        """Run rsync command while emitting periodic feedback and collecting output tail."""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+        log_interval_s = 30.0
+        last_progress_line = ""
+        output_tail: list[str] = []
+
+        async def _drain_output() -> None:
+            nonlocal last_progress_line
+            if proc.stdout is None:
+                return
+            buffer = ""
+            while True:
+                chunk = await proc.stdout.read(4096)
+                if not chunk:
+                    break
+                buffer += chunk.decode(errors="replace")
+                buffer = buffer.replace("\r", "\n")
+                parts = buffer.split("\n")
+                buffer = parts.pop() if parts else ""
+                for raw in parts:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    output_tail.append(line)
+                    if len(output_tail) > 20:
+                        output_tail.pop(0)
+                    last_progress_line = line
+            trailing = buffer.strip()
+            if trailing:
+                output_tail.append(trailing)
+                if len(output_tail) > 20:
+                    output_tail.pop(0)
+                last_progress_line = trailing
+
+        drain_task = asyncio.create_task(_drain_output())
+        while True:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=log_interval_s)
+                break
+            except TimeoutError:
+                elapsed_s = time.monotonic() - started_at
+                if last_progress_line:
+                    logger.info("  [RAM cache] %s — %s", model_name, last_progress_line)
+                else:
+                    logger.info(
+                        "  [RAM cache] %s — copy in progress (%.1fs elapsed)",
+                        model_name,
+                        elapsed_s,
+                    )
+
+        await drain_task
+        return proc.returncode or 0, " | ".join(output_tail[-3:])
 
     def _is_stale(self, src: Path, cached: Path) -> bool:
         """Check if source is newer than cached copy by comparing mtimes."""
