@@ -951,20 +951,74 @@ def test_search_starts_from_floor_not_ceiling():
     assert result.kv_cache_sent_mb == pytest.approx(4096.0)
 
 
-def test_floor_failure_gives_clear_error():
-    """When even 1 GB KV cache fails, report that model weights exceed VRAM."""
+def test_floor_and_ceiling_failure_gives_clear_error():
+    """When both floor and ceiling fail, report that model weights exceed VRAM."""
+    # Need 2 side effects: floor probe fails, ceiling probe fails
     patches = _patch_search_infra(
-        wait_ready_side_effect=[RuntimeError("OOM at floor")],
+        wait_ready_side_effect=[
+            RuntimeError("OOM at floor"),
+            RuntimeError("OOM at ceiling"),
+        ],
         gpu_vram_total_mb=48000.0,
     )
 
     result, mocks = _run_search_calibrate(patches, plan=_make_search_plan())
 
     assert not result.success
-    assert "minimum kv cache" in result.error.lower()
     assert "model weights likely exceed" in result.error.lower()
-    # Only one probe — the floor attempt
-    assert mocks["spawn"].call_count == 1
+    # Two probes — floor then ceiling
+    assert mocks["spawn"].call_count == 2
+
+
+def test_floor_fails_ceiling_succeeds_finds_min_kv():
+    """When the floor probe fails but the ceiling succeeds, binary-search
+    downward to find the minimum KV cache the model needs (e.g. because
+    max_position_embeddings requires more KV than the 1 GB floor)."""
+    # With 24 GB GPU: ceiling = floor(24000*0.8/1024)*1024 = 18432
+    # Model needs >= 6 GB KV cache for its max_position_embeddings.
+    # Search: floor fails, ceiling (18432) works.
+    # Binary search downward: lo=1024, hi=18432
+    #   mid = round_up_gb((1024+18432)/2) = round_up_gb(9728) = 10240 → OK, best=10240, hi=10240
+    #   mid = round_up_gb((1024+10240)/2) = round_up_gb(5632) = 6144  → OK, best=6144, hi=6144
+    #   mid = round_up_gb((1024+6144)/2)  = round_up_gb(3584) = 4096  → FAIL, lo=5120
+    #   hi-lo = 6144-5120 = 1024 >= 1024 → continue
+    #   mid = round_up_gb((5120+6144)/2)  = round_up_gb(5632) = 6144  → mid >= hi, break
+    # best_kv = 6144 (6 GB)
+    kv_calls = []
+    kv_min_threshold_mb = 5120  # model needs >= 5 GB KV
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(kv_cache_memory_bytes)
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*args, **kwargs):
+        last_kv = _parse_kv_to_mb(kv_calls[-1])
+        if last_kv < kv_min_threshold_mb:
+            raise RuntimeError("KV cache too small for max_position_embeddings")
+
+    patches = _patch_search_infra(
+        wait_ready_side_effect=wait_ready_side_effect,
+        gpu_vram_total_mb=24000.0,
+    )
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration.spawn_vllm",
+        side_effect=spawn_side_effect,
+    )
+    patches["ready"] = patch(
+        "logos_worker_node.calibration.wait_ready",
+        side_effect=wait_ready_side_effect,
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    # First probe should be the floor (1 GB), second should be the ceiling
+    assert kv_calls[0] == "1G"
+    # The minimum working KV should be 6144 MB (6 GB) — the lowest that passes
+    assert result.kv_cache_sent_mb == pytest.approx(6144.0)
 
 
 def test_ceiling_reachable():

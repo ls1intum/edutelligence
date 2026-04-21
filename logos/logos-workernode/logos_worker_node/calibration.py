@@ -689,44 +689,83 @@ def calibrate_model(
         search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
         search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
 
-        # Phase 2a: Verify the model loads at all with minimum KV cache.
-        # If even 1 GB KV fails, the model simply doesn't fit.
+        # Phase 2a: Probe floor and ceiling to bracket the binary search.
+        #
+        # The floor probe can fail for two distinct reasons:
+        #   a) Model weights alone exceed GPU VRAM (truly doesn't fit).
+        #   b) The model's native max_position_embeddings requires more KV
+        #      cache than the floor — vLLM refuses to start because it
+        #      cannot serve even one full-length request in the KV pool.
+        #
+        # To distinguish (a) from (b), probe the ceiling when the floor
+        # fails.  If the ceiling works, the model fits but needs more KV
+        # cache — binary-search downward from the ceiling to find the
+        # minimum working KV size.
         logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
-        proc = _try_start(search_lo)
-        if proc is None:
-            partial.error = (
-                f"Model cannot start even with minimum KV cache "
-                f"{_format_kv_mb(search_lo)} on tp={tp}. "
-                f"Model weights likely exceed available GPU VRAM."
+        floor_proc = _try_start(search_lo)
+
+        if floor_proc is not None:
+            # Floor works — binary-search upward from floor to ceiling.
+            stop_vllm(floor_proc)
+            time.sleep(_VRAM_SETTLE_S)
+            best_kv = search_lo
+
+            while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                mid = _round_up_gb((search_lo + search_hi) / 2.0)
+                if mid <= search_lo:
+                    break
+                proc = _try_start(mid)
+                if proc is not None:
+                    best_kv = mid
+                    stop_vllm(proc)
+                    time.sleep(_VRAM_SETTLE_S)
+                    proc = None
+                    search_lo = mid
+                else:
+                    search_hi = mid - _KV_CACHE_MIN_STEP_MB
+        else:
+            # Floor failed — probe the ceiling before giving up.
+            logger.info(
+                "        Floor probe failed — probing ceiling kv_cache=%s "
+                "to check if model fits with more KV cache...",
+                _format_kv_mb(search_hi),
             )
-            logger.warning("  ERROR: %s", partial.error)
-            return partial
+            ceil_proc = _try_start(search_hi)
+            if ceil_proc is None:
+                partial.error = (
+                    f"Model cannot start with floor KV cache "
+                    f"{_format_kv_mb(_KV_CACHE_MIN_STEP_MB)} nor ceiling "
+                    f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}. "
+                    f"Model weights likely exceed available GPU VRAM."
+                )
+                logger.warning("  ERROR: %s", partial.error)
+                return partial
 
-        # Floor works — now binary-search upward to find maximum KV cache that fits
-        stop_vllm(proc)
-        time.sleep(_VRAM_SETTLE_S)
-        proc = None
-        best_kv = search_lo
+            # Ceiling works — binary-search downward to find the minimum
+            # KV cache that satisfies the model's max_position_embeddings.
+            stop_vllm(ceil_proc)
+            time.sleep(_VRAM_SETTLE_S)
+            best_kv = search_hi
 
-        while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
-            mid = _round_up_gb((search_lo + search_hi) / 2.0)
-            if mid <= search_lo:
-                break
-            proc = _try_start(mid)
-            if proc is not None:
-                # Works at this size — try even higher
-                best_kv = mid
-                stop_vllm(proc)
-                time.sleep(_VRAM_SETTLE_S)
-                proc = None
-                search_lo = mid
-            else:
-                # Too large — maximum is lower
-                search_hi = mid - _KV_CACHE_MIN_STEP_MB
+            while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                mid = _round_up_gb((search_lo + search_hi) / 2.0)
+                if mid >= search_hi:
+                    break
+                proc = _try_start(mid)
+                if proc is not None:
+                    # Works at this size — try even lower
+                    best_kv = mid
+                    stop_vllm(proc)
+                    time.sleep(_VRAM_SETTLE_S)
+                    proc = None
+                    search_hi = mid
+                else:
+                    # Too small — minimum is higher
+                    search_lo = mid + _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
         logger.info(
-            "  KV cache search result: max_working=%.0f MB (search range exhausted, "
+            "  KV cache search result: best_working=%.0f MB (search range exhausted, "
             "precision=%.0f MB)",
             best_kv, _KV_CACHE_MIN_STEP_MB,
         )
