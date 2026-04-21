@@ -168,18 +168,6 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
         failed_path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
 
 
-def _extract_kv_from_fingerprint(fingerprint: str) -> float | None:
-    """Extract the KV cache size in MB from a command fingerprint."""
-    parts = fingerprint.split()
-    for i, tok in enumerate(parts):
-        if tok == "--kv-cache-memory-bytes" and i + 1 < len(parts):
-            try:
-                return _parse_kv_to_mb(parts[i + 1])
-            except (ValueError, IndexError):
-                return None
-    return None
-
-
 # ---------------------------------------------------------------------------
 # GPU VRAM helpers
 # ---------------------------------------------------------------------------
@@ -695,32 +683,44 @@ def calibrate_model(
     # actual vLLM spawn (not on blacklist-skipped probes).
     _ram_cached = hf_home is not None  # already cached if hf_home was passed
 
-    def _try_start(kv_mb: float) -> subprocess.Popen[str] | None:
-        """Try to start vLLM with the given KV cache.  Returns the
-        running process on success, ``None`` on failure (process is
-        cleaned up).  Blacklisted commands are skipped immediately
-        unless they are also whitelisted (previous success overrides)."""
+    # Sentinel returned by _try_start when a whitelisted probe is skipped
+    # (trusted success without spawning).  Callers check ``is _WHITELIST_HIT``
+    # to distinguish from a real running process.
+    _WHITELIST_HIT = object()
+
+    def _try_start(kv_mb: float) -> subprocess.Popen[str] | object | None:
+        """Try to start vLLM with the given KV cache.
+
+        Returns:
+          - A running ``Popen`` on real success.
+          - ``_WHITELIST_HIT`` sentinel if the command is whitelisted
+            (known-good from a previous run) — no process spawned.
+          - ``None`` on failure or blacklist skip.
+        """
         nonlocal hf_home, _ram_cached
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
         fingerprint = _cmd_fingerprint(
             _build_vllm_cmd(planned, vllm_binary, host, port, kv_str)
         )
-        # Whitelist overrides blacklist: a previously successful command
-        # should be retried even if a later run (e.g. stuck GPU) failed.
-        if fingerprint in failed_commands and fingerprint not in succeeded_commands:
+        # Whitelist: known-good from a previous calibration run.  Trust the
+        # result — skip the expensive vLLM spawn during the binary search.
+        if fingerprint in succeeded_commands:
+            if fingerprint in failed_commands:
+                # Also blacklisted (e.g. stuck-GPU session added it later).
+                # Whitelist wins — clean up the stale blacklist entry.
+                _remove_failed_command(failed_path, fingerprint)
+                failed_commands.discard(fingerprint)
+            logger.info("        OK kv_cache=%s (whitelisted, skipping spawn)", kv_str)
+            return _WHITELIST_HIT
+        # Blacklist: known-bad, skip.
+        if fingerprint in failed_commands:
             logger.warning(
                 "        SKIP kv_cache=%s — command previously failed "
                 "(remove line from %s to retry)",
                 kv_str, failed_path,
             )
             return None
-        if fingerprint in failed_commands and fingerprint in succeeded_commands:
-            logger.info(
-                "        kv_cache=%s — blacklisted but also whitelisted "
-                "(previous success), retrying",
-                kv_str,
-            )
         # Lazy RAM cache: copy model into tmpfs on first real spawn.
         if not _ram_cached and model_cache is not None:
             logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
@@ -783,51 +783,91 @@ def calibrate_model(
         search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
         original_ceiling = search_hi
 
-        # Whitelist fast-path: if a previous calibration run found a working
-        # KV size for this model+tp combo, try it directly.  This skips the
-        # entire binary search on restarts / recalibrations, saving minutes.
-        _whitelist_kv_sizes = sorted(
-            (kv for fp in succeeded_commands
-             if model in fp and f"--tensor-parallel-size {tp}" in fp
-             for kv in [_extract_kv_from_fingerprint(fp)]
-             if kv is not None and search_lo <= kv <= search_hi),
-            reverse=True,  # largest first — calibration wants the max
-        )
-        if _whitelist_kv_sizes:
-            _wl_kv = _whitelist_kv_sizes[0]
-            logger.info(
-                "        Whitelist fast-path: trying previously successful "
-                "kv_cache=%s...",
-                _format_kv_mb(_wl_kv),
-            )
-            _wl_proc = _try_start(_wl_kv)
-            if _wl_proc is not None:
-                # Still works — use it directly, skip the full search.
-                kv_cache_sent_mb = _wl_kv
-                proc = _wl_proc
-                logger.info(
-                    "  KV cache search result: best_working=%.0f MB "
-                    "(whitelist fast-path, search skipped)",
-                    _wl_kv,
-                )
-                # Jump past the search to the measurement phase.
-            else:
-                logger.info(
-                    "        Whitelist fast-path failed — falling back to "
-                    "full search",
-                )
-
-        if proc is None:
-            # Full search — whitelist fast-path didn't apply or failed.
-            logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
-            floor_proc = _try_start(search_lo)
-
-            if floor_proc is not None:
-                # Floor works — binary-search upward from floor to ceiling.
-                stop_vllm(floor_proc)
+        # Phase 2a: Find the maximum KV cache the model can start with.
+        # Whitelisted probes (known-good from previous runs) are treated as
+        # instant successes by _try_start, so the binary search skips them
+        # instead of wasting minutes re-spawning vLLM.
+        def _stop_if_real(result: object) -> None:
+            """Stop the vLLM process unless it's a whitelist sentinel."""
+            if result is not _WHITELIST_HIT and result is not None:
+                stop_vllm(result)  # type: ignore[arg-type]
                 time.sleep(_VRAM_SETTLE_S)
-                best_kv = search_lo
 
+        logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
+        floor_proc = _try_start(search_lo)
+
+        if floor_proc is not None:
+            # Floor works — binary-search upward from floor to ceiling.
+            _stop_if_real(floor_proc)
+            best_kv = search_lo
+
+            while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                mid = _round_up_gb((search_lo + search_hi) / 2.0)
+                if mid <= search_lo:
+                    break
+                p = _try_start(mid)
+                if p is not None:
+                    best_kv = mid
+                    _stop_if_real(p)
+                    search_lo = mid
+                else:
+                    search_hi = mid - _KV_CACHE_MIN_STEP_MB
+        else:
+            # Floor failed — probe the ceiling before giving up.
+            logger.info(
+                "        Floor probe failed — probing ceiling kv_cache=%s "
+                "to check if model fits with more KV cache...",
+                _format_kv_mb(search_hi),
+            )
+            ceil_proc = _try_start(search_hi)
+
+            if ceil_proc is not None:
+                # Ceiling works — it is already the maximum.
+                _stop_if_real(ceil_proc)
+                best_kv = search_hi
+            else:
+                # Both extremes failed.  The working range lies strictly
+                # between them.  Probe interior points, then binary-search
+                # upward from the first hit.
+                logger.info(
+                    "        Both floor and ceiling failed — searching "
+                    "middle range for a working KV size...",
+                )
+                best_kv = None
+                frac_candidates = [0.5, 0.75, 0.25, 0.625, 0.375, 0.875, 0.125]
+                span = original_ceiling - _KV_CACHE_MIN_STEP_MB
+                candidates = []
+                seen: set[float] = set()
+                for frac in frac_candidates:
+                    c = _round_up_gb(_KV_CACHE_MIN_STEP_MB + span * frac)
+                    if c not in seen and _KV_CACHE_MIN_STEP_MB < c < original_ceiling:
+                        candidates.append(c)
+                        seen.add(c)
+
+                for kv in candidates:
+                    logger.info(
+                        "        Trying interior kv_cache=%s...",
+                        _format_kv_mb(kv),
+                    )
+                    p = _try_start(kv)
+                    if p is not None:
+                        best_kv = kv
+                        _stop_if_real(p)
+                        break
+
+                if best_kv is None:
+                    partial.error = (
+                        f"No working KV cache size found between "
+                        f"{_format_kv_mb(_KV_CACHE_MIN_STEP_MB)} and "
+                        f"{_format_kv_mb(original_ceiling)} on tp={tp}. "
+                        f"Model weights likely exceed available GPU VRAM."
+                    )
+                    logger.warning("  ERROR: %s", partial.error)
+                    return partial
+
+                # Found a working point — binary-search upward for max.
+                search_lo = best_kv
+                search_hi = original_ceiling
                 while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
                     mid = _round_up_gb((search_lo + search_hi) / 2.0)
                     if mid <= search_lo:
@@ -835,123 +875,58 @@ def calibrate_model(
                     p = _try_start(mid)
                     if p is not None:
                         best_kv = mid
-                        stop_vllm(p)
-                        time.sleep(_VRAM_SETTLE_S)
+                        _stop_if_real(p)
                         search_lo = mid
                     else:
                         search_hi = mid - _KV_CACHE_MIN_STEP_MB
-            else:
-                # Floor failed — probe the ceiling before giving up.
-                logger.info(
-                    "        Floor probe failed — probing ceiling kv_cache=%s "
-                    "to check if model fits with more KV cache...",
-                    _format_kv_mb(search_hi),
-                )
-                ceil_proc = _try_start(search_hi)
 
-                if ceil_proc is not None:
-                    # Ceiling works — it is already the maximum.
-                    stop_vllm(ceil_proc)
-                    time.sleep(_VRAM_SETTLE_S)
-                    best_kv = search_hi
-                else:
-                    # Both extremes failed.  The working range lies strictly
-                    # between them.  Probe interior points, then binary-search
-                    # upward from the first hit.
-                    logger.info(
-                        "        Both floor and ceiling failed — searching "
-                        "middle range for a working KV size...",
-                    )
-                    best_kv = None
-                    frac_candidates = [0.5, 0.75, 0.25, 0.625, 0.375, 0.875, 0.125]
-                    span = original_ceiling - _KV_CACHE_MIN_STEP_MB
-                    candidates = []
-                    seen: set[float] = set()
-                    for frac in frac_candidates:
-                        c = _round_up_gb(_KV_CACHE_MIN_STEP_MB + span * frac)
-                        if c not in seen and _KV_CACHE_MIN_STEP_MB < c < original_ceiling:
-                            candidates.append(c)
-                            seen.add(c)
+        kv_cache_sent_mb = best_kv
+        logger.info(
+            "  KV cache search result: best_working=%.0f MB "
+            "(search range exhausted, precision=%.0f MB)",
+            best_kv, _KV_CACHE_MIN_STEP_MB,
+        )
 
-                    for kv in candidates:
-                        logger.info(
-                            "        Trying interior kv_cache=%s...",
-                            _format_kv_mb(kv),
-                        )
-                        p = _try_start(kv)
-                        if p is not None:
-                            best_kv = kv
-                            stop_vllm(p)
-                            time.sleep(_VRAM_SETTLE_S)
-                            break
-
-                    if best_kv is None:
-                        partial.error = (
-                            f"No working KV cache size found between "
-                            f"{_format_kv_mb(_KV_CACHE_MIN_STEP_MB)} and "
-                            f"{_format_kv_mb(original_ceiling)} on tp={tp}. "
-                            f"Model weights likely exceed available GPU VRAM."
-                        )
-                        logger.warning("  ERROR: %s", partial.error)
-                        return partial
-
-                    # Found a working point — binary-search upward for max.
-                    search_lo = best_kv
-                    search_hi = original_ceiling
-                    while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
-                        mid = _round_up_gb((search_lo + search_hi) / 2.0)
-                        if mid <= search_lo:
-                            break
-                        p = _try_start(mid)
-                        if p is not None:
-                            best_kv = mid
-                            stop_vllm(p)
-                            time.sleep(_VRAM_SETTLE_S)
-                            search_lo = mid
-                        else:
-                            search_hi = mid - _KV_CACHE_MIN_STEP_MB
-
-            kv_cache_sent_mb = best_kv
-            logger.info(
-                "  KV cache search result: best_working=%.0f MB "
-                "(search range exhausted, precision=%.0f MB)",
-                best_kv, _KV_CACHE_MIN_STEP_MB,
+        # Start vLLM at the final KV size for VRAM measurement.
+        # Must be a real process (not whitelist hit) so we can measure VRAM.
+        # Temporarily suppress whitelist so _try_start spawns for real.
+        _saved_succeeded = set(succeeded_commands)
+        succeeded_commands.clear()
+        _final_kv = kv_cache_sent_mb
+        for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
+            _final_kv_str = _format_kv_mb(_final_kv)
+            _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
+            _final_fp = _cmd_fingerprint(
+                _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str)
             )
+            failed_commands.discard(_final_fp)
+            proc = _try_start(_final_kv)
+            if proc is not None:
+                kv_cache_sent_mb = _final_kv
+                break
+            logger.warning(
+                "        Final measurement attempt %d/%d at %s failed — %s",
+                _attempt + 1, _FINAL_MEASUREMENT_RETRIES,
+                _format_kv_mb(_final_kv),
+                "stepping down" if _final_kv > _KV_CACHE_MIN_STEP_MB else "giving up",
+            )
+            _final_kv -= _KV_CACHE_MIN_STEP_MB
+            if _final_kv < _KV_CACHE_MIN_STEP_MB:
+                break
 
-            # Start vLLM at the final KV size for measurement.
-            # Retry with step-down on flaky CUDA failures.
-            _final_kv = kv_cache_sent_mb
-            for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
-                _final_kv_str = _format_kv_mb(_final_kv)
-                _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
-                _final_fp = _cmd_fingerprint(
-                    _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str)
-                )
-                failed_commands.discard(_final_fp)
-                proc = _try_start(_final_kv)
-                if proc is not None:
-                    kv_cache_sent_mb = _final_kv
-                    break
-                logger.warning(
-                    "        Final measurement attempt %d/%d at %s failed — %s",
-                    _attempt + 1, _FINAL_MEASUREMENT_RETRIES,
-                    _format_kv_mb(_final_kv),
-                    "stepping down" if _final_kv > _KV_CACHE_MIN_STEP_MB else "giving up",
-                )
-                _final_kv -= _KV_CACHE_MIN_STEP_MB
-                if _final_kv < _KV_CACHE_MIN_STEP_MB:
-                    break
+        succeeded_commands.update(_saved_succeeded)
 
-            if proc is None:
-                partial.error = (
-                    f"Model failed to start for final measurement "
-                    f"(tried down to {_format_kv_mb(_final_kv + _KV_CACHE_MIN_STEP_MB)}) "
-                    f"on tp={tp}"
-                )
-                logger.warning("  ERROR: %s", partial.error)
-                return partial
+        if proc is None:
+            partial.error = (
+                f"Model failed to start for final measurement "
+                f"(tried down to {_format_kv_mb(_final_kv + _KV_CACHE_MIN_STEP_MB)}) "
+                f"on tp={tp}"
+            )
+            logger.warning("  ERROR: %s", partial.error)
+            return partial
     else:
-        # Fixed KV cache — single attempt
+        # Fixed KV cache — single attempt (need real process for measurement)
+        succeeded_commands.clear()
         proc = _try_start(kv_cache_sent_mb)
         if proc is None:
             partial.error = (
