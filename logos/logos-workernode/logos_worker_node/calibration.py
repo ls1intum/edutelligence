@@ -60,6 +60,7 @@ _PROFILES_FILE = "model_profiles.yml"
 _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # binary search precision and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
+_FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 
 # ---------------------------------------------------------------------------
@@ -805,12 +806,40 @@ def calibrate_model(
             best_kv, _KV_CACHE_MIN_STEP_MB,
         )
 
-        # Start vLLM at the final KV size for measurement
-        proc = _try_start(kv_cache_sent_mb)
+        # Start vLLM at the final KV size for measurement.
+        # The same KV size worked during the search, but CUDA/NCCL
+        # failures can be non-deterministic.  Retry a few times,
+        # clearing the blacklist entry so _try_start doesn't skip it.
+        # If it still fails, step down to lower KV sizes.
+        _final_kv = kv_cache_sent_mb
+        proc = None
+        for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
+            # Un-blacklist so _try_start doesn't skip it.
+            _final_kv_str = _format_kv_mb(_final_kv)
+            _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
+            _final_fp = _cmd_fingerprint(
+                _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str)
+            )
+            failed_commands.discard(_final_fp)
+
+            proc = _try_start(_final_kv)
+            if proc is not None:
+                kv_cache_sent_mb = _final_kv
+                break
+            logger.warning(
+                "        Final measurement attempt %d/%d at %s failed — %s",
+                _attempt + 1, _FINAL_MEASUREMENT_RETRIES, _format_kv_mb(_final_kv),
+                "stepping down" if _final_kv > _KV_CACHE_MIN_STEP_MB else "giving up",
+            )
+            # Step down by 1 GB and retry
+            _final_kv -= _KV_CACHE_MIN_STEP_MB
+            if _final_kv < _KV_CACHE_MIN_STEP_MB:
+                break
+
         if proc is None:
             partial.error = (
-                f"Model failed to start at final KV cache "
-                f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
+                f"Model failed to start for final measurement (tried down to "
+                f"{_format_kv_mb(_final_kv + _KV_CACHE_MIN_STEP_MB)}) on tp={tp}"
             )
             logger.warning("  ERROR: %s", partial.error)
             return partial
