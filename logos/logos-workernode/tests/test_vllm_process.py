@@ -170,6 +170,35 @@ def test_build_cmd_omits_kv_cache_when_empty(monkeypatch) -> None:
     assert "--kv-cache-memory-bytes" not in cmd
 
 
+def test_build_cmd_omits_default_lane_context_cap_for_vllm(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        context_length=4096,
+        vllm_config=VllmConfig(max_model_len=0),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--max-model-len" not in cmd
+
+
+def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        context_length=8192,
+        vllm_config=VllmConfig(max_model_len=0),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "8192"
+
+
 def test_vllm_config_kv_cache_validation() -> None:
     import pytest
 

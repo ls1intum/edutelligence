@@ -46,6 +46,7 @@ _READY_TIMEOUT = 300  # vLLM startup can be slow (model download + compilation)
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
+_DEFAULT_LANE_CONTEXT_LENGTH = 4096
 _SCRUBBED_ENV_VARS = (
     "LOCAL_RANK",
     "RANK",
@@ -455,7 +456,10 @@ class VllmProcessHandle:
         # prevents the model weights from loading at all.
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
-        elif lane_config.context_length > 0:
+        # For vLLM lanes, context_length defaults to 4096 from shared lane
+        # schema. Treat that sentinel default as "unset" so vLLM can use the
+        # model's native maximum context unless an explicit override is given.
+        elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
