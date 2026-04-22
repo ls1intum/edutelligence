@@ -1,5 +1,6 @@
 import json
 import re
+import time
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -51,6 +52,12 @@ class LectureSearchAnswerPipeline(SubPipeline):
         pipeline_id = "lecture_search_answer_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
         answer_model = resolve_model(pipeline_id, "default", "answer", local=local)
+        logger.info(
+            "LectureSearchAnswerPipeline init | local=%s, hyde_model=%s, answer_model=%s",
+            local,
+            hyde_model,
+            answer_model,
+        )
 
         hyde_completion_args = CompletionArguments(temperature=0.7)
         answer_completion_args = CompletionArguments(
@@ -88,16 +95,31 @@ class LectureSearchAnswerPipeline(SubPipeline):
         :param limit: Maximum number of source segments to retrieve.
         :return: An answer with source references.
         """
+        pipeline_start = time.monotonic()
+        logger.info(
+            "LectureSearchAnswerPipeline started | query=%r, limit=%d",
+            query[:100],
+            limit,
+        )
+
         # Step 1: Generate a short hypothetical answer to use as the search vector
+        t0 = time.monotonic()
         hypothetical_answer = (self.hyde_prompt | self.hyde_pipeline).invoke(
             {"query": query}
         )
+        t1 = time.monotonic()
         self._append_tokens(
             self.hyde_llm.tokens, PipelineEnum.IRIS_LECTURE_SEARCH_ANSWER_PIPELINE
+        )
+        logger.info(
+            "Step 1 HyDE LLM done | duration=%.2fs, output_length=%d",
+            t1 - t0,
+            len(hypothetical_answer),
         )
         logger.debug("HyDE hypothetical answer | output=%r", hypothetical_answer[:200])
 
         # Step 2: Search using the hypothetical answer embedding (answer-space → answer-space)
+        t2 = time.monotonic()
         sources: list[LectureSearchResultDTO] = (
             self.retriever.search_with_vector_override(
                 query=query,
@@ -106,8 +128,18 @@ class LectureSearchAnswerPipeline(SubPipeline):
                 limit=limit,
             )
         )
+        t3 = time.monotonic()
+        logger.info(
+            "Step 2 Weaviate search done | duration=%.2fs, results=%d",
+            t3 - t2,
+            len(sources),
+        )
 
         if not sources:
+            logger.info(
+                "LectureSearchAnswerPipeline aborted (no sources) | total=%.2fs",
+                t3 - pipeline_start,
+            )
             return LectureSearchAskResponseDTO(
                 answer="No relevant course material was found for this query.",
                 sources=[],
@@ -117,6 +149,10 @@ class LectureSearchAnswerPipeline(SubPipeline):
         # model knows the course/lecture name and can reference them explicitly)
         grounded_sources = [s for s in sources if s.snippet]
         if not grounded_sources:
+            logger.info(
+                "LectureSearchAnswerPipeline aborted (no grounded sources) | total=%.2fs",
+                t3 - pipeline_start,
+            )
             return LectureSearchAskResponseDTO(
                 answer="No relevant course material was found for this query.",
                 sources=[],
@@ -126,9 +162,12 @@ class LectureSearchAnswerPipeline(SubPipeline):
             f"[{i + 1}] [{s.course.name} — {s.lecture.name}, Slide {s.lecture_unit.page_number}]\n{s.snippet}"
             for i, s in enumerate(grounded_sources)
         )
+        t4 = time.monotonic()
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
             {"context": context, "query": query}
         )
+        t5 = time.monotonic()
+        logger.info("Step 3 Answer LLM done | duration=%.2fs", t5 - t4)
 
         # Parse structured response — strip markdown code fences if present
         try:
@@ -152,6 +191,14 @@ class LectureSearchAnswerPipeline(SubPipeline):
 
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_LECTURE_SEARCH_ANSWER_PIPELINE
+        )
+
+        logger.info(
+            "LectureSearchAnswerPipeline done | total=%.2fs (hyde=%.2fs, weaviate=%.2fs, answer=%.2fs)",
+            time.monotonic() - pipeline_start,
+            t1 - t0,
+            t3 - t2,
+            t5 - t4,
         )
 
         return LectureSearchAskResponseDTO(answer=answer, sources=used_sources)
