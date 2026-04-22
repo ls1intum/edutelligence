@@ -41,6 +41,18 @@ worker:
   # (limited only by port range and VRAM). Set via config or MAX_LANES env var.
   max_lanes: 0
 
+  # When true (default), initiate a host OS reboot when all lanes exhaust their
+  # crash-restart budget and at least one has stuck GPU VRAM (an unrecoverable
+  # GPU state that only a full reboot can fix). Tries `sudo reboot` first; if
+  # that fails, writes a sentinel file at `reboot_sentinel_path` for a
+  # host-side watchdog process to pick up.
+  auto_reboot_on_stuck_gpu: true
+
+  # Path for the reboot-request sentinel file used when `sudo reboot` is
+  # unavailable. Mount the host's /tmp or a dedicated directory into the
+  # container at this path so a host-side watchdog can detect it.
+  reboot_sentinel_path: /host/reboot-requested
+
 
 # ── Logos control-plane connection ───────────────────────────────────────────
 logos:
@@ -218,6 +230,16 @@ engines:
     #
     #   cpu_offload_gb: float      — GB of CPU RAM to use for KV-cache offloading.
     #     Lets you run larger models at the cost of higher latency. 0 = disabled.
+    #
+    #   enable_auto_tool_choice: bool — pass --enable-auto-tool-choice to vLLM.
+    #     Allows clients to send tools/tool_choice without getting HTTP 400.
+    #     On by default.
+    #
+    #   tool_call_parser: str      — tool call parser for function calling.
+    #     Common values: "hermes", "mistral", "llama3_json", "pythonic".
+    #     Empty (default) = vLLM auto-detects the parser from the model's
+    #     tokenizer_config.json, which works for most modern chat models.
+    #     Set explicitly only if auto-detection picks the wrong parser.
     #
     #   chat_template_kwargs: dict — default kwargs passed to the chat template.
     #     Example: {enable_thinking: false} to disable Qwen3 chain-of-thought.

@@ -60,7 +60,65 @@ _PROFILES_FILE = "model_profiles.yml"
 _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # binary search precision and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
+_FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
+_SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
+
+# ---------------------------------------------------------------------------
+# ANSI colours for calibration search visualisation
+# ---------------------------------------------------------------------------
+
+_C_RESET = "\033[0m"
+_C_GREEN = "\033[32m"       # success / best
+_C_RED = "\033[31m"         # failure
+_C_YELLOW = "\033[33m"      # blacklisted (skipped)
+_C_CYAN = "\033[36m"        # whitelisted (instant OK)
+_C_DIM = "\033[2m"          # untested
+_C_BOLD = "\033[1m"
+_C_GREEN_BG = "\033[42;30m"  # best marker
+
+
+def _render_search_bar(
+    floor_mb: float,
+    ceiling_mb: float,
+    step_mb: float,
+    probes: dict[float, str],  # kv_mb → "ok" | "fail" | "skip" | "whitelist" | "best"
+    best_kv: float | None = None,
+) -> str:
+    """Render a coloured ASCII bar showing the KV cache search state.
+
+    Example output::
+
+      1G [··✗··✓··✓·✗★·✗··✗···] 38G   best=18G
+           ↑fail  ↑ok      ↑best
+    """
+    slots: list[float] = []
+    kv = floor_mb
+    while kv <= ceiling_mb:
+        slots.append(kv)
+        kv += step_mb
+
+    bar_chars: list[str] = []
+    for s in slots:
+        status = probes.get(s)
+        if best_kv is not None and s == best_kv:
+            bar_chars.append(f"{_C_GREEN_BG}★{_C_RESET}")
+        elif status == "ok" or status == "whitelist":
+            c = _C_CYAN if status == "whitelist" else _C_GREEN
+            bar_chars.append(f"{c}✓{_C_RESET}")
+        elif status == "fail":
+            bar_chars.append(f"{_C_RED}✗{_C_RESET}")
+        elif status == "skip":
+            bar_chars.append(f"{_C_YELLOW}─{_C_RESET}")
+        else:
+            bar_chars.append(f"{_C_DIM}·{_C_RESET}")
+
+    bar = "".join(bar_chars)
+    lo_label = _format_kv_mb(floor_mb)
+    hi_label = _format_kv_mb(ceiling_mb)
+    best_label = f"  best={_C_BOLD}{_C_GREEN}{_format_kv_mb(best_kv)}{_C_RESET}" if best_kv else ""
+    return f"  {lo_label} [{bar}] {hi_label}{best_label}"
+
 
 # ---------------------------------------------------------------------------
 # KV-cache size parsing
@@ -136,6 +194,34 @@ def _record_failed_command(failed_path: Path, fingerprint: str) -> None:
     with failed_path.open("a", encoding="utf-8") as f:
         f.write(fingerprint + "\n")
     logger.info("  Blacklisted command → %s", failed_path)
+
+
+def _load_succeeded_commands(succeeded_path: Path) -> set[str]:
+    if not succeeded_path.exists():
+        return set()
+    return {
+        line.strip()
+        for line in succeeded_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+
+def _record_succeeded_command(succeeded_path: Path, fingerprint: str) -> None:
+    succeeded_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _load_succeeded_commands(succeeded_path)
+    if fingerprint not in existing:
+        with succeeded_path.open("a", encoding="utf-8") as f:
+            f.write(fingerprint + "\n")
+
+
+def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
+    """Remove a fingerprint from the blacklist file (whitelisted success overrides)."""
+    if not failed_path.exists():
+        return
+    lines = failed_path.read_text(encoding="utf-8").splitlines()
+    remaining = [ln for ln in lines if ln.strip() != fingerprint]
+    if len(remaining) < len(lines):
+        failed_path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +339,7 @@ def _build_vllm_cmd(
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
     max_model_len = plan.get("max_model_len")
-    enforce_eager = bool(plan.get("enforce_eager", False))
+    enforce_eager = bool(plan.get("enforce_eager", True))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
@@ -296,10 +382,12 @@ def spawn_vllm(
     port: int,
     log_path: Path,
     kv_cache_memory_bytes: str,
+    *,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
 ) -> tuple[subprocess.Popen[str], list[str]]:
     """Spawn vLLM and return ``(process, cmd_list)``."""
     tp = int(plan.get("tensor_parallel_size", 1))
-    disable_nccl_p2p = bool(plan.get("disable_nccl_p2p", False))
 
     cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes)
 
@@ -309,22 +397,48 @@ def spawn_vllm(
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
 
+    # Override HF_HOME to load from tmpfs RAM cache if provided.
+    if hf_home:
+        env["HF_HOME"] = hf_home
+        logger.info("  HF_HOME=%s (tmpfs RAM cache)", hf_home)
+
+    # NCCL P2P: disabled by default (PCIe-only assumed).
+    # Set nccl_p2p_available=True for NVLink setups.
+    if not nccl_p2p_available:
+        env.setdefault("NCCL_P2P_DISABLE", "1")
+        logger.info(
+            "  NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+            "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)"
+        )
+    else:
+        logger.info("  NCCL P2P enabled (NVLink topology)")
+
     # For tensor-parallel calibration runs (tp > 1), mirror the NCCL env vars
     # used by regular vLLM lanes so calibration matches production behaviour.
     if tp > 1:
         env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
         env.setdefault("NCCL_CUMEM_ENABLE", "0")   # unreliable in Docker without NUMA config
         env.setdefault("NCCL_TIMEOUT", "1800")
-        if disable_nccl_p2p:
-            env.setdefault("NCCL_P2P_DISABLE", "1")    # PCIe GPUs without NVLink hang on P2P init
 
     gpu_devices = str(plan.get("gpu_devices") or "")
     if gpu_devices and gpu_devices.lower() not in ("all", ""):
         env["CUDA_VISIBLE_DEVICES"] = gpu_devices
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("w", encoding="utf-8")
+    # Append mode — preserves logs from earlier calibration attempts so the
+    # full search history is visible in a single file, not just the last probe.
+    log_file = log_path.open("a", encoding="utf-8")
     try:
+        kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
+        _sep = "=" * 72
+        log_file.write(
+            f"\n{_sep}\n"
+            f"  Calibration probe — {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"  KV cache: {kv_bytes}  TP: {tp}\n"
+            f"  Command: {' '.join(cmd)}\n"
+            f"{_sep}\n\n"
+        )
+        log_file.flush()
         proc = subprocess.Popen(
             cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
             start_new_session=True,
@@ -374,7 +488,7 @@ def _kill_stale_vllm_workers() -> None:
         time.sleep(_VRAM_SETTLE_S)  # let GPU memory release
 
 
-def _read_log_tail(log_path: Path, max_lines: int = 40) -> str:
+def _read_log_tail(log_path: Path, max_lines: int = 80) -> str:
     """Read the last *max_lines* of a vLLM log file, or '' on failure."""
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -502,7 +616,19 @@ def calibrate_model(
     log_dir: Path,
     sleep_level: int,
     ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
+    model_cache: Any | None = None,
 ) -> CalibrationResult:
+    # Always force eager mode for calibration: CUDA graph capture is not
+    # needed for VRAM measurement and can add 10-30 minutes of startup time.
+    # The per-model production enforce_eager setting is irrelevant here.
+    if not plan.get("enforce_eager"):
+        logger.info(
+            "  enforce_eager=True (forced for calibration — CUDA graph capture skipped)"
+        )
+        plan = {**plan, "enforce_eager": True}
+
     model = plan["model"]
     gpu_devices = str(plan.get("gpu_devices") or "")
     tp = int(plan.get("tensor_parallel_size", 1))
@@ -605,29 +731,70 @@ def calibrate_model(
         )
 
     failed_path = log_dir / _FAILED_COMMANDS_FILE
+    succeeded_path = log_dir / _SUCCEEDED_COMMANDS_FILE
     failed_commands = _load_failed_commands(failed_path)
+    succeeded_commands = _load_succeeded_commands(succeeded_path)
 
-    def _try_start(kv_mb: float) -> subprocess.Popen[str] | None:
-        """Try to start vLLM with the given KV cache.  Returns the
-        running process on success, ``None`` on failure (process is
-        cleaned up).  Blacklisted commands are skipped immediately."""
+    # Lazy RAM-cache flag: only cache the model into tmpfs on the first
+    # actual vLLM spawn (not on blacklist-skipped probes).
+    _ram_cached = hf_home is not None  # already cached if hf_home was passed
+
+    # Sentinel returned by _try_start when a whitelisted probe is skipped
+    # (trusted success without spawning).  Callers check ``is _WHITELIST_HIT``
+    # to distinguish from a real running process.
+    _WHITELIST_HIT = object()
+
+    def _try_start(kv_mb: float) -> subprocess.Popen[str] | object | None:
+        """Try to start vLLM with the given KV cache.
+
+        Returns:
+          - A running ``Popen`` on real success.
+          - ``_WHITELIST_HIT`` sentinel if the command is whitelisted
+            (known-good from a previous run) — no process spawned.
+          - ``None`` on failure or blacklist skip.
+        """
+        nonlocal hf_home, _ram_cached
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
-        # Check the blacklist *before* spawning to avoid wasting time.
         fingerprint = _cmd_fingerprint(
             _build_vllm_cmd(planned, vllm_binary, host, port, kv_str)
         )
+        # Whitelist: known-good from a previous calibration run.  Trust the
+        # result — skip the expensive vLLM spawn during the binary search.
+        if fingerprint in succeeded_commands:
+            if fingerprint in failed_commands:
+                # Also blacklisted (e.g. stuck-GPU session added it later).
+                # Whitelist wins — clean up the stale blacklist entry.
+                _remove_failed_command(failed_path, fingerprint)
+                failed_commands.discard(fingerprint)
+            logger.info("        OK kv_cache=%s (whitelisted, skipping spawn)", kv_str)
+            return _WHITELIST_HIT
+        # Blacklist: known-bad, skip.
         if fingerprint in failed_commands:
             logger.warning(
-                "        SKIP kv_cache=%s — command previously failed "
-                "(remove line from %s to retry)",
-                kv_str, failed_path,
+                "        SKIP kv_cache=%s — blacklisted",
+                kv_str,
             )
+            _probes[kv_mb] = "skip"
             return None
+        # Lazy RAM cache: copy model into tmpfs on first real spawn.
+        if not _ram_cached and model_cache is not None:
+            logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
+            _hf = model_cache.ensure_cached_sync(model) or None
+            if _hf:
+                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
+                if is_tmpfs:
+                    hf_home = _hf
+                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
+                else:
+                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+            _ram_cached = True
         proc, _ = spawn_vllm(
             planned,
             vllm_binary, host, port, log_path,
             kv_cache_memory_bytes=kv_str,
+            nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
         )
         logger.info(
             "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
@@ -640,6 +807,15 @@ def calibrate_model(
                 "        OK kv_cache=%s ready in %.1fs",
                 kv_str, time.perf_counter() - t0,
             )
+            # Record success — whitelist this command for future runs.
+            _record_succeeded_command(succeeded_path, fingerprint)
+            succeeded_commands.add(fingerprint)
+            # Remove from blacklist if it was there (stale entry from e.g.
+            # a previous stuck-GPU session).
+            if fingerprint in failed_commands:
+                _remove_failed_command(failed_path, fingerprint)
+                failed_commands.discard(fingerprint)
+                logger.info("        Removed stale blacklist entry for kv_cache=%s", kv_str)
             return proc
         except (RuntimeError, TimeoutError) as exc:
             log_tail = _read_log_tail(log_path)
@@ -647,11 +823,13 @@ def calibrate_model(
                 "        FAIL kv_cache=%s: %s", kv_str, exc,
             )
             if log_tail:
-                logger.warning("  -- vLLM log tail --\n%s", log_tail)
+                logger.warning("  -- vLLM log tail --\n%s%s%s", _C_DIM, log_tail, _C_RESET)
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
             _record_failed_command(failed_path, fingerprint)
             failed_commands.add(fingerprint)
+            # Remove stale whitelist entry — this command no longer works.
+            succeeded_commands.discard(fingerprint)
             return None
 
     proc: subprocess.Popen[str] | None = None
@@ -659,60 +837,182 @@ def calibrate_model(
     if kv_search:
         search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
         search_hi = kv_cache_sent_mb       # ceiling (80% of per-GPU VRAM)
+        original_ceiling = search_hi
 
-        # Phase 2a: Verify the model loads at all with minimum KV cache.
-        # If even 1 GB KV fails, the model simply doesn't fit.
-        logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
-        proc = _try_start(search_lo)
-        if proc is None:
-            partial.error = (
-                f"Model cannot start even with minimum KV cache "
-                f"{_format_kv_mb(search_lo)} on tp={tp}. "
-                f"Model weights likely exceed available GPU VRAM."
-            )
-            logger.warning("  ERROR: %s", partial.error)
-            return partial
+        # Track probe results for the visual search bar.
+        # Key: kv_mb, Value: "ok" | "fail" | "skip" | "whitelist"
+        _probes: dict[float, str] = {}
+        _best_kv_viz: float | None = None
 
-        # Floor works — now binary-search upward to find maximum KV cache that fits
-        stop_vllm(proc)
-        time.sleep(_VRAM_SETTLE_S)
-        proc = None
-        best_kv = search_lo
-
-        while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
-            mid = _round_up_gb((search_lo + search_hi) / 2.0)
-            if mid <= search_lo:
-                break
-            proc = _try_start(mid)
-            if proc is not None:
-                # Works at this size — try even higher
-                best_kv = mid
-                stop_vllm(proc)
+        def _stop_if_real(result: object) -> None:
+            """Stop the vLLM process unless it's a whitelist sentinel."""
+            if result is not _WHITELIST_HIT and result is not None:
+                stop_vllm(result)  # type: ignore[arg-type]
                 time.sleep(_VRAM_SETTLE_S)
-                proc = None
-                search_lo = mid
+
+        def _record_probe(kv_mb: float, result: object) -> None:
+            """Record probe result and log the visual search bar."""
+            nonlocal _best_kv_viz
+            if result is _WHITELIST_HIT:
+                _probes[kv_mb] = "whitelist"
+            elif result is not None:
+                _probes[kv_mb] = "ok"
+            elif kv_mb in _probes:
+                pass  # already recorded (e.g. blacklist skip)
             else:
-                # Too large — maximum is lower
-                search_hi = mid - _KV_CACHE_MIN_STEP_MB
+                _probes[kv_mb] = "fail"
+            if result is not None:
+                _best_kv_viz = max(_best_kv_viz or 0, kv_mb)
+            bar = _render_search_bar(
+                _KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB,
+                _probes, _best_kv_viz,
+            )
+            logger.info(bar)
+
+        logger.info(
+            "  Legend: %s✓%s=ok  %s✗%s=fail  %s─%s=blacklisted  "
+            "%s✓%s=whitelisted  %s★%s=best  %s·%s=untested",
+            _C_GREEN, _C_RESET, _C_RED, _C_RESET, _C_YELLOW, _C_RESET,
+            _C_CYAN, _C_RESET, _C_GREEN_BG, _C_RESET, _C_DIM, _C_RESET,
+        )
+        logger.info("        Probing floor kv_cache=%s...", _format_kv_mb(search_lo))
+        floor_proc = _try_start(search_lo)
+        _record_probe(search_lo, floor_proc)
+
+        if floor_proc is not None:
+            # Floor works — binary-search upward from floor to ceiling.
+            _stop_if_real(floor_proc)
+            best_kv = search_lo
+
+            while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                mid = _round_up_gb((search_lo + search_hi) / 2.0)
+                if mid <= search_lo:
+                    break
+                p = _try_start(mid)
+                _record_probe(mid, p)
+                if p is not None:
+                    best_kv = mid
+                    _stop_if_real(p)
+                    search_lo = mid
+                else:
+                    search_hi = mid - _KV_CACHE_MIN_STEP_MB
+        else:
+            # Floor failed — probe the ceiling before giving up.
+            logger.info(
+                "        Floor probe failed — probing ceiling kv_cache=%s...",
+                _format_kv_mb(search_hi),
+            )
+            ceil_proc = _try_start(search_hi)
+            _record_probe(search_hi, ceil_proc)
+
+            if ceil_proc is not None:
+                # Ceiling works — it is already the maximum.
+                _stop_if_real(ceil_proc)
+                best_kv = search_hi
+            else:
+                # Both extremes failed — search interior points.
+                logger.info("        Both extremes failed — searching middle range...")
+                best_kv = None
+                frac_candidates = [0.5, 0.75, 0.25, 0.625, 0.375, 0.875, 0.125]
+                span = original_ceiling - _KV_CACHE_MIN_STEP_MB
+                candidates = []
+                seen: set[float] = set()
+                for frac in frac_candidates:
+                    c = _round_up_gb(_KV_CACHE_MIN_STEP_MB + span * frac)
+                    if c not in seen and _KV_CACHE_MIN_STEP_MB < c < original_ceiling:
+                        candidates.append(c)
+                        seen.add(c)
+
+                for kv in candidates:
+                    p = _try_start(kv)
+                    _record_probe(kv, p)
+                    if p is not None:
+                        best_kv = kv
+                        _stop_if_real(p)
+                        break
+
+                if best_kv is None:
+                    partial.error = (
+                        f"No working KV cache size found between "
+                        f"{_format_kv_mb(_KV_CACHE_MIN_STEP_MB)} and "
+                        f"{_format_kv_mb(original_ceiling)} on tp={tp}. "
+                        f"Model weights likely exceed available GPU VRAM."
+                    )
+                    logger.warning("  ERROR: %s", partial.error)
+                    return partial
+
+                # Found a working point — binary-search upward for max.
+                search_lo = best_kv
+                search_hi = original_ceiling
+                while search_hi - search_lo >= _KV_CACHE_MIN_STEP_MB:
+                    mid = _round_up_gb((search_lo + search_hi) / 2.0)
+                    if mid <= search_lo:
+                        break
+                    p = _try_start(mid)
+                    _record_probe(mid, p)
+                    if p is not None:
+                        best_kv = mid
+                        _stop_if_real(p)
+                        search_lo = mid
+                    else:
+                        search_hi = mid - _KV_CACHE_MIN_STEP_MB
 
         kv_cache_sent_mb = best_kv
         logger.info(
-            "  KV cache search result: max_working=%.0f MB (search range exhausted, "
-            "precision=%.0f MB)",
-            best_kv, _KV_CACHE_MIN_STEP_MB,
+            "  KV cache search result: %s%sbest_working=%s%s "
+            "(precision=%.0f MB)",
+            _C_BOLD, _C_GREEN, _format_kv_mb(best_kv), _C_RESET,
+            _KV_CACHE_MIN_STEP_MB,
+        )
+        # Final search bar
+        _best_kv_viz = best_kv
+        logger.info(
+            _render_search_bar(
+                _KV_CACHE_MIN_STEP_MB, original_ceiling, _KV_CACHE_MIN_STEP_MB,
+                _probes, _best_kv_viz,
+            )
         )
 
-        # Start vLLM at the final KV size for measurement
-        proc = _try_start(kv_cache_sent_mb)
+        # Start vLLM at the final KV size for VRAM measurement.
+        # Must be a real process (not whitelist hit) so we can measure VRAM.
+        # Temporarily suppress whitelist so _try_start spawns for real.
+        _saved_succeeded = set(succeeded_commands)
+        succeeded_commands.clear()
+        _final_kv = kv_cache_sent_mb
+        for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
+            _final_kv_str = _format_kv_mb(_final_kv)
+            _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
+            _final_fp = _cmd_fingerprint(
+                _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str)
+            )
+            failed_commands.discard(_final_fp)
+            proc = _try_start(_final_kv)
+            if proc is not None:
+                kv_cache_sent_mb = _final_kv
+                break
+            logger.warning(
+                "        Final measurement attempt %d/%d at %s failed — %s",
+                _attempt + 1, _FINAL_MEASUREMENT_RETRIES,
+                _format_kv_mb(_final_kv),
+                "stepping down" if _final_kv > _KV_CACHE_MIN_STEP_MB else "giving up",
+            )
+            _final_kv -= _KV_CACHE_MIN_STEP_MB
+            if _final_kv < _KV_CACHE_MIN_STEP_MB:
+                break
+
+        succeeded_commands.update(_saved_succeeded)
+
         if proc is None:
             partial.error = (
-                f"Model failed to start at final KV cache "
-                f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
+                f"Model failed to start for final measurement "
+                f"(tried down to {_format_kv_mb(_final_kv + _KV_CACHE_MIN_STEP_MB)}) "
+                f"on tp={tp}"
             )
             logger.warning("  ERROR: %s", partial.error)
             return partial
     else:
-        # Fixed KV cache — single attempt
+        # Fixed KV cache — single attempt (need real process for measurement)
+        succeeded_commands.clear()
         proc = _try_start(kv_cache_sent_mb)
         if proc is None:
             partial.error = (
@@ -816,6 +1116,10 @@ def calibrate_model(
     finally:
         logger.info("  Stopping vLLM...")
         stop_vllm(proc)
+        # Kill any orphaned TP workers left behind by CUDA/NCCL crashes during
+        # the binary search.  Process-group kill handles the happy path, but
+        # crashes can leave detached workers holding GPU memory.
+        _kill_stale_vllm_workers()
         # Let the GPU release memory before the next model
         logger.info("  Waiting %.0fs for GPU memory release...", _VRAM_SETTLE_S)
         time.sleep(_VRAM_SETTLE_S)
@@ -927,7 +1231,6 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
                 "enforce_eager",
                 "max_model_len",
                 "disable_custom_all_reduce",
-                "disable_nccl_p2p",
             ):
                 plan.setdefault(k, v)
 
@@ -942,11 +1245,21 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 
 
 def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
-    """Return the maximum tensor_parallel_size allowed for *plan*."""
+    """Return the maximum tensor_parallel_size allowed for *plan*.
+
+    TP must be a power of 2 for most model architectures (attention heads
+    must be evenly divisible).  Round down to the largest power of 2 that
+    fits within the available GPUs.
+    """
     gpu_devices = str(plan.get("gpu_devices") or "").strip().lower()
     if not gpu_devices or gpu_devices == "all":
-        return available_gpus
-    return len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
+        n = available_gpus
+    else:
+        n = len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
+    # Largest power of 2 ≤ n  (e.g. 3 → 2, 5 → 4, 7 → 4, 8 → 8)
+    if n < 1:
+        return 1
+    return 1 << (n.bit_length() - 1)
 
 
 def _try_calibrate(
@@ -957,6 +1270,9 @@ def _try_calibrate(
     log_dir: Path,
     sleep_level: int,
     ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
+    model_cache: Any | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -968,6 +1284,9 @@ def _try_calibrate(
             log_dir=log_dir,
             sleep_level=sleep_level,
             ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
+            model_cache=model_cache,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -990,6 +1309,8 @@ def auto_calibrate_models(
     port: int = _CALIBRATION_PORT,
     sleep_level: int = 1,
     ready_timeout_s: float = _READY_TIMEOUT_S,
+    nccl_p2p_available: bool = False,
+    model_cache: Any | None = None,
 ) -> dict[str, CalibrationResult]:
     """Calibrate a list of uncalibrated models and persist results.
 
@@ -1053,6 +1374,7 @@ def auto_calibrate_models(
         log_dir=log_dir,
         sleep_level=sleep_level,
         ready_timeout_s=ready_timeout_s,
+        nccl_p2p_available=nccl_p2p_available,
     )
 
     results: dict[str, CalibrationResult] = {}
@@ -1061,6 +1383,13 @@ def auto_calibrate_models(
         model_name = plan["model"]
         original_tp = int(plan.get("tensor_parallel_size", 1))
         max_tp = _max_tp_for_plan(plan, available_gpus)
+
+        # RAM caching is deferred: calibrate_model triggers it on the first
+        # actual vLLM spawn so we don't waste time copying when all probes are
+        # blacklisted.  Pass the cache object through; it will call
+        # ensure_cached_sync only when needed.
+        _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+        model_cal_kwargs = {**cal_kwargs, "model_cache": _mc}
 
         # ----------------------------------------------------------
         # Strategy: "max-first, then search down"
@@ -1076,7 +1405,7 @@ def auto_calibrate_models(
 
         tp = max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **cal_kwargs)
+        result = _try_calibrate(current_plan, **model_cal_kwargs)
 
         # Auto-retry with --trust-remote-code when vLLM demands it.
         _err = result.error or ""
@@ -1090,19 +1419,25 @@ def auto_calibrate_models(
                 extra.append("--trust-remote-code")
             plan = {**plan, "extra_args": extra}
             current_plan = {**plan, "tensor_parallel_size": tp}
-            result = _try_calibrate(current_plan, **cal_kwargs)
+            result = _try_calibrate(current_plan, **model_cal_kwargs)
 
-        # If even max tp fails, the model cannot run — skip it.
+        # If max tp fails, try the configured (original) tp before giving up.
+        # Models may have attention-head counts that aren't divisible by max_tp
+        # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
         _fatal = (
             "does not recognize this architecture" in (result.error or "")
             or "Cannot access gated repo" in (result.error or "")
         )
+        if not result.success and not _fatal and tp > original_tp:
+            logger.info(
+                "  %s failed at max tp=%d — falling back to configured tp=%d",
+                model_name, tp, original_tp,
+            )
+            tp = original_tp
+            current_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(current_plan, **model_cal_kwargs)
+
         if not result.success or _fatal:
-            if tp > original_tp:
-                logger.warning(
-                    "  %s failed even with max tp=%d — skipping",
-                    model_name, tp,
-                )
             results[model_name] = result
             if not result.success:
                 logger.warning(
@@ -1134,7 +1469,7 @@ def auto_calibrate_models(
                 model_name, mid_tp, low_tp, high_tp,
             )
             mid_plan = {**plan, "tensor_parallel_size": mid_tp}
-            mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+            mid_result = _try_calibrate(mid_plan, **model_cal_kwargs)
             if mid_result.success:
                 best_result = mid_result
                 best_tp = mid_tp

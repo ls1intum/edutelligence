@@ -298,6 +298,23 @@ async def test_send_runtime_status_skips_unchanged_payload(monkeypatch):
     assert [payload["type"] for payload in sends] == ["status", "status"]
 
 
+def test_lane_target_url_blocks_vllm_management_endpoints():
+    """Ensure vLLM sleep/wake and other management endpoints cannot be reached
+    through proxied inference requests."""
+    lane_status = {"port": 11436, "inference_endpoint": "/v1/chat/completions"}
+
+    for blocked_path in ("sleep", "wake_up", "is_sleeping", "pause", "resume"):
+        with pytest.raises(ValueError, match="not allowed through the inference proxy"):
+            LogosBridgeClient._lane_target_url(lane_status, request_path=blocked_path)
+
+    # Normal inference paths should work fine
+    url = LogosBridgeClient._lane_target_url(lane_status, request_path="v1/chat/completions")
+    assert url == "http://127.0.0.1:11436/v1/chat/completions"
+
+    url = LogosBridgeClient._lane_target_url(lane_status, request_path="v1/embeddings")
+    assert url == "http://127.0.0.1:11436/v1/embeddings"
+
+
 @pytest.mark.asyncio
 async def test_send_heartbeat_uses_lightweight_payload():
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
