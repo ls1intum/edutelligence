@@ -13,13 +13,19 @@ Design: Range-scaled additive correction
 This preserves same-state ordering (two models in the same infrastructure state
 get identical penalty → classification ordering preserved) while making the
 correction proportional to the weight span of the candidate set.
+
+ETTFT decomposes into three additive phases:
+  1. State overhead  — wake or cold-load latency
+  2. Reclaim overhead — VRAM eviction cost, context-aware:
+     idle/sleeping eviction is cheap, draining busy lanes is expensive
+  3. Queue wait — queued requests × observed per-request service time
 """
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
-from logos.sdi.models import ModelSchedulerView, AzureCapacity
+from logos.sdi.models import ModelSchedulerView, AzureCapacity, LaneSchedulerSignals
 
 
 # ── Correction tuning knobs ─────────────────────────────────────────────
@@ -32,9 +38,13 @@ CORRECTION_STRENGTH = 1.5           # Multiplier on the penalty fraction
 OVERHEAD_WARM_S = 0.0               # Loaded model → serve immediately
 OVERHEAD_SLEEPING_S = 2.5           # Sleep → wake transition
 OVERHEAD_COLD_S = 45.0              # Cold load from disk
-OVERHEAD_RECLAIM_S = 8.0            # Additional cost when VRAM eviction needed
 CLOUD_OVERHEAD_S = 0.3              # Azure/cloud baseline latency
 CLOUD_LOW_HEADROOM_S = 5.0          # Azure near rate limit
+
+# ── Reclaim overhead (context-aware) ──────────────────────────────────
+
+RECLAIM_IDLE_EVICT_S = 3.0          # Evicting idle/sleeping lanes (fast)
+RECLAIM_BUSY_DRAIN_S = 30.0         # Draining busy lanes (up to 60s timeout, avg ~30s)
 
 # ── Weight span floor ──────────────────────────────────────────────────
 
@@ -43,7 +53,7 @@ MIN_SPAN_FLOOR = 1.0                # Absolute floor for weight span
 
 # ── Queue estimation ───────────────────────────────────────────────────
 
-DEFAULT_GENERATION_TIME_S = 3.0     # Fallback generation time per request
+DEFAULT_GENERATION_TIME_S = 3.0     # Fallback generation time when no observed data
 
 
 class ReadinessTier(Enum):
@@ -64,6 +74,7 @@ class EttftEstimate:
     tier: ReadinessTier
     reasoning: str
     state_overhead_s: float = 0.0
+    reclaim_overhead_s: float = 0.0
     queue_wait_s: float = 0.0
     needs_reclaim: bool = False
 
@@ -127,24 +138,86 @@ def compute_corrected_score(
     return classification_weight - penalty
 
 
+# ── Service time estimation ───────────────────────────────────────────
+
+
+def _effective_service_time_s(
+    observed_e2e_p50_s: float,
+    fallback_s: float = DEFAULT_GENERATION_TIME_S,
+) -> float:
+    """Return the best available per-request service time estimate.
+
+    Uses the observed e2e latency p50 from vLLM metrics when available,
+    falling back to the configured constant when the model has no history
+    (e.g. just loaded, or histogram not yet populated).
+    """
+    if observed_e2e_p50_s > 0:
+        return observed_e2e_p50_s
+    return fallback_s
+
+
 # ── Queue wait estimation ──────────────────────────────────────────────
 
 
 def _estimate_queue_wait_s(
     scheduler_queue_depth: int,
     effective_parallel: int,
-    generation_time_s: float,
+    service_time_s: float,
 ) -> float:
-    """Estimate queue wait from depth, parallelism, and generation time.
+    """Estimate queue wait from depth, parallelism, and service time.
 
     queue_rounds = scheduler_queue_depth / effective_parallel
-    queue_wait_s = queue_rounds × generation_time_s
+    queue_wait_s = queue_rounds × service_time_s
     """
     if scheduler_queue_depth <= 0:
         return 0.0
     parallel = max(effective_parallel, 1)
     queue_rounds = scheduler_queue_depth / parallel
-    return queue_rounds * generation_time_s
+    return queue_rounds * service_time_s
+
+
+# ── Reclaim overhead estimation ───────────────────────────────────────
+
+
+def _estimate_reclaim_overhead_s(
+    sibling_lanes: List[LaneSchedulerSignals],
+    target_model_name: str,
+) -> float:
+    """Estimate VRAM reclaim cost based on what sibling lanes are doing.
+
+    Examines other lanes on the same provider to determine whether reclaim
+    would require evicting idle/sleeping lanes (fast) or draining busy
+    lanes (slow).
+
+    Returns:
+        Estimated reclaim overhead in seconds.
+    """
+    if not sibling_lanes:
+        # No visibility into sibling state — use conservative idle estimate
+        return RECLAIM_IDLE_EVICT_S
+
+    # Look at siblings that are NOT the target model (potential eviction victims)
+    evictable_idle = False
+    must_drain_busy = True  # assume worst case, disprove below
+
+    for lane in sibling_lanes:
+        if lane.model_name == target_model_name:
+            continue
+        # A lane is cheaply evictable if it's sleeping or idle (no active requests)
+        if lane.runtime_state == "sleeping":
+            evictable_idle = True
+            must_drain_busy = False
+        elif lane.runtime_state in ("loaded", "running") and lane.active_requests == 0:
+            evictable_idle = True
+            must_drain_busy = False
+
+    if evictable_idle:
+        return RECLAIM_IDLE_EVICT_S
+    if must_drain_busy:
+        return RECLAIM_BUSY_DRAIN_S
+
+    # Fallback
+    return RECLAIM_IDLE_EVICT_S
 
 
 # ── Local (logosnode) estimation ───────────────────────────────────────
@@ -158,20 +231,30 @@ def estimate_ettft_local(
     model_vram_mb: float = 0.0,
     kv_budget_mb: float = 0.0,
     scheduler_queue_depth: int = 0,
+    observed_e2e_p50_s: float = 0.0,
+    all_provider_lanes: Optional[List[LaneSchedulerSignals]] = None,
 ) -> EttftEstimate:
     """Estimate ETTFT for a local (logosnode) model from its scheduler view.
+
+    The estimate decomposes into three additive phases:
+      ETTFT = state_overhead + reclaim_overhead + queue_wait
+
+    State overhead depends on the warmest lane state (warm/sleeping/cold).
+    Reclaim overhead is context-aware: it inspects sibling lanes to determine
+    whether eviction targets are idle (fast, ~3s) or busy (slow, ~30s).
+    Queue wait uses the observed e2e latency p50 as service time when available,
+    falling back to a configured constant.
 
     Decision tree:
     1. No lanes or all stopped/error → UNAVAILABLE
     2. All lanes cold/starting:
-       a. model_vram_mb > available_vram_mb → COLD_RECLAIM (45s + 8s)
-       b. otherwise → COLD (45s)
+       a. model_vram_mb > available_vram_mb → COLD_RECLAIM
+       b. otherwise → COLD
     3. Best lane sleeping:
-       a. kv_budget_mb > available_vram_mb → SLEEPING_RECLAIM (2.5s + 8s)
-       b. otherwise → SLEEPING (2.5s)
-    4. Best lane loaded/running → WARM (0s)
-    5. Queue penalty added in all non-UNAVAILABLE cases:
-       queue_wait_s = (scheduler_queue_depth / effective_parallel) × generation_time_s
+       a. kv_budget_mb > available_vram_mb → SLEEPING_RECLAIM
+       b. otherwise → SLEEPING
+    4. Best lane loaded/running → WARM
+    5. Queue wait added in all non-UNAVAILABLE cases
     """
     if not view.lanes:
         return EttftEstimate(
@@ -189,34 +272,45 @@ def estimate_ettft_local(
         )
 
     best_state = view.best_lane_state
+    service_time = _effective_service_time_s(observed_e2e_p50_s, generation_time_s)
     queue_wait_s = _estimate_queue_wait_s(
-        scheduler_queue_depth, effective_parallel, generation_time_s,
+        scheduler_queue_depth, effective_parallel, service_time,
+    )
+    queue_suffix = (
+        f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p"
+        f", svc={service_time:.1f}s)"
+        if queue_wait_s > 0 else ""
     )
 
     # ── Cold: no loaded/running lanes ──────────────────────────────────
     if best_state in ("cold", "starting"):
         needs_reclaim = model_vram_mb > 0 and model_vram_mb > available_vram_mb
         if needs_reclaim:
-            overhead = OVERHEAD_COLD_S + OVERHEAD_RECLAIM_S
+            reclaim_s = _estimate_reclaim_overhead_s(
+                all_provider_lanes or [], view.model_name,
+            )
+            overhead = OVERHEAD_COLD_S
             tier = ReadinessTier.COLD_RECLAIM
             reason = (
                 f"Cold + reclaim: model needs {model_vram_mb:.0f}MB, "
-                f"available {available_vram_mb:.0f}MB"
+                f"available {available_vram_mb:.0f}MB, "
+                f"reclaim ~{reclaim_s:.0f}s"
             )
         else:
             overhead = OVERHEAD_COLD_S
+            reclaim_s = 0.0
             tier = ReadinessTier.COLD
             reason = f"Best lane state is '{best_state}', cold-start ~{OVERHEAD_COLD_S:.0f}s"
 
-        expected = overhead + queue_wait_s
-        if queue_wait_s > 0:
-            reason += f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p)"
+        expected = overhead + reclaim_s + queue_wait_s
+        reason += queue_suffix
 
         return EttftEstimate(
             expected_wait_s=expected,
             tier=tier,
             reasoning=reason,
             state_overhead_s=overhead,
+            reclaim_overhead_s=reclaim_s,
             queue_wait_s=queue_wait_s,
             needs_reclaim=needs_reclaim,
         )
@@ -225,26 +319,31 @@ def estimate_ettft_local(
     if best_state == "sleeping":
         needs_reclaim = kv_budget_mb > 0 and kv_budget_mb > available_vram_mb
         if needs_reclaim:
-            overhead = OVERHEAD_SLEEPING_S + OVERHEAD_RECLAIM_S
+            reclaim_s = _estimate_reclaim_overhead_s(
+                all_provider_lanes or [], view.model_name,
+            )
+            overhead = OVERHEAD_SLEEPING_S
             tier = ReadinessTier.SLEEPING_RECLAIM
             reason = (
                 f"Sleeping + reclaim: KV cache needs {kv_budget_mb:.0f}MB, "
-                f"available {available_vram_mb:.0f}MB"
+                f"available {available_vram_mb:.0f}MB, "
+                f"reclaim ~{reclaim_s:.0f}s"
             )
         else:
             overhead = OVERHEAD_SLEEPING_S
+            reclaim_s = 0.0
             tier = ReadinessTier.SLEEPING
             reason = f"Best lane is sleeping, wake ~{OVERHEAD_SLEEPING_S:.1f}s"
 
-        expected = overhead + queue_wait_s
-        if queue_wait_s > 0:
-            reason += f" + queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p)"
+        expected = overhead + reclaim_s + queue_wait_s
+        reason += queue_suffix
 
         return EttftEstimate(
             expected_wait_s=expected,
             tier=tier,
             reasoning=reason,
             state_overhead_s=overhead,
+            reclaim_overhead_s=reclaim_s,
             queue_wait_s=queue_wait_s,
             needs_reclaim=needs_reclaim,
         )
@@ -253,14 +352,14 @@ def estimate_ettft_local(
     overhead = OVERHEAD_WARM_S
     expected = overhead + queue_wait_s
     reason = "Loaded and warm"
-    if queue_wait_s > 0:
-        reason += f", queue {queue_wait_s:.1f}s ({scheduler_queue_depth}q/{effective_parallel}p)"
+    reason += queue_suffix
 
     return EttftEstimate(
         expected_wait_s=expected,
         tier=ReadinessTier.WARM,
         reasoning=reason,
         state_overhead_s=overhead,
+        reclaim_overhead_s=0.0,
         queue_wait_s=queue_wait_s,
     )
 

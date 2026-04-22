@@ -2141,6 +2141,7 @@ class CapacityPlanner:
                 requests_running=0.0,
                 gpu_cache_usage_percent=None,
                 ttft_p95_seconds=0.0,
+                e2e_latency_p50_seconds=0.0,
                 effective_vram_mb=0.0,
                 num_parallel=0,
                 gpu_devices=None,

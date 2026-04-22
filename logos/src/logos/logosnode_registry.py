@@ -48,8 +48,12 @@ def _lane_metric_float(value: Any) -> float:
         return 0.0
 
 
-def _lane_ttft_p95_seconds(metrics: dict[str, Any]) -> float:
-    histogram = metrics.get("ttft_histogram")
+def _histogram_quantile(histogram: dict[str, Any] | None, quantile: float) -> float:
+    """Extract a quantile from a Prometheus cumulative histogram.
+
+    Works for any cumulative-bucket histogram (TTFT, e2e latency, etc.).
+    Returns 0.0 when the histogram is empty or the quantile lands in +Inf.
+    """
     if not isinstance(histogram, dict) or not histogram:
         return 0.0
 
@@ -78,12 +82,20 @@ def _lane_ttft_p95_seconds(metrics: dict[str, Any]) -> float:
     if total <= 0:
         return 0.0
 
-    target = total * 0.95
+    target = total * quantile
     for upper, count in buckets:
         if count >= target:
             return 0.0 if upper == float("inf") else upper
     last_upper = buckets[-1][0]
     return 0.0 if last_upper == float("inf") else last_upper
+
+
+def _lane_ttft_p95_seconds(metrics: dict[str, Any]) -> float:
+    return _histogram_quantile(metrics.get("ttft_histogram"), 0.95)
+
+
+def _lane_e2e_latency_p50_seconds(metrics: dict[str, Any]) -> float:
+    return _histogram_quantile(metrics.get("e2e_latency_histogram"), 0.50)
 
 
 def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:

@@ -317,6 +317,16 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 model_id, provider_id,
             )
 
+            # Observed e2e latency p50 for queue wait estimation
+            observed_e2e_p50_s = view.warmest_e2e_latency_p50_seconds
+
+            # All lanes on this provider for reclaim context
+            all_provider_lanes = None
+            try:
+                all_provider_lanes = self._logosnode.get_all_lane_signals(provider_id)
+            except (KeyError, Exception):
+                pass
+
             return estimate_ettft_local(
                 view,
                 effective_parallel=effective_parallel,
@@ -325,6 +335,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 model_vram_mb=model_vram_mb,
                 kv_budget_mb=kv_budget_mb,
                 scheduler_queue_depth=scheduler_queue_depth,
+                observed_e2e_p50_s=observed_e2e_p50_s,
+                all_provider_lanes=all_provider_lanes,
             )
 
         if provider_type == "azure":
@@ -367,16 +379,18 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         """
         for idx, (model_id, provider_id, provider_type, score, priority_int, ettft) in enumerate(scored):
             if provider_type == "logosnode":
-                # ECCS-aware: if this candidate is not ready (sleeping/cold)
-                # and it's the top-scored candidate, don't fall through to a
-                # worse warm model — queue for this one instead.
+                # If the top-scored candidate is not ready (sleeping/cold),
+                # queue for it rather than falling through to a lower-scored
+                # warm model.  This applies regardless of ETTFT — the scoring
+                # system already determined this is the best model; its
+                # sleeping state is temporary and the capacity planner will
+                # wake it.
                 if (
-                    self._ettft_enabled
-                    and ettft.tier in self._NOT_READY_TIERS
+                    ettft.tier in self._NOT_READY_TIERS
                     and idx == 0
                 ):
                     logger.info(
-                        "ECCS queue-for-best: top candidate model %s provider %s "
+                        "Queue-for-best: top candidate model %s provider %s "
                         "is %s (score=%.2f, wait=%.1fs) — deferring to queue path "
                         "instead of downgrading to a lower-scored warm model",
                         model_id, provider_id, ettft.tier.value,

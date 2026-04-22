@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_metric_float
+from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_e2e_latency_p50_seconds, _lane_metric_float
 
 from ..models import (
     ModelStatus,
@@ -480,6 +480,7 @@ class LogosNodeDataProvider:
                 else None
             ),
             ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
+            e2e_latency_p50_seconds=_lane_e2e_latency_p50_seconds(backend_metrics),
             effective_vram_mb=float(lane.get("effective_vram_mb", 0.0) or 0.0),
             num_parallel=int(lane.get("num_parallel", 0) or 0),
             gpu_memory_utilization=(
@@ -558,6 +559,14 @@ class LogosNodeDataProvider:
         ]
         warmest_ttft = min(loaded_ttfts) if loaded_ttfts else 0.0
 
+        # Best-case e2e latency p50 among loaded/running lanes (non-zero)
+        loaded_e2e = [
+            s.e2e_latency_p50_seconds
+            for s in matching_signals
+            if s.runtime_state in ("loaded", "running") and s.e2e_latency_p50_seconds > 0
+        ]
+        warmest_e2e = min(loaded_e2e) if loaded_e2e else 0.0
+
         # Max GPU cache pressure across lanes (vLLM only)
         cache_values = [
             s.gpu_cache_usage_percent
@@ -576,6 +585,7 @@ class LogosNodeDataProvider:
             aggregate_active_requests=aggregate_active,
             aggregate_queue_waiting=aggregate_queue,
             warmest_ttft_p95_seconds=warmest_ttft,
+            warmest_e2e_latency_p50_seconds=warmest_e2e,
             gpu_cache_pressure_max=gpu_cache_max,
             lanes=matching_signals,
         )

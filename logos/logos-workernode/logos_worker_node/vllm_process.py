@@ -310,6 +310,7 @@ class VllmProcessHandle:
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
+            "e2e_latency_histogram": {},
         }
         if self._http is None:
             return metrics
@@ -347,6 +348,11 @@ class VllmProcessHandle:
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["ttft_histogram"][bucket] = value
+                elif "e2e_request_latency_seconds_bucket" in metric_name:
+                    bucket = "unknown"
+                    if 'le="' in name:
+                        bucket = name.split('le="', 1)[1].split('"', 1)[0]
+                    metrics["e2e_latency_histogram"][bucket] = value
         except httpx.HTTPError:
             return metrics
         return metrics
