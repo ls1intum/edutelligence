@@ -85,6 +85,10 @@ def _infer_tool_call_parser(model: str) -> str:
     vLLM requires an explicit ``--tool-call-parser`` value when
     ``--enable-auto-tool-choice`` is set (no built-in auto-detect yet).
     Falls back to ``hermes`` which is broadly compatible.
+
+    TODO: vLLM draft PR adds ``--tool-call-parser=auto`` which would make
+    this function obsolete. Check if merged and remove this workaround:
+    https://github.com/vllm-project/vllm/pull/34809
     """
     model_lower = model.lower()
     for pattern, parser in _TOOL_PARSER_RULES:
