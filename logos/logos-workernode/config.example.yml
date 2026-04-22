@@ -236,10 +236,11 @@ engines:
     #     On by default.
     #
     #   tool_call_parser: str      — tool call parser for function calling.
-    #     Common values: "hermes", "mistral", "llama3_json", "pythonic".
-    #     Empty (default) = vLLM auto-detects the parser from the model's
-    #     tokenizer_config.json, which works for most modern chat models.
-    #     Set explicitly only if auto-detection picks the wrong parser.
+    #     Common values: "hermes", "mistral", "llama3_json", "gemma4", "pythonic".
+    #     Empty (default) = inferred from the model name:
+    #       gemma-4/gemma4 → gemma4, llama-3 → llama3_json, llama-4 → llama4_pythonic,
+    #       mistral/mixtral → mistral, qwen → hermes, fallback → hermes.
+    #     Set explicitly only if inference picks the wrong parser.
     #
     #   chat_template_kwargs: dict — default kwargs passed to the chat template.
     #     Example: {enable_thinking: false} to disable Qwen3 chain-of-thought.

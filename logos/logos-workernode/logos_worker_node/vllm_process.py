@@ -57,6 +57,41 @@ _SCRUBBED_ENV_VARS = (
     "MASTER_PORT",
 )
 
+# Model-name → vLLM --tool-call-parser mapping.  Checked in order;
+# first match wins.  Patterns are lowercased substrings of the HF model id.
+_TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
+    ("gemma-4", "gemma4"),
+    ("gemma4", "gemma4"),
+    ("llama-4", "llama4_pythonic"),
+    ("llama4", "llama4_pythonic"),
+    ("llama-3", "llama3_json"),
+    ("llama3", "llama3_json"),
+    ("mistral", "mistral"),
+    ("mixtral", "mistral"),
+    ("deepseek", "deepseek_v3"),
+    ("granite", "granite"),
+    ("internlm", "internlm"),
+    ("jamba", "jamba"),
+    ("qwen3-", "hermes"),
+    ("qwen3_", "hermes"),
+    ("qwen", "hermes"),
+    ("gpt-oss", "hermes"),
+)
+
+
+def _infer_tool_call_parser(model: str) -> str:
+    """Infer the vLLM tool-call-parser from the model name.
+
+    vLLM requires an explicit ``--tool-call-parser`` value when
+    ``--enable-auto-tool-choice`` is set (no built-in auto-detect yet).
+    Falls back to ``hermes`` which is broadly compatible.
+    """
+    model_lower = model.lower()
+    for pattern, parser in _TOOL_PARSER_RULES:
+        if pattern in model_lower:
+            return parser
+    return "hermes"
+
 
 class VllmProcessHandle:
     """Manages a single vLLM server process on a specific port."""
@@ -501,12 +536,12 @@ class VllmProcessHandle:
             cmd.append("--enable-sleep-mode")
         # Tool calling: enabled by default so OpenAI-compatible clients
         # (OpenCode, etc.) can send tools/tool_choice without getting HTTP 400.
-        # When tool_call_parser is empty, vLLM auto-detects the parser from the
-        # model's tokenizer_config.json (supported on most modern chat models).
+        # vLLM requires --tool-call-parser when --enable-auto-tool-choice is set.
+        # When tool_call_parser is empty we infer the parser from the model name.
         if vc.enable_auto_tool_choice:
+            parser = vc.tool_call_parser or _infer_tool_call_parser(lane_config.model)
             cmd.append("--enable-auto-tool-choice")
-            if vc.tool_call_parser:
-                cmd.extend(["--tool-call-parser", vc.tool_call_parser])
+            cmd.extend(["--tool-call-parser", parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])

@@ -81,10 +81,10 @@ def test_build_cmd_includes_tool_calling_flags_by_default(monkeypatch) -> None:
         vllm_config=VllmConfig(),
     )
     cmd = handle._build_cmd(lane)
-    # Default: --enable-auto-tool-choice is present but --tool-call-parser is NOT
-    # (vLLM auto-detects the parser from the model's tokenizer_config.json)
+    # Default: parser inferred from model name (gemma-4 → gemma4)
     assert "--enable-auto-tool-choice" in cmd
-    assert "--tool-call-parser" not in cmd
+    idx = cmd.index("--tool-call-parser")
+    assert cmd[idx + 1] == "gemma4"
 
 
 def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
@@ -100,6 +100,18 @@ def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
     assert "--enable-auto-tool-choice" in cmd
     idx = cmd.index("--tool-call-parser")
     assert cmd[idx + 1] == "hermes"
+
+
+def test_infer_tool_call_parser() -> None:
+    from logos_worker_node.vllm_process import _infer_tool_call_parser
+
+    assert _infer_tool_call_parser("google/gemma-4-26B-A4B-it") == "gemma4"
+    assert _infer_tool_call_parser("meta-llama/Llama-3.1-8B-Instruct") == "llama3_json"
+    assert _infer_tool_call_parser("meta-llama/Llama-4-Scout-17B-16E-Instruct") == "llama4_pythonic"
+    assert _infer_tool_call_parser("mistralai/Mistral-7B-Instruct-v0.3") == "mistral"
+    assert _infer_tool_call_parser("Qwen/Qwen2.5-Coder-14B-Instruct-AWQ") == "hermes"
+    assert _infer_tool_call_parser("openai/gpt-oss-120b") == "hermes"
+    assert _infer_tool_call_parser("some/unknown-model") == "hermes"  # fallback
 
 
 def test_build_cmd_omits_tool_calling_when_disabled(monkeypatch) -> None:
