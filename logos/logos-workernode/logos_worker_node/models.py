@@ -87,9 +87,11 @@ class VllmConfig(BaseModel):
         "Passes --enable-auto-tool-choice to vLLM. Set to false to disable.",
     )
     tool_call_parser: str = Field(
-        default="hermes",
+        default="",
         description="Tool call parser for function calling (e.g. 'hermes', 'mistral', 'llama3_json'). "
-        "Passed as --tool-call-parser to vLLM. Empty = disable tool calling.",
+        "Passed as --tool-call-parser to vLLM when non-empty. "
+        "Empty (default) = pass --enable-auto-tool-choice without --tool-call-parser, "
+        "letting vLLM auto-detect the parser from the model's tokenizer_config.json.",
     )
     cuda_graph_sizes: str = Field(
         default="",
@@ -191,6 +193,23 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    auto_reboot_on_stuck_gpu: bool = Field(
+        default=True,
+        description=(
+            "Initiate a host OS reboot when all lanes exhaust their crash-restart budget "
+            "and at least one has stuck VRAM (unrecoverable GPU state). "
+            "Tries 'sudo reboot' first; falls back to writing a sentinel file at "
+            "reboot_sentinel_path for a host-side watchdog."
+        ),
+    )
+    reboot_sentinel_path: str = Field(
+        default="/host/reboot-requested",
+        description=(
+            "Path for the reboot-request sentinel file written when 'sudo reboot' is "
+            "unavailable. Mount the host's /tmp or a dedicated directory so a "
+            "host-side watchdog can detect and act on it."
+        ),
+    )
 
 
 class LogosConfig(BaseModel):

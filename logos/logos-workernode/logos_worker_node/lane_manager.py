@@ -42,6 +42,17 @@ _HANDLE_CLOSE_TIMEOUT = 10
 _GPU_PLACEMENT_HEADROOM_RATIO = 0.10
 _GPU_PLACEMENT_MIN_HEADROOM_MB = 1024.0
 _CRASH_RESTART_COOLDOWN_S = 30.0
+_MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
+
+
+def _write_reboot_sentinel(path: str) -> None:
+    """Write the reboot-requested sentinel file (sync helper for asyncio.to_thread)."""
+    import os
+    sentinel_dir = os.path.dirname(path)
+    if sentinel_dir:
+        os.makedirs(sentinel_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("reboot-requested\n")
 
 
 class PortAllocator:
@@ -211,6 +222,8 @@ class LaneManager:
         gpu_force_poll: Callable[[], Awaitable[None]] | None = None,
         max_lanes: int = 0,
         model_cache: Any | None = None,
+        auto_reboot_on_stuck_gpu: bool = True,
+        reboot_sentinel_path: str = "/host/reboot-requested",
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
@@ -221,6 +234,8 @@ class LaneManager:
         self._gpu_force_poll = gpu_force_poll
         self._max_lanes = max_lanes
         self._model_cache = model_cache
+        self._auto_reboot_on_stuck_gpu = auto_reboot_on_stuck_gpu
+        self._reboot_sentinel_path = reboot_sentinel_path
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -242,6 +257,7 @@ class LaneManager:
         _STUCK_POLL_THRESHOLD = 6  # ~30s at 5s heartbeat
         self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
         self._last_crash_restart_attempt_at: dict[str, float] = {}
+        self._crash_restart_counts: dict[str, int] = {}
 
     def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
         """Check which capabilities_models are available locally.
@@ -402,27 +418,73 @@ class LaneManager:
                             action="unchanged", lane_id=lid, model=desired_lc.model,
                         ))
 
-                # Phase 3: Add new lanes
+                # Phase 3: Add new lanes, with staggered startup.
+                # Temporarily sleep any existing vLLM lanes that support
+                # sleep mode so the new model can load VRAM without competing
+                # with active KV-cache allocations in running lanes.
                 to_add = desired_ids - current_ids
-                for lid in to_add:
-                    lc = desired_map[lid]
-                    try:
-                        await self._add_lane_unlocked(lid, lc)
-                        added_ids.append(lid)
-                        port = self._port_alloc.get_port(lid)
-                        if lc.vllm:
-                            details = f"port={port}, continuous_batching=true"
-                        else:
-                            details = f"port={port}, num_parallel={lc.num_parallel}"
-                        actions.append(LaneAction(
-                            action="added", lane_id=lid, model=lc.model,
-                            details=details,
-                        ))
-                    except Exception as e:
-                        msg = f"Failed to add lane '{lid}': {e}"
-                        logger.error(msg, exc_info=True)
-                        errors.append(msg)
-                        raise _ApplyAbort(msg)
+                slept_lids: list[str] = []
+                if to_add:
+                    for existing_lid, existing_h in self._handles.items():
+                        elc = existing_h.lane_config
+                        if (
+                            elc is not None
+                            and elc.vllm
+                            and elc.vllm_config is not None
+                            and elc.vllm_config.enable_sleep_mode
+                        ):
+                            try:
+                                await existing_h.sleep(level=2, mode="wait")
+                                slept_lids.append(existing_lid)
+                                logger.info(
+                                    "Staggered startup: slept lane '%s' (level=2) "
+                                    "to free VRAM for %d new lane(s)",
+                                    existing_lid, len(to_add),
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Staggered startup: could not sleep lane '%s'; "
+                                    "continuing without stagger for that lane",
+                                    existing_lid,
+                                    exc_info=True,
+                                )
+                try:
+                    for lid in to_add:
+                        lc = desired_map[lid]
+                        try:
+                            await self._add_lane_unlocked(lid, lc)
+                            added_ids.append(lid)
+                            port = self._port_alloc.get_port(lid)
+                            if lc.vllm:
+                                details = f"port={port}, continuous_batching=true"
+                            else:
+                                details = f"port={port}, num_parallel={lc.num_parallel}"
+                            actions.append(LaneAction(
+                                action="added", lane_id=lid, model=lc.model,
+                                details=details,
+                            ))
+                        except Exception as e:
+                            msg = f"Failed to add lane '{lid}': {e}"
+                            logger.error(msg, exc_info=True)
+                            errors.append(msg)
+                            raise _ApplyAbort(msg)
+                finally:
+                    # Always wake staggered lanes — even if an add failed
+                    for slept_lid in slept_lids:
+                        try:
+                            slept_h = self._handles.get(slept_lid)
+                            if slept_h is not None:
+                                await slept_h.wake_up()
+                                logger.info(
+                                    "Staggered startup: woke lane '%s' after adding new lanes",
+                                    slept_lid,
+                                )
+                        except Exception:
+                            logger.warning(
+                                "Staggered startup: failed to wake lane '%s'",
+                                slept_lid,
+                                exc_info=True,
+                            )
 
             except _ApplyAbort:
                 # ---- Rollback: best-effort restore previous state ----
@@ -628,10 +690,15 @@ class LaneManager:
     async def _recover_dead_lanes(self, statuses: list[LaneStatus]) -> None:
         """Best-effort restart for lanes whose process died unexpectedly.
 
-        Keep this outside the status lock path and apply a cooldown so repeated
-        startup failures don't thrash the host.
+        Implements a circuit breaker (max _MAX_CRASH_RESTARTS attempts per lane)
+        and skips restart when VRAM or GPU is in an unrecoverable state.
+        After all dead lanes exhaust their restart budget and any has stuck VRAM,
+        the worker triggers a host OS reboot (when auto_reboot_on_stuck_gpu is enabled).
         """
         now = asyncio.get_running_loop().time()
+        exhausted_lids: list[str] = []   # lanes that hit the max retry budget
+        stuck_vram_lids: list[str] = []  # lanes with uncleared VRAM
+
         for status in statuses:
             if status.runtime_state not in {"stopped", "error"}:
                 continue
@@ -639,22 +706,84 @@ class LaneManager:
             if lane_config is None:
                 continue
             lid = status.lane_id
+            handle = self._handles.get(lid)
+
+            # Skip if the handle has fatal CUDA errors (GPU unrecoverable without reboot)
+            if handle is not None and getattr(handle, "has_fatal_cuda_errors", False):
+                logger.error(
+                    "Lane '%s' has fatal CUDA errors in recent logs; skipping restart "
+                    "(reboot required to recover GPU state)",
+                    lid,
+                )
+                self._record_event(
+                    lid, "crash_restart_skipped_fatal_cuda",
+                    model=lane_config.model,
+                    details="Fatal CUDA error patterns detected in process logs",
+                    port=status.port,
+                )
+                exhausted_lids.append(lid)
+                if getattr(handle, "has_stuck_vram", False):
+                    stuck_vram_lids.append(lid)
+                continue
+
+            # Skip if VRAM is still held from the previous crash
+            if handle is not None and getattr(handle, "has_stuck_vram", False):
+                logger.error(
+                    "Lane '%s' has stuck VRAM from previous crash; skipping restart "
+                    "until GPU memory is released",
+                    lid,
+                )
+                self._record_event(
+                    lid, "crash_restart_skipped_stuck_vram",
+                    model=lane_config.model,
+                    details="VRAM still held by crashed process",
+                    port=status.port,
+                )
+                stuck_vram_lids.append(lid)
+                exhausted_lids.append(lid)
+                continue
+
+            # Circuit breaker: skip if restart budget exhausted
+            restart_count = self._crash_restart_counts.get(lid, 0)
+            if restart_count >= _MAX_CRASH_RESTARTS:
+                logger.error(
+                    "Lane '%s' has exhausted its crash-restart budget (%d/%d); "
+                    "skipping automatic restart",
+                    lid, restart_count, _MAX_CRASH_RESTARTS,
+                )
+                self._record_event(
+                    lid, "crash_restart_budget_exhausted",
+                    model=lane_config.model,
+                    details=f"restart_count={restart_count}/{_MAX_CRASH_RESTARTS}",
+                    port=status.port,
+                )
+                exhausted_lids.append(lid)
+                continue
+
+            # Cooldown check
             last_attempt = self._last_crash_restart_attempt_at.get(lid, 0.0)
             if now - last_attempt < _CRASH_RESTART_COOLDOWN_S:
                 continue
 
             self._last_crash_restart_attempt_at[lid] = now
+            new_count = restart_count + 1
+            self._crash_restart_counts[lid] = new_count
             self._record_event(
                 lid,
                 "crash_restart_attempt",
                 model=lane_config.model,
-                details=f"runtime_state={status.runtime_state}",
+                details=(
+                    f"runtime_state={status.runtime_state}, "
+                    f"attempt={new_count}/{_MAX_CRASH_RESTARTS}"
+                ),
                 port=status.port,
             )
             logger.warning(
-                "Lane '%s' process is %s; attempting automatic restart",
+                "Lane '%s' process is %s; attempting automatic restart (%d/%d)",
                 lid,
                 status.runtime_state,
+                new_count,
+                _MAX_CRASH_RESTARTS,
             )
             try:
                 async with self._lock:
@@ -666,10 +795,77 @@ class LaneManager:
                         continue
                     current_lc = handle.lane_config or lane_config
                     await self._restart_lane_unlocked(lid, current_lc)
+                # Successful restart: reset the counter
+                self._crash_restart_counts[lid] = 0
                 self._record_event(lid, "crash_restart_ok", model=current_lc.model, port=status.port)
             except Exception:
                 logger.error("Lane '%s' automatic crash recovery failed", lid, exc_info=True)
                 self._record_event(lid, "crash_restart_failed", model=lane_config.model, port=status.port)
+
+        # If all dead lanes are exhausted AND any has stuck VRAM → consider host reboot
+        if (
+            self._auto_reboot_on_stuck_gpu
+            and stuck_vram_lids
+            and exhausted_lids
+            and all(
+                s.runtime_state in {"stopped", "error"}
+                for s in statuses
+                if s.lane_id in exhausted_lids
+            )
+        ):
+            logger.critical(
+                "All crashed lanes have exhausted restart budgets and %d lane(s) have "
+                "stuck VRAM (%s); initiating host OS reboot",
+                len(stuck_vram_lids),
+                stuck_vram_lids,
+            )
+            await self._initiate_reboot()
+
+    async def _initiate_reboot(self) -> None:
+        """Trigger a host OS reboot to recover from unrecoverable GPU state.
+
+        Attempts ``sudo reboot`` first; falls back to writing a sentinel file at
+        ``self._reboot_sentinel_path`` which a host-side watchdog can pick up.
+        """
+        logger.critical("Initiating host OS reboot due to unrecoverable GPU state")
+
+        # Stop all lanes gracefully before rebooting
+        for lid in list(self._handles.keys()):
+            try:
+                handle = self._handles[lid]
+                await handle.destroy()
+            except Exception:
+                logger.warning("Failed to stop lane '%s' before reboot", lid, exc_info=True)
+
+        # Brief pause so logs can flush before the host goes down
+        await asyncio.sleep(5)
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "sudo", "reboot",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=10.0)
+            logger.critical("sudo reboot issued successfully")
+            return
+        except Exception:
+            logger.error(
+                "sudo reboot failed; writing sentinel file '%s'",
+                self._reboot_sentinel_path,
+                exc_info=True,
+            )
+
+        # Fallback: write sentinel file for a host-side watchdog
+        try:
+            await asyncio.to_thread(_write_reboot_sentinel, self._reboot_sentinel_path)
+            logger.critical("Sentinel file written at '%s'", self._reboot_sentinel_path)
+        except Exception:
+            logger.error(
+                "Failed to write reboot sentinel file '%s'",
+                self._reboot_sentinel_path,
+                exc_info=True,
+            )
 
     async def get_lane_status(self, lane_id: str) -> LaneStatus:
         async with self._lock:

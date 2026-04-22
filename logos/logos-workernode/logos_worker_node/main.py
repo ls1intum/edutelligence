@@ -241,6 +241,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gpu_force_poll=gpu_collector.force_poll,
         max_lanes=cfg.worker.max_lanes,
         model_cache=model_cache,
+        auto_reboot_on_stuck_gpu=cfg.worker.auto_reboot_on_stuck_gpu,
+        reboot_sentinel_path=cfg.worker.reboot_sentinel_path,
     )
 
     # Validate capabilities models at startup (warnings only)

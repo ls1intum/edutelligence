@@ -174,6 +174,24 @@ class VllmProcessHandle:
         """True if the last stop detected residual GPU memory."""
         return getattr(self, "_stuck_vram", False)
 
+    @property
+    def has_fatal_cuda_errors(self) -> bool:
+        """True if recent logs contain fatal CUDA error patterns.
+
+        These patterns indicate the GPU is in an unrecoverable state that
+        cannot be resolved without a host OS reboot.
+        """
+        if not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs).lower()
+        fatal_patterns = (
+            "cuda-capable device(s) is/are busy or unavailable",
+            "all cuda-capable devices are busy or unavailable",
+            "nccl warn cuda failure",
+            "cuda error: out of memory",
+        )
+        return any(p in log_blob for p in fatal_patterns)
+
     async def reconfigure(self, lane_config: LaneConfig) -> ProcessStatus:
         """Reconfigure = full restart for vLLM (model/config change)."""
         logger.info("[%s] Reconfiguring vLLM", self.lane_id)
@@ -483,9 +501,12 @@ class VllmProcessHandle:
             cmd.append("--enable-sleep-mode")
         # Tool calling: enabled by default so OpenAI-compatible clients
         # (OpenCode, etc.) can send tools/tool_choice without getting HTTP 400.
-        if vc.enable_auto_tool_choice and vc.tool_call_parser:
+        # When tool_call_parser is empty, vLLM auto-detects the parser from the
+        # model's tokenizer_config.json (supported on most modern chat models).
+        if vc.enable_auto_tool_choice:
             cmd.append("--enable-auto-tool-choice")
-            cmd.extend(["--tool-call-parser", vc.tool_call_parser])
+            if vc.tool_call_parser:
+                cmd.extend(["--tool-call-parser", vc.tool_call_parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])

@@ -81,6 +81,22 @@ def test_build_cmd_includes_tool_calling_flags_by_default(monkeypatch) -> None:
         vllm_config=VllmConfig(),
     )
     cmd = handle._build_cmd(lane)
+    # Default: --enable-auto-tool-choice is present but --tool-call-parser is NOT
+    # (vLLM auto-detects the parser from the model's tokenizer_config.json)
+    assert "--enable-auto-tool-choice" in cmd
+    assert "--tool-call-parser" not in cmd
+
+
+def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="NousResearch/Hermes-3-Llama-3.1-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tool_call_parser="hermes"),
+    )
+    cmd = handle._build_cmd(lane)
     assert "--enable-auto-tool-choice" in cmd
     idx = cmd.index("--tool-call-parser")
     assert cmd[idx + 1] == "hermes"
