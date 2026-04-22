@@ -105,13 +105,68 @@ def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
 def test_infer_tool_call_parser() -> None:
     from logos_worker_node.vllm_process import _infer_tool_call_parser
 
+    # Google Gemma
     assert _infer_tool_call_parser("google/gemma-4-26B-A4B-it") == "gemma4"
+    assert _infer_tool_call_parser("google/functiongemma-270m-it") == "functiongemma"
+    # Meta Llama
     assert _infer_tool_call_parser("meta-llama/Llama-3.1-8B-Instruct") == "llama3_json"
     assert _infer_tool_call_parser("meta-llama/Llama-4-Scout-17B-16E-Instruct") == "llama4_pythonic"
+    # Mistral
     assert _infer_tool_call_parser("mistralai/Mistral-7B-Instruct-v0.3") == "mistral"
+    # DeepSeek (V3.2 > V3.1 > general)
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3-0324") == "deepseek_v3"
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-R1-0528") == "deepseek_v3"
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.1") == "deepseek_v31"
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.2") == "deepseek_v32"
+    # IBM Granite
+    assert _infer_tool_call_parser("ibm-granite/granite-20b-functioncalling") == "granite-20b-fc"
+    assert _infer_tool_call_parser("ibm-granite/granite-4.0-h-small") == "granite4"
+    assert _infer_tool_call_parser("ibm-granite/granite-3.1-8b-instruct") == "granite"
+    # Zhipu GLM
+    assert _infer_tool_call_parser("zai-org/GLM-4.7-Flash") == "glm47"
+    assert _infer_tool_call_parser("zai-org/GLM-4.5") == "glm45"
+    assert _infer_tool_call_parser("zai-org/GLM-4.6") == "glm45"
+    # InternLM
+    assert _infer_tool_call_parser("internlm/internlm2_5-7b-chat") == "internlm"
+    # AI21 Jamba
+    assert _infer_tool_call_parser("ai21labs/AI21-Jamba-1.5-Mini") == "jamba"
+    # Alibaba Qwen (coder→qwen3_xml, general→hermes)
+    assert _infer_tool_call_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3_xml"
     assert _infer_tool_call_parser("Qwen/Qwen2.5-Coder-14B-Instruct-AWQ") == "hermes"
-    assert _infer_tool_call_parser("openai/gpt-oss-120b") == "hermes"
-    assert _infer_tool_call_parser("some/unknown-model") == "hermes"  # fallback
+    assert _infer_tool_call_parser("Qwen/QwQ-32B") == "hermes"
+    # Salesforce xLAM (contains "llama"/"qwen" — must match xlam first)
+    assert _infer_tool_call_parser("Salesforce/Llama-xLAM-2-8B-fc-r") == "xlam"
+    assert _infer_tool_call_parser("Salesforce/Qwen-xLAM-32B-fc-r") == "xlam"
+    # NousResearch Hermes (contains "llama" — must match hermes first)
+    assert _infer_tool_call_parser("NousResearch/Hermes-3-Llama-3.1-8B") == "hermes"
+    # MiniMax
+    assert _infer_tool_call_parser("MiniMaxAi/MiniMax-M2-40B") == "minimax_m2"
+    assert _infer_tool_call_parser("MiniMaxAi/MiniMax-M1-40k") == "minimax"
+    # Microsoft Phi
+    assert _infer_tool_call_parser("microsoft/phi-4-mini") == "phi4_mini_json"
+    # Allen AI OLMo
+    assert _infer_tool_call_parser("allenai/Olmo-3-7B-Instruct") == "olmo3"
+    # Tencent Hunyuan
+    assert _infer_tool_call_parser("tencent/Hunyuan-A13B-Instruct") == "hunyuan_a13b"
+    # Baidu ERNIE
+    assert _infer_tool_call_parser("baidu/ERNIE-4.5-0.3B-Instruct") == "ernie45"
+    # Moonshot Kimi
+    assert _infer_tool_call_parser("moonshotai/Kimi-K2-Instruct") == "kimi_k2"
+    # ByteDance Seed
+    assert _infer_tool_call_parser("bytedance/Seed-Oss-Coder") == "seed_oss"
+    # StepFun (3.5 before 3)
+    assert _infer_tool_call_parser("stepfun/Step-3.5-16B") == "step3p5"
+    assert _infer_tool_call_parser("stepfun/Step-3-8B") == "step3"
+    # Sber GigaChat
+    assert _infer_tool_call_parser("ai-sage/GigaChat3-702B-A36B-preview") == "gigachat3"
+    # Meituan LongCat
+    assert _infer_tool_call_parser("meituan-longcat/LongCat-Flash-Chat") == "longcat"
+    # Xiaomi MIMO
+    assert _infer_tool_call_parser("xiaomi/MIMO-7B") == "mimo"
+    # OpenAI OSS (gpt-oss → openai parser, NOT hermes)
+    assert _infer_tool_call_parser("openai/gpt-oss-120b") == "openai"
+    # Unknown model falls back to hermes
+    assert _infer_tool_call_parser("some/unknown-model") == "hermes"
 
 
 def test_build_cmd_omits_tool_calling_when_disabled(monkeypatch) -> None:
