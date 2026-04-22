@@ -1,3 +1,23 @@
+# ── Chat models (GPT-4.1 family) ─────────────────────────────────────────────
+- id: oai-gpt-4-1
+  type: openai_chat
+  model: gpt-4.1
+  api_key:
+  cost_per_million_input_token: 2.0
+  cost_per_million_output_token: 8.0
+- id: oai-gpt-4-1-mini
+  type: openai_chat
+  model: gpt-4.1-mini
+  api_key:
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+- id: oai-gpt-4-1-nano
+  type: openai_chat
+  model: gpt-4.1-nano
+  api_key:
+  cost_per_million_input_token: 0.1
+  cost_per_million_output_token: 0.4
+
 # ── Chat models (GPT-5 family) ───────────────────────────────────────────────
 - id: oai-gpt-52
   type: openai_chat

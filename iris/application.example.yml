@@ -271,10 +271,10 @@ llm_configuration:
     default:
       hyde:
         local: gpt-oss
-        cloud: oai-gpt-5-nano
+        cloud: oai-gpt-4-1-nano
       answer:
         local: gpt-oss
-        cloud: oai-gpt-5-mini
+        cloud: oai-gpt-4-1-mini
       embedding: oai-embedding-small
 
   mcq_generation_pipeline:
