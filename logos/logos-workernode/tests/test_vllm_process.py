@@ -71,6 +71,47 @@ def test_build_cmd_includes_stability_and_sleep_flags(monkeypatch) -> None:
     assert "--enable-sleep-mode" in cmd
 
 
+def test_build_cmd_includes_tool_calling_flags_by_default(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--enable-auto-tool-choice" in cmd
+    idx = cmd.index("--tool-call-parser")
+    assert cmd[idx + 1] == "hermes"
+
+
+def test_build_cmd_omits_tool_calling_when_disabled(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_auto_tool_choice=False),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--enable-auto-tool-choice" not in cmd
+    assert "--tool-call-parser" not in cmd
+
+
+def test_build_env_auto_enables_dev_mode_for_sleep(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    lane = LaneConfig(
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True, server_dev_mode=False),
+    )
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    assert env["VLLM_SERVER_DEV_MODE"] == "1"
+
+
 def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")

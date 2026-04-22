@@ -28,7 +28,7 @@ import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, ClassVar
 
 import httpx
 
@@ -481,6 +481,11 @@ class VllmProcessHandle:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
             cmd.append("--enable-sleep-mode")
+        # Tool calling: enabled by default so OpenAI-compatible clients
+        # (OpenCode, etc.) can send tools/tool_choice without getting HTTP 400.
+        if vc.enable_auto_tool_choice and vc.tool_call_parser:
+            cmd.append("--enable-auto-tool-choice")
+            cmd.extend(["--tool-call-parser", vc.tool_call_parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
@@ -699,7 +704,10 @@ class VllmProcessHandle:
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
-        if vc.server_dev_mode:
+        # Sleep endpoints (/sleep, /wake_up, /is_sleeping) require
+        # VLLM_SERVER_DEV_MODE.  Auto-enable it when sleep mode is active
+        # so operators don't need to set both flags.
+        if vc.server_dev_mode or vc.enable_sleep_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
         if self._vllm_engine_config.flashinfer_loglevel > 0:
@@ -1003,6 +1011,13 @@ class VllmProcessHandle:
         )
         return False
 
+    # vLLM warnings that are expected side-effects of our configuration
+    # (e.g. VLLM_SERVER_DEV_MODE required for sleep endpoints) and add
+    # no operational value — suppress them from the log stream.
+    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "SECURITY WARNING: Development endpoints are enabled",
+    )
+
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:
             return
@@ -1011,6 +1026,8 @@ class VllmProcessHandle:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()
                 if line:
                     self._recent_logs.append(line)
+                    if any(frag in line for frag in self._SUPPRESSED_LOG_FRAGMENTS):
+                        continue
                     logger.info("[vllm:%s] %s", self.lane_id, line)
         except asyncio.CancelledError:
             pass

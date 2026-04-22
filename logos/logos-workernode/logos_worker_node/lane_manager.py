@@ -169,6 +169,8 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
         or cv.attention_backend != dv.attention_backend
         or cv.disable_custom_all_reduce != dv.disable_custom_all_reduce
         or cv.cpu_offload_gb != dv.cpu_offload_gb
+        or cv.enable_auto_tool_choice != dv.enable_auto_tool_choice
+        or cv.tool_call_parser != dv.tool_call_parser
         or cv.extra_args != dv.extra_args
         or current.gpu_devices != desired.gpu_devices
     )

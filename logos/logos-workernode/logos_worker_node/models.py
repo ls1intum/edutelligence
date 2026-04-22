@@ -81,6 +81,16 @@ class VllmConfig(BaseModel):
     disable_custom_all_reduce: bool = False
     enable_sleep_mode: bool = False
     server_dev_mode: bool = False
+    enable_auto_tool_choice: bool = Field(
+        default=True,
+        description="Enable automatic tool choice for function calling. "
+        "Passes --enable-auto-tool-choice to vLLM. Set to false to disable.",
+    )
+    tool_call_parser: str = Field(
+        default="hermes",
+        description="Tool call parser for function calling (e.g. 'hermes', 'mistral', 'llama3_json'). "
+        "Passed as --tool-call-parser to vLLM. Empty = disable tool calling.",
+    )
     cuda_graph_sizes: str = Field(
         default="",
         description="Comma-separated batch sizes for CUDA graph capture (e.g. '1,2,4,8'). "
