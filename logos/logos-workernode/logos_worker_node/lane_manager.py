@@ -449,7 +449,8 @@ class LaneManager:
                                     exc_info=True,
                                 )
                 try:
-                    for lid in to_add:
+                    add_list = list(to_add)
+                    for idx, lid in enumerate(add_list):
                         lc = desired_map[lid]
                         try:
                             await self._add_lane_unlocked(lid, lc)
@@ -468,6 +469,34 @@ class LaneManager:
                             logger.error(msg, exc_info=True)
                             errors.append(msg)
                             raise _ApplyAbort(msg)
+
+                        # Stagger: sleep the just-spawned lane before starting
+                        # the next one, so VRAM is freed for the next model load.
+                        if idx < len(add_list) - 1:
+                            new_h = self._handles.get(lid)
+                            nlc = new_h.lane_config if new_h else None
+                            if (
+                                new_h is not None
+                                and nlc is not None
+                                and nlc.vllm
+                                and nlc.vllm_config is not None
+                                and nlc.vllm_config.enable_sleep_mode
+                            ):
+                                try:
+                                    await new_h.sleep(level=2, mode="wait")
+                                    slept_lids.append(lid)
+                                    logger.info(
+                                        "Staggered startup: slept newly-added lane '%s' "
+                                        "before spawning next lane",
+                                        lid,
+                                    )
+                                except Exception:
+                                    logger.warning(
+                                        "Staggered startup: could not sleep newly-added "
+                                        "lane '%s'; next spawn may compete for VRAM",
+                                        lid,
+                                        exc_info=True,
+                                    )
                 finally:
                     # Always wake staggered lanes — even if an add failed
                     for slept_lid in slept_lids:
