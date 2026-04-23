@@ -22,7 +22,6 @@ services:
       - ./letsencrypt:/letsencrypt
     networks:
       - internal
-      - extern
 
   logos-server:
     image: ghcr.io/ls1intum/edutelligence/logos:${IMAGE_TAG:-latest}
@@ -154,37 +153,10 @@ services:
     networks:
       - internal
 
-  landing-page:
-    image: ghcr.io/ls1intum/edutelligence/logos-landing:${IMAGE_TAG:-latest}
-    container_name: logos-landing
-    restart: unless-stopped
-    environment:
-      - NODE_OPTIONS=--max-old-space-size=1024
-    expose:
-      - "80"
-    labels:
-      - "traefik.enable=true"
-
-      # === Landing page routing ===
-      # Override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
-      - "traefik.http.routers.landing.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
-      - "traefik.http.routers.landing.entrypoints=websecure"
-      - "traefik.http.routers.landing.tls=true"
-      - "traefik.http.routers.landing.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.landing.service=landing-svc"
-      - "traefik.http.routers.landing.priority=1"
-
-      # Shared service definition
-      - "traefik.http.services.landing-svc.loadbalancer.server.port=80"
-    networks:
-      - extern
-
 volumes:
   data_volume:
   postgres_data:
 
 networks:
   internal:
-    driver: bridge
-  extern:
     driver: bridge
