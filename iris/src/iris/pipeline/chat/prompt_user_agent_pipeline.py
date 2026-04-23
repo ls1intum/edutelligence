@@ -307,7 +307,7 @@ class PromptUserAgentPipeline(
                 elif self.verdict.verdict == "next_question":
                     state.callback.status.event = "next_question"
 
-            state.callback.done("Done!", final_result=result, tokens=state.tokens)
+            state.callback.done("Done!", final_result=result, tokens=state.tokens, verdict=self.verdict)
 
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
@@ -414,9 +414,9 @@ class PromptUserAgentPipeline(
             if self.assess_user_answer_pipeline.tokens is not None:
                 self._track_tokens(state, self.assess_user_answer_pipeline.tokens)
 
+            # verdict is sent in callback together with main pipeline result not here
             state.callback.done(
                 final_result=None,
-                verdict=self.verdict,
                 tokens=state.tokens,
             )
 
