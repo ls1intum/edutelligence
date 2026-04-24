@@ -55,6 +55,12 @@ const EMPTY_FORM: CreateForm = {
     role: "app_developer",
 };
 
+type RoleBadgeProps = {
+    user: User;
+    editable?: boolean;
+    onPress?: () => void;
+};
+
 const MODAL_STYLES = {
     overlay: {
         flex: 1,
@@ -92,8 +98,37 @@ function BaseModal({ visible, onClose, children, maxWidth = 400 }: any) {
     );
 }
 
+function RoleBadge({ user, editable = false, onPress }: RoleBadgeProps) {
+    const badge = (
+        <View style={{
+            borderRadius: 8,
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            borderWidth: 1,
+            borderColor: ROLE_COLORS[user.role],
+        }}>
+            <Text style={{
+                color: ROLE_COLORS[user.role],
+                fontWeight: "600",
+                fontSize: 12,
+            }}>
+                {ROLE_LABELS[user.role]}
+            </Text>
+        </View>
+    );
+
+    if (!editable) return badge;
+
+    return (
+        <Pressable onPress={onPress}>
+            {badge}
+        </Pressable>
+    );
+}
+
 export default function UserManagement() {
-    const { apiKey } = useAuth();
+    const { apiKey, role } = useAuth();
+    const isLogosAdmin = role === "logos_admin";
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [roleTarget, setRoleTarget] = useState<User | null>(null);
@@ -105,6 +140,7 @@ export default function UserManagement() {
             const res = await fetch(`${API_BASE}/users`, {
                 headers: { "logos-key": apiKey }
             });
+            if (!res.ok) throw new Error(`${res.status}`);
             const data = await res.json();
             setUsers(data);
         } catch (err) {
@@ -162,19 +198,6 @@ export default function UserManagement() {
                 </Text>
             </VStack>
 
-            {!loading && (
-                <HStack space="xl" className="justify-center">
-                    <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
-                        <Text size="xl" className="font-bold text-black dark:text-white">
-                            {users.length}
-                        </Text>
-                        <Text size="sm" className="mt-1 text-black dark:text-white">
-                            Users
-                        </Text>
-                    </VStack>
-                </HStack>
-            )}
-
             <Box className="self-end">
                 <Button onPress={() => setCreateVisible(true)}>
                     <ButtonText>+ New User</ButtonText>
@@ -197,7 +220,7 @@ export default function UserManagement() {
                                         <TableHead>Full Name</TableHead>
                                         <TableHead>Role</TableHead>
                                         <TableHead>Teams</TableHead>
-                                        <TableHead>{""}</TableHead>
+                                        {isLogosAdmin && <TableHead>{""}</TableHead>}
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -211,25 +234,22 @@ export default function UserManagement() {
                                                 </VStack>
                                             </TableData>
                                             <TableData>
-                                                <Pressable onPress={() => setRoleTarget(user)}>
-                                                    <View style={{
-                                                        borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
-                                                        borderWidth: 1, borderColor: ROLE_COLORS[user.role]
-                                                    }}>
-                                                        <Text style={{ color: ROLE_COLORS[user.role], fontWeight: "600", fontSize: 12 }}>
-                                                            {ROLE_LABELS[user.role]}
-                                                        </Text>
-                                                    </View>
-                                                </Pressable>
+                                                <RoleBadge
+                                                    user={user}
+                                                    editable={isLogosAdmin}
+                                                    onPress={() => setRoleTarget(user)}
+                                                />
                                             </TableData>
                                             <TableData>
                                                 <Text>{user.teams.map(t => t.name).join(", ") || "-"}</Text>
                                             </TableData>
-                                            <TableData>
-                                                <Pressable onPress={() => setDeleteTarget(user)} style={{ padding: 8 }}>
-                                                    <Icon as={TrashIcon} size="sm" className="text-typography-400" />
-                                                </Pressable>
-                                            </TableData>
+                                            {isLogosAdmin && (
+                                                <TableData>
+                                                    <Pressable onPress={() => setDeleteTarget(user)} style={{ padding: 8 }}>
+                                                        <Icon as={TrashIcon} size="sm" className="text-typography-400" />
+                                                    </Pressable>
+                                                </TableData>
+                                            )}
                                         </TableRow>
                                     ))}
                                 </TableBody>
@@ -246,12 +266,13 @@ export default function UserManagement() {
                 onClose={() => setCreateVisible(false)}
                 onCreated={(user: User) => setUsers(prev => [user, ...prev])}
                 apiKey={apiKey}
+                showRoleSelector={isLogosAdmin}
             />
         </VStack>
     );
 }
 
-function CreateUserModal({ visible, onClose, onCreated, apiKey }: any) {
+function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleSelector }: any) {
     const [form, setForm] = useState<CreateForm>(EMPTY_FORM);
     const [loading, setLoading] = useState(false);
     const [generatedKey, setGeneratedKey] = useState("");
@@ -310,14 +331,16 @@ function CreateUserModal({ visible, onClose, onCreated, apiKey }: any) {
                     <Input><InputField placeholder="Username" value={form.username} autoCapitalize="none" onChangeText={v => setForm(f => ({...f, username: v}))} /></Input>
                     <Input><InputField placeholder="Email" value={form.email} autoCapitalize="none" onChangeText={v => setForm(f => ({...f, email: v}))} /></Input>
                     {error ? <Text style={{ color: "#e63535", fontSize: 12, fontWeight: "500" }}>{error}</Text> : null}
-                    <HStack space="xs" className="flex-wrap mt-2">
-                        {ALL_ROLES.map(role => (
-                            <Pressable key={role} onPress={() => setForm(f => ({...f, role}))}
-                                style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: form.role === role ? ROLE_COLORS[role] : "#eee" }}>
-                                <Text style={{ fontSize: 11, fontWeight: "600", color: form.role === role ? ROLE_COLORS[role] : "#999" }}>{ROLE_LABELS[role]}</Text>
-                            </Pressable>
-                        ))}
-                    </HStack>
+                    {showRoleSelector && (
+                        <HStack space="xs" className="flex-wrap mt-2">
+                            {ALL_ROLES.map(role => (
+                                <Pressable key={role} onPress={() => setForm(f => ({...f, role}))}
+                                    style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: form.role === role ? ROLE_COLORS[role] : "#eee" }}>
+                                    <Text style={{ fontSize: 11, fontWeight: "600", color: form.role === role ? ROLE_COLORS[role] : "#999" }}>{ROLE_LABELS[role]}</Text>
+                                </Pressable>
+                            ))}
+                        </HStack>
+                    )}
                     <HStack space="md" className="justify-end mt-4">
                         <Button variant="outline" onPress={closeAndReset}><ButtonText>Cancel</ButtonText></Button>
                         <Button onPress={handleCreate} disabled={isAnyFieldEmpty || loading} style={{ opacity: (isAnyFieldEmpty || loading) ? 0.5 : 1 }}><ButtonText>Create</ButtonText></Button>

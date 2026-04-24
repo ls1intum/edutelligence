@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
-from logos.role_auth import require_logos_admin_key
+from logos.role_auth import require_logos_admin_key, require_app_admin_or_above
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
@@ -2854,16 +2854,15 @@ async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Reques
 
 @app.get("/users", tags=["users"])
 async def list_users(request: Request):
-    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    logos_key = require_app_admin_or_above(request)
     with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
         users = db.list_users()
     return users
 
 
 @app.post("/users", tags=["users"])
 async def create_user(body: CreateUserRequest, request: Request):
-    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    logos_key = require_app_admin_or_above(request)
     valid_roles = {"app_developer", "app_admin", "logos_admin"}
     if body.role not in valid_roles:
         raise HTTPException(
@@ -2871,7 +2870,9 @@ async def create_user(body: CreateUserRequest, request: Request):
             detail=f"Invalid role. Must be one of: {sorted(valid_roles)}",
         )
     with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller and caller["role"] == "app_admin" and body.role != "app_developer":
+            raise HTTPException(status_code=403, detail="App admins can only create app_developer users")
         user_dict, new_key, status = db.create_user(
             body.username, body.prename, body.name, body.email, body.role
         )

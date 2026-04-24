@@ -31,5 +31,5 @@ export const getProviderColor = (index: number): string => {
 export const ROLES_PALETTE = {
     logos_admin: "#7FB069",
     app_admin: "#2A7F7F",
-    app_developer: "#1F3A5F",
+    app_developer: "#5B7CFA",
 };
