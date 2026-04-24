@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────
 # Stage 1: Builder – compile wheels and install dependencies
 # ──────────────────────────────────────────────────────────
-FROM python:3.13-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /build
 
@@ -12,7 +12,7 @@ RUN apt-get update \
 
 # Install uv – a drop-in pip replacement written in Rust (10-100× faster)
 # Pinned to a specific version to mitigate supply-chain risk (update explicitly)
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /usr/local/bin/uv
 
 # Create an isolated virtual-env that we will copy into the runtime image
 RUN uv venv /opt/venv
@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime – slim image without compilers or build tools
 # ──────────────────────────────────────────────────────────
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
