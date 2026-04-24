@@ -17,22 +17,18 @@ export const MENU_ITEMS: MenuItem[] = [
   { label: "Models", path: "/models", aliases: ["/add_model"], roles: ["logos_admin"] },
   { label: "Providers", path: "/providers", aliases: ["/add_provider"], roles: ["logos_admin"] },
   { label: "Statistics", path: "/statistics", roles: ["logos_admin"] },
-  { label: "User Management", path: "/user-management", roles: ["logos_admin"] },
+  { label: "User Management", path: "/user-management", roles: ADMIN_AND_ABOVE },
 
   { label: "Billing", path: "/billing", roles: ADMIN_AND_ABOVE },
-  { label: "Routing", path: "/routing", roles: ADMIN_AND_ABOVE },
-  { label: "API Management", path: "/api-management", roles: ADMIN_AND_ABOVE },
 
-  { label: "Open Code Config", path: "/open-code-config", roles: ALL_ROLES },
-  { label: "Rate Limits", path: "/rate-limits", roles: ALL_ROLES },
   { label: "Settings", path: "/settings", roles: ALL_ROLES },
   { label: "Logout", path: "/logout",roles: ALL_ROLES },
 ];
 
 // Screen role lands on after login or when redirected from forbidden route
 export const HOME_ROUTE: Record<UserRole, string> = {
-  app_developer: "/open-code-config",
-  app_admin:     "/open-code-config",
+  app_developer: "/settings",
+  app_admin:     "/user-management",
   logos_admin:   "/dashboard",
 };
 
