@@ -2,7 +2,7 @@
 # Usage: docker compose -f docker-compose.dev.yaml up --build
 services:
   traefik:
-    image: traefik:v3.6.1
+    image: traefik:v3.6.14
     container_name: traefik
     restart: unless-stopped
     command:

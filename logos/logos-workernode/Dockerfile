@@ -34,7 +34,7 @@
 # vLLM/PyTorch wheels: cu128 (newest wheel index under CUDA 13.1 driver).
 # =============================================================================
 
-ARG BASE_IMAGE=python:3.12-slim
+ARG BASE_IMAGE=python:3.14-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC="vllm>=0.19.0"
