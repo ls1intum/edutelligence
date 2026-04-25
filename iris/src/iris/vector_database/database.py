@@ -2,6 +2,7 @@ import atexit
 import threading
 
 import weaviate
+from weaviate.classes.init import Auth
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
@@ -24,23 +25,48 @@ class VectorDatabase:
 
     _lock = threading.Lock()
     static_client_instance = None
+    _static_collections: dict = {}
 
     def __init__(self):
         with VectorDatabase._lock:
             if not VectorDatabase.static_client_instance:
-                VectorDatabase.static_client_instance = weaviate.connect_to_local(
-                    host=settings.weaviate.host,
-                    port=settings.weaviate.port,
+                auth = (
+                    Auth.api_key(settings.weaviate.api_key)
+                    if settings.weaviate.api_key
+                    else None
+                )
+                VectorDatabase.static_client_instance = weaviate.connect_to_custom(
+                    http_host=settings.weaviate.host,
+                    http_port=settings.weaviate.port,
+                    http_secure=settings.weaviate.http_secure,
+                    grpc_host=settings.weaviate.host,
                     grpc_port=settings.weaviate.grpc_port,
+                    grpc_secure=settings.weaviate.grpc_secure,
+                    auth_credentials=auth,
                 )
                 atexit.register(VectorDatabase.static_client_instance.close)
                 logger.info("Weaviate client initialized")
+
+                # Initialize schemas exactly once per process. Running them on
+                # every ``VectorDatabase()`` call is racy: multiple threads can
+                # pass the ``exists()`` check and then all call ``create()``,
+                # with the losers getting a 422 "class already exists".
+                client = VectorDatabase.static_client_instance
+                VectorDatabase._static_collections = {
+                    "lectures": init_lecture_unit_page_chunk_schema(client),
+                    "transcriptions": init_lecture_transcription_schema(client),
+                    "lecture_segments": init_lecture_unit_segment_schema(client),
+                    "lecture_units": init_lecture_unit_schema(client),
+                    "faqs": init_faq_schema(client),
+                }
+
         self.client = VectorDatabase.static_client_instance
-        self.lectures = init_lecture_unit_page_chunk_schema(self.client)
-        self.transcriptions = init_lecture_transcription_schema(self.client)
-        self.lecture_segments = init_lecture_unit_segment_schema(self.client)
-        self.lecture_units = init_lecture_unit_schema(self.client)
-        self.faqs = init_faq_schema(self.client)
+        collections = VectorDatabase._static_collections
+        self.lectures = collections["lectures"]
+        self.transcriptions = collections["transcriptions"]
+        self.lecture_segments = collections["lecture_segments"]
+        self.lecture_units = collections["lecture_units"]
+        self.faqs = collections["faqs"]
 
     def delete_collection(self, collection_name):
         """

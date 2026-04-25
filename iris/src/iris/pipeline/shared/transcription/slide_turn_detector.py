@@ -1,7 +1,7 @@
 """
 Detect slide-number change points from a video with minimal GPT Vision calls.
 
-Strategy (from Nebula production code):
+Strategy:
 - Probe sparse "anchors" (every ``anchor_stride`` segments) with GPT Vision.
 - When adjacent anchors disagree (or either is unknown), recursively probe the
   midpoint until the interval either stabilises or shrinks to ``min_stride``.
@@ -23,9 +23,7 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm.completion_arguments import CompletionArguments
-from iris.llm.request_handler.model_version_request_handler import (
-    ModelVersionRequestHandler,
-)
+from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
 
 logger = get_logger(__name__)
 
@@ -130,7 +128,7 @@ class SlideTurnDetector:
         self,
         video_path: str,
         segments: List[Dict],
-        request_handler: ModelVersionRequestHandler,
+        request_handler: LlmRequestHandler,
         anchor_stride: int = 50,
         min_stride: int = 1,
         cache_size: int = 16,
@@ -339,7 +337,7 @@ class SlideTurnDetector:
 def detect_slide_timestamps(
     video_path: str,
     segments: List[Dict],
-    request_handler: ModelVersionRequestHandler,
+    request_handler: LlmRequestHandler,
     anchor_stride: int = 50,
     min_stride: int = 1,
     job_id: Optional[str] = None,

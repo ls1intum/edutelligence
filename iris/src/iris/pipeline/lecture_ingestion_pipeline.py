@@ -1,14 +1,14 @@
 import base64
 import os
+import re
 import tempfile
 import threading
-from typing import List, Optional
+from typing import Optional
 
 import fitz
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -17,9 +17,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from iris.domain.variant.lecture_unit_page_ingestion_variant import (
-    LectureUnitPageIngestionVariant,
-)
+from iris.domain.variant.variant import Variant
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -28,7 +26,7 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
@@ -42,6 +40,51 @@ from . import Pipeline
 logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
+
+
+_UNICODE_BULLETS = (
+    "\u0095"  # BULLET (legacy Windows-1252)
+    "\u2022"  # BULLET
+    "\u2023"  # TRIANGULAR BULLET
+    "\u2043"  # HYPHEN BULLET
+    "\u3164"  # HANGUL FILLER
+    "\u204c"  # BLACK LEFTWARDS BULLET
+    "\u204d"  # BLACK RIGHTWARDS BULLET
+    "\u2219"  # BULLET OPERATOR
+    "\u25cb"  # WHITE CIRCLE
+    "\u25cf"  # BLACK CIRCLE
+    "\u25d8"  # INVERSE BULLET
+    "\u25e6"  # WHITE BULLET
+    "\u2619"  # REVERSED ROTATED FLORAL HEART BULLET
+    "\u2765"  # ROTATED HEAVY BLACK HEART BULLET
+    "\u2767"  # ROTATED FLORAL HEART BULLET
+    "\u29be"  # CIRCLED WHITE BULLET
+    "\u29bf"  # CIRCLED BULLET
+    "\u002d"  # HYPHEN-MINUS
+    "\u2013"  # EN DASH
+    "\u00b7"  # MIDDLE DOT
+    "\u2024"  # ONE DOT LEADER
+    "\u002a"  # ASTERISK
+)
+_BULLET_PATTERN = re.compile(
+    rf"^[^\S\n]*[{re.escape(_UNICODE_BULLETS)}][^\S\n]*",
+    flags=re.MULTILINE,
+)
+
+
+def clean_text(
+    text: str, *, bullets: bool = False, extra_whitespace: bool = False
+) -> str:
+    """Lightweight replacement for unstructured.cleaners.core.clean.
+
+    Bullets are stripped first so the multiline-anchored regex can match
+    line-leading bullets before newlines are collapsed by whitespace cleanup.
+    """
+    if bullets:
+        text = _BULLET_PATTERN.sub("", text)
+    if extra_whitespace:
+        text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def cleanup_temporary_file(file_path):
@@ -95,58 +138,50 @@ def create_page_data(
     ]
 
 
-class LectureUnitPageIngestionPipeline(
-    AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]
-):
+class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
     processing the content, and updating the vector database."""
+
+    PIPELINE_ID = "lecture_unit_page_ingestion_pipeline"
+    ROLES = {"chat", "embedding"}
+    VARIANT_DEFS = [
+        (
+            "default",
+            "Default",
+            "Default lecture ingestion variant using efficient models "
+            "for text processing and embeddings.",
+        ),
+        (
+            "advanced",
+            "Advanced",
+            "Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
+        ),
+    ]
 
     def __init__(
         self,
         client: WeaviateClient,
         dto: Optional[IngestionPipelineExecutionDto],
         callback: ingestion_status_callback,
+        variant: Variant,
+        local: bool = False,
     ):
-        super().__init__()
+        super().__init__(implementation_id=self.PIPELINE_ID)
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_chat = ModelVersionRequestHandler("gpt-5-mini")
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gpt-5-mini")
-        completion_args = CompletionArguments(temperature=0.2)
+        chat_model = variant.model("chat", local)
+        embedding_model = variant.model("embedding", local)
+        self.llm_chat = LlmRequestHandler(chat_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+        request_handler = LlmRequestHandler(chat_model)
+        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
-
-    @classmethod
-    def get_variants(cls) -> List[LectureUnitPageIngestionVariant]:
-        """
-        Returns available variants for the LectureUnitPageIngestionPipeline.
-
-        Returns:
-            List of LectureUnitPageIngestionVariant objects representing available variants
-        """
-        return [
-            LectureUnitPageIngestionVariant(
-                variant_id="default",
-                name="Default",
-                description="Default lecture ingestion variant using efficient models "
-                "for text processing and embeddings.",
-                chat_model="gpt-5-mini",
-                embedding_model="text-embedding-3-small",
-            ),
-            LectureUnitPageIngestionVariant(
-                variant_id="advanced",
-                name="Advanced",
-                description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
-                chat_model="gpt-5.2",
-                embedding_model="text-embedding-3-large",
-            ),
-        ]
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
@@ -390,7 +425,7 @@ class LectureUnitPageIngestionPipeline(
             image_interpretation=image_interpretation,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
-        clean_output = clean(
+        clean_output = clean_text(
             (prompt | self.pipeline).invoke({}),
             bullets=True,
             extra_whitespace=True,

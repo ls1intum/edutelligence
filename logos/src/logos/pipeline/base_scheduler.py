@@ -61,6 +61,7 @@ class BaseScheduler(SchedulerInterface):
             priority = Priority.from_int(priority_int)
             queue_state = self._queue_mgr.get_state(model_id, provider_id)
             queue_depth = queue_state.total
+            tracking_started = False
 
             try:
                 status = self._logosnode.get_model_status(model_id, provider_id)
@@ -70,14 +71,24 @@ class BaseScheduler(SchedulerInterface):
                 utilization = 0.0
                 is_cold_start = True
 
-            self._logosnode.on_request_start(
-                request_id,
-                model_id=model_id,
-                provider_id=provider_id,
-                priority=priority.name.lower(),
-            )
+            try:
+                self._logosnode.on_request_start(
+                    request_id,
+                    model_id=model_id,
+                    provider_id=provider_id,
+                    priority=priority.name.lower(),
+                )
+                tracking_started = True
+            except (KeyError, ValueError) as exc:
+                logger.warning(
+                    "Skipping logosnode request tracking for model=%s provider=%s request=%s: %s",
+                    model_id,
+                    provider_id,
+                    request_id,
+                    exc,
+                )
 
-            if not was_queued:
+            if tracking_started and not was_queued:
                 try:
                     self._logosnode.on_request_begin_processing(
                         request_id,

@@ -35,11 +35,6 @@
       "commitMessagePrefix": "`Memiris`:"
     },
     {
-      "groupName": "nebula",
-      "matchFileNames": ["nebula/**"],
-      "commitMessagePrefix": "`Nebula`:"
-    },
-    {
       "groupName": "shared",
       "matchFileNames": ["shared/**"],
       "commitMessagePrefix": "`Shared`:"

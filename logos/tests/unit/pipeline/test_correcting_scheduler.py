@@ -75,6 +75,7 @@ class MockLogosNodeFacade:
         self._views = {}  # (model_id, provider_id) -> ModelSchedulerView
         self._reserve_results = {}  # (model_id, provider_id) -> bool
         self._tracking = {}
+        self.raise_on_request_start = False
 
     def set_view(self, model_id, provider_id, view):
         self._views[(model_id, provider_id)] = view
@@ -112,9 +113,12 @@ class MockLogosNodeFacade:
         return self._reserve_results.get((model_id, provider_id), True)
 
     def on_request_start(self, request_id, **kwargs):
+        if self.raise_on_request_start:
+            raise ValueError("Model not registered")
         self._tracking[request_id] = {"started": True, **kwargs}
 
     def on_request_begin_processing(self, request_id, **kwargs):
+        # No-op in tests: scheduling assertions do not require processing bookkeeping.
         pass
 
     def on_request_complete(self, request_id, **kwargs):
@@ -140,6 +144,7 @@ class MockAzureFacade:
         return mock
 
     def update_model_rate_limits(self, model_id, provider_id, headers):
+        # No-op in tests: scheduler selection logic does not mutate Azure rate state.
         pass
 
 
@@ -673,6 +678,33 @@ async def test_missing_deployment_skipped():
     result = await scheduler.schedule(request)
     assert result is not None
     assert result.model_id == 2
+
+
+# ---------------------------------------------------------------------------
+# Transient tracking failure should not break scheduling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_transient_tracking_failure_does_not_break_scheduling():
+    """Registration races in on_request_start should not fail scheduling."""
+    logosnode = MockLogosNodeFacade()
+    logosnode.set_view(
+        1, 10,
+        _make_view(model_id=1, provider_id=10, best_lane_state="cold", is_loaded=False),
+    )
+    logosnode.set_reserve(1, 10, True)
+    logosnode.raise_on_request_start = True
+
+    scheduler = _make_scheduler(logosnode=logosnode, ettft_enabled=True)
+
+    candidates = [(1, 12.0, 1, 4)]
+    deployments = [{"model_id": 1, "provider_id": 10, "type": "logosnode"}]
+    request = _make_request(candidates, deployments)
+
+    result = await scheduler.schedule(request)
+    assert result is not None
+    assert result.model_id == 1
 
 
 # ===========================================================================

@@ -14,7 +14,6 @@ EduTelligence is the suite of AI-enabled services that extend [Artemis](https://
 | ----------- | --------------------------------------------------------------------------------- | ------------------------------- |
 | **Iris**    | AI virtual tutor — chat orchestrator, retrieval-augmented prompts, session memory | Live                            |
 | **Athena**  | AI feedback service — automated exercise feedback generation                      | Live                            |
-| **Nebula**  | Transcription service — speech-to-text for lecture media                          | Live                            |
 | **Atlas**   | Competency-based learning — learner profiles, recommendations                     | Live (server-side)              |
 | **Memiris** | Memory service — cross-session personalization for Iris                           | Live                            |
 | **Logos**   | AI gateway — unified routing, metering, privacy controls                          | Implemented, not yet integrated |
@@ -28,10 +27,6 @@ Iris communicates with Artemis via REST API. Artemis sends chat requests, exerci
 ### Memiris
 
 [Memiris](https://github.com/ls1intum/edutelligence) provides cross-session memory for Iris. It stores summarized interaction history so that Iris can personalize responses based on what a student has previously asked about and struggled with — even across different sessions.
-
-### Nebula
-
-[Nebula](https://github.com/ls1intum/edutelligence) processes lecture recordings into text transcripts. These transcripts are then ingested by Iris's RAG pipeline, making lecture content searchable and citable in chat responses.
 
 ### Logos
 

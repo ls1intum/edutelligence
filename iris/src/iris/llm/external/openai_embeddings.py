@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Literal
+from typing import Literal, Optional
 
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
@@ -69,10 +69,29 @@ class OpenAIEmbeddingModel(EmbeddingModel):
 
 
 class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
+    """Direct OpenAI embedding model.
+
+    If ``base_url`` is set, the client points at an OpenAI-compatible endpoint
+    (e.g. a vLLM/Logos gateway); otherwise it defaults to the official OpenAI API.
+    """
+
     type: Literal["openai_embedding"]
+    base_url: Optional[str] = None
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
-        self._client = OpenAIEmbeddings(api_key=self.api_key)
+        if self.base_url:
+            # Non-OpenAI, OpenAI-compatible backends (e.g. vLLM, Logos) do not
+            # accept the tiktoken-tokenized input path that
+            # ``OpenAIEmbeddings.embed_documents`` uses by default, so we
+            # disable the length-safe path and send raw strings instead.
+            self._client = OpenAIEmbeddings(
+                model=self.model,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                check_embedding_ctx_length=False,
+            )
+        else:
+            self._client = OpenAIEmbeddings(model=self.model, api_key=self.api_key)
 
     def __str__(self):
         return f"OpenAIEmbedding('{self.model}')"

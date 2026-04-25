@@ -100,6 +100,10 @@ def _apply_env_overrides(cfg: AppConfig) -> None:
     if _getenv_bool("LOGOS_ALLOW_INSECURE_HTTP"):
         cfg.logos.allow_insecure_http = True
 
+    max_lanes = _getenv_int("MAX_LANES")
+    if max_lanes is not None:
+        cfg.worker.max_lanes = max_lanes
+
 
 def _parse_kv_to_mb(value: str) -> float:
     """Convert a KV cache size string to megabytes. e.g. '6G' → 6144.0."""
