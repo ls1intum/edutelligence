@@ -418,9 +418,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         for msg in state.message_history[
             -self.get_history_limit(state) :  # noqa: E203
         ]:
-            # Skip SYSTEM marker messages (e.g. context-switch indicators) — they are
-            # instructions for the LLM, not conversational turns worth titling.
-            if msg.sender == IrisMessageRole.SYSTEM:
+            # Skip context-switch marker messages — they are instructions for the LLM,
+            # not conversational turns worth titling.
+            if msg.sender == IrisMessageRole.CTXSWAP:
                 continue
             if msg.contents and isinstance(msg.contents[0], TextMessageContentDTO):
                 prefix = "User" if msg.sender == IrisMessageRole.USER else "Assistant"

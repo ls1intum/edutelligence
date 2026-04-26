@@ -48,6 +48,10 @@ def convert_iris_message_to_langchain_message(
             return AIMessage(content=message.text_content)
         case IrisMessageRole.SYSTEM:
             return SystemMessage(content=message.text_content)
+        case IrisMessageRole.CTXSWAP:
+            return SystemMessage(
+                content=f"[context_switch] The student switched the chat context to: {message.text_content}"
+            )
         case IrisMessageRole.ARTIFACT:
             return SystemMessage(content="Previous suggestion: " + message.text_content)
         case _:

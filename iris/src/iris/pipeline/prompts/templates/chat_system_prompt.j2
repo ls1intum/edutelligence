@@ -224,10 +224,10 @@ Use them for context and consistency, but never repeat, reuse, or paraphrase ear
 Always craft new, original replies aligned with the instructions above.
 Never re-use any message you already wrote. Instead, always write new and original responses.
 
-If the history contains a system message starting with "[Context switch]" or "[Kontextwechsel]",
-treat all messages **before** that marker as historical background from a different context (e.g. a
-different exercise or lecture). Focus your response on the current context — the one described in
-the system message — and on the student's latest question. Do not refer back to the previous context
+If the history contains a system message starting with "[context_switch]", the student has switched
+the chat context to a new entity (e.g. a different exercise or lecture). Treat all messages
+**before** that marker as historical background from a different context. Focus your response on
+the current context and on the student's latest question. Do not refer back to the previous context
 unless the student explicitly asks about it.
 {% endif %}
 
