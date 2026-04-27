@@ -559,13 +559,13 @@ class GlobalSearchCallback(StatusCallback):
 
     def thinking(self):
         """Mark the thinking stage as in-progress and notify Artemis."""
-        logger.info("[ask] → callback: thinking (LLM path started)")
+        logger.info("[global-search] → callback: thinking (LLM path started)")
         self.in_progress(message="Searching course content")
 
     def done(self, answer=None, sources=None, tokens=None, **_kwargs):
         """Advance to responding stage, attach result, and notify Artemis."""
         logger.info(
-            "[ask] → callback: done  answer=%s  sources=%d",
+            "[global-search] → callback: done  answer=%s  sources=%d",
             "present" if answer else "null",
             len(sources) if sources else 0,
         )
