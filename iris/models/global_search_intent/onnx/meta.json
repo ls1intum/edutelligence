@@ -1,0 +1,14 @@
+{
+  "base_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "task": "binary_classification",
+  "labels": {
+    "0": "skip_ai",
+    "1": "trigger_ai"
+  },
+  "quantization": "dynamic INT8",
+  "optimization_level": "O3",
+  "onnx_file": "model_optimized_quantized.onnx",
+  "eval_metrics": {
+    "accuracy": 0.9971671388101983
+  }
+}
