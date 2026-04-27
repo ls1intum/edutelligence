@@ -52,6 +52,7 @@ CREATE TABLE teams (
 CREATE TABLE team_members (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    is_owner BOOLEAN NOT NULL DEFAULT false,
     PRIMARY KEY (user_id, team_id)
 );
 
