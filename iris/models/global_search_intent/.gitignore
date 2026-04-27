@@ -1,0 +1,4 @@
+# Intermediate training artifacts — only onnx/ (final model) is committed
+backbone/
+onnx_base/
+onnx_optimized/
