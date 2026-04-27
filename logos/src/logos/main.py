@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
-from logos.role_auth import require_logos_admin_key, require_app_admin_or_above
+from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
@@ -2879,6 +2879,9 @@ async def create_user(body: CreateUserRequest, request: Request):
         user_dict, new_key, status = db.create_user(
             body.username, body.prename, body.name, body.email, body.role
         )
+        if status == 200 and body.team_ids:
+            for team_id in body.team_ids:
+                db.add_team_member(team_id, user_dict["id"])
     if status != 200:
         raise HTTPException(status_code=status, detail=user_dict.get("error"))
     return {**user_dict, "logos_key": new_key}
@@ -2890,6 +2893,101 @@ async def delete_user(user_id: int, request: Request):
     with DBManager() as db:
         require_logos_admin_key(logos_key, db)
         result, status = db.delete_user(user_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+@app.get("/users/admins", tags=["users"])
+async def list_admin_users(request: Request):
+    require_logos_admin(request)
+    with DBManager() as db:
+        return db.list_admin_users()
+
+
+@app.get("/teams", tags=["teams"])
+async def list_teams(request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "logos_admin":
+            return db.list_teams()
+        return db.list_teams(owner_user_id=caller["id"])
+
+
+@app.post("/teams", tags=["teams"])
+async def create_team(body: CreateTeamRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "logos_admin":
+            owner_ids = body.owner_ids if body.owner_ids else [caller["id"]]
+        else:
+            owner_ids = [caller["id"]]
+        team_id, status = db.create_team(body.name, owner_ids)
+    if status == 409:
+        raise HTTPException(status_code=409, detail="A team with this name already exists.")
+    if status != 200:
+        raise HTTPException(status_code=status, detail="Failed to create team")
+    return {"id": team_id, "name": body.name}
+
+
+@app.delete("/teams/{team_id}", tags=["teams"])
+async def delete_team(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        result, status = db.delete_team(team_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.get("/teams/{team_id}/members", tags=["teams"])
+async def get_team_detail(team_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        team = db.get_team(team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="Team not found")
+        members = db.list_team_members(team_id)
+    return {"team": team, "members": members}
+
+
+@app.post("/teams/{team_id}/members", tags=["teams"])
+async def add_team_member(team_id: int, body: AddTeamMemberRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        result, status = db.add_team_member(team_id, body.user_id, body.is_owner)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.delete("/teams/{team_id}/members/{user_id}", tags=["teams"])
+async def remove_team_member(team_id: int, user_id: int, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+        result, status = db.remove_team_member(team_id, user_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+@app.patch("/teams/{team_id}/members/{user_id}", tags=["teams"])
+async def set_team_member_owner(team_id: int, user_id: int, body: SetOwnerRequest, request: Request):
+    require_logos_admin(request)
+    with DBManager() as db:
+        result, status = db.set_team_owner(team_id, user_id, body.is_owner)
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
     return result
