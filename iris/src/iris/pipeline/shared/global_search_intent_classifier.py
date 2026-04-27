@@ -58,9 +58,10 @@ class _IntentClassifier:
         logger.info("Loading intent classifier from %s", model_dir)
 
         onnx_path = _find_onnx_file(model_dir)
+        meta = json.loads((model_dir / "meta.json").read_text())
         self._tokenizer = AutoTokenizer.from_pretrained(
-            str(model_dir)
-        )  # nosec B615 – local path, not Hub
+            meta["base_model"]
+        )  # nosec B615
         self._head = joblib.load(model_dir / "model_head.joblib")
 
         pooling_cfg = json.loads((model_dir / "pooling_config.json").read_text())
