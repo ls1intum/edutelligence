@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { UserRole } from "@/components/route-permissions";
 
 export const API_BASE =
   Platform.OS === "web"
@@ -33,3 +34,18 @@ export const ROLES_PALETTE = {
     app_admin: "#2A7F7F",
     app_developer: "#5B7CFA",
 };
+
+export const ROLE_COLORS: Record<UserRole, string> = {
+    logos_admin: ROLES_PALETTE.logos_admin,
+    app_admin: ROLES_PALETTE.app_admin,
+    app_developer: ROLES_PALETTE.app_developer,
+};
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+    logos_admin: "Logos Admin",
+    app_admin: "App Admin",
+    app_developer: "App Developer",
+};
+
+export type AdminUser = { id: number; username: string; prename: string; name: string };
+export type BasicTeam = { id: number; name: string };
