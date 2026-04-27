@@ -3341,6 +3341,173 @@ class DBManager:
         self.session.commit()
         return {"result": "User deleted"}, 200
 
+    def list_teams(self, owner_user_id: int | None = None) -> list[dict]:
+        if owner_user_id is not None:
+            sql = text("""
+                       SELECT t.id, t.name,
+                        COALESCE(
+                            json_agg(json_build_object('id', u.id, 'username', u.username))
+                            FILTER (WHERE u.id IS NOT NULL),
+                            '[]'::json
+                        ) AS owners,
+                        (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) AS member_count
+                       FROM teams t
+                                LEFT JOIN team_members tm ON t.id = tm.team_id AND tm.is_owner = true
+                                LEFT JOIN users u ON tm.user_id = u.id
+                       WHERE t.id IN (SELECT team_id
+                                      FROM team_members
+                                      WHERE user_id = :owner_user_id
+                                        AND is_owner = true)
+                       GROUP BY t.id, t.name
+                       ORDER BY t.id
+                       """)
+            rows = self.session.execute(sql, {"owner_user_id": owner_user_id}).fetchall()
+        else:
+            sql = text("""
+                       SELECT t.id, t.name,
+                        COALESCE(
+                            json_agg(json_build_object('id', u.id, 'username', u.username))
+                            FILTER (WHERE u.id IS NOT NULL),
+                            '[]'::json
+                        ) AS owners,
+                        (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) AS member_count
+                       FROM teams t
+                                LEFT JOIN team_members tm ON t.id = tm.team_id AND tm.is_owner = true
+                                LEFT JOIN users u ON tm.user_id = u.id
+                       GROUP BY t.id, t.name
+                       ORDER BY t.id
+                       """)
+            rows = self.session.execute(sql).fetchall()
+        result = []
+        for row in rows:
+            data = dict(row._mapping)
+            owners = data.get("owners", [])
+            if isinstance(owners, str):
+                import json
+                owners = json.loads(owners)
+            data["owners"] = owners
+            result.append(data)
+        return result
+
+    def create_team(self, name: str, owner_ids: list[int]) -> tuple[int, int]:
+        existing = self.session.execute(
+            text("SELECT id FROM teams WHERE name = :name"),
+            {"name": name},
+        ).fetchone()
+        if existing is not None:
+            return None, 409
+        row = self.session.execute(
+            text("INSERT INTO teams (name) VALUES (:name) RETURNING id"),
+            {"name": name},
+        ).fetchone()
+        team_id = row.id
+        for user_id in owner_ids:
+            self.session.execute(
+                text("""
+                     INSERT INTO team_members (team_id, user_id, is_owner)
+                     VALUES (:team_id, :user_id, true) ON CONFLICT (team_id, user_id) DO NOTHING
+                     """),
+                {"team_id": team_id, "user_id": user_id},
+            )
+        self.session.commit()
+        return team_id, 200
+
+    def get_team(self, team_id: int) -> dict | None:
+        row = self.session.execute(
+            text("SELECT id, name FROM teams WHERE id = :team_id"),
+            {"team_id": team_id},
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row._mapping)
+
+    def delete_team(self, team_id: int) -> tuple[dict, int]:
+        row = self.session.execute(
+            text("DELETE FROM teams WHERE id = :team_id RETURNING id"),
+            {"team_id": team_id},
+        ).fetchone()
+        if row is None:
+            return {"error": f"Team {team_id} not found"}, 404
+        self.session.commit()
+        return {"result": "Team deleted"}, 200
+
+    def is_team_owner(self, team_id: int, user_id: int) -> bool:
+        row = self.session.execute(
+            text("""
+                 SELECT *
+                 FROM team_members
+                 WHERE team_id = :team_id
+                   AND user_id = :user_id
+                   AND is_owner = true
+                 """),
+            {"team_id": team_id, "user_id": user_id},
+        ).fetchone()
+        return row is not None
+
+    def list_team_members(self, team_id: int) -> list[dict]:
+        sql = text("""
+                   SELECT u.id, u.username, u.prename, u.name, u.email, u.role, tm.is_owner
+                   FROM team_members tm
+                            JOIN users u ON tm.user_id = u.id
+                   WHERE tm.team_id = :team_id
+                   ORDER BY tm.is_owner DESC, u.username
+                   """)
+        rows = self.session.execute(sql, {"team_id": team_id}).fetchall()
+        return [dict(row._mapping) for row in rows]
+
+    def add_team_member(self, team_id: int, user_id: int, is_owner: bool = False) -> tuple[dict, int]:
+        self.session.execute(
+            text("""
+                 INSERT INTO team_members (team_id, user_id, is_owner)
+                 VALUES (:team_id, :user_id, :is_owner) ON CONFLICT (team_id, user_id) DO
+                 UPDATE
+                     SET is_owner = EXCLUDED.is_owner
+                 """),
+            {"team_id": team_id, "user_id": user_id, "is_owner": is_owner},
+        )
+        self.session.commit()
+        return {"result": "Member added"}, 200
+
+    def remove_team_member(self, team_id: int, user_id: int) -> tuple[dict, int]:
+        row = self.session.execute(
+            text("""
+                 DELETE
+                 FROM team_members
+                 WHERE team_id = :team_id
+                   AND user_id = :user_id RETURNING user_id
+                 """),
+            {"team_id": team_id, "user_id": user_id},
+        ).fetchone()
+        if row is None:
+            return {"error": "Member not found in team"}, 404
+        self.session.commit()
+        return {"result": "Member removed"}, 200
+
+    def list_admin_users(self) -> list[dict]:
+        sql = text("""
+                   SELECT id, username
+                   FROM users
+                   WHERE role IN ('app_admin', 'logos_admin')
+                   ORDER BY username
+                   """)
+        rows = self.session.execute(sql).fetchall()
+        return [dict(row._mapping) for row in rows]
+
+    def set_team_owner(self, team_id: int, user_id: int, is_owner: bool) -> tuple[dict, int]:
+        row = self.session.execute(
+            text("""
+                 UPDATE team_members
+                 SET is_owner = :is_owner
+                 WHERE team_id = :team_id
+                   AND user_id = :user_id RETURNING user_id
+                 """),
+            {"team_id": team_id, "user_id": user_id, "is_owner": is_owner},
+        ).fetchone()
+        if row is None:
+            return {"error": "Member not found in team"}, 404
+        self.session.commit()
+        return {"result": "Owner status updated"}, 200
+
     def __enter__(self):
         self.engine = _init_engine()
         _ensure_metadata(self.engine)

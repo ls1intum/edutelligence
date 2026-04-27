@@ -216,3 +216,15 @@ class CreateUserRequest(BaseModel):
     name: str
     email: str
     role: str
+    team_ids: list[int] = []
+
+class CreateTeamRequest(BaseModel):
+    name: str
+    owner_ids: list[int] = []
+
+class AddTeamMemberRequest(BaseModel):
+    user_id: int
+    is_owner: bool = False
+
+class SetOwnerRequest(BaseModel):
+    is_owner: bool
