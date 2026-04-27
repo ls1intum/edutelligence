@@ -1,6 +1,6 @@
 from typing import overload
 
-from langfuse._client.observe import observe
+from langfuse import observe
 from weaviate.client import WeaviateClient
 
 from memiris.llm.abstract_language_model import AbstractLanguageModel
@@ -44,7 +44,7 @@ class MemorySleepPipelineBuilder:
     _max_groups: int | None  # Maximum number of groups to process in parallel
 
     def __init__(self):
-        self._tool_llm = OllamaLanguageModel("mistral-small3.1:24b")
+        self._tool_llm = OllamaLanguageModel("gpt-oss:120b")
         self._response_llm = OllamaLanguageModel("gemma3:27b")
         self._learning_repository = None
         self._memory_repository = None

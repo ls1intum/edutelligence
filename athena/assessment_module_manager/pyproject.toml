@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "assessment-module-manager"
-version = "0.1.0"
+version = "2.0.0"
 description = "The interface between the Athena modules and external systems. It manages, which modules will be used for incoming submissions and feedback."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"

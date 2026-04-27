@@ -3,7 +3,9 @@
 Main request pipeline orchestrating classification → scheduling → execution.
 """
 
+import asyncio
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Tuple
@@ -218,129 +220,144 @@ class RequestPipeline:
         )
 
         # Record demand for capacity planner
-        if self._demand_tracker:
-            model_name = self._resolve_model_name(scheduling_result.model_id)
-            if model_name:
-                self._demand_tracker.record_request(model_name)
-
-            # Record latent demand when the scheduler overrides classification's top
-            # choice due to availability (e.g. ETTFT penalties). This lets the
-            # capacity planner see that users want the unloaded model, so it can
-            # drain/wake it before it starves in resource mode.
-            if sorted_candidates and scheduling_result.model_id != sorted_candidates[0][0]:
-                top_model_name = self._resolve_model_name(sorted_candidates[0][0])
-                if top_model_name:
-                    self._demand_tracker.record_latent_demand(top_model_name)
-                    prom.DEMAND_LATENT_TOTAL.labels(model=top_model_name).inc()
+        self._record_demand(scheduling_result, sorted_candidates)
 
         # 3. Resolve execution context (with authorization check)
-        try:
-            exec_context = await self._context_resolver.resolve_context(
+        #    For logosnode providers, the lane may be starting (not yet ready to
+        #    accept requests). Retry with backoff instead of failing immediately.
+        ctx_result = await self._resolve_context_with_retry(
+            scheduling_result=scheduling_result,
+            classification_result=classification_result,
+            request=request,
+            request_id=request_id,
+        )
+        if not ctx_result.success:
+            return ctx_result
+
+        # Record provider ID now that it's resolved
+        self._monitoring.record_provider(request_id, ctx_result.execution_context.provider_id)
+
+        return ctx_result
+
+    def _record_demand(self, scheduling_result, sorted_candidates: list) -> None:
+        if not self._demand_tracker:
+            return
+        model_name = self._resolve_model_name(scheduling_result.model_id)
+        if model_name:
+            self._demand_tracker.record_request(model_name)
+        # Record latent demand when the scheduler overrides classification's top
+        # choice due to availability (e.g. ETTFT penalties). This lets the
+        # capacity planner see that users want the unloaded model, so it can
+        # drain/wake it before it starves in resource mode.
+        if sorted_candidates and scheduling_result.model_id != sorted_candidates[0][0]:
+            top_model_name = self._resolve_model_name(sorted_candidates[0][0])
+            if top_model_name:
+                self._demand_tracker.record_latent_demand(top_model_name)
+                prom.DEMAND_LATENT_TOTAL.labels(model=top_model_name).inc()
+
+    _CONTEXT_RESOLVE_TIMEOUT_S = 180.0
+    _CONTEXT_RESOLVE_INTERVAL_S = 2.0
+
+    async def _resolve_context_with_retry(
+        self,
+        scheduling_result,
+        classification_result: "_ClassificationResult",
+        request: "PipelineRequest",
+        request_id: str,
+    ) -> "PipelineResult":
+        """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
+        deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
+        first_attempt = True
+
+        while True:
+            try:
+                exec_context = await self._context_resolver.resolve_context(
                     model_id=scheduling_result.model_id,
                     provider_id=scheduling_result.provider_id,
                     logos_key=request.logos_key,
                     profile_id=request.profile_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._release_scheduler_safe(scheduling_result, request_id, "exception")
+                logger.warning(
+                    "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
+                    request_id, scheduling_result.model_id, scheduling_result.provider_id, exc,
+                )
+                return self._context_failure(
+                    scheduling_result, classification_result, request_id,
+                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
+                )
 
-            )
-        except Exception as exc:  # noqa: BLE001
-            try:
-                self._scheduler.release(
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
-                    scheduling_result.provider_type,
-                    request_id,
+            if exec_context is not None:
+                return PipelineResult(
+                    success=True,
+                    model_id=scheduling_result.model_id,
+                    provider_id=scheduling_result.provider_id,
+                    execution_context=exec_context,
+                    classification_stats=classification_result.stats,
+                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id),
                 )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "Failed to release scheduler reservation after context resolution exception "
-                    "(request_id=%s, model_id=%s, provider_id=%s)",
-                    request_id,
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
+
+            # For cloud providers or after timeout, fail immediately
+            if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
+                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                return self._context_failure(
+                    scheduling_result, classification_result, request_id,
+                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
                 )
-            logger.warning(
-                "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
-                request_id,
+
+            if first_attempt:
+                logger.info(
+                    "No lane ready yet for request %s (model=%s, provider=%s); "
+                    "waiting up to %.0fs for lane to become available",
+                    request_id, scheduling_result.model_id, scheduling_result.provider_id,
+                    self._CONTEXT_RESOLVE_TIMEOUT_S,
+                )
+                first_attempt = False
+
+            await asyncio.sleep(self._CONTEXT_RESOLVE_INTERVAL_S)
+
+    def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str) -> None:
+        try:
+            self._scheduler.release(
                 scheduling_result.model_id,
                 scheduling_result.provider_id,
-                exc,
+                scheduling_result.provider_type,
+                request_id,
             )
-            return PipelineResult(
-                success=False,
-                model_id=scheduling_result.model_id,
-                provider_id=scheduling_result.provider_id,
-                execution_context=None,
-                classification_stats=classification_result.stats,
-                scheduling_stats={
-                    "request_id": request_id,
-                    "model_id": scheduling_result.model_id,
-                    "provider_id": scheduling_result.provider_id,
-                    "provider_type": scheduling_result.provider_type,
-                    "queue_depth": scheduling_result.queue_depth_at_schedule,
-                    "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
-                    "utilization_at_arrival": scheduling_result.utilization_at_arrival,
-                    "is_cold_start": scheduling_result.is_cold_start,
-                },
-                error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to release scheduler reservation after context resolution %s "
+                "(request_id=%s, model_id=%s, provider_id=%s)",
+                reason, request_id, scheduling_result.model_id, scheduling_result.provider_id,
             )
 
-        if not exec_context:
-            try:
-                self._scheduler.release(
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
-                    scheduling_result.provider_type,
-                    request_id,
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "Failed to release scheduler reservation after context resolution failure "
-                    "(request_id=%s, model_id=%s, provider_id=%s)",
-                    request_id,
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
-                )
-            return PipelineResult(
-                success=False,
-                model_id=scheduling_result.model_id,
-                provider_id=scheduling_result.provider_id,
-                execution_context=None,
-                classification_stats=classification_result.stats,
-                scheduling_stats={
-                    "request_id": request_id,
-                    "model_id": scheduling_result.model_id,
-                    "provider_id": scheduling_result.provider_id,
-                    "provider_type": scheduling_result.provider_type,
-                    "queue_depth": scheduling_result.queue_depth_at_schedule,
-                    "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
-                    "utilization_at_arrival": scheduling_result.utilization_at_arrival,
-                    "is_cold_start": scheduling_result.is_cold_start,
-                },
-                error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
-            )
-        
-        # Record provider ID now that it's resolved
-        self._monitoring.record_provider(request_id, exec_context.provider_id)
+    def _scheduling_stats(self, scheduling_result, request_id: str) -> dict:
+        return {
+            "request_id": request_id,
+            "model_id": scheduling_result.model_id,
+            "provider_id": scheduling_result.provider_id,
+            "provider_type": scheduling_result.provider_type,
+            "queue_depth": scheduling_result.queue_depth_at_schedule,
+            "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
+            "utilization_at_arrival": scheduling_result.utilization_at_arrival,
+            "is_cold_start": scheduling_result.is_cold_start,
+        }
 
-        
+    def _context_failure(
+        self, scheduling_result, classification_result: "_ClassificationResult",
+        request_id: str, *, error: str,
+    ) -> "PipelineResult":
         return PipelineResult(
-            success=True,
+            success=False,
             model_id=scheduling_result.model_id,
-            provider_id=exec_context.provider_id,
-            execution_context=exec_context,
+            provider_id=scheduling_result.provider_id,
+            execution_context=None,
             classification_stats=classification_result.stats,
-            scheduling_stats={
-                "request_id": request_id,
-                "model_id": scheduling_result.model_id,
-                "provider_id": scheduling_result.provider_id,
-                "provider_type": scheduling_result.provider_type,
-                "queue_depth": scheduling_result.queue_depth_at_schedule,
-                "queue_depth_at_arrival": scheduling_result.queue_depth_at_arrival,
-                "utilization_at_arrival": scheduling_result.utilization_at_arrival,
-                "is_cold_start": scheduling_result.is_cold_start,
-            },
+            scheduling_stats=self._scheduling_stats(scheduling_result, request_id),
+            error=error,
         )
-    
+
     def _classify(self, request: PipelineRequest) -> "_ClassificationResult":
         """Run classification to get candidate models."""
         policy = request.policy or ProxyPolicy()
@@ -348,7 +365,6 @@ class RequestPipeline:
         # Extract prompts
         user_prompt, system_prompt = self._extract_prompts(request.payload)
         
-        import time
         start = time.time()
         
         candidates = self._classifier.classify(

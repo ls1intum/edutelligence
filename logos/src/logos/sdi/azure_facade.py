@@ -266,7 +266,7 @@ class AzureSchedulingDataFacade:
         provider = self._providers[provider_key]
         provider.update_rate_limits(deployment_name, response_headers)
 
-        logger.debug("Updated rate limits for provider=%s deployment=%s", provider_id, deployment_name)
+        logger.debug("Updated rate limits for provider=%s deployment=%s", provider.name, deployment_name)
 
     def update_model_rate_limits(self, model_id: int, provider_id: int, response_headers: Dict[str, str]) -> None:
         """

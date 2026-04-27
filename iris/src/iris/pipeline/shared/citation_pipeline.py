@@ -16,9 +16,10 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.faq_schema import FaqSchema
@@ -88,10 +89,13 @@ class CitationPipeline(SubPipeline):
         self.llms = {}
         self.pipelines = {}
 
+        pipeline_id = "citation_pipeline"
+
+        default_model = resolve_model(pipeline_id, "default", "chat", local=local)
+        advanced_model = resolve_model(pipeline_id, "advanced", "chat", local=local)
+
         # Default variant
-        default_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-5-nano"
-        )
+        default_request_handler = LlmRequestHandler(model_id=default_model)
         default_llm = IrisLangchainChatModel(
             request_handler=default_request_handler,
             completion_args=CompletionArguments(temperature=0),
@@ -100,9 +104,7 @@ class CitationPipeline(SubPipeline):
         self.pipelines["default"] = default_llm | StrOutputParser()
 
         # Advanced variant
-        advanced_request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-5-mini"
-        )
+        advanced_request_handler = LlmRequestHandler(model_id=advanced_model)
         advanced_llm = IrisLangchainChatModel(
             request_handler=advanced_request_handler,
             completion_args=CompletionArguments(temperature=0),
@@ -111,8 +113,11 @@ class CitationPipeline(SubPipeline):
         self.pipelines["advanced"] = advanced_llm | StrOutputParser()
 
         # RequestHandler for keyword/summary (small models, separate instance per thread)
-        self._keyword_summary_request_handler = ModelVersionRequestHandler(
-            version="gemma3:27b" if local else "gpt-5-nano"
+        keyword_model = resolve_model(
+            pipeline_id, "default", "keyword_summary", local=local
+        )
+        self._keyword_summary_request_handler = LlmRequestHandler(
+            model_id=keyword_model
         )
         self._keyword_summary_completion_args = CompletionArguments(temperature=0)
 

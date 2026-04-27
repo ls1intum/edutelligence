@@ -1,3 +1,2 @@
-from ..request_handler.basic_request_handler import BasicRequestHandler
-from ..request_handler.model_version_request_handler import ModelVersionRequestHandler
+from ..request_handler.llm_request_handler import LlmRequestHandler
 from ..request_handler.request_handler_interface import RequestHandler

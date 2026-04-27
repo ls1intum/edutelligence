@@ -289,7 +289,7 @@ class CapacityPlanner:
             snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
             if snap is None:
                 name = self._facade.get_provider_name(pid) or "?"
-                lines.append(f"{paint('⊘', RED)} provider={pid} worker={paint(name, BOLD)} {paint('offline', DIM)}")
+                lines.append(f"{paint('⊘', RED)} provider={paint(name, BOLD)} {paint('offline', DIM)}")
                 continue
 
             connected += 1
@@ -311,7 +311,7 @@ class CapacityPlanner:
             worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
 
             lines.append(
-                f"{paint('●', worker_color)} provider={pid} worker={paint(str(worker_id), BOLD)} "
+                f"{paint('●', worker_color)} provider={paint(str(worker_id), BOLD)} "
                 f"status={paint('active', worker_color)} hb={heartbeat_age_s:.0f}s "
                 f"vram={paint(f'{total_vram - free_vram:.0f}/{total_vram:.0f}MB', BOLD)} ({used_pct:.0f}%)"
             )
@@ -442,9 +442,10 @@ class CapacityPlanner:
         }
         for action in actions:
             color = action_colors.get(action.action, CYAN)
+            pname = self._facade.get_provider_name(action.provider_id) or str(action.provider_id)
             lines.append(
                 f"{paint('→', color)} {paint(action.action, color, BOLD)} "
-                f"provider={action.provider_id} lane={action.lane_id}"
+                f"provider={pname} lane={action.lane_id}"
             )
             lines.extend(wrap_plain(f"model: {action.model_name}", indent="    "))
             lines.extend(wrap_plain(f"reason: {action.reason}", indent="    "))
@@ -565,7 +566,7 @@ class CapacityPlanner:
         profile = self._safe_get_profiles(provider_id).get(model_name)
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
-            logger.debug("No capacity info for provider %s, cannot cold-load %s", provider_id, model_name)
+            logger.debug("No capacity info for provider %s, cannot cold-load %s", self._facade.get_provider_name(provider_id) or provider_id, model_name)
             return None
 
         # No early feasibility bail-out here — the reclaim loop below will
@@ -662,14 +663,14 @@ class CapacityPlanner:
             if not ok:
                 logger.info(
                     "Cannot reclaim enough VRAM for cold load of %s on provider %s",
-                    model_name, provider_id,
+                    model_name, self._facade.get_provider_name(provider_id) or provider_id,
                 )
                 return None
 
-        logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, provider_id, lane_id)
+        logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id)
         async with self._lane_lock(provider_id, lane_id):
             loaded = await self._execute_action_with_confirmation(
-                load_action, timeout_seconds=max(timeout_seconds, 180.0),
+                load_action, timeout_seconds=max(timeout_seconds, 300.0),
             )
         if not loaded:
             return None
@@ -1126,6 +1127,21 @@ class CapacityPlanner:
         """
         now = time.time()
         actions = []
+
+        # Never sleep the only usable lane on a worker — it would leave
+        # the worker with zero serving capacity.
+        active_lanes = [
+            l for l in lanes
+            if l.runtime_state not in ("stopped", "error", "cold")
+        ]
+        if len(active_lanes) <= 1:
+            if active_lanes:
+                logger.info(
+                    "Skipping idle sleep for provider %s: only 1 active lane (%s)",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    active_lanes[0].lane_id,
+                )
+            return []
 
         for lane in lanes:
             key = self._lane_key(provider_id, lane.lane_id)
@@ -1725,12 +1741,12 @@ class CapacityPlanner:
         if candidates:
             logger.info(
                 "Preemptive sleep candidates for provider=%s: %s",
-                provider_id,
+                self._facade.get_provider_name(provider_id) or provider_id,
                 ", ".join(f"{name}(demand={score:.2f}, residual={profile.sleeping_residual_mb:.0f}MB)"
                           for score, name, profile in candidates),
             )
         else:
-            logger.info("Preemptive sleep: no candidates for provider=%s (no stopped models with known residual and demand>0)", provider_id)
+            logger.info("Preemptive sleep: no candidates for provider=%s (no stopped models with known residual and demand>0)", self._facade.get_provider_name(provider_id) or provider_id)
 
         now = time.time()
 
@@ -1913,6 +1929,10 @@ class CapacityPlanner:
             reason="Request-time lane preparation",
         )
 
+        # Tracks when we first detected phantom VRAM (lanes=0, VRAM still occupied
+        # by a recently-killed process whose CUDA context hasn't been freed yet).
+        _phantom_wait_started: Optional[float] = None
+
         while True:
             capacity = self._safe_get_capacity(provider_id)
             if capacity is None:
@@ -2021,14 +2041,47 @@ class CapacityPlanner:
                 )
                 return True
 
+            lanes_now = self._safe_get_lanes(provider_id)
             reclaim = self._next_request_reclaim_action(
                 provider_id=provider_id,
                 target=target,
-                lanes=self._safe_get_lanes(provider_id),
+                lanes=lanes_now,
                 profiles=self._safe_get_profiles(provider_id),
                 required_free_mb=shortfall,
             )
             if reclaim is None:
+                # Phantom-VRAM path: no lanes exist but VRAM is still occupied by
+                # a recently-killed process whose CUDA context hasn't been released
+                # by the driver yet.  Wait up to 60 s for the driver to free memory
+                # before giving up — the worker will re-report fresh VRAM numbers
+                # on each heartbeat cycle.
+                total_vram = float(getattr(capacity, "total_vram_mb", 0) or 0)
+                phantom_mb = total_vram - available
+                if (
+                    not lanes_now
+                    and total_vram > 0
+                    and phantom_mb > needed * 0.5
+                ):
+                    if _phantom_wait_started is None:
+                        _phantom_wait_started = time.monotonic()
+                        logger.info(
+                            "ensure_capacity provider=%s model=%s: "
+                            "phantom VRAM detected (%.0f MB occupied, 0 lanes) — "
+                            "waiting up to 60 s for CUDA driver to release contexts",
+                            provider_id, target.model_name, phantom_mb,
+                        )
+                    elapsed = time.monotonic() - _phantom_wait_started
+                    if elapsed < 60.0:
+                        await asyncio.sleep(2.0)
+                        capacity = self._safe_get_capacity(provider_id)
+                        if capacity is None:
+                            return False
+                        continue
+                    logger.info(
+                        "ensure_capacity provider=%s model=%s: "
+                        "phantom VRAM still present after %.0f s — giving up",
+                        provider_id, target.model_name, elapsed,
+                    )
                 logger.info(
                     "No idle reclaim action available for provider=%s model=%s "
                     "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
@@ -2779,7 +2832,7 @@ class CapacityPlanner:
                     - self.get_pending_vram_mb(provider_id)
                 )
             except Exception:
-                logger.debug("Cannot check VRAM for provider %s, rejecting %s", provider_id, action.action)
+                logger.debug("Cannot check VRAM for provider %s, rejecting %s", self._facade.get_provider_name(provider_id) or provider_id, action.action)
                 continue
 
             try:
@@ -2832,7 +2885,6 @@ class CapacityPlanner:
         params["vllm"] = True
         vllm_config: Dict[str, Any] = {
             "enable_sleep_mode": True,
-            "server_dev_mode": True,
         }
         # Send TP if profile has an observed value, or infer from model size vs GPU VRAM.
         tp = 1
@@ -3639,7 +3691,8 @@ class CapacityPlanner:
                 try:
                     await self._registry.send_command(
                         action.provider_id, "add_lane", action.params,
-                        timeout_seconds=int(timeout_seconds),
+                        timeout_seconds=int(max(timeout_seconds, 300)),
+                        stale_after_seconds=360,
                     )
                     self._registry.update_desired_lane_add(
                         action.provider_id, action.params,
@@ -3665,7 +3718,8 @@ class CapacityPlanner:
                     result = await self._registry.send_command(
                         action.provider_id, "apply_lanes",
                         {"lanes": desired},
-                        timeout_seconds=int(timeout_seconds),
+                        timeout_seconds=int(max(timeout_seconds, 300)),
+                        stale_after_seconds=360,
                     )
                     rolled_back = isinstance(result, dict) and result.get("rolled_back")
                     if rolled_back:

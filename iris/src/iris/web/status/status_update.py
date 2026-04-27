@@ -83,7 +83,7 @@ class StatusCallback(ABC):
             True if the status update was sent successfully, False otherwise.
         """
         try:
-            requests.post(
+            resp = requests.post(
                 self.url,
                 headers={
                     "Content-Type": "application/json",
@@ -91,7 +91,9 @@ class StatusCallback(ABC):
                 },
                 json=self.status.model_dump(by_alias=True),
                 timeout=200,
-            ).raise_for_status()
+            )
+            logger.info("Status callback to %s returned %d", self.url, resp.status_code)
+            resp.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
             logger.error("Error sending status update: %s", e)
@@ -221,6 +223,7 @@ class StatusCallback(ABC):
         message: str,
         exception=None,
         tokens: Optional[List[TokenUsageDTO]] = None,
+        error_code: Optional[str] = None,
     ):
         """
         Transition the current stage to ERROR and update the status.
@@ -232,6 +235,8 @@ class StatusCallback(ABC):
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
+        if error_code is not None and hasattr(self.status, "error_code"):
+            self.status.error_code = error_code
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
             self.current_stage_index + 1

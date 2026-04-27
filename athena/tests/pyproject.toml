@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "athena-tests"
-version = "0.1.0"
+version = "2.0.0"
 description = "Testing environment for the Athena project, orchestrating tests for all modules."
 license = "MIT"
 package-mode = false

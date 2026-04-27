@@ -90,7 +90,7 @@ class ContextResolver:
             api_key = auth_info.get("api_key")
 
             if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
-                logger.error(f"No API key for model {model_id} / provider {provider_id}")
+                logger.error(f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}")
                 return None
 
         provider_name = auth_info["provider_name"]
@@ -110,7 +110,7 @@ class ContextResolver:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "Request-time lane preparation failed for provider=%s model=%s: %s",
-                        provider_id,
+                        provider_name,
                         model_name,
                         exc,
                     )
@@ -123,12 +123,12 @@ class ContextResolver:
                     if lane_id:
                         forward_url = f"logosnode://provider/{provider_id}/lane/{lane_id}"
                     else:
-                        logger.error("logosnode lane missing lane_id for provider=%s", provider_id)
+                        logger.error("logosnode lane missing lane_id for provider=%s", provider_name)
                         return None
                 else:
                     logger.info(
                         "No logosnode lane available yet for provider=%s model=%s; waiting instead of falling back to HTTP",
-                        provider_id,
+                        provider_name,
                         model_name,
                     )
                     return None

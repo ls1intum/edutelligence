@@ -9,9 +9,11 @@ class CompletionArguments:
     def __init__(
         self,
         temperature: float = None,
+        max_tokens: int = None,
         stop: list[str] = None,
         response_format: CompletionArgumentsResponseFormat = "TEXT",
     ):
         self.temperature = temperature
+        self.max_tokens = max_tokens
         self.stop = stop
         self.response_format = response_format

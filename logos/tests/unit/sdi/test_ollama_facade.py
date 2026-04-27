@@ -107,6 +107,25 @@ def test_logosnode_runtime_parallel_capacity_overrides_static_config(monkeypatch
     assert provider.try_reserve_capacity(101, "req-5") is False
 
 
+def test_logosnode_try_reserve_allows_unregistered_model_for_cold_start(monkeypatch):
+    queue_mgr = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_mgr)
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {},
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: {"models": []},
+    )
+
+    facade.register_model(101, "logosnode", "http://fake", "llama3.1:latest", 65536, provider_id=12)
+    provider = facade._providers[12]
+
+    assert provider.try_reserve_capacity(999, "req-unknown") is True
+
+
 def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present(monkeypatch):
     class _FakeRegistry:
         @staticmethod
