@@ -6,15 +6,15 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
-fastapi = "0.120.1"
-uvicorn = "0.38.0"
+python = "3.14.*"
+fastapi = "0.136.1"
+uvicorn = "0.46.0"
 docker = "7.1.0"
-mypy = "1.18.2"
+mypy = "1.20.2"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.32.4.20250913"
-prospector = "1.17.3"
+types-requests = "2.33.0.20260408"
+prospector = "1.18.0"
 
 [build-system]
 requires = ["poetry-core"]

@@ -6,14 +6,14 @@ authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 athena = { path = "../athena", develop = true }
-langsmith = ">=0.1.112,<0.2.0"
+langsmith = ">=0.7.37,<0.8.0"
 langchain = ">=0.3,<0.4"
 langchain-community = ">=0.3,<0.4"
-langchain-openai = ">=0.2,<0.3"
-openai = "1.58.1"
-python-dotenv = "1.2.1"
+langchain-openai = ">=0.3,<0.4"
+openai = "1.109.1"
+python-dotenv = "1.2.2"
 tiktoken = "0.12.0"
 #langfuse = "^3.3.0"
 
@@ -21,7 +21,7 @@ tiktoken = "0.12.0"
 module = "athena:run_module"
 
 [tool.poetry.group.dev.dependencies]
-prospector = "1.17.3"
+prospector = "1.18.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
