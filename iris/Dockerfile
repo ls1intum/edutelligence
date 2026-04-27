@@ -1,5 +1,10 @@
-# Dockerfile to build a container image for a Python 3.12 FastAPI application
-FROM python:3.12.3-slim
+# Dockerfile to build a container image for a Python 3.13 FastAPI application
+FROM python:3.13.3-slim
+
+# Install system dependencies for video transcription
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory in the container
 WORKDIR /app
@@ -10,7 +15,7 @@ COPY iris/pyproject.toml iris/poetry.lock ./
 COPY memiris ../memiris
 
 # Install poetry
-RUN pip install poetry
+RUN pip install "poetry>=2.1,<3"
 
 # Install any dependencies
 RUN poetry install --only main --no-root

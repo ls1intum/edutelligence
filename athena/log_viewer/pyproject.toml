@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "log-viewer"
-version = "0.1.0"
+version = "2.0.0"
 description = "Shows the logs of the assessment module manager and all modules in a web interface."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"

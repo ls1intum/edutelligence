@@ -14,10 +14,6 @@ iris:
   - changed-files:
       - any-glob-to-any-file: iris/**/*
 
-nebula:
-  - changed-files:
-      - any-glob-to-any-file: nebula/**/*
-
 memiris:
   - changed-files:
       - any-glob-to-any-file: memiris/**/*

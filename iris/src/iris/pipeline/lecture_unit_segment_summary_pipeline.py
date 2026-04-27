@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -10,9 +10,10 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
     CompletionArguments,
-    ModelVersionRequestHandler,
+    LlmRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
@@ -30,6 +31,7 @@ from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,
 )
+from iris.web.status.status_update import StatusCallback
 
 
 class LectureUnitSegmentSummaryPipeline(SubPipeline):
@@ -49,10 +51,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         client: WeaviateClient,
         lecture_unit_dto: LectureUnitDTO,
         local: bool = False,
+        callback: Optional[StatusCallback] = None,
     ) -> None:
-        super().__init__()
+        super().__init__(implementation_id="lecture_unit_segment_summary_pipeline")
         self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
+        self.callback = callback
 
         self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
@@ -62,12 +66,16 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             client
         )
 
-        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-
-        request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-5-mini"
+        pipeline_id = "lecture_unit_segment_summary_pipeline"
+        embedding_model = resolve_model(
+            pipeline_id, "default", "embedding", local=False
         )
-        completion_args = CompletionArguments(temperature=0)
+        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
+
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+
+        request_handler = LlmRequestHandler(model_id=chat_model)
+        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -79,7 +87,14 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
-        for slide_index in range(slide_number_start, slide_number_end + 1):
+        total_slides = slide_number_end - slide_number_start + 1
+        for i, slide_index in enumerate(
+            range(slide_number_start, slide_number_end + 1)
+        ):
+            if self.callback is not None:
+                self.callback.in_progress(
+                    f"Generating lecture unit summary for slide {slide_index} ({i + 1}/{total_slides})"
+                )
             transcriptions = self._get_transcriptions(slide_index)
             slides = self._get_slides(slide_index)
             summary = self._create_summary(transcriptions, slides)

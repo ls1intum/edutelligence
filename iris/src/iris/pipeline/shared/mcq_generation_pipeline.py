@@ -14,8 +14,9 @@ from langchain_core.output_parsers import StrOutputParser
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
-from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.web.status.status_update import StatusCallback
 
@@ -41,9 +42,9 @@ class McqGenerationPipeline(SubPipeline):
         self.prompt_template = jinja_env.get_template("mcq_generation_prompt.j2")
 
         # Create LLM
-        request_handler = ModelVersionRequestHandler(
-            version="gpt-oss:120b" if local else "gpt-4.1-nano"
-        )
+        pipeline_id = "mcq_generation_pipeline"
+        model_id = resolve_model(pipeline_id, "default", "chat", local=local)
+        request_handler = LlmRequestHandler(model_id=model_id)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=CompletionArguments(temperature=0.7),

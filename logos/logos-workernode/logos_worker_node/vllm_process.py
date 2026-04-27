@@ -11,8 +11,8 @@ Key differences from Ollama:
 - No ``num_parallel`` — continuous batching handles all concurrency.
 - ``num_ctx`` equivalent is ``--max-model-len``.
 - GPU pinning via ``CUDA_VISIBLE_DEVICES`` or ``--tensor-parallel-size``.
-- Optional stability controls are exposed via lane config:
-  ``disable_custom_all_reduce`` and ``disable_nccl_p2p``.
+- Optional stability controls: ``disable_custom_all_reduce`` (per-lane)
+  and ``nccl_p2p_available`` (global engine config, default False).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, ClassVar
 
 import httpx
 
@@ -38,6 +38,7 @@ from logos_worker_node.models import (
     ProcessState,
     ProcessStatus,
     VllmEngineConfig,
+    _DEFAULT_LANE_CONTEXT_LENGTH,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -79,6 +80,7 @@ class VllmProcessHandle:
         self._stuck_vram: bool = False
         self._known_child_pids: set[int] = set()
         self._process_group_id: int | None = None
+        self.hf_home_override: str | None = None
 
     async def init(self) -> None:
         self._http = httpx.AsyncClient(
@@ -171,6 +173,24 @@ class VllmProcessHandle:
     def has_stuck_vram(self) -> bool:
         """True if the last stop detected residual GPU memory."""
         return getattr(self, "_stuck_vram", False)
+
+    @property
+    def has_fatal_cuda_errors(self) -> bool:
+        """True if recent logs contain fatal CUDA error patterns.
+
+        These patterns indicate the GPU is in an unrecoverable state that
+        cannot be resolved without a host OS reboot.
+        """
+        if not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs).lower()
+        fatal_patterns = (
+            "cuda-capable device(s) is/are busy or unavailable",
+            "all cuda-capable devices are busy or unavailable",
+            "nccl warn cuda failure",
+            "cuda error: out of memory",
+        )
+        return any(p in log_blob for p in fatal_patterns)
 
     async def reconfigure(self, lane_config: LaneConfig) -> ProcessStatus:
         """Reconfigure = full restart for vLLM (model/config change)."""
@@ -454,7 +474,10 @@ class VllmProcessHandle:
         # prevents the model weights from loading at all.
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
-        elif lane_config.context_length > 0:
+        # For vLLM lanes, context_length defaults to 4096 from shared lane
+        # schema. Treat that sentinel default as "unset" so vLLM can use the
+        # model's native maximum context unless an explicit override is given.
+        elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
@@ -476,6 +499,14 @@ class VllmProcessHandle:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
             cmd.append("--enable-sleep-mode")
+        # Tool calling: enabled by default so OpenAI-compatible clients
+        # (OpenCode, etc.) can send tools/tool_choice without getting HTTP 400.
+        # When tool_call_parser is empty, vLLM auto-detects the parser from the
+        # model's tokenizer_config.json (supported on most modern chat models).
+        if vc.enable_auto_tool_choice:
+            cmd.append("--enable-auto-tool-choice")
+            if vc.tool_call_parser:
+                cmd.extend(["--tool-call-parser", vc.tool_call_parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
@@ -679,15 +710,25 @@ class VllmProcessHandle:
                     env["CUDA_HOME"] = candidate
                     break
 
+        # HuggingFace token — needed for gated models (e.g. gemma)
+        hf_token = os.environ.get("HF_TOKEN", "")
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+
         # HuggingFace cache — use same location as Ollama models for consistency
         # (though vLLM uses HF format, not GGUF)
-        if "HF_HOME" not in os.environ:
+        if self.hf_home_override:
+            env["HF_HOME"] = self.hf_home_override
+        elif "HF_HOME" not in os.environ:
             env["HF_HOME"] = self._resolve_hf_home(gc.models_path)
 
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
-        if vc.server_dev_mode:
+        # Sleep endpoints (/sleep, /wake_up, /is_sleeping) require
+        # VLLM_SERVER_DEV_MODE.  Auto-enable it when sleep mode is active
+        # so operators don't need to set both flags.
+        if vc.server_dev_mode or vc.enable_sleep_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
         if self._vllm_engine_config.flashinfer_loglevel > 0:
@@ -720,8 +761,17 @@ class VllmProcessHandle:
             if detected_arch:
                 env["TORCH_CUDA_ARCH_LIST"] = detected_arch
 
-        if vc.disable_nccl_p2p:
+        # NCCL P2P: disabled globally by default (PCIe-only assumed).
+        # Set engines.vllm.nccl_p2p_available=true in config.yml for NVLink setups.
+        if not self._vllm_engine_config.nccl_p2p_available:
             env["NCCL_P2P_DISABLE"] = "1"
+            logger.info(
+                "[%s] NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+                "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)",
+                self.lane_id,
+            )
+        else:
+            logger.info("[%s] NCCL P2P enabled (NVLink topology)", self.lane_id)
 
         # NCCL defaults for tensor-parallel lanes (TP > 1).
         # IMPORTANT: Do NOT set NCCL transport tuning vars (P2P_LEVEL,
@@ -982,6 +1032,13 @@ class VllmProcessHandle:
         )
         return False
 
+    # vLLM warnings that are expected side-effects of our configuration
+    # (e.g. VLLM_SERVER_DEV_MODE required for sleep endpoints) and add
+    # no operational value — suppress them from the log stream.
+    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "SECURITY WARNING: Development endpoints are enabled",
+    )
+
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:
             return
@@ -990,6 +1047,8 @@ class VllmProcessHandle:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()
                 if line:
                     self._recent_logs.append(line)
+                    if any(frag in line for frag in self._SUPPRESSED_LOG_FRAGMENTS):
+                        continue
                     logger.info("[vllm:%s] %s", self.lane_id, line)
         except asyncio.CancelledError:
             pass

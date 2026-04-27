@@ -18,6 +18,7 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 | 8.7.0 - 8.7.1   | 1.7.0                 | ✅ Stable |
 | 8.7.2 - 8.7.4   | 1.7.2                 | ✅ Stable |
 | 8.8.x           | 1.8.0                 | ✅ Stable |
+| 9.0.x           | 2.0.x                 | ✅ Stable |
 
 > **Note:** Always ensure you're using compatible versions for optimal integration and functionality.
 
@@ -77,12 +78,6 @@ A comprehensive LLM Engineering Platform that provides centralized management an
 **Technology Stack:** Python 3.13, Poetry, FastAPI, Docker
 
 [More information](https://logos.ase.cit.tum.de/)
-
-### 🌌 [Nebula](./nebula/) - [In Development]
-
-_Documentation and features coming soon_
-
-**Technology Stack:** Python, Poetry
 
 ## 🚀 Quick Start
 

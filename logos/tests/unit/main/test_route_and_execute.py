@@ -46,6 +46,7 @@ async def test_route_and_execute_proxy_branch(monkeypatch):
         is_async_job,
         profile_id=None,
         request_id=None,
+        request_path=None,
     ):
         called["proxy"] = True
         return {"status": "proxy"}

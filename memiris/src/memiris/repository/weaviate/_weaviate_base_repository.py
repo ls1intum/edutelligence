@@ -53,8 +53,8 @@ class _WeaviateBaseRepository(ABC):
 
     def _ensure_learning_schema(self) -> None:
         vector_config = [
-            Configure.NamedVectors.none(
-                f"vector_{i}",
+            Configure.Vectors.self_provided(
+                name=f"vector_{i}",
                 vector_index_config=Configure.VectorIndex.hnsw(
                     distance_metric=VectorDistances.COSINE,
                 ),
@@ -67,7 +67,7 @@ class _WeaviateBaseRepository(ABC):
                 name=self.learning_collection_name,
                 description="(v0.2) A learning object represents a piece of "
                 "information that has been learned from a source.",
-                vectorizer_config=vector_config,
+                vector_config=vector_config,
                 multi_tenancy_config=Configure.multi_tenancy(
                     enabled=True, auto_tenant_creation=True, auto_tenant_activation=True
                 ),
@@ -92,8 +92,8 @@ class _WeaviateBaseRepository(ABC):
 
     def _ensure_memory_schema(self) -> None:
         vector_config = [
-            Configure.NamedVectors.none(
-                f"vector_{i}",
+            Configure.Vectors.self_provided(
+                name=f"vector_{i}",
                 vector_index_config=Configure.VectorIndex.hnsw(
                     distance_metric=VectorDistances.COSINE,
                 ),
@@ -105,7 +105,7 @@ class _WeaviateBaseRepository(ABC):
             self.client.collections.create(
                 name=self.memory_collection_name,
                 description="(v0.2) A memory object represents 1+ processed learning objects.",
-                vectorizer_config=vector_config,
+                vector_config=vector_config,
                 multi_tenancy_config=Configure.multi_tenancy(
                     enabled=True, auto_tenant_creation=True, auto_tenant_activation=True
                 ),

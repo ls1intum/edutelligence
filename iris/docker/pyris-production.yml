@@ -15,6 +15,7 @@ services:
     volumes:
       - ${PYRIS_APPLICATION_YML_FILE}:/config/application.yml:ro
       - ${PYRIS_LLM_CONFIG_YML_FILE}:/config/llm_config.yml:ro
+      - ${PYRIS_TRANSCRIPTION_DATA_DIR:-./transcription-data}:/data/transcription
     networks:
       - pyris
 
