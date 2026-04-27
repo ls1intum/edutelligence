@@ -12,5 +12,6 @@ class GlobalSearchStatusUpdateDTO(StatusUpdateDTO):
       2. After the pipeline finishes — answer=str|None, sources=[...]
     """
 
+    result: Optional[str] = None
     answer: Optional[str] = None
     sources: List[LectureSearchResultDTO] = []
