@@ -33,7 +33,7 @@ class LectureGlobalSearchRetrieval:
 
     def __init__(self, client: WeaviateClient):
         embedding_model = resolve_model(
-            "lecture_search_answer_pipeline", "default", "embedding", local=False
+            "global_search_pipeline", "default", "embedding", local=False
         )
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)
