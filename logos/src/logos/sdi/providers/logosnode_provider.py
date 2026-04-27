@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_metric_float
+from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_e2e_latency_p50_seconds, _lane_metric_float
 
 from ..models import (
     ModelStatus,
@@ -352,18 +352,25 @@ class LogosNodeDataProvider:
                 continue
 
             matched_lanes += 1
+            is_vllm = bool(lane.get("vllm"))
             capacity_hint = lane.get("num_parallel")
-            if bool(lane.get("vllm")) and not capacity_hint:
-                lane_config = lane.get("lane_config")
-                if isinstance(lane_config, dict):
-                    # vLLM runtime status reports num_parallel=0 because concurrency is continuous,
-                    # but the saved lane config still provides the scheduling capacity hint.
-                    capacity_hint = lane_config.get("num_parallel")
+            if is_vllm and not capacity_hint:
+                # vLLM uses continuous batching — num_parallel=0 means unlimited.
+                # Default to 256 so the scheduler doesn't artificially
+                # serialize requests.  The DB parallel column is the real
+                # ceiling if one is needed.
+                capacity_hint = 256
 
             try:
                 capacity = int(capacity_hint) if capacity_hint is not None else 0
             except (TypeError, ValueError):
                 capacity = 0
+
+            # Apply oversubscription for vLLM lanes: the reported
+            # num_parallel is based on worst-case full-context requests,
+            # but real requests typically use a fraction of context.
+            if is_vllm and capacity > 0 and capacity < 256:
+                capacity = capacity * self.VLLM_CONCURRENCY_OVERSUBSCRIPTION
 
             if capacity > 0:
                 total_capacity += capacity
@@ -473,6 +480,7 @@ class LogosNodeDataProvider:
                 else None
             ),
             ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
+            e2e_latency_p50_seconds=_lane_e2e_latency_p50_seconds(backend_metrics),
             effective_vram_mb=float(lane.get("effective_vram_mb", 0.0) or 0.0),
             num_parallel=int(lane.get("num_parallel", 0) or 0),
             gpu_memory_utilization=(
@@ -551,6 +559,14 @@ class LogosNodeDataProvider:
         ]
         warmest_ttft = min(loaded_ttfts) if loaded_ttfts else 0.0
 
+        # Best-case e2e latency p50 among loaded/running lanes (non-zero)
+        loaded_e2e = [
+            s.e2e_latency_p50_seconds
+            for s in matching_signals
+            if s.runtime_state in ("loaded", "running") and s.e2e_latency_p50_seconds > 0
+        ]
+        warmest_e2e = min(loaded_e2e) if loaded_e2e else 0.0
+
         # Max GPU cache pressure across lanes (vLLM only)
         cache_values = [
             s.gpu_cache_usage_percent
@@ -569,6 +585,7 @@ class LogosNodeDataProvider:
             aggregate_active_requests=aggregate_active,
             aggregate_queue_waiting=aggregate_queue,
             warmest_ttft_p95_seconds=warmest_ttft,
+            warmest_e2e_latency_p50_seconds=warmest_e2e,
             gpu_cache_pressure_max=gpu_cache_max,
             lanes=matching_signals,
         )
@@ -708,10 +725,30 @@ class LogosNodeDataProvider:
 
     # Maximum backend queue_waiting before we refuse new reservations.
     # Prevents piling requests on an already-backlogged vLLM process.
-    BACKEND_QUEUE_PRESSURE_THRESHOLD = 2
+    # Raised from 2→8: with oversubscription enabled, vLLM's internal
+    # scheduler (PagedAttention) handles queuing efficiently; we only
+    # need to back off when the engine is genuinely saturated.
+    BACKEND_QUEUE_PRESSURE_THRESHOLD = 8
+
+    # vLLM reports "Maximum concurrency for N tokens per request" assuming
+    # every request fills the entire context window.  In practice, requests
+    # use a fraction of context (e.g. 200/4096 = 5%), so the KV cache can
+    # safely hold many more concurrent sequences.  This multiplier is
+    # applied to the vLLM-reported num_parallel to allow higher throughput
+    # while still letting vLLM's own scheduler handle fine-grained KV
+    # admission via PagedAttention preemption.
+    VLLM_CONCURRENCY_OVERSUBSCRIPTION = 3
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         with self._lock:
+            # Reject if no lane is ready (loaded/running) — requests for sleeping
+            # or unloaded models should go to the scheduler queue instead.
+            if not self._is_model_lane_ready(model_id):
+                logger.debug(
+                    "Refusing reservation for model %d: no ready lane (sleeping/not loaded)",
+                    model_id,
+                )
+                return False
             current_active = self._model_active.get(model_id, 0)
             max_capacity, _source = self.get_parallel_capacity(model_id)
             if current_active < max_capacity:
@@ -728,6 +765,26 @@ class LogosNodeDataProvider:
                 self._model_active[model_id] = current_active + 1
                 return True
             return False
+
+    def _is_model_lane_ready(self, model_id: int) -> bool:
+        """Check if at least one lane for this model is in a ready state (loaded/running)."""
+        if self._runtime_registry is None:
+            return True  # No runtime info, assume ready (backwards compat)
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return False
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return True  # No snapshot yet, assume ready
+        lanes = ((snap.get("runtime") or {}).get("lanes") or [])
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if lane.get("model") != model_name:
+                continue
+            if lane.get("runtime_state") in ("loaded", "running"):
+                return True
+        return False
 
     def _backend_queue_exceeds_threshold(self, model_id: int) -> bool:
         """Check if the backend (vLLM) queue_waiting exceeds the threshold."""

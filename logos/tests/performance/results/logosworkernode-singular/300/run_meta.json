@@ -1,0 +1,15 @@
+{
+  "workload": "tests/performance/workloads/explicit/10m/workload_explicit_hw3_even_random_300_10m.csv",
+  "api_base": "http://127.0.0.1:8080",
+  "request_timeout_s": 1200.0,
+  "request_count": 300,
+  "experiment_name": "10m",
+  "output_dir": "tests/performance/results/explicit/20260411_170323 - 10m",
+  "run_started_at": "2026-04-11T17:03:23Z",
+  "run_finished_at": "2026-04-11T17:14:35Z",
+  "output_summary_csv": "tests/performance/results/explicit/20260411_170323 - 10m/summary.csv",
+  "output_detailed_csv": "tests/performance/results/explicit/20260411_170323 - 10m/detailed.csv",
+  "output_runtime_samples_jsonl": "tests/performance/results/explicit/20260411_170323 - 10m/runtime_samples.jsonl",
+  "output_provider_vram_json": "tests/performance/results/explicit/20260411_170323 - 10m/provider_vram.json",
+  "output_request_log_stats_json": "tests/performance/results/explicit/20260411_170323 - 10m/request_log_stats.json"
+}

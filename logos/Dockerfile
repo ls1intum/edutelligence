@@ -66,4 +66,4 @@ COPY logos/tests/ ./tests/
 
 EXPOSE 8080 50051
 
-CMD ["uvicorn", "logos.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "logos.main:app", "--host", "0.0.0.0", "--port", "8080", "--ws-ping-interval", "60", "--ws-ping-timeout", "60"]

@@ -83,3 +83,59 @@ export type SelectionState = {
   pageX?: number;
   confirmable?: boolean;
 };
+
+/** Per-physical-GPU data from scheduler_signals.provider.devices[] */
+export type DeviceInfo = {
+  device_id: string;
+  kind: "nvidia" | "derived";
+  name: string;
+  memory_used_mb: number;
+  memory_total_mb: number;
+  memory_free_mb: number;
+  utilization_percent: number | null;
+  temperature_celsius: number | null;
+  power_draw_watts: number | null;
+};
+
+/** Per-lane signal data from scheduler_signals.lanes[lane_id] */
+export type LaneSignalData = {
+  model: string;
+  vllm: boolean;
+  runtime_state: string; // "running"|"loaded"|"sleeping"|"starting"|"cold"|"stopped"|"error"
+  sleep_state: string | null;
+  active_requests: number;
+  effective_vram_mb: number;
+  gpu_cache_usage_percent: number | null;
+  ttft_p95_seconds: number | null;
+  queue_waiting: number | null;
+  requests_running: number | null;
+};
+
+/** Response from POST /logosdb/paginated_requests */
+export type PaginatedRequestItem = {
+  request_id: string;
+  model_name: string;
+  provider_name: string;
+  is_cloud: boolean;
+  status: string;
+  timestamp: string | null;
+  duration: number | null;
+  cold_start: boolean | null;
+  enqueue_ts: string | null;
+  scheduled_ts: string | null;
+  request_complete_ts: string | null;
+  queue_seconds: number | null;
+  total_seconds: number | null;
+  initial_priority: string | null;
+  priority_when_scheduled: string | null;
+  queue_depth_at_enqueue: number | null;
+  error_message: string | null;
+};
+
+export type PaginatedRequestResponse = {
+  requests: PaginatedRequestItem[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+};

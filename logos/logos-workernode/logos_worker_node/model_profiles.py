@@ -137,13 +137,21 @@ class ModelProfileRegistry:
         engine: str | None = None,
         observed_gpu_memory_utilization: float | None = None,
         tensor_parallel_size: int | None = None,
-    ) -> None:
+    ) -> bool:
+        """Update metadata fields. Returns True if tensor_parallel_size changed."""
+        tp_changed = False
         if isinstance(engine, str) and engine.strip():
             profile.engine = engine.strip()
         if observed_gpu_memory_utilization is not None and observed_gpu_memory_utilization > 0:
             profile.observed_gpu_memory_utilization = observed_gpu_memory_utilization
         if tensor_parallel_size is not None and tensor_parallel_size > 0:
+            if (
+                profile.tensor_parallel_size is not None
+                and profile.tensor_parallel_size != tensor_parallel_size
+            ):
+                tp_changed = True
             profile.tensor_parallel_size = tensor_parallel_size
+        return tp_changed
 
     def add_overrides(self, overrides: dict[str, dict[str, Any]]) -> None:
         """Merge additional manual overrides (e.g. from capabilities_overrides)."""
@@ -276,21 +284,40 @@ class ModelProfileRegistry:
 
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
-            self._update_metadata(
+            tp_changed = self._update_metadata(
                 profile,
                 engine=engine,
                 observed_gpu_memory_utilization=observed_gpu_memory_utilization,
                 tensor_parallel_size=tensor_parallel_size,
             )
 
+            if tp_changed:
+                logger.info(
+                    "TP size changed for %s — resetting VRAM measurements "
+                    "(old loaded=%.0f, new=%.0f)",
+                    model_name, profile.loaded_vram_mb or 0, effective_vram_mb,
+                )
+                # Reset sleeping residual too — it's invalid with a new TP
+                profile.sleeping_residual_mb = None
+
             if engine == "vllm" and kv_cache_sent_mb > 0:
                 measured_base = max(effective_vram_mb - kv_cache_sent_mb, 0.0)
                 if measured_base > 0:
-                    profile.base_residency_mb = _ema(profile.base_residency_mb, measured_base)
-                    profile.residency_source = "measured"
+                    # Never let runtime measurements overwrite a calibrated
+                    # base_residency — calibration measures on a clean GPU and
+                    # is authoritative.  Runtime measurements can be lower when
+                    # multiple models share GPU memory.
+                    if profile.residency_source == "calibrated":
+                        pass  # keep calibrated value
+                    elif tp_changed or profile.base_residency_mb is None:
+                        profile.base_residency_mb = measured_base
+                        profile.residency_source = "measured"
+                    else:
+                        profile.base_residency_mb = _ema(profile.base_residency_mb, measured_base)
+                        profile.residency_source = "measured"
                 profile.kv_budget_mb = _ema(profile.kv_budget_mb, kv_cache_sent_mb)
 
-            if profile.loaded_vram_mb is None:
+            if tp_changed or profile.loaded_vram_mb is None:
                 profile.loaded_vram_mb = effective_vram_mb
             else:
                 profile.loaded_vram_mb = _ema(profile.loaded_vram_mb, effective_vram_mb)
@@ -340,13 +367,20 @@ class ModelProfileRegistry:
 
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
-            self._update_metadata(
+            tp_changed = self._update_metadata(
                 profile,
                 engine=engine,
                 observed_gpu_memory_utilization=observed_gpu_memory_utilization,
                 tensor_parallel_size=tensor_parallel_size,
             )
-            if profile.sleeping_residual_mb is None:
+            if tp_changed or profile.sleeping_residual_mb is None:
+                # TP change invalidates old measurements — reset instead of EMA
+                if tp_changed:
+                    logger.info(
+                        "TP size changed for %s — resetting sleeping_residual_mb "
+                        "(old=%.0f, new=%.0f)",
+                        model_name, profile.sleeping_residual_mb or 0, residual_vram_mb,
+                    )
                 profile.sleeping_residual_mb = residual_vram_mb
             else:
                 profile.sleeping_residual_mb = _ema(profile.sleeping_residual_mb, residual_vram_mb)

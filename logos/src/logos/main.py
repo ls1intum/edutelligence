@@ -349,6 +349,23 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "runtime_modes": _runtime_modes_for_lanes(lanes),
     }
 
+    raw_device_list = devices.get("devices") or []
+    provider_signals["devices"] = [
+        {
+            "device_id": d.get("device_id", ""),
+            "kind": d.get("kind", "nvidia"),
+            "name": d.get("name", ""),
+            "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
+            "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
+            "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
+            "utilization_percent": _safe_float(d.get("utilization_percent")),
+            "temperature_celsius": _safe_float(d.get("temperature_celsius")),
+            "power_draw_watts": _safe_float(d.get("power_draw_watts")),
+        }
+        for d in raw_device_list
+        if isinstance(d, dict)
+    ]
+
     model_signals: dict[str, Dict[str, Any]] = {}
     lane_signals: dict[str, Dict[str, Any]] = {}
 
@@ -741,6 +758,26 @@ def _merge_local_provider_vram_payload(
         transport = runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
         if transport:
             entry["transport_connected"] = bool(transport.get("connected", connected))
+
+        runtime_devices = runtime.get("devices") if isinstance(runtime, dict) else {}
+        if isinstance(runtime_devices, dict):
+            raw_device_list = runtime_devices.get("devices") or []
+            if isinstance(raw_device_list, list) and raw_device_list:
+                entry["devices"] = [
+                    {
+                        "device_id": d.get("device_id", ""),
+                        "kind": d.get("kind", "nvidia"),
+                        "name": d.get("name", ""),
+                        "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
+                        "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
+                        "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
+                        "utilization_percent": _safe_float(d.get("utilization_percent")),
+                        "temperature_celsius": _safe_float(d.get("temperature_celsius")),
+                        "power_draw_watts": _safe_float(d.get("power_draw_watts")),
+                    }
+                    for d in raw_device_list
+                    if isinstance(d, dict)
+                ]
 
         data = list(entry.get("data") or [])
 
@@ -1312,6 +1349,21 @@ async def start_pipeline():
         lane_preparer=_capacity_planner,
     )
     _pipeline._context_resolver = _context_resolver
+
+    # Wire capacity-needed callback: when the scheduler queues a request
+    # for a sleeping/unloaded model, immediately trigger the capacity
+    # planner to wake/load it (instead of waiting for the 30s cycle).
+    async def _on_capacity_needed(provider_id: int, model_name: str) -> None:
+        try:
+            await _capacity_planner.prepare_lane_for_request(provider_id, model_name)
+        except Exception:
+            logger.debug(
+                "Background capacity request for %s on provider %s failed",
+                model_name, provider_id, exc_info=True,
+            )
+
+    scheduler._on_capacity_needed = _on_capacity_needed
+
     await _capacity_planner.start()
 
     logger.info(
@@ -3288,6 +3340,42 @@ async def request_logs(request: Request):
 
 @app.options("/logosdb/latest_requests", tags=["admin"])
 async def latest_requests_options():
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+    )
+
+
+@app.post("/logosdb/paginated_requests", tags=["admin"])
+async def paginated_requests_endpoint(request: Request):
+    """
+    Fetch paginated request logs with Cloud/Local type classification.
+    """
+    headers = dict(request.headers)
+    logos_key, _ = authenticate_logos_key(headers)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    if not isinstance(body, dict):
+        body = {}
+
+    page = int(body.get("page", 1))
+    per_page = int(body.get("per_page", 20))
+
+    with DBManager() as db:
+        payload, status = db.get_paginated_requests(logos_key, page=page, per_page=per_page)
+        return JSONResponse(content=payload, status_code=status)
+
+
+@app.options("/logosdb/paginated_requests", tags=["admin"])
+async def paginated_requests_options():
     return JSONResponse(
         content={},
         headers={

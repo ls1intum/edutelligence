@@ -157,30 +157,4 @@ def load_config() -> AppConfig:
     _apply_env_overrides(_config)
     _wire_kv_budget(_config)
 
-    # Restore persisted lanes from state file if present
-    lanes_path = get_state_dir() / "lanes.json"
-    if lanes_path.exists() and not _config.lanes:
-        try:
-            with lanes_path.open("r", encoding="utf-8") as f:
-                lanes_data = json.load(f)
-            _config.lanes = [LaneConfig(**item) for item in lanes_data]
-            logger.info("Restored %d lane(s) from %s", len(_config.lanes), lanes_path)
-        except Exception:
-            logger.debug("Failed to restore lanes from %s", lanes_path, exc_info=True)
-
     return _config
-
-
-def save_lanes_state(lanes: list[LaneConfig]) -> None:
-    """Persist lane configuration to the state directory."""
-    try:
-        state_dir = get_state_dir()
-        lanes_path = state_dir / "lanes.json"
-        data = [lane.model_dump(mode="json", exclude_none=True) for lane in lanes]
-        with lanes_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        logger.info("Lane state saved to %s", lanes_path)
-    except OSError:
-        logger.debug("Could not persist lane state", exc_info=True)

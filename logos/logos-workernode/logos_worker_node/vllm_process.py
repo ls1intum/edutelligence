@@ -21,7 +21,9 @@ import asyncio
 from collections import deque
 from datetime import datetime
 import logging
+import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -80,6 +82,7 @@ class VllmProcessHandle:
         self._stuck_vram: bool = False
         self._known_child_pids: set[int] = set()
         self._process_group_id: int | None = None
+        self._max_concurrency: int | None = None
         self.hf_home_override: str | None = None
 
     async def init(self) -> None:
@@ -327,6 +330,7 @@ class VllmProcessHandle:
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
+            "e2e_latency_histogram": {},
         }
         if self._http is None:
             return metrics
@@ -350,7 +354,8 @@ class VllmProcessHandle:
                     metrics["queue_waiting"] = value
                 elif metric_name.endswith("num_requests_running"):
                     metrics["requests_running"] = value
-                elif metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent"):
+                elif (metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent")
+                      or metric_name.endswith("kv_cache_usage_perc") or metric_name.endswith("kv_cache_usage_percent")):
                     metrics["gpu_cache_usage_percent"] = value * 100.0
                 elif metric_name.endswith("prefix_cache_hit_rate"):
                     metrics["prefix_cache_hit_rate"] = value
@@ -363,6 +368,11 @@ class VllmProcessHandle:
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["ttft_histogram"][bucket] = value
+                elif "e2e_request_latency_seconds_bucket" in metric_name:
+                    bucket = "unknown"
+                    if 'le="' in name:
+                        bucket = name.split('le="', 1)[1].split('"', 1)[0]
+                    metrics["e2e_latency_histogram"][bucket] = value
         except httpx.HTTPError:
             return metrics
         return metrics
@@ -795,6 +805,11 @@ class VllmProcessHandle:
             if self._vllm_engine_config.nccl_debug_subsys:
                 env["NCCL_DEBUG_SUBSYS"] = self._vllm_engine_config.nccl_debug_subsys
 
+        # Per-model environment overrides (e.g. VLLM_USE_V1=0 for models
+        # whose head dimensions exceed V1 attention kernel limits on SM 7.5).
+        if vc.env_overrides:
+            env.update(vc.env_overrides)
+
         return env
 
     def _build_process_env(
@@ -1032,12 +1047,24 @@ class VllmProcessHandle:
         )
         return False
 
+    # Matches vLLM startup line like:
+    #   "Maximum concurrency for 4,096 tokens per request: 10.66x"
+    _RE_MAX_CONCURRENCY = re.compile(
+        r"Maximum concurrency for [\d,]+ tokens per request:\s+([\d.]+)x"
+    )
+
     # vLLM warnings that are expected side-effects of our configuration
     # (e.g. VLLM_SERVER_DEV_MODE required for sleep endpoints) and add
     # no operational value — suppress them from the log stream.
     _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
         "SECURITY WARNING: Development endpoints are enabled",
     )
+
+    @property
+    def max_concurrency(self) -> int | None:
+        """Max concurrent full-context requests reported by vLLM at startup."""
+        return self._max_concurrency
+
 
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:
@@ -1050,6 +1077,14 @@ class VllmProcessHandle:
                     if any(frag in line for frag in self._SUPPRESSED_LOG_FRAGMENTS):
                         continue
                     logger.info("[vllm:%s] %s", self.lane_id, line)
+                    if self._max_concurrency is None:
+                        m = self._RE_MAX_CONCURRENCY.search(line)
+                        if m:
+                            self._max_concurrency = max(1, math.floor(float(m.group(1))))
+                            logger.info(
+                                "[%s] vLLM reported max concurrency: %d",
+                                self.lane_id, self._max_concurrency,
+                            )
         except asyncio.CancelledError:
             pass
         except Exception:

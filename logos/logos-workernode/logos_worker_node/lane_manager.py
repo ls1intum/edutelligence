@@ -1283,6 +1283,105 @@ class LaneManager:
         )
         return lane_config.model_copy(update={"gpu_devices": selector})
 
+    async def _wait_for_vram_headroom(
+        self, lane_id: str, lane_config: LaneConfig,
+    ) -> None:
+        """Poll GPU snapshot briefly to confirm enough VRAM is free before spawn.
+
+        After a previous model is stopped, CUDA may take a moment to reclaim
+        device memory.  This gate avoids the common first-attempt failure where
+        vLLM rejects the launch because free memory is below its utilisation
+        threshold.  Polls up to 3 times (force_poll + snapshot) at ~2 s
+        intervals — at most ~6 s total — then proceeds regardless so the
+        planner's own retry loop handles any remaining race.
+        """
+        if self._gpu_force_poll is None or self._gpu_snapshot is None:
+            return
+        if not lane_config.vllm:
+            return
+
+        total_needed_mb = self._estimate_lane_vram_mb(lane_config)
+        if total_needed_mb <= 0:
+            return  # unknown profile — skip gate, let vLLM decide
+
+        tp_size = 1
+        if lane_config.vllm_config:
+            tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
+        per_gpu_needed_mb = total_needed_mb / tp_size
+
+        # Which GPU indices will this lane use?
+        target_indices: set[int] | None = None
+        if lane_config.gpu_devices:
+            try:
+                target_indices = {
+                    int(s.strip())
+                    for s in lane_config.gpu_devices.split(",")
+                    if s.strip()
+                }
+            except ValueError:
+                pass
+
+        max_attempts = 3
+        poll_interval = 2.0
+
+        for attempt in range(max_attempts):
+            try:
+                await self._gpu_force_poll()
+                snapshot = await self._gpu_snapshot()
+            except Exception:
+                logger.debug(
+                    "VRAM headroom check: GPU poll failed (attempt %d/%d)",
+                    attempt + 1, max_attempts, exc_info=True,
+                )
+                break  # can't check — proceed with spawn
+
+            if not snapshot.nvidia_smi_available:
+                break
+
+            # Check free VRAM on target devices
+            min_free_mb = float("inf")
+            for fallback_idx, device in enumerate(snapshot.devices):
+                if device.kind != "nvidia":
+                    continue
+                raw_idx = device.extra.get("index", fallback_idx)
+                try:
+                    idx = int(raw_idx)
+                except (TypeError, ValueError):
+                    idx = fallback_idx
+                if target_indices is not None and idx not in target_indices:
+                    continue
+                free = float(device.memory_free_mb or 0.0)
+                min_free_mb = min(min_free_mb, free)
+
+            if min_free_mb == float("inf"):
+                break  # no matching devices found — skip gate
+
+            if min_free_mb >= per_gpu_needed_mb:
+                logger.info(
+                    "VRAM headroom OK for lane '%s' model=%s: "
+                    "min_free=%.0f MB >= needed=%.0f MB/GPU (attempt %d)",
+                    lane_id, lane_config.model,
+                    min_free_mb, per_gpu_needed_mb, attempt + 1,
+                )
+                return
+
+            logger.info(
+                "VRAM headroom wait for lane '%s' model=%s: "
+                "min_free=%.0f MB < needed=%.0f MB/GPU — "
+                "waiting %.1fs (attempt %d/%d)",
+                lane_id, lane_config.model,
+                min_free_mb, per_gpu_needed_mb,
+                poll_interval, attempt + 1, max_attempts,
+            )
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(poll_interval)
+
+        logger.warning(
+            "VRAM headroom not confirmed for lane '%s' model=%s after %d attempts "
+            "— proceeding with spawn (planner will retry if needed)",
+            lane_id, lane_config.model, max_attempts,
+        )
+
     async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
         if self._max_lanes > 0 and len(self._handles) >= self._max_lanes:
             raise ValueError(
@@ -1307,6 +1406,7 @@ class LaneManager:
         lane_config = self._apply_model_vllm_overrides(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
+        await self._wait_for_vram_headroom(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)
         handle = _create_handle(
             lane_id,
@@ -1853,7 +1953,12 @@ class LaneManager:
         if lc is not None:
             is_vllm = lc.vllm
             model = lc.model
-            num_parallel = 0 if lc.vllm else lc.num_parallel
+            if lc.vllm:
+                # Use vLLM-reported max concurrency (KV-budget-derived) when available.
+                vllm_max = getattr(handle, "max_concurrency", None)
+                num_parallel = vllm_max if vllm_max and vllm_max > 0 else 0
+            else:
+                num_parallel = lc.num_parallel
             context_length = lc.context_length
             keep_alive = lc.keep_alive
             kv_cache_type = lc.kv_cache_type

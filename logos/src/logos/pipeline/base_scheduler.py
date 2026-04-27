@@ -29,11 +29,16 @@ class BaseScheduler(SchedulerInterface):
         logosnode_facade: LogosNodeSchedulingDataFacade,
         azure_facade: AzureSchedulingDataFacade,
         model_registry: Dict[tuple[int, int], str] | None = None,
+        on_capacity_needed=None,
     ):
         self._queue_mgr = queue_manager
         self._logosnode = logosnode_facade
         self._azure = azure_facade
         self._model_registry = model_registry or {}
+        # Async callback: (provider_id, model_name) -> None
+        # Fired when a request is queued for a sleeping/unloaded model
+        # so the capacity planner can start waking/loading immediately.
+        self._on_capacity_needed = on_capacity_needed
         self._logger = logging.getLogger(__name__)
 
     def _create_result(
@@ -152,20 +157,47 @@ class BaseScheduler(SchedulerInterface):
 
         has_waiters = next_task is not None
 
+        # For logosnode: check lane readiness BEFORE deciding reuse_slot.
+        # If the lane is sleeping/draining, we must NOT transfer the slot —
+        # that would create a phantom active count.  Instead, release the
+        # slot properly (reuse_slot=False) and re-enqueue the waiter so it
+        # can be served once the model is available again.
+        reuse_slot = has_waiters
+        if provider_type == 'logosnode' and has_waiters:
+            try:
+                lane_ready = self._logosnode.is_model_lane_ready(model_id, provider_id)
+            except Exception:
+                lane_ready = True  # optimistic if check fails
+            if not lane_ready:
+                logger.info(
+                    "Request %s released model %s but lane not ready — "
+                    "re-enqueuing waiter instead of slot transfer",
+                    request_id, model_id,
+                )
+                reuse_slot = False
+                # Put the waiter back in the queue
+                if isinstance(next_task, asyncio.Future) and not next_task.done():
+                    waiter_priority = entry.current_priority if entry else Priority.NORMAL
+                    self._queue_mgr.enqueue(
+                        next_task, model_id, provider_id, waiter_priority,
+                    )
+                next_task = None
+                has_waiters = False
+
         if provider_type == 'logosnode':
             try:
                 self._logosnode.on_request_complete(
                     request_id,
                     was_cold_start=False,
                     duration_ms=0,
-                    reuse_slot=has_waiters,
+                    reuse_slot=reuse_slot,
                     provider_id=provider_id,
                 )
                 logger.info(
                     "Request %s released model %s. Reusing slot? %s",
                     request_id,
                     model_id,
-                    has_waiters,
+                    reuse_slot,
                 )
             except KeyError:
                 pass
@@ -257,28 +289,42 @@ class BaseScheduler(SchedulerInterface):
         """Reevaluate queued requests for a model after state change (load/wake).
 
         When a provider state changes (e.g. a new lane becomes available),
-        queued futures for that model may be resolvable immediately.
+        dispatches up to max_capacity queued futures immediately rather than
+        drip-feeding one at a time. Results are created with slot_transferred=False
+        so _queue_and_wait properly increments the active count.
         """
-        # Find all (model_id, provider_id) pairs for this model name
         for (model_id, provider_id), ptype in self._model_registry.items():
             if ptype != "logosnode":
                 continue
-            # Check if this provider now has capacity for the model
+
+            # Use lane readiness as the primary check — it reads the runtime
+            # snapshot directly, bypassing the 5s refresh_interval cache in
+            # _loaded_models that can be stale right after a cold load confirms.
+            try:
+                if not self._logosnode.is_model_lane_ready(model_id, provider_id):
+                    continue
+            except Exception:
+                continue
+
             try:
                 status = self._logosnode.get_model_status(model_id, provider_id)
             except (ValueError, KeyError):
                 continue
-            if not status.is_loaded:
-                continue
 
-            # Try to dequeue and resolve waiting futures
-            while True:
+            # Determine how many requests we can dispatch
+            try:
+                max_capacity, _ = self._logosnode.get_parallel_capacity(model_id, provider_id)
+            except (KeyError, Exception):
+                max_capacity = 1
+            current_active = status.active_requests
+            available_slots = max(0, max_capacity - current_active)
+
+            dispatched = 0
+            while dispatched < available_slots:
                 task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
                 if task is None:
                     break
-                if not isinstance(task, asyncio.Future):
-                    break
-                if task.done():
+                if not isinstance(task, asyncio.Future) or task.done():
                     continue
 
                 priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
@@ -303,14 +349,22 @@ class BaseScheduler(SchedulerInterface):
                     is_cold_start=False,
                     provider_metrics=provider_metrics,
                     available_vram_mb=provider_metrics.get('available_vram_mb'),
+                    slot_transferred=False,
                 )
 
                 logger.info(
-                    "Reevaluation: resolving queued request for model %s (provider=%s) after state change",
-                    model_name, provider_id,
+                    "Reevaluation: resolving queued request for model %s "
+                    "(provider=%s, dispatched=%d/%d) after state change",
+                    model_name, provider_id, dispatched + 1, available_slots,
                 )
                 task.get_loop().call_soon_threadsafe(task.set_result, result)
-                break  # One at a time to avoid overwhelming the newly loaded lane
+                dispatched += 1
+
+            if dispatched > 0:
+                logger.info(
+                    "Reevaluation complete: dispatched %d queued requests for model %s (provider=%s)",
+                    dispatched, model_name, provider_id,
+                )
 
     def update_model_registry(self, model_registry: Dict[tuple[int, int], str]) -> None:
         self._model_registry = dict(model_registry or {})

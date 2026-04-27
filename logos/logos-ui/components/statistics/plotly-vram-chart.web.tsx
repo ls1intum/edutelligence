@@ -5,7 +5,9 @@ import { Text } from "@/components/ui/text";
 import EmptyState from "@/components/statistics/empty-state";
 import { loadPlotly } from "@/components/statistics/plotly-loader.web";
 import SegmentedSwitch from "@/components/statistics/segmented-switch";
+import { getLaneStateColor } from "@/components/statistics/constants";
 import { useDarkMode } from "@/components/statistics/use-dark-mode";
+import type { LaneSignalData } from "@/components/statistics/types";
 
 /* ================================================================== *
  *  Types                                                              *
@@ -31,6 +33,8 @@ type PlotlyVramChartProps = {
   vramTotalBuckets: number;
   getProviderColor: (index: number) => string;
   nowMs: number;
+  /** Per-lane state data keyed by provider name then lane_id — used to render lane VRAM traces */
+  laneStateByProvider?: Record<string, Record<string, LaneSignalData>>;
 };
 
 type VramPoint = {
@@ -203,6 +207,7 @@ export default function PlotlyVramChart({
   providerMetaByName = {},
   getProviderColor,
   nowMs,
+  laneStateByProvider,
 }: PlotlyVramChartProps) {
   const plotRef = useRef<HTMLDivElement | null>(null);
   const plotlyRef = useRef<any>(null);
@@ -213,6 +218,8 @@ export default function PlotlyVramChart({
   const providerOrderRef = useRef<string[]>([]);
   const prevFirstTsRef = useRef<number | null>(null);
   const prevLengthsRef = useRef<number[]>([]);
+  const prevLaneLengthsRef = useRef<Record<string, number>>({});
+  const laneKeyOrderRef = useRef<string>("");
   const prevYRangeRef = useRef<[number, number] | null>(null);
   const [plotlyError, setPlotlyError] = useState<string | null>(null);
   const [plotlyReady, setPlotlyReady] = useState(false);
@@ -250,6 +257,56 @@ export default function PlotlyVramChart({
       }),
     [providers, providerMetaByName, vramDataByProvider, getProviderColor],
   );
+
+  /* ── Lane entries: per-lane time series for VRAM usage ─────────────── */
+  const laneEntries = useMemo(() => {
+    if (!laneStateByProvider) return [];
+    const entries: Array<{
+      key: string;
+      laneId: string;
+      color: string;
+      modelName: string;
+      runtimeState: string;
+      points: Array<{ ts: number; vramMb: number }>;
+    }> = [];
+
+    for (const providerName of providers) {
+      const samples = vramDataByProvider[providerName] || [];
+      const currentLanes = laneStateByProvider[providerName] ?? {};
+
+      const laneIds = new Set<string>();
+      for (const sample of samples) {
+        const lanes = (sample?.scheduler_signals?.lanes) as Record<string, LaneSignalData> | undefined;
+        if (lanes) Object.keys(lanes).forEach((id) => laneIds.add(id));
+      }
+
+      for (const laneId of laneIds) {
+        const currentLane = currentLanes[laneId];
+        const pts: Array<{ ts: number; vramMb: number }> = [];
+        for (const sample of samples) {
+          if (!sample?.timestamp) continue;
+          const ts =
+            typeof sample.timestamp === "number"
+              ? sample.timestamp
+              : new Date(sample.timestamp).getTime();
+          if (!Number.isFinite(ts)) continue;
+          const lane = (sample?.scheduler_signals?.lanes as any)?.[laneId] as LaneSignalData | undefined;
+          if (!lane) continue;
+          pts.push({ ts, vramMb: lane.effective_vram_mb ?? 0 });
+        }
+        if (!pts.length) continue;
+        entries.push({
+          key: `${providerName}::${laneId}`,
+          laneId,
+          color: getLaneStateColor(currentLane?.runtime_state ?? "cold"),
+          modelName: currentLane?.model ?? laneId,
+          runtimeState: currentLane?.runtime_state ?? "cold",
+          points: pts,
+        });
+      }
+    }
+    return entries.sort((a, b) => a.key.localeCompare(b.key));
+  }, [laneStateByProvider, providers, vramDataByProvider]);
 
   const hasAnyPoints = providerSeries.some((p) => p.points.length > 0);
 
@@ -323,6 +380,31 @@ export default function PlotlyVramChart({
       })),
     [providerSeries],
   );
+
+  /* ── Lane traces (dashed, hidden by default) ───────────────────────── */
+  const laneTraces = useMemo(
+    () =>
+      laneEntries.map((entry) => ({
+        type: "scattergl" as const,
+        mode: "lines" as const,
+        name: `${entry.laneId} (${entry.modelName})`,
+        x: entry.points.map((pt) => new Date(pt.ts)),
+        y: entry.points.map((pt) => pt.vramMb / 1024),
+        line: { color: entry.color, width: 1.6, dash: "dot" as const },
+        connectgaps: false,
+        visible: "legendonly" as const,
+        customdata: entry.points.map((pt) => [entry.runtimeState, entry.modelName, pt.vramMb]),
+        hovertemplate:
+          "Lane: <b>%{fullData.name}</b>" +
+          "<br>State: %{customdata[0]}" +
+          "<br>VRAM: %{customdata[2]:.0f} MB (%{y:.2f} GB)" +
+          "<extra></extra>",
+      })),
+    [laneEntries],
+  );
+
+  /* ── Combined traces ────────────────────────────────────────────────── */
+  const allTraces = useMemo(() => [...traces, ...laneTraces], [traces, laneTraces]);
 
   /* ── Load Plotly CDN ───────────────────────────────────────────────── */
   useEffect(() => {
@@ -420,7 +502,7 @@ export default function PlotlyVramChart({
           tickfont: { color: textMuted, size: 11 },
           rangemode: "tozero",
           title: {
-            text: "Remaining Memory (GB)",
+            text: "VRAM (GB)",
             font: { color: textMuted, size: 11 },
           },
         },
@@ -472,19 +554,24 @@ export default function PlotlyVramChart({
       };
 
       /* ── Incremental-update detection ──────────────────────────────── */
+      const currentLaneKeyOrder = laneEntries.map((e) => e.key).join("|");
       const canAppend =
         initializedRef.current &&
         prevFirstTsRef.current === firstTs &&
         providerOrder.join("|") === providerOrderRef.current.join("|") &&
         prevLengthsRef.current.length === providerSeries.length &&
+        laneKeyOrderRef.current === currentLaneKeyOrder &&
         providerSeries.every(
           (p, i) => p.points.length >= (prevLengthsRef.current[i] || 0),
         );
       const hasNewPoints =
         canAppend &&
-        providerSeries.some(
+        (providerSeries.some(
           (p, i) => p.points.length > (prevLengthsRef.current[i] || 0),
-        );
+        ) ||
+          laneEntries.some(
+            (e) => e.points.length > (prevLaneLengthsRef.current[e.key] || 0),
+          ));
 
       /* ── y-auto-fit (with jitter guard) ────────────────────────────── */
       const updateVisibleYRange = async (start: Date, end: Date) => {
@@ -516,7 +603,7 @@ export default function PlotlyVramChart({
       if (!initializedRef.current) {
         isProgrammaticRelayoutRef.current = true;
         try {
-          await plotly.newPlot(graphDiv, traces, layout, config);
+          await plotly.newPlot(graphDiv, allTraces, layout, config);
         } finally {
           isProgrammaticRelayoutRef.current = false;
         }
@@ -576,6 +663,18 @@ export default function PlotlyVramChart({
             );
           });
 
+          // Also extend lane traces
+          const laneStartIdx = providerSeries.length;
+          laneEntries.forEach((entry, laneIdx) => {
+            const prevLen = prevLaneLengthsRef.current[entry.key] || 0;
+            const newPts = entry.points.slice(prevLen);
+            if (!newPts.length) return;
+            indices.push(laneStartIdx + laneIdx);
+            extendX.push(newPts.map((pt) => new Date(pt.ts)));
+            extendY.push(newPts.map((pt) => pt.vramMb / 1024));
+            extendCD.push(newPts.map((pt) => [entry.runtimeState, entry.modelName, pt.vramMb]));
+          });
+
           if (indices.length > 0) {
             await plotly.extendTraces(
               graphDiv,
@@ -600,10 +699,10 @@ export default function PlotlyVramChart({
           isProgrammaticRelayoutRef.current = false;
         }
       } else {
-        /* ── Full redraw (providers changed, etc.) ───────────────────── */
+        /* ── Full redraw (providers changed, lane set changed, etc.) ─── */
         isProgrammaticRelayoutRef.current = true;
         try {
-          await plotly.react(graphDiv, traces, layout, config);
+          await plotly.react(graphDiv, allTraces, layout, config);
         } finally {
           isProgrammaticRelayoutRef.current = false;
         }
@@ -624,6 +723,10 @@ export default function PlotlyVramChart({
       providerOrderRef.current = providerOrder;
       prevFirstTsRef.current = firstTs;
       prevLengthsRef.current = providerSeries.map((p) => p.points.length);
+      laneKeyOrderRef.current = currentLaneKeyOrder;
+      for (const entry of laneEntries) {
+        prevLaneLengthsRef.current[entry.key] = entry.points.length;
+      }
     };
 
     renderPlot().catch((err) => {
@@ -637,7 +740,10 @@ export default function PlotlyVramChart({
       disposed = true;
     };
   }, [
+    allTraces,
     traces,
+    laneTraces,
+    laneEntries,
     providerSeries,
     width,
     nowMs,

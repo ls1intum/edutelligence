@@ -1,5 +1,18 @@
-# docker-compose.dev.yaml — Local development (builds images from source)
+# docker-compose.dev.yaml — Local development (plain HTTP, no TLS)
 # Usage: docker compose -f docker-compose.dev.yaml up --build
+#
+# All services are reachable over plain HTTP on localhost.
+# Production docker-compose.yaml is NOT affected.
+#
+# Ports:
+#   18081  →  UI + API  (Traefik HTTP — main entry point)
+#   18443  →  Landing page (Traefik HTTP)
+#   18080  →  logos-server direct (bypass Traefik, handy for debugging)
+#   5432   →  PostgreSQL
+#
+# Worker node: point LOGOS_URL=http://host.docker.internal:18080
+#              with   LOGOS_ALLOW_INSECURE_HTTP=true
+
 services:
   traefik:
     image: traefik:v3.6.1
@@ -8,12 +21,13 @@ services:
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.secure8080.address=:8080"
-      - "--api.dashboard=true"
+      # HTTP-only entrypoints (no TLS)
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web8080.address=:8080"
+      - "--api.dashboard=false"
     ports:
-      - "${LOGOS_TRAEFIK_HTTPS_PORT:-18443}:443"
-      - "${LOGOS_TRAEFIK_SECURE8080_PORT:-18081}:8080"
+      - "${LOGOS_TRAEFIK_LANDING_PORT:-18443}:80"     # landing page
+      - "${LOGOS_TRAEFIK_UI_PORT:-18081}:8080"         # UI + API
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -26,18 +40,25 @@ services:
       dockerfile: ./logos/Dockerfile
     container_name: logos-server
     restart: unless-stopped
+    command: ["uvicorn", "logos.main:app", "--host", "0.0.0.0", "--port", "8080", "--ws-ping-interval", "60", "--ws-ping-timeout", "60"]
     depends_on:
       logos-db:
         condition: service_healthy
     volumes:
       - data_volume:/src/logos
+      - ./src/logos/capacity:/app/src/logos/capacity:ro
+      - ./src/logos/pipeline:/app/src/logos/pipeline:ro
+      - ./src/logos/sdi:/app/src/logos/sdi:ro
       - ./tests/performance/results:/app/tests/performance/results
       - ./tests/integration:/app/tests/integration
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
-      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
+      ECCS_DECISION_LOG: "${ECCS_DECISION_LOG:-/tmp/eccs_decisions.jsonl}"
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "true"
+      LOGOSNODE_INFER_TIMEOUT_SECONDS: "1200"
+      LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
     expose:
       - "8080"
@@ -48,50 +69,43 @@ services:
 
       # === Routing: /v1 ===
       - "traefik.http.routers.logos-server-v1.rule=PathPrefix(`/v1`)"
-      - "traefik.http.routers.logos-server-v1.entrypoints=secure8080"
-      - "traefik.http.routers.logos-server-v1.tls=true"
+      - "traefik.http.routers.logos-server-v1.entrypoints=web8080"
       - "traefik.http.routers.logos-server-v1.service=logos-server"
       - "traefik.http.routers.logos-server-v1.priority=100"
 
       # === Routing: /openai ===
       - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
-      - "traefik.http.routers.logos-server-openai.entrypoints=secure8080"
-      - "traefik.http.routers.logos-server-openai.tls=true"
+      - "traefik.http.routers.logos-server-openai.entrypoints=web8080"
       - "traefik.http.routers.logos-server-openai.service=logos-server"
       - "traefik.http.routers.logos-server-openai.priority=100"
 
       # === Routing: /jobs ===
       - "traefik.http.routers.logos-server-jobs.rule=PathPrefix(`/jobs`)"
-      - "traefik.http.routers.logos-server-jobs.entrypoints=secure8080"
-      - "traefik.http.routers.logos-server-jobs.tls=true"
+      - "traefik.http.routers.logos-server-jobs.entrypoints=web8080"
       - "traefik.http.routers.logos-server-jobs.service=logos-server"
       - "traefik.http.routers.logos-server-jobs.priority=100"
 
       # === Routing: /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
-      - "traefik.http.routers.logos-server-logosdb.entrypoints=secure8080"
-      - "traefik.http.routers.logos-server-logosdb.tls=true"
+      - "traefik.http.routers.logos-server-logosdb.entrypoints=web8080"
       - "traefik.http.routers.logos-server-logosdb.service=logos-server"
       - "traefik.http.routers.logos-server-logosdb.priority=100"
 
       # === Routing: /docs ===
       - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
-      - "traefik.http.routers.logos-server-docs.entrypoints=secure8080"
-      - "traefik.http.routers.logos-server-docs.tls=true"
+      - "traefik.http.routers.logos-server-docs.entrypoints=web8080"
       - "traefik.http.routers.logos-server-docs.service=logos-server"
       - "traefik.http.routers.logos-server-docs.priority=100"
 
       # === Routing: /metrics (Prometheus) ===
       - "traefik.http.routers.logos-server-metrics.rule=PathPrefix(`/metrics`)"
-      - "traefik.http.routers.logos-server-metrics.entrypoints=secure8080"
-      - "traefik.http.routers.logos-server-metrics.tls=true"
+      - "traefik.http.routers.logos-server-metrics.entrypoints=web8080"
       - "traefik.http.routers.logos-server-metrics.service=logos-server"
       - "traefik.http.routers.logos-server-metrics.priority=100"
 
       # === Routing: /ws (WebSocket) ===
       - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
-      - "traefik.http.routers.logos-server-ws.entrypoints=secure8080"
-      - "traefik.http.routers.logos-server-ws.tls=true"
+      - "traefik.http.routers.logos-server-ws.entrypoints=web8080"
       - "traefik.http.routers.logos-server-ws.service=logos-server"
       - "traefik.http.routers.logos-server-ws.priority=100"
 
@@ -129,8 +143,7 @@ services:
 
   logos-ui:
     build:
-      context: ../
-      dockerfile: ./logos/logos-ui/Dockerfile
+      context: ./logos-ui
     container_name: logos-ui
     restart: unless-stopped
     expose:
@@ -138,10 +151,9 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === UI routing ===
+      # === UI routing (HTTP, no TLS) ===
       - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui.entrypoints=secure8080"
-      - "traefik.http.routers.internal-ui.tls=true"
+      - "traefik.http.routers.internal-ui.entrypoints=web8080"
       - "traefik.http.routers.internal-ui.service=internal-ui-svc"
       - "traefik.http.routers.internal-ui.priority=0"
 
@@ -152,8 +164,7 @@ services:
 
   landing-page:
     build:
-      context: ../
-      dockerfile: ./logos/logos-landing/Dockerfile
+      context: ./logos-landing
     container_name: logos-landing
     restart: unless-stopped
     environment:
@@ -163,10 +174,9 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Landing page routing ===
+      # === Landing page routing (HTTP, no TLS) ===
       - "traefik.http.routers.landing.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
-      - "traefik.http.routers.landing.entrypoints=websecure"
-      - "traefik.http.routers.landing.tls=true"
+      - "traefik.http.routers.landing.entrypoints=web"
       - "traefik.http.routers.landing.service=landing-svc"
       - "traefik.http.routers.landing.priority=1"
 
@@ -175,9 +185,55 @@ services:
     networks:
       - extern
 
+  logos-workernode:
+    image: logos-workernode-vllm:gemma4  # local image with transformers 5.5.3 for gemma4 arch support (based on pr-489)
+    container_name: logos-workernode-dev
+    init: true
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 2m
+    pid: host
+    ipc: host
+    shm_size: "16g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    environment:
+      LOGOS_URL: "http://logos-server:8080"
+      LOGOS_API_KEY: "DzlgIX6bEhjZexiVUgo0DuG575-6PcWOXoYvUq1xwUJ59pLG6_xvXxqWOtx9h4Lo"
+      LOGOS_ALLOW_INSECURE_HTTP: "true"
+      LOGOS_WORKER_NODE_CONFIG: /app/config.yml
+      LOGOS_STATE_DIR: /app/data
+      LOGOS_SKIP_AUTO_CALIBRATION: "0"
+      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      HF_HUB_OFFLINE: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - ./logos-workernode/config.yml:/app/config.yml:ro
+      - ./logos-workernode/data:/app/data
+      # Mount repo code over pr-489 image code — gives us the latest
+      # worker code (max_concurrency, model_profiles fixes) without
+      # rebuilding the full vLLM+PyTorch image.
+      - ./logos-workernode/logos_worker_node:/app/logos_worker_node:ro
+      # Model weights + HF cache from standalone worker volume
+      - ollama-models:/usr/share/ollama/.ollama/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - internal
+
 volumes:
   data_volume:
   postgres_data:
+  ollama-models:
+    external: true
+    name: logos-workernode_ollama-models
 
 networks:
   internal:

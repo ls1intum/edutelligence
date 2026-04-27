@@ -177,6 +177,7 @@ class LaneSchedulerSignals:
     requests_running: float  # from backend_metrics (vLLM) or active_requests (Ollama)
     gpu_cache_usage_percent: Optional[float]  # vLLM only
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
+    e2e_latency_p50_seconds: float  # p50 end-to-end request latency, 0.0 if unavailable
     effective_vram_mb: float
     num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
@@ -195,6 +196,7 @@ class LaneSchedulerSignals:
             'requests_running': self.requests_running,
             'gpu_cache_usage_percent': self.gpu_cache_usage_percent,
             'ttft_p95_seconds': self.ttft_p95_seconds,
+            'e2e_latency_p50_seconds': self.e2e_latency_p50_seconds,
             'effective_vram_mb': self.effective_vram_mb,
             'num_parallel': self.num_parallel,
             'gpu_memory_utilization': self.gpu_memory_utilization,
@@ -221,6 +223,7 @@ class ModelSchedulerView:
     aggregate_active_requests: int  # sum across all matching lanes
     aggregate_queue_waiting: float  # sum of queue_waiting across lanes
     warmest_ttft_p95_seconds: float  # min ttft_p95 among loaded lanes (best case)
+    warmest_e2e_latency_p50_seconds: float  # min e2e latency p50 among loaded lanes
     gpu_cache_pressure_max: Optional[float]  # max gpu_cache_usage_percent across lanes
     lanes: List[LaneSchedulerSignals] = field(default_factory=list)
 
@@ -269,6 +272,7 @@ class ModelSchedulerView:
             'aggregate_active_requests': self.aggregate_active_requests,
             'aggregate_queue_waiting': self.aggregate_queue_waiting,
             'warmest_ttft_p95_seconds': self.warmest_ttft_p95_seconds,
+            'warmest_e2e_latency_p50_seconds': self.warmest_e2e_latency_p50_seconds,
             'gpu_cache_pressure_max': self.gpu_cache_pressure_max,
             'lanes': [lane.to_dict() for lane in self.lanes],
         }
