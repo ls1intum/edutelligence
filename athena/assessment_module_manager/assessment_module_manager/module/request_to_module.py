@@ -34,15 +34,7 @@ async def find_module_by_name(module_name: str) -> Optional[Module]:
 
 
 # pylint: disable=too-many-positional-arguments
-async def request_to_module(
-    module: Module,
-    headers: dict,
-    path: str,
-    lms_url: str,
-    data: Optional[dict],
-    method: str,
-    lms_secret: Optional[str] = None,
-) -> ModuleResponse:
+async def request_to_module(module: Module, headers: dict, path: str, lms_url: str, data: Optional[dict], method: str) -> ModuleResponse:
     """
     Helper function to send a request to a module.
     It raises appropriate FastAPI HTTPException if the request fails.
@@ -55,15 +47,7 @@ async def request_to_module(
         # We need the Athena secret with the LMS to access repositories.
         # In order to only have to configure it once for the whole of Athena,
         # we pass it to the module from here.
-        repository_secret = env.DEPLOYMENT_SECRETS.get(lms_url, "")
-        if not repository_secret and not env.PRODUCTION and lms_secret:
-            logger.warning(
-                "DEBUG MODE: No deployment secret configured for LMS URL %s. "
-                "Falling back to the incoming Authorization header for repository access.",
-                lms_url,
-            )
-            repository_secret = lms_secret
-        headers['X-Repository-Authorization-Secret'] = repository_secret
+        headers['X-Repository-Authorization-Secret'] = env.DEPLOYMENT_SECRETS.get(lms_url, "")
         # for repository access
         # should be the same as the LMS key
 
