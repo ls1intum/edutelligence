@@ -6,13 +6,13 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 package-mode = true
 
 [tool.poetry.dependencies]
-python = "3.11.*"
-python-dotenv = "1.2.1"
+python = "3.14.*"
+python-dotenv = "1.2.2"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "8.3.5"
+pytest = "8.4.2"
 pytest-asyncio = "0.26.0"
-prospector = "1.17.3"
+prospector = "1.18.0"
 
 [tool.poetry.scripts]
 lint_all = "scripts.lint_modules:main"

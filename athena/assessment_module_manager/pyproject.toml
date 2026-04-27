@@ -6,16 +6,16 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 athena = { path = "../athena", develop = true }
-fastapi = "0.120.1"
-uvicorn = "0.38.0"
+fastapi = "0.136.1"
+uvicorn = "0.46.0"
 httpx = "0.28.1"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.32.4.20250913"
-pydantic = "2.11.7"
-prospector = "1.17.3"
+types-requests = "2.33.0.20260408"
+pydantic = "2.13.3"
+prospector = "1.18.0"
 
 [tool.poetry.scripts]
 assessment_module_manager = "assessment_module_manager.__main__:main"

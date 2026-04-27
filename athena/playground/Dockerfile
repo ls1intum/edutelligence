@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:24.11.0-alpine
+FROM node:24.15.0-alpine
 
 LABEL org.opencontainers.image.source=https://github.com/ls1intum/Athena
 

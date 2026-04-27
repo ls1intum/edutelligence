@@ -2,7 +2,7 @@
 
 # This is the Dockerfile for the assessment module manager.
 
-FROM python:3.11
+FROM python:3.14
 LABEL org.opencontainers.image.source=https://github.com/ls1intum/Athena
 
 # Environment variable Python in Docker

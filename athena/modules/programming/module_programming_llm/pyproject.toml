@@ -6,23 +6,23 @@ authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
 # athena = { path = "../athena", develop = true }
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
-gitpython = "3.1.45"
+gitpython = "3.1.47"
 tiktoken = "0.12.0"
-nltk = "3.9.2"
+nltk = "3.9.4"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.32.4.20250913"
-pydantic = "2.11.7"
-prospector = "1.17.3"
+types-requests = "2.33.0.20260408"
+pydantic = "2.13.3"
+prospector = "1.18.0"
 
 [tool.poetry.group.test.dependencies]
-pytest = "8.2.0"
+pytest = "8.4.2"
 pytest-asyncio = "0.26.0"
 
 [tool.poetry.scripts]
