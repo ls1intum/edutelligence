@@ -5,8 +5,8 @@ Pipeline:
   1. Load artemis_intent_dataset.csv
   2. Fine-tune paraphrase-multilingual-MiniLM-L12-v2 with SetFit
   3. Export backbone to ONNX
-  4. Apply O3 graph optimisation
-  5. Apply dynamic INT8 quantisation
+  4. Apply O3 graph optimisation (saved separately; not used for quantisation)
+  5. Apply dynamic INT8 quantisation on base graph (O3 ops break the quantiser)
   6. Save everything to intent_model_onnx_quantized/
 """
 
@@ -164,7 +164,7 @@ print("=== Applying dynamic INT8 quantisation ===")
 FINAL_DIR = Path("models/global_search_intent/onnx")
 FINAL_DIR.mkdir(exist_ok=True)
 
-quantizer = ORTQuantizer.from_pretrained(str(ONNX_OPT_DIR))
+quantizer = ORTQuantizer.from_pretrained(str(ONNX_BASE_DIR))
 
 # Try platform-specific configs, fall back to a generic dynamic INT8 config
 try:
@@ -192,7 +192,7 @@ quantizer.quantize(
     save_dir=str(FINAL_DIR),
     quantization_config=qconfig,
 )
-tokenizer.save_pretrained(str(FINAL_DIR))
+# Tokenizer is loaded from HuggingFace Hub at runtime — do not commit it.
 print(f"  Quantised ONNX saved to {FINAL_DIR}\n")
 
 # ── 8. Save classifier head alongside ONNX files ─────────────────────────────
