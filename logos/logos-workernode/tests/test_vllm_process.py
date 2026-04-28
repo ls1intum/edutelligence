@@ -655,6 +655,77 @@ def test_build_process_env_keeps_explicit_gpu_pin(monkeypatch) -> None:
     assert process_env["PATH"] == f"{expected_prefix}{os.pathsep}/usr/bin"
 
 
+def test_build_process_env_prepends_nvidia_pip_cuda_lib_dirs(monkeypatch, tmp_path: Path) -> None:
+    """LD_LIBRARY_PATH should include nvidia pip-package lib dirs so PyTorch
+    cu128 can find CUDA 12 shared libraries (libcudart.so.12, libcublasLt.so.12)."""
+    import logos_worker_node.vllm_process as vp
+
+    # Build a fake site-packages tree with nvidia package lib dirs
+    site_packages = tmp_path / "lib" / "python3.13" / "site-packages"
+    for pkg in ("cublas", "cuda_runtime", "cudnn"):
+        (site_packages / "nvidia" / pkg / "lib").mkdir(parents=True)
+    (site_packages / "torch" / "lib").mkdir(parents=True)
+
+    # Patch sysconfig to return our fake site-packages and reset cache
+    monkeypatch.setattr("sysconfig.get_path", lambda _key: str(site_packages))
+    old_cache = vp._pip_cuda_lib_dirs
+    vp._pip_cuda_lib_dirs = None
+
+    try:
+        handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+        lane = LaneConfig(
+            model="Qwen/Qwen2.5-0.5B-Instruct",
+            vllm=True,
+            vllm_config=VllmConfig(),
+        )
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/usr/local/cuda/lib64")
+        monkeypatch.delenv("HF_HOME", raising=False)
+
+        env = handle._build_env(lane)
+        process_env = handle._build_process_env(lane, env, ["/tmp/vllm", "serve"])
+
+        ld_path = process_env["LD_LIBRARY_PATH"]
+        # All three nvidia lib dirs and torch/lib should be prepended
+        for pkg in ("cuda_runtime", "cublas", "cudnn"):
+            assert str(site_packages / "nvidia" / pkg / "lib") in ld_path
+        assert str(site_packages / "torch" / "lib") in ld_path
+        # Original LD_LIBRARY_PATH should be preserved at the end
+        assert ld_path.endswith("/usr/local/cuda/lib64")
+    finally:
+        vp._pip_cuda_lib_dirs = old_cache
+
+
+def test_build_process_env_no_ld_change_without_nvidia_dirs(monkeypatch, tmp_path: Path) -> None:
+    """When no nvidia pip packages exist, LD_LIBRARY_PATH should be unchanged."""
+    import logos_worker_node.vllm_process as vp
+
+    site_packages = tmp_path / "lib" / "python3.13" / "site-packages"
+    site_packages.mkdir(parents=True)
+
+    monkeypatch.setattr("sysconfig.get_path", lambda _key: str(site_packages))
+    old_cache = vp._pip_cuda_lib_dirs
+    vp._pip_cuda_lib_dirs = None
+
+    try:
+        handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+        lane = LaneConfig(
+            model="Qwen/Qwen2.5-0.5B-Instruct",
+            vllm=True,
+            vllm_config=VllmConfig(),
+        )
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/usr/local/cuda/lib64")
+        monkeypatch.delenv("HF_HOME", raising=False)
+
+        env = handle._build_env(lane)
+        process_env = handle._build_process_env(lane, env, ["/tmp/vllm", "serve"])
+
+        assert process_env["LD_LIBRARY_PATH"] == "/usr/local/cuda/lib64"
+    finally:
+        vp._pip_cuda_lib_dirs = old_cache
+
+
 @pytest.mark.asyncio
 async def test_spawn_uses_new_process_session(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
