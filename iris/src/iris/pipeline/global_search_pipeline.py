@@ -158,22 +158,27 @@ class GlobalSearchPipeline(SubPipeline):
             answer = raw
             used_sources = grounded_sources
 
-        # Safety net: if the LLM ignored the null instruction and wrote a refusal
-        # instead, suppress it so the client never sees a "not covered" message.
-        if answer and re.search(
-            r"not (covered|mentioned|discussed|found|available|provided|present|included)"
-            r"|not (in|part of) the (course|lecture|material|content|slides)"
-            r"|no (mention|reference|explanation|definition|description|information)"
-            r"|does not (cover|mention|discuss|provide|include|contain|address)"
-            r"|cannot (answer|find|provide|address)",
-            answer,
-            re.IGNORECASE,
+        # Safety net: if the LLM ignored the null instruction and wrote a short refusal
+        # instead of a grounded answer, suppress it so the client never sees a
+        # "not covered" message. Only fires on short answers (< 120 chars) to avoid
+        # suppressing legitimate answers that mention what the course does not cover.
+        if (
+            answer
+            and len(answer) < 120
+            and re.search(
+                r"not (covered|mentioned|discussed|found|available|provided|present|included)"
+                r"|not (in|part of) the (course|lecture|material|content|slides)"
+                r"|no (mention|reference|explanation|definition|description|information)"
+                r"|does not (cover|mention|discuss|provide|include|contain|address)"
+                r"|cannot (answer|find|provide|address)",
+                answer,
+                re.IGNORECASE,
+            )
         ):
             logger.info(
-                "[ask] LLM refusal detected in answer text — suppressing to null"
+                "[global-search] LLM refusal detected in answer text — suppressing to null"
             )
             answer = None
-            used_sources = []
 
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_LECTURE_SEARCH_ANSWER_PIPELINE
