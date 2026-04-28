@@ -7,7 +7,7 @@
   },
   "quantization": "dynamic INT8",
   "optimization_level": "O3",
-  "onnx_file": "model_optimized_quantized.onnx",
+  "onnx_file": "model_quantized.onnx",
   "eval_metrics": {
     "accuracy": 0.9971671388101983
   }

@@ -11,7 +11,7 @@ path (relative to the repo root).
 
 import json
 import os
-from functools import lru_cache
+import threading
 from pathlib import Path
 
 import joblib
@@ -104,9 +104,15 @@ class _IntentClassifier:
         return self._infer(query)
 
 
-@lru_cache(maxsize=1)
-def _get_classifier() -> _IntentClassifier | None:
-    """Load once, cache forever. Returns None if the model directory is missing."""
+_classifier_instance: "_IntentClassifier | None" = None
+_classifier_lock = threading.Lock()
+
+
+def _get_classifier() -> "_IntentClassifier | None":
+    """Load lazily; only memoize on success so transient errors are retried."""
+    global _classifier_instance
+    if _classifier_instance is not None:
+        return _classifier_instance
     model_dir = _model_dir()
     if not model_dir.exists():
         logger.warning(
@@ -114,11 +120,17 @@ def _get_classifier() -> _IntentClassifier | None:
             model_dir,
         )
         return None
-    try:
-        return _IntentClassifier(model_dir)
-    except Exception:
-        logger.exception("Failed to load intent classifier — intent filtering disabled")
-        return None
+    with _classifier_lock:
+        if _classifier_instance is not None:
+            return _classifier_instance
+        try:
+            _classifier_instance = _IntentClassifier(model_dir)
+        except Exception:
+            logger.exception(
+                "Failed to load intent classifier — will retry on next call"
+            )
+            return None
+    return _classifier_instance
 
 
 def classify(query: str) -> SearchIntent:

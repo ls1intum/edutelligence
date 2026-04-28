@@ -211,7 +211,7 @@ meta = {
     "quantization": "dynamic INT8",
     "optimization_level": "O3",
     "onnx_file": next((f.name for f in FINAL_DIR.glob("*.onnx")), "unknown"),
-    "eval_metrics": metrics,
+    "eval_metrics": {k: float(v) for k, v in metrics.items()},
 }
 (FINAL_DIR / "meta.json").write_text(json.dumps(meta, indent=2))
 
