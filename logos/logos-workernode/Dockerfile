@@ -31,14 +31,19 @@
 #   library always matches the host's driver version.
 #
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
-# vLLM/PyTorch wheels: cu128 (newest wheel index under CUDA 13.1 driver).
+# vLLM/PyTorch: PyPI wheels ship CUDA 13 support since vLLM ≥0.20 / torch ≥2.11.
 # =============================================================================
 
 ARG BASE_IMAGE=python:3.12-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
 ARG VLLM_PIP_SPEC="vllm>=0.19.1"
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+# TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
+# installs, which already includes CUDA support matching its nvidia-* deps.
+# Only set this to override with a specific CUDA wheel index (e.g.
+# https://download.pytorch.org/whl/cu128) for older vLLM versions whose
+# PyPI torch was CPU-only.
+ARG TORCH_INDEX_URL=
 ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
@@ -130,12 +135,14 @@ RUN set -e \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
          # 1. Install vLLM (pins torch to its required version from PyPI)
          pip install --no-cache-dir $VLLM_PIP_SPEC \
-         # Free disk space before reinstalling torch: strip tests, caches, temp files
+         # Free disk space: strip tests, caches, temp files
          && (find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + || true) \
          && (find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
               -path '*/torch/*' -exec rm -rf {} + || true) \
          && rm -rf /tmp/pip-* /root/.cache \
-         # 2. Reinstall torch from CUDA wheel index (same version, GPU-enabled)
+         # 2. Optional: reinstall torch from a specific CUDA wheel index.
+         #    Since vLLM ≥0.20, PyPI torch already includes CUDA support, so
+         #    this is normally a no-op (TORCH_INDEX_URL defaults to empty).
          && if [ -n "$TORCH_INDEX_URL" ]; then \
               torch_ver=$(python3 -c "import importlib.metadata as m; print(m.version('torch'))") \
               && echo "Reinstalling torch==${torch_ver} from ${TORCH_INDEX_URL}" \
