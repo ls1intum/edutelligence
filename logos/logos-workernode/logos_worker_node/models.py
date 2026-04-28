@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
+_DEFAULT_LANE_CONTEXT_LENGTH = 4096
 
 
 def _normalize_gpu_devices(raw: str) -> str:
@@ -78,9 +79,19 @@ class VllmConfig(BaseModel):
     )
     enable_prefix_caching: bool = True
     disable_custom_all_reduce: bool = False
-    disable_nccl_p2p: bool = False
     enable_sleep_mode: bool = False
     server_dev_mode: bool = False
+    enable_auto_tool_choice: bool = Field(
+        default=True,
+        description="Enable automatic tool choice for function calling. "
+        "Passes --enable-auto-tool-choice to vLLM. Set to false to disable.",
+    )
+    tool_call_parser: str = Field(
+        default="",
+        description="Tool call parser for function calling (e.g. 'hermes', 'mistral', 'llama3_json'). "
+        "Empty (default) = infer from the model name (gemma4→gemma4, llama3→llama3_json, "
+        "qwen→hermes, etc.; falls back to hermes). Set explicitly to override.",
+    )
     cuda_graph_sizes: str = Field(
         default="",
         description="Comma-separated batch sizes for CUDA graph capture (e.g. '1,2,4,8'). "
@@ -125,6 +136,12 @@ class VllmEngineConfig(BaseModel):
     flashinfer_logdest: str = Field(
         default="",
         description="FlashInfer log destination: stdout, stderr, or a file path. Empty = FlashInfer default.",
+    )
+    nccl_p2p_available: bool = Field(
+        default=False,
+        description="Set to true when GPUs are connected via NVLink and NCCL peer-to-peer "
+        "communication is available. Default false (PCIe-only topology) disables "
+        "NCCL P2P globally for all TP>1 lanes to prevent hangs.",
     )
     nccl_debug: str = Field(
         default="",
@@ -175,6 +192,23 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    auto_reboot_on_stuck_gpu: bool = Field(
+        default=True,
+        description=(
+            "Initiate a host OS reboot when all lanes exhaust their crash-restart budget "
+            "and at least one has stuck VRAM (unrecoverable GPU state). "
+            "Tries 'sudo reboot' first; falls back to writing a sentinel file at "
+            "reboot_sentinel_path for a host-side watchdog."
+        ),
+    )
+    reboot_sentinel_path: str = Field(
+        default="/host/reboot-requested",
+        description=(
+            "Path for the reboot-request sentinel file written when 'sudo reboot' is "
+            "unavailable. Mount the host's /tmp or a dedicated directory so a "
+            "host-side watchdog can detect and act on it."
+        ),
+    )
 
 
 class LogosConfig(BaseModel):
@@ -231,7 +265,7 @@ class LaneConfig(BaseModel):
     model: str
     vllm: bool = False
     num_parallel: int = Field(default=4, ge=1)
-    context_length: int = Field(default=4096, ge=128)
+    context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
     keep_alive: str = "5m"
     kv_cache_type: str = "q8_0"
     flash_attention: bool = True

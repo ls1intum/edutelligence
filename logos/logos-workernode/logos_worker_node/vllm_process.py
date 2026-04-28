@@ -11,8 +11,8 @@ Key differences from Ollama:
 - No ``num_parallel`` — continuous batching handles all concurrency.
 - ``num_ctx`` equivalent is ``--max-model-len``.
 - GPU pinning via ``CUDA_VISIBLE_DEVICES`` or ``--tensor-parallel-size``.
-- Optional stability controls are exposed via lane config:
-  ``disable_custom_all_reduce`` and ``disable_nccl_p2p``.
+- Optional stability controls: ``disable_custom_all_reduce`` (per-lane)
+  and ``nccl_p2p_available`` (global engine config, default False).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, ClassVar
 
 import httpx
 
@@ -38,6 +38,7 @@ from logos_worker_node.models import (
     ProcessState,
     ProcessStatus,
     VllmEngineConfig,
+    _DEFAULT_LANE_CONTEXT_LENGTH,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -55,6 +56,111 @@ _SCRUBBED_ENV_VARS = (
     "MASTER_ADDR",
     "MASTER_PORT",
 )
+
+# Model-name → vLLM --tool-call-parser mapping.  Checked in order;
+# first match wins.  Patterns are lowercased substrings of the HF model id.
+# Full list of parsers: https://docs.vllm.ai/en/latest/features/tool_calling.html
+_TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
+    # --- Patterns that share substrings with other families -----------------
+    # Google FunctionGemma (before gemma — "functiongemma" contains "gemma")
+    ("functiongemma", "functiongemma"),  # google/functiongemma-270m-it
+    # Google Gemma 4
+    ("gemma-4", "gemma4"),
+    ("gemma4", "gemma4"),
+    # Salesforce xLAM (before llama/qwen — xLAM models may contain those)
+    ("xlam", "xlam"),
+    # NousResearch Hermes (before llama — Hermes-Llama models exist)
+    ("hermes", "hermes"),
+    # Meta Llama (4 before 3)
+    ("llama-4", "llama4_pythonic"),
+    ("llama4", "llama4_pythonic"),
+    ("llama-3", "llama3_json"),
+    ("llama3", "llama3_json"),
+    # Mistral / Mixtral
+    ("mistral", "mistral"),
+    ("mixtral", "mistral"),
+    # DeepSeek (specific versions before general; R1 also uses deepseek_v3)
+    ("deepseek-v3.2", "deepseek_v32"),
+    ("deepseek-v3.1", "deepseek_v31"),
+    ("deepseek", "deepseek_v3"),
+    # IBM Granite (specific before general)
+    ("granite-20b-functioncalling", "granite-20b-fc"),
+    ("granite-20b-fc", "granite-20b-fc"),
+    ("granite-4", "granite4"),
+    ("granite4", "granite4"),
+    ("granite", "granite"),
+    # Zhipu GLM (4.7 before 4 — "glm-4" is a prefix of "glm-4.7")
+    ("glm-4.7", "glm47"),
+    ("glm47", "glm47"),
+    ("glm-4", "glm45"),  # also covers GLM-4.5 and GLM-4.6
+    ("glm4", "glm45"),
+    # Shanghai AI Lab InternLM
+    ("internlm", "internlm"),
+    # AI21 Labs Jamba
+    ("jamba", "jamba"),
+    # Alibaba Qwen (coder→qwen3_xml per docs, then general qwen3→hermes)
+    ("qwen3-coder", "qwen3_xml"),
+    ("qwen3_coder", "qwen3_xml"),
+    ("qwen3-", "hermes"),
+    ("qwen3_", "hermes"),
+    ("qwen", "hermes"),
+    # MiniMax (m2 before general)
+    ("minimax-m2", "minimax_m2"),
+    ("minimax_m2", "minimax_m2"),
+    ("minimax", "minimax"),
+    # Microsoft Phi
+    ("phi-4-mini", "phi4_mini_json"),
+    ("phi4mini", "phi4_mini_json"),
+    # Allen AI OLMo
+    ("olmo-3", "olmo3"),
+    ("olmo3", "olmo3"),
+    # Tencent Hunyuan
+    ("hunyuan-a13b", "hunyuan_a13b"),
+    ("hunyuan_a13b", "hunyuan_a13b"),
+    ("hunyuan", "hunyuan_a13b"),
+    # Baidu ERNIE
+    ("ernie-4.5", "ernie45"),
+    ("ernie45", "ernie45"),
+    ("ernie", "ernie45"),
+    # Moonshot Kimi
+    ("kimi-k2", "kimi_k2"),
+    ("kimi_k2", "kimi_k2"),
+    ("kimi", "kimi_k2"),
+    # ByteDance Seed
+    ("seed-oss", "seed_oss"),
+    ("seed_oss", "seed_oss"),
+    # StepFun (3.5 before 3 — "step-3" is a prefix of "step-3.5")
+    ("step-3.5", "step3p5"),
+    ("step3p5", "step3p5"),
+    ("step-3", "step3"),
+    ("step3", "step3"),
+    # Sber GigaChat
+    ("gigachat", "gigachat3"),
+    # Meituan LongCat
+    ("longcat", "longcat"),
+    # Xiaomi MIMO
+    ("mimo", "mimo"),
+    # OpenAI OSS (gpt-oss-20b, gpt-oss-120b)
+    ("gpt-oss", "openai"),
+)
+
+
+def _infer_tool_call_parser(model: str) -> str:
+    """Infer the vLLM tool-call-parser from the model name.
+
+    vLLM requires an explicit ``--tool-call-parser`` value when
+    ``--enable-auto-tool-choice`` is set (no built-in auto-detect yet).
+    Falls back to ``hermes`` which is broadly compatible.
+
+    TODO: vLLM draft PR adds ``--tool-call-parser=auto`` which would make
+    this function obsolete. Check if merged and remove this workaround:
+    https://github.com/vllm-project/vllm/pull/34809
+    """
+    model_lower = model.lower()
+    for pattern, parser in _TOOL_PARSER_RULES:
+        if pattern in model_lower:
+            return parser
+    return "hermes"
 
 
 class VllmProcessHandle:
@@ -172,6 +278,24 @@ class VllmProcessHandle:
     def has_stuck_vram(self) -> bool:
         """True if the last stop detected residual GPU memory."""
         return getattr(self, "_stuck_vram", False)
+
+    @property
+    def has_fatal_cuda_errors(self) -> bool:
+        """True if recent logs contain fatal CUDA error patterns.
+
+        These patterns indicate the GPU is in an unrecoverable state that
+        cannot be resolved without a host OS reboot.
+        """
+        if not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs).lower()
+        fatal_patterns = (
+            "cuda-capable device(s) is/are busy or unavailable",
+            "all cuda-capable devices are busy or unavailable",
+            "nccl warn cuda failure",
+            "cuda error: out of memory",
+        )
+        return any(p in log_blob for p in fatal_patterns)
 
     async def reconfigure(self, lane_config: LaneConfig) -> ProcessStatus:
         """Reconfigure = full restart for vLLM (model/config change)."""
@@ -455,7 +579,10 @@ class VllmProcessHandle:
         # prevents the model weights from loading at all.
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
-        elif lane_config.context_length > 0:
+        # For vLLM lanes, context_length defaults to 4096 from shared lane
+        # schema. Treat that sentinel default as "unset" so vLLM can use the
+        # model's native maximum context unless an explicit override is given.
+        elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
@@ -477,6 +604,14 @@ class VllmProcessHandle:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
             cmd.append("--enable-sleep-mode")
+        # Tool calling: enabled by default so OpenAI-compatible clients
+        # (OpenCode, etc.) can send tools/tool_choice without getting HTTP 400.
+        # vLLM requires --tool-call-parser when --enable-auto-tool-choice is set.
+        # When tool_call_parser is empty we infer the parser from the model name.
+        if vc.enable_auto_tool_choice:
+            parser = vc.tool_call_parser or _infer_tool_call_parser(lane_config.model)
+            cmd.append("--enable-auto-tool-choice")
+            cmd.extend(["--tool-call-parser", parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
@@ -695,7 +830,10 @@ class VllmProcessHandle:
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
-        if vc.server_dev_mode:
+        # Sleep endpoints (/sleep, /wake_up, /is_sleeping) require
+        # VLLM_SERVER_DEV_MODE.  Auto-enable it when sleep mode is active
+        # so operators don't need to set both flags.
+        if vc.server_dev_mode or vc.enable_sleep_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
         if self._vllm_engine_config.flashinfer_loglevel > 0:
@@ -728,8 +866,17 @@ class VllmProcessHandle:
             if detected_arch:
                 env["TORCH_CUDA_ARCH_LIST"] = detected_arch
 
-        if vc.disable_nccl_p2p:
+        # NCCL P2P: disabled globally by default (PCIe-only assumed).
+        # Set engines.vllm.nccl_p2p_available=true in config.yml for NVLink setups.
+        if not self._vllm_engine_config.nccl_p2p_available:
             env["NCCL_P2P_DISABLE"] = "1"
+            logger.info(
+                "[%s] NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+                "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)",
+                self.lane_id,
+            )
+        else:
+            logger.info("[%s] NCCL P2P enabled (NVLink topology)", self.lane_id)
 
         # NCCL defaults for tensor-parallel lanes (TP > 1).
         # IMPORTANT: Do NOT set NCCL transport tuning vars (P2P_LEVEL,
@@ -990,6 +1137,13 @@ class VllmProcessHandle:
         )
         return False
 
+    # vLLM warnings that are expected side-effects of our configuration
+    # (e.g. VLLM_SERVER_DEV_MODE required for sleep endpoints) and add
+    # no operational value — suppress them from the log stream.
+    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "SECURITY WARNING: Development endpoints are enabled",
+    )
+
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:
             return
@@ -998,6 +1152,8 @@ class VllmProcessHandle:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()
                 if line:
                     self._recent_logs.append(line)
+                    if any(frag in line for frag in self._SUPPRESSED_LOG_FRAGMENTS):
+                        continue
                     logger.info("[vllm:%s] %s", self.lane_id, line)
         except asyncio.CancelledError:
             pass

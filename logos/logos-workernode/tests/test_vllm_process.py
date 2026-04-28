@@ -28,7 +28,7 @@ def test_resolve_vllm_binary_uses_venv_sibling(monkeypatch, tmp_path: Path) -> N
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     resolved = handle._resolve_vllm_binary("vllm")
-    assert resolved == str(vllm_bin)
+    assert resolved == [str(vllm_bin)]
 
 
 def test_resolve_vllm_binary_honors_absolute_path(tmp_path: Path) -> None:
@@ -37,7 +37,7 @@ def test_resolve_vllm_binary_honors_absolute_path(tmp_path: Path) -> None:
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     resolved = handle._resolve_vllm_binary(str(explicit))
-    assert resolved == str(explicit)
+    assert resolved == [str(explicit)]
 
 
 def test_build_cmd_does_not_duplicate_enforce_eager(monkeypatch) -> None:
@@ -69,6 +69,130 @@ def test_build_cmd_includes_stability_and_sleep_flags(monkeypatch) -> None:
     cmd = handle._build_cmd(lane)
     assert "--disable-custom-all-reduce" in cmd
     assert "--enable-sleep-mode" in cmd
+
+
+def test_build_cmd_includes_tool_calling_flags_by_default(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    # Default: parser inferred from model name (gemma-4 → gemma4)
+    assert "--enable-auto-tool-choice" in cmd
+    idx = cmd.index("--tool-call-parser")
+    assert cmd[idx + 1] == "gemma4"
+
+
+def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="NousResearch/Hermes-3-Llama-3.1-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tool_call_parser="hermes"),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--enable-auto-tool-choice" in cmd
+    idx = cmd.index("--tool-call-parser")
+    assert cmd[idx + 1] == "hermes"
+
+
+def test_infer_tool_call_parser() -> None:
+    from logos_worker_node.vllm_process import _infer_tool_call_parser
+
+    # Google Gemma
+    assert _infer_tool_call_parser("google/gemma-4-26B-A4B-it") == "gemma4"
+    assert _infer_tool_call_parser("google/functiongemma-270m-it") == "functiongemma"
+    # Meta Llama
+    assert _infer_tool_call_parser("meta-llama/Llama-3.1-8B-Instruct") == "llama3_json"
+    assert _infer_tool_call_parser("meta-llama/Llama-4-Scout-17B-16E-Instruct") == "llama4_pythonic"
+    # Mistral
+    assert _infer_tool_call_parser("mistralai/Mistral-7B-Instruct-v0.3") == "mistral"
+    # DeepSeek (V3.2 > V3.1 > general)
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3-0324") == "deepseek_v3"
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-R1-0528") == "deepseek_v3"
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.1") == "deepseek_v31"
+    assert _infer_tool_call_parser("deepseek-ai/DeepSeek-V3.2") == "deepseek_v32"
+    # IBM Granite
+    assert _infer_tool_call_parser("ibm-granite/granite-20b-functioncalling") == "granite-20b-fc"
+    assert _infer_tool_call_parser("ibm-granite/granite-4.0-h-small") == "granite4"
+    assert _infer_tool_call_parser("ibm-granite/granite-3.1-8b-instruct") == "granite"
+    # Zhipu GLM
+    assert _infer_tool_call_parser("zai-org/GLM-4.7-Flash") == "glm47"
+    assert _infer_tool_call_parser("zai-org/GLM-4.5") == "glm45"
+    assert _infer_tool_call_parser("zai-org/GLM-4.6") == "glm45"
+    # InternLM
+    assert _infer_tool_call_parser("internlm/internlm2_5-7b-chat") == "internlm"
+    # AI21 Jamba
+    assert _infer_tool_call_parser("ai21labs/AI21-Jamba-1.5-Mini") == "jamba"
+    # Alibaba Qwen (coder→qwen3_xml, general→hermes)
+    assert _infer_tool_call_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3_xml"
+    assert _infer_tool_call_parser("Qwen/Qwen2.5-Coder-14B-Instruct-AWQ") == "hermes"
+    assert _infer_tool_call_parser("Qwen/QwQ-32B") == "hermes"
+    # Salesforce xLAM (contains "llama"/"qwen" — must match xlam first)
+    assert _infer_tool_call_parser("Salesforce/Llama-xLAM-2-8B-fc-r") == "xlam"
+    assert _infer_tool_call_parser("Salesforce/Qwen-xLAM-32B-fc-r") == "xlam"
+    # NousResearch Hermes (contains "llama" — must match hermes first)
+    assert _infer_tool_call_parser("NousResearch/Hermes-3-Llama-3.1-8B") == "hermes"
+    # MiniMax
+    assert _infer_tool_call_parser("MiniMaxAi/MiniMax-M2-40B") == "minimax_m2"
+    assert _infer_tool_call_parser("MiniMaxAi/MiniMax-M1-40k") == "minimax"
+    # Microsoft Phi
+    assert _infer_tool_call_parser("microsoft/phi-4-mini") == "phi4_mini_json"
+    # Allen AI OLMo
+    assert _infer_tool_call_parser("allenai/Olmo-3-7B-Instruct") == "olmo3"
+    # Tencent Hunyuan
+    assert _infer_tool_call_parser("tencent/Hunyuan-A13B-Instruct") == "hunyuan_a13b"
+    # Baidu ERNIE
+    assert _infer_tool_call_parser("baidu/ERNIE-4.5-0.3B-Instruct") == "ernie45"
+    # Moonshot Kimi
+    assert _infer_tool_call_parser("moonshotai/Kimi-K2-Instruct") == "kimi_k2"
+    # ByteDance Seed
+    assert _infer_tool_call_parser("bytedance/Seed-Oss-Coder") == "seed_oss"
+    # StepFun (3.5 before 3)
+    assert _infer_tool_call_parser("stepfun/Step-3.5-16B") == "step3p5"
+    assert _infer_tool_call_parser("stepfun/Step-3-8B") == "step3"
+    # Sber GigaChat
+    assert _infer_tool_call_parser("ai-sage/GigaChat3-702B-A36B-preview") == "gigachat3"
+    # Meituan LongCat
+    assert _infer_tool_call_parser("meituan-longcat/LongCat-Flash-Chat") == "longcat"
+    # Xiaomi MIMO
+    assert _infer_tool_call_parser("xiaomi/MIMO-7B") == "mimo"
+    # OpenAI OSS (gpt-oss → openai parser, NOT hermes)
+    assert _infer_tool_call_parser("openai/gpt-oss-120b") == "openai"
+    # Unknown model falls back to hermes
+    assert _infer_tool_call_parser("some/unknown-model") == "hermes"
+
+
+def test_build_cmd_omits_tool_calling_when_disabled(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_auto_tool_choice=False),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--enable-auto-tool-choice" not in cmd
+    assert "--tool-call-parser" not in cmd
+
+
+def test_build_env_auto_enables_dev_mode_for_sleep(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
+    lane = LaneConfig(
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True, server_dev_mode=False),
+    )
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    assert env["VLLM_SERVER_DEV_MODE"] == "1"
 
 
 def test_build_cmd_includes_kv_cache_memory_bytes(monkeypatch) -> None:
@@ -127,10 +251,11 @@ def test_build_cmd_respects_explicit_compilation_config(monkeypatch) -> None:
     assert "--compilation-config" not in cmd
 
 
-def test_build_cmd_injects_low_gpu_memory_utilization_with_kv_cache(monkeypatch) -> None:
-    """When kv_cache_memory_bytes is set but gpu_memory_utilization is not,
-    a low fallback value (0.1) must be injected to satisfy vLLM's startup
-    free-memory guard while letting kv_cache_memory_bytes control cache sizing."""
+def test_build_cmd_omits_gpu_memory_utilization_with_kv_cache(monkeypatch) -> None:
+    """When kv_cache_memory_bytes is set, --gpu-memory-utilization must NOT be
+    injected.  kv_cache_memory_bytes controls the KV pool size directly; adding
+    gpu_memory_utilization=0.1 would cap total VRAM to 10% and prevent model
+    weights from loading."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
 
@@ -140,8 +265,7 @@ def test_build_cmd_injects_low_gpu_memory_utilization_with_kv_cache(monkeypatch)
         vllm_config=VllmConfig(kv_cache_memory_bytes="4G"),
     )
     cmd = handle._build_cmd(lane)
-    idx = cmd.index("--gpu-memory-utilization")
-    assert cmd[idx + 1] == "0.1"
+    assert "--gpu-memory-utilization" not in cmd
 
 
 def test_build_cmd_omits_gpu_memory_utilization_when_no_kv_cache(monkeypatch) -> None:
@@ -168,6 +292,35 @@ def test_build_cmd_omits_kv_cache_when_empty(monkeypatch) -> None:
     )
     cmd = handle._build_cmd(lane)
     assert "--kv-cache-memory-bytes" not in cmd
+
+
+def test_build_cmd_omits_default_lane_context_cap_for_vllm(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        context_length=4096,
+        vllm_config=VllmConfig(max_model_len=0),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--max-model-len" not in cmd
+
+
+def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        context_length=8192,
+        vllm_config=VllmConfig(max_model_len=0),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "8192"
 
 
 def test_vllm_config_kv_cache_validation() -> None:
@@ -213,11 +366,12 @@ def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) 
 
 
 def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
+    # nccl_p2p_available=False (default) → NCCL_P2P_DISABLE=1 globally
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
-        vllm_config=VllmConfig(server_dev_mode=True, disable_nccl_p2p=True),
+        vllm_config=VllmConfig(server_dev_mode=True),
     )
 
     monkeypatch.delenv("HF_HOME", raising=False)
@@ -419,17 +573,33 @@ def test_build_env_no_nccl_safety_for_tp_1(monkeypatch) -> None:
     assert "NCCL_DEBUG_SUBSYS" not in env
 
 
-def test_build_env_nccl_safety_respects_explicit_disable_nccl_p2p(monkeypatch) -> None:
-    """When disable_nccl_p2p is explicitly set in config, it should still be set for TP>1."""
+def test_build_env_nccl_p2p_disabled_by_default(monkeypatch) -> None:
+    """NCCL P2P is disabled by default (nccl_p2p_available=False) for all lanes."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(gpu_devices="all"))
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
-        vllm_config=VllmConfig(tensor_parallel_size=2, disable_nccl_p2p=True),
+        vllm_config=VllmConfig(tensor_parallel_size=2),
     )
     monkeypatch.delenv("HF_HOME", raising=False)
     env = handle._build_env(lane)
     assert env["NCCL_P2P_DISABLE"] == "1"
+
+
+def test_build_env_nccl_p2p_not_disabled_when_available(monkeypatch) -> None:
+    """When nccl_p2p_available=True, NCCL_P2P_DISABLE should NOT be set."""
+    handle = VllmProcessHandle(
+        "lane-test", 19000, OllamaConfig(gpu_devices="all"),
+        VllmEngineConfig(nccl_p2p_available=True),
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+    monkeypatch.delenv("HF_HOME", raising=False)
+    env = handle._build_env(lane)
+    assert "NCCL_P2P_DISABLE" not in env
 
 
 def test_build_process_env_scrubs_inherited_distributed_vars_for_all_gpus(monkeypatch) -> None:
