@@ -57,6 +57,111 @@ _SCRUBBED_ENV_VARS = (
     "MASTER_PORT",
 )
 
+# Model-name → vLLM --tool-call-parser mapping.  Checked in order;
+# first match wins.  Patterns are lowercased substrings of the HF model id.
+# Full list of parsers: https://docs.vllm.ai/en/latest/features/tool_calling.html
+_TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
+    # --- Patterns that share substrings with other families -----------------
+    # Google FunctionGemma (before gemma — "functiongemma" contains "gemma")
+    ("functiongemma", "functiongemma"),  # google/functiongemma-270m-it
+    # Google Gemma 4
+    ("gemma-4", "gemma4"),
+    ("gemma4", "gemma4"),
+    # Salesforce xLAM (before llama/qwen — xLAM models may contain those)
+    ("xlam", "xlam"),
+    # NousResearch Hermes (before llama — Hermes-Llama models exist)
+    ("hermes", "hermes"),
+    # Meta Llama (4 before 3)
+    ("llama-4", "llama4_pythonic"),
+    ("llama4", "llama4_pythonic"),
+    ("llama-3", "llama3_json"),
+    ("llama3", "llama3_json"),
+    # Mistral / Mixtral
+    ("mistral", "mistral"),
+    ("mixtral", "mistral"),
+    # DeepSeek (specific versions before general; R1 also uses deepseek_v3)
+    ("deepseek-v3.2", "deepseek_v32"),
+    ("deepseek-v3.1", "deepseek_v31"),
+    ("deepseek", "deepseek_v3"),
+    # IBM Granite (specific before general)
+    ("granite-20b-functioncalling", "granite-20b-fc"),
+    ("granite-20b-fc", "granite-20b-fc"),
+    ("granite-4", "granite4"),
+    ("granite4", "granite4"),
+    ("granite", "granite"),
+    # Zhipu GLM (4.7 before 4 — "glm-4" is a prefix of "glm-4.7")
+    ("glm-4.7", "glm47"),
+    ("glm47", "glm47"),
+    ("glm-4", "glm45"),  # also covers GLM-4.5 and GLM-4.6
+    ("glm4", "glm45"),
+    # Shanghai AI Lab InternLM
+    ("internlm", "internlm"),
+    # AI21 Labs Jamba
+    ("jamba", "jamba"),
+    # Alibaba Qwen (coder→qwen3_xml per docs, then general qwen3→hermes)
+    ("qwen3-coder", "qwen3_xml"),
+    ("qwen3_coder", "qwen3_xml"),
+    ("qwen3-", "hermes"),
+    ("qwen3_", "hermes"),
+    ("qwen", "hermes"),
+    # MiniMax (m2 before general)
+    ("minimax-m2", "minimax_m2"),
+    ("minimax_m2", "minimax_m2"),
+    ("minimax", "minimax"),
+    # Microsoft Phi
+    ("phi-4-mini", "phi4_mini_json"),
+    ("phi4mini", "phi4_mini_json"),
+    # Allen AI OLMo
+    ("olmo-3", "olmo3"),
+    ("olmo3", "olmo3"),
+    # Tencent Hunyuan
+    ("hunyuan-a13b", "hunyuan_a13b"),
+    ("hunyuan_a13b", "hunyuan_a13b"),
+    ("hunyuan", "hunyuan_a13b"),
+    # Baidu ERNIE
+    ("ernie-4.5", "ernie45"),
+    ("ernie45", "ernie45"),
+    ("ernie", "ernie45"),
+    # Moonshot Kimi
+    ("kimi-k2", "kimi_k2"),
+    ("kimi_k2", "kimi_k2"),
+    ("kimi", "kimi_k2"),
+    # ByteDance Seed
+    ("seed-oss", "seed_oss"),
+    ("seed_oss", "seed_oss"),
+    # StepFun (3.5 before 3 — "step-3" is a prefix of "step-3.5")
+    ("step-3.5", "step3p5"),
+    ("step3p5", "step3p5"),
+    ("step-3", "step3"),
+    ("step3", "step3"),
+    # Sber GigaChat
+    ("gigachat", "gigachat3"),
+    # Meituan LongCat
+    ("longcat", "longcat"),
+    # Xiaomi MIMO
+    ("mimo", "mimo"),
+    # OpenAI OSS (gpt-oss-20b, gpt-oss-120b)
+    ("gpt-oss", "openai"),
+)
+
+
+def _infer_tool_call_parser(model: str) -> str:
+    """Infer the vLLM tool-call-parser from the model name.
+
+    vLLM requires an explicit ``--tool-call-parser`` value when
+    ``--enable-auto-tool-choice`` is set (no built-in auto-detect yet).
+    Falls back to ``hermes`` which is broadly compatible.
+
+    TODO: vLLM draft PR adds ``--tool-call-parser=auto`` which would make
+    this function obsolete. Check if merged and remove this workaround:
+    https://github.com/vllm-project/vllm/pull/34809
+    """
+    model_lower = model.lower()
+    for pattern, parser in _TOOL_PARSER_RULES:
+        if pattern in model_lower:
+            return parser
+    return "hermes"
+
 
 class VllmProcessHandle:
     """Manages a single vLLM server process on a specific port."""
@@ -501,12 +606,12 @@ class VllmProcessHandle:
             cmd.append("--enable-sleep-mode")
         # Tool calling: enabled by default so OpenAI-compatible clients
         # (OpenCode, etc.) can send tools/tool_choice without getting HTTP 400.
-        # When tool_call_parser is empty, vLLM auto-detects the parser from the
-        # model's tokenizer_config.json (supported on most modern chat models).
+        # vLLM requires --tool-call-parser when --enable-auto-tool-choice is set.
+        # When tool_call_parser is empty we infer the parser from the model name.
         if vc.enable_auto_tool_choice:
+            parser = vc.tool_call_parser or _infer_tool_call_parser(lane_config.model)
             cmd.append("--enable-auto-tool-choice")
-            if vc.tool_call_parser:
-                cmd.extend(["--tool-call-parser", vc.tool_call_parser])
+            cmd.extend(["--tool-call-parser", parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])

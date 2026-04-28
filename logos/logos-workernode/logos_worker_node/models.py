@@ -89,9 +89,8 @@ class VllmConfig(BaseModel):
     tool_call_parser: str = Field(
         default="",
         description="Tool call parser for function calling (e.g. 'hermes', 'mistral', 'llama3_json'). "
-        "Passed as --tool-call-parser to vLLM when non-empty. "
-        "Empty (default) = pass --enable-auto-tool-choice without --tool-call-parser, "
-        "letting vLLM auto-detect the parser from the model's tokenizer_config.json.",
+        "Empty (default) = infer from the model name (gemma4→gemma4, llama3→llama3_json, "
+        "qwen→hermes, etc.; falls back to hermes). Set explicitly to override.",
     )
     cuda_graph_sizes: str = Field(
         default="",
