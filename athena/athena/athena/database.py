@@ -1,7 +1,7 @@
 import importlib
 import os
 from contextlib import contextmanager
-from typing import Optional
+from typing import Iterator, Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -19,7 +19,7 @@ class DatabaseDisabledError(RuntimeError):
 
 
 _engine: Optional[Engine] = None
-SessionLocal: Optional[sessionmaker[Session]] = None
+SessionLocal: Optional[sessionmaker] = None
 _database_enabled = True
 
 
@@ -75,7 +75,7 @@ def _initialize_database() -> None:
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
 
-def create_tables(exercise_type: str):
+def create_tables(exercise_type: str) -> None:
     """
     Create all tables for models in athena.models, whose name starts with "DB"+exercise_type.name.title().
     Also create all tables which have been registered previously using `create_additional_table_if_not_exists`.
@@ -98,14 +98,14 @@ def create_tables(exercise_type: str):
 
 
 @contextmanager
-def get_db():
+def get_db() -> Iterator[Session]:
     if not is_database_enabled():
         raise DatabaseDisabledError("Database support is disabled for this Athena module.")
 
     _initialize_database()
     assert SessionLocal is not None
 
-    db = SessionLocal()
+    db: Session = SessionLocal()
     try:
         yield db
     finally:
