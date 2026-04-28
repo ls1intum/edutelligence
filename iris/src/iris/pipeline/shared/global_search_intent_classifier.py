@@ -106,15 +106,23 @@ class _IntentClassifier:
 
 _classifier_instance: "_IntentClassifier | None" = None
 _classifier_lock = threading.Lock()
+_model_dir_missing: bool = False  # latched once to suppress repeated warnings
 
 
 def _get_classifier() -> "_IntentClassifier | None":
-    """Load lazily; only memoize on success so transient errors are retried."""
-    global _classifier_instance
+    """Load lazily; only memoize on success so transient errors are retried.
+
+    The missing-model-directory case is treated as permanent and latched so
+    that the warning is only emitted once per process lifetime.
+    """
+    global _classifier_instance, _model_dir_missing
     if _classifier_instance is not None:
         return _classifier_instance
+    if _model_dir_missing:
+        return None
     model_dir = _model_dir()
     if not model_dir.exists():
+        _model_dir_missing = True
         logger.warning(
             "Intent model directory not found at %s — intent filtering disabled",
             model_dir,
