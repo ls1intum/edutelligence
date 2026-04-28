@@ -206,3 +206,13 @@ class LogosNodeReconfigureLaneRequest(LogosKeyModel):
     provider_id: int
     lane_id: str
     updates: dict[str, Any]
+
+class UpdateRoleRequest(BaseModel):
+    role: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    prename: str
+    name: str
+    email: str
+    role: str
