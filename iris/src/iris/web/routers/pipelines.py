@@ -529,9 +529,9 @@ def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
     """
     Answer a student's question using course content retrieved via HyDE.
 
-    Returns 202 immediately. Sends two webhook callbacks to Artemis:
-      1. thinking  — right away, so the UI can show a loading state
-      2. result    — once the pipeline finishes (~5-8s for LLM queries, ~200ms for navigation)
+    Returns 202 immediately. Sends webhook callbacks to Artemis:
+      - TRIGGER_AI (LLM path, ~5-8s): thinking callback first, then result
+      - SKIP_AI (sources only, ~200ms): result callback only (no loading state needed)
     """
     thread = Thread(
         target=run_global_search_pipeline_worker,

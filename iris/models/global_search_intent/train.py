@@ -11,27 +11,22 @@ Pipeline:
 """
 
 import json
-import subprocess  # nosec B404
-import sys
 from pathlib import Path
 
-# ── 0. Install dependencies ───────────────────────────────────────────────────
-print("=== Installing dependencies ===")
-pkgs = [
-    "setfit",
-    "onnxruntime",
-    "optimum[onnxruntime]",
-    "pandas",
-    "scikit-learn",
-    "datasets",
-    "joblib",
-]
-for pkg in pkgs:
-    subprocess.check_call(  # nosec B603
-        [sys.executable, "-m", "pip", "install", pkg, "-q", "--upgrade"],
-        stdout=subprocess.DEVNULL,
+# ── 0. Check dependencies ─────────────────────────────────────────────────────
+# Training deps are declared in pyproject.toml [tool.poetry.group.train].
+# Install them with: poetry install --with train
+_missing = []
+for _pkg in ("setfit", "optimum", "datasets", "sklearn", "pandas", "joblib"):
+    try:
+        __import__(_pkg)
+    except ImportError:
+        _missing.append(_pkg)
+if _missing:
+    raise SystemExit(
+        f"Missing training dependencies: {_missing}\n"
+        "Run: poetry install --with train"
     )
-print("Dependencies installed.\n")
 
 import joblib  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -210,7 +205,10 @@ meta = {
     "labels": {"0": "skip_ai", "1": "trigger_ai"},
     "quantization": "dynamic INT8",
     "optimization_level": "O3",
-    "onnx_file": next((f.name for f in FINAL_DIR.glob("*.onnx")), "unknown"),
+    "onnx_file": next(
+        (f.name for f in sorted(FINAL_DIR.glob("*.onnx")) if "quantized" in f.name),
+        next((f.name for f in sorted(FINAL_DIR.glob("*.onnx"))), "unknown"),
+    ),
     "eval_metrics": {k: float(v) for k, v in metrics.items()},
 }
 (FINAL_DIR / "meta.json").write_text(json.dumps(meta, indent=2))
