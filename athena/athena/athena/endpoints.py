@@ -7,6 +7,7 @@ from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
 from athena.app import app
 from athena.authenticate import authenticated
+from athena.database import is_database_enabled
 from athena.metadata import with_meta
 from athena.module_config import get_dynamic_module_config_factory
 from athena.logger import logger
@@ -166,6 +167,10 @@ def submission_selector(func: Union[
 
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         store_exercise(exercise)
+
+        if not is_database_enabled():
+            logger.info("%s: Database support is disabled, falling back to the manager's default submission selection.", func.__name__)
+            return -1
 
         # Get the full submission objects
         submissions = list(get_stored_submissions(submission_type, exercise.id, submission_ids))

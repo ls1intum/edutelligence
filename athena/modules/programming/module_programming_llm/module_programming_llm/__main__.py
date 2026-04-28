@@ -52,4 +52,4 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
 if __name__ == "__main__":
     # Preload for token estimation later
     tiktoken.get_encoding("cl100k_base")
-    app.start()
+    app.start(database_required=False)

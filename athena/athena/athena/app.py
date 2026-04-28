@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from . import env
-from .database import create_tables
+from .database import configure_database, create_tables, is_database_enabled
 from .logger import logger
 from .module_config import get_module_config
 from .metadata import MetaDataMiddleware
@@ -30,16 +30,26 @@ class FastAPIWithStart(FastAPI):
         self.add_middleware(ExperimentMiddleware)
 
 
-    def start(self) -> None:
-        """Start Athena. You have to ensure to have `app` in your module main scope so that it can be imported."""
+    def start(self, *, database_required: bool = True) -> None:
+        """
+        Start Athena.
+
+        You have to ensure to have `app` in your module main scope so that it can be imported.
+        Set `database_required=False` for modules that can run without persistent storage. In that mode database
+        support can still be enabled explicitly via `ATHENA_DATABASE_ENABLED=1`.
+        """
         LOGGING_CONFIG["formatters"]["default"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
         LOGGING_CONFIG["formatters"]["access"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
         logger.info("Starting athena module")
 
         conf = get_module_config()
 
-        logger.debug("Creating database tables")
-        create_tables(conf.type)
+        configure_database(required=database_required)
+        if is_database_enabled():
+            logger.debug("Creating database tables")
+            create_tables(conf.type)
+        else:
+            logger.info("Starting without database support. Set ATHENA_DATABASE_ENABLED=1 to enable it.")
 
         if env.PRODUCTION:
             logger.info("Running in PRODUCTION mode")
