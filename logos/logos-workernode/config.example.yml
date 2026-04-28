@@ -336,6 +336,34 @@ lanes: []
 #     keep_alive: 10m
 
 
+# ── Static lanes (pinned, never removed by the capacity planner) ─────────────
+# Static lanes are always active with pinned GPU devices. Unlike regular lanes
+# (above), they are started at boot and the capacity planner can never remove
+# them. Use this for models that must always be available regardless of server
+# scheduling decisions.
+#
+# The syntax is identical to regular lanes. Each entry counts towards max_lanes.
+# Static lanes are NOT persisted to lanes.json — they are always loaded from
+# this config file on startup.
+
+static_lanes: []
+# static_lanes:
+#   - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+#     vllm: true
+#     gpu_devices: "0"
+#     vllm_config:
+#       tensor_parallel_size: 1
+#       kv_cache_memory_bytes: 4G
+#       quantization: awq
+#
+#   - model: meta-llama/Llama-3.1-8B-Instruct
+#     vllm: true
+#     gpu_devices: "1"
+#     vllm_config:
+#       tensor_parallel_size: 1
+#       kv_cache_memory_bytes: 6G
+
+
 # ── Manual VRAM profile overrides ────────────────────────────────────────────
 # Bypass the auto-calibrated VRAM profile for a specific model. Only needed
 # when calibration fails or produces wrong values. The worker uses these numbers

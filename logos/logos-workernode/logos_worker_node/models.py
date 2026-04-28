@@ -304,6 +304,7 @@ class AppConfig(BaseModel):
     logos: LogosConfig = Field(default_factory=LogosConfig)
     engines: EnginesConfig = Field(default_factory=EnginesConfig)
     lanes: list[LaneConfig] = Field(default_factory=list)
+    static_lanes: list[LaneConfig] = Field(default_factory=list)
     model_profile_overrides: dict[str, dict] = Field(
         default_factory=dict,
         description="Per-model VRAM profile overrides for niche models with "
@@ -383,6 +384,7 @@ class LaneStatus(BaseModel):
     model: str
     port: int
     vllm: bool = False
+    is_static: bool = False
     process: ProcessStatus
     runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
     routing_url: str = ""
