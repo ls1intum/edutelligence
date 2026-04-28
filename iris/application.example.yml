@@ -267,7 +267,7 @@ llm_configuration:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-nano
 
-  lecture_search_answer_pipeline:
+  global_search_pipeline:
     default:
       hyde:
         local: gpt-oss

@@ -35,9 +35,19 @@ types-pytz = "^2025.2.0.20251108"
 httpx = {version = "^0.28.1", extras = ["http2"]}
 memiris = {path = "../memiris", develop = true}
 apscheduler = "^3.11.2"
+onnxruntime = "^1.25.0"
+transformers = "^4.55.0"
+joblib = "^1.5.0"
 ffmpeg-python = "^0.2.0"
 opencv-python-headless = "^4.13.0"
 yt-dlp = "^2026.3.17"
+
+[tool.poetry.group.train.dependencies]
+setfit = "^1.1.0"
+optimum = {version = "^2.0.0", extras = ["onnxruntime"]}
+datasets = "^3.0.0"
+scikit-learn = "^1.6.0"
+pandas = "^2.2.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.19.1"

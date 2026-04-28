@@ -9,15 +9,19 @@ from weaviate import WeaviateClient
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.search.lecture_search_dto import (
-    LectureSearchAskResponseDTO,
+    GlobalSearchResponseDTO,
     LectureSearchResultDTO,
 )
+from iris.domain.search.search_intent_dto import SearchIntent
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
-from iris.pipeline.prompts.lecture_search_prompts import (
+from iris.pipeline.prompts.global_search_prompts import (
     answer_system_prompt,
     hyde_system_prompt,
+)
+from iris.pipeline.shared.global_search_intent_classifier import (
+    classify as classify_intent,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
@@ -28,9 +32,9 @@ from iris.tracing import observe
 logger = get_logger(__name__)
 
 
-class LectureSearchAnswerPipeline(SubPipeline):
+class GlobalSearchPipeline(SubPipeline):
     """
-    Pipeline that answers a student's question by retrieving relevant lecture content
+    Pipeline that answers a student's question by retrieving relevant course content
     using HyDE (Hypothetical Document Embedding) and then generating a concise answer.
 
     HyDE improves retrieval precision for Q&A: instead of embedding the question directly,
@@ -44,11 +48,11 @@ class LectureSearchAnswerPipeline(SubPipeline):
     answer_pipeline: Runnable
 
     def __init__(self, client: WeaviateClient, local: bool = False):
-        super().__init__(implementation_id="lecture_search_answer_pipeline")
+        super().__init__(implementation_id="global_search_pipeline")
         self.tokens = []
         self.retriever = LectureGlobalSearchRetrieval(client)
 
-        pipeline_id = "lecture_search_answer_pipeline"
+        pipeline_id = "global_search_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
         answer_model = resolve_model(pipeline_id, "default", "answer", local=local)
 
@@ -73,21 +77,31 @@ class LectureSearchAnswerPipeline(SubPipeline):
         self.answer_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", answer_system_prompt),
-                ("user", "Lecture content:\n{context}\n\nQuestion: {query}"),
+                ("user", "Course content:\n{context}\n\nQuestion: {query}"),
             ]
         )
 
-    @observe(name="Lecture Search Answer Pipeline")
+    @observe(name="Global Search Pipeline")
     def __call__(
-        self, query: str, limit: int = 5, **_kwargs
-    ) -> LectureSearchAskResponseDTO:
+        self, query: str, limit: int = 5, intent: SearchIntent | None = None, **_kwargs
+    ) -> GlobalSearchResponseDTO:
         """
-        Answer a student's question using lecture content retrieved via HyDE.
+        Answer a student's question using course content retrieved via HyDE.
 
         :param query: The student's question or search text.
         :param limit: Maximum number of source segments to retrieve.
+        :param intent: Pre-computed intent (SearchIntent). If None,
+                       the classifier is called here.
         :return: An answer with source references.
         """
+        # Guard: skip the full LLM pipeline for navigation queries
+        if intent is None:
+            intent = classify_intent(query)
+        logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
+        if intent == SearchIntent.SKIP_AI:
+            sources = self.retriever.search(query=query, limit=limit)
+            return GlobalSearchResponseDTO(answer=None, sources=sources)
+
         # Step 1: Generate a short hypothetical answer to use as the search vector
         hypothetical_answer = (self.hyde_prompt | self.hyde_pipeline).invoke(
             {"query": query}
@@ -108,19 +122,13 @@ class LectureSearchAnswerPipeline(SubPipeline):
         )
 
         if not sources:
-            return LectureSearchAskResponseDTO(
-                answer="No relevant course material was found for this query.",
-                sources=[],
-            )
+            return GlobalSearchResponseDTO(answer=None, sources=[])
 
         # Step 3: Generate the real answer using numbered context (with metadata so the
         # model knows the course/lecture name and can reference them explicitly)
         grounded_sources = [s for s in sources if s.snippet]
         if not grounded_sources:
-            return LectureSearchAskResponseDTO(
-                answer="No relevant course material was found for this query.",
-                sources=[],
-            )
+            return GlobalSearchResponseDTO(answer=None, sources=[])
 
         context = "\n\n".join(
             f"[{i + 1}] [{s.course.name} — {s.lecture.name}, Slide {s.lecture_unit.page_number}]\n{s.snippet}"
@@ -134,7 +142,7 @@ class LectureSearchAnswerPipeline(SubPipeline):
         try:
             cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
             parsed = json.loads(cleaned)
-            answer = parsed.get("answer", raw)
+            answer = parsed.get("answer") or None  # treat null and "" as no answer
             used_indices = {
                 i - 1
                 for i in parsed.get("used_sources", [])
@@ -150,8 +158,30 @@ class LectureSearchAnswerPipeline(SubPipeline):
             answer = raw
             used_sources = grounded_sources
 
+        # Safety net: if the LLM ignored the null instruction and wrote a short refusal
+        # instead of a grounded answer, suppress it so the client never sees a
+        # "not covered" message. Only fires on short answers (< 120 chars) to avoid
+        # suppressing legitimate answers that mention what the course does not cover.
+        if (
+            answer
+            and len(answer) < 120
+            and re.search(
+                r"not (covered|mentioned|discussed|found|available|provided|present|included)"
+                r"|not (in|part of) the (course|lecture|material|content|slides)"
+                r"|no (mention|reference|explanation|definition|description|information)"
+                r"|does not (cover|mention|discuss|provide|include|contain|address)"
+                r"|cannot (answer|find|provide|address)",
+                answer,
+                re.IGNORECASE,
+            )
+        ):
+            logger.info(
+                "[global-search] LLM refusal detected in answer text — suppressing to null"
+            )
+            answer = None
+
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_LECTURE_SEARCH_ANSWER_PIPELINE
         )
 
-        return LectureSearchAskResponseDTO(answer=answer, sources=used_sources)
+        return GlobalSearchResponseDTO(answer=answer, sources=used_sources)

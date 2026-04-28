@@ -28,6 +28,8 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
+from iris.domain.search.lecture_search_dto import GlobalSearchRequestDTO
+from iris.domain.search.search_intent_dto import SearchIntent
 from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_configuration import LlmConfigurationError
@@ -44,6 +46,7 @@ from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
 from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
+from iris.pipeline.global_search_pipeline import GlobalSearchPipeline
 from iris.pipeline.inconsistency_check_pipeline import (
     InconsistencyCheckPipeline,
 )
@@ -51,12 +54,17 @@ from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
 )
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
+from iris.pipeline.shared.global_search_intent_classifier import (
+    classify as classify_intent,
+)
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
+from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import (
     AutonomousTutorCallback,
     CompetencyExtractionCallback,
     CourseChatStatusCallback,
     ExerciseChatStatusCallback,
+    GlobalSearchCallback,
     InconsistencyCheckCallback,
     LectureChatCallback,
     RewritingCallback,
@@ -461,6 +469,73 @@ def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
     thread = Thread(
         target=run_autonomous_tutor_pipeline_worker,
         args=(dto, variant, request_id),
+    )
+    thread.start()
+
+
+def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: str):
+    set_request_id(request_id)
+    try:
+        callback = GlobalSearchCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+        )
+    except Exception as e:
+        logger.error("Error creating global search callback", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
+        intent = classify_intent(dto.query)
+        logger.debug(
+            "[global-search] query=%r  intent=%s  → %s",
+            dto.query[:120],
+            intent,
+            (
+                "calling LLM (HyDE + answer)"
+                if intent == SearchIntent.TRIGGER_AI
+                else "skipping LLM (sources only)"
+            ),
+        )
+        if intent == SearchIntent.TRIGGER_AI:
+            callback.thinking()
+        client = VectorDatabase().get_client()
+        result = GlobalSearchPipeline(client)(
+            query=dto.query, limit=dto.limit, intent=intent
+        )
+        if result.answer:
+            logger.info(
+                "[global-search] LLM produced an answer (%d chars, %d sources)",
+                len(result.answer),
+                len(result.sources),
+            )
+        else:
+            logger.info(
+                "[global-search] answer=null  sources=%d  (LLM returned null or was skipped)",
+                len(result.sources),
+            )
+        callback.done(answer=result.answer, sources=result.sources)
+    except Exception as e:
+        logger.error("Error running global search pipeline", exc_info=e)
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/global-search/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
+    """
+    Answer a student's question using course content retrieved via HyDE.
+
+    Returns 202 immediately. Sends webhook callbacks to Artemis:
+      - TRIGGER_AI (LLM path, ~5-8s): thinking callback first, then result
+      - SKIP_AI (sources only, ~200ms): result callback only (no loading state needed)
+    """
+    thread = Thread(
+        target=run_global_search_pipeline_worker,
+        args=(dto, get_request_id()),
     )
     thread.start()
 
