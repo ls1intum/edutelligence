@@ -258,6 +258,7 @@ class LaneManager:
         self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
+        self._static_lane_ids: set[str] = set()
 
     def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
         """Check which capabilities_models are available locally.
@@ -285,6 +286,16 @@ class LaneManager:
         if not missing:
             logger.info("All %d capability models verified as available locally", len(capabilities_models))
         return missing
+
+    def register_static_lanes(self, lane_ids: set[str]) -> None:
+        """Register lane IDs as static (pinned, never removed by the planner)."""
+        self._static_lane_ids = set(lane_ids)
+        if self._static_lane_ids:
+            logger.info("Registered %d static lane(s): %s", len(self._static_lane_ids), sorted(self._static_lane_ids))
+
+    def is_static_lane(self, lane_id: str) -> bool:
+        """Return True if the given lane_id is a static lane."""
+        return lane_id in self._static_lane_ids
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [
@@ -322,9 +333,16 @@ class LaneManager:
 
         Returns a result with all actions taken and final lane statuses.
         """
-        if self._max_lanes > 0 and len(desired) > self._max_lanes:
+        # Count static lanes that will be re-injected (running but not in desired)
+        desired_lid_set = {_lane_id_from_config(lc) for lc in desired}
+        static_reinject_count = sum(
+            1 for sid in self._static_lane_ids
+            if sid not in desired_lid_set and sid in self._handles
+        )
+        effective_desired_count = len(desired) + static_reinject_count
+        if self._max_lanes > 0 and effective_desired_count > self._max_lanes:
             raise ValueError(
-                f"Desired lane count ({len(desired)}) exceeds MAX_LANES limit ({self._max_lanes})"
+                f"Desired lane count ({effective_desired_count}) exceeds MAX_LANES limit ({self._max_lanes})"
             )
         self._validate_vllm_runtime_requirements(desired)
         async with self._lock:
@@ -342,6 +360,19 @@ class LaneManager:
                     )
                 desired_map[lid] = lc
 
+            # Re-inject running static lanes that the planner omitted from the
+            # desired set.  This ensures the capacity planner can never remove
+            # static lanes — they are always part of the desired state.
+            for static_lid in self._static_lane_ids:
+                if static_lid not in desired_map and static_lid in self._handles:
+                    handle = self._handles[static_lid]
+                    if handle.lane_config is not None:
+                        desired_map[static_lid] = handle.lane_config
+                        logger.info(
+                            "Static lane '%s' re-injected into desired set (planner omitted it)",
+                            static_lid,
+                        )
+
             current_ids = set(self._handles.keys())
             desired_ids = set(desired_map.keys())
 
@@ -357,7 +388,7 @@ class LaneManager:
 
             try:
                 # Phase 1: Remove stale lanes (free VRAM)
-                to_remove = current_ids - desired_ids
+                to_remove = current_ids - desired_ids - self._static_lane_ids
                 for lid in to_remove:
                     handle = self._handles[lid]
                     port = self._port_alloc.get_port(lid)
@@ -548,6 +579,8 @@ class LaneManager:
 
     async def remove_lane(self, lane_id: str) -> None:
         """Remove a single lane and free its port."""
+        if lane_id in self._static_lane_ids:
+            raise ValueError(f"Cannot remove static lane '{lane_id}'")
         async with self._lock:
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
@@ -1932,6 +1965,7 @@ class LaneManager:
             model=model,
             port=handle.port,
             vllm=is_vllm,
+            is_static=handle.lane_id in self._static_lane_ids,
             process=ps,
             runtime_state=runtime_state,
             routing_url=routing_url,
