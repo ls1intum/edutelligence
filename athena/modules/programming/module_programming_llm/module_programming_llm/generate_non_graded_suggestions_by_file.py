@@ -22,6 +22,7 @@ from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo,
     add_line_numbers,
+    format_grading_instructions,
     get_programming_language_file_extension,
 )
 
@@ -37,6 +38,7 @@ class FeedbackModel(BaseModel):
     line_end: Optional[int] = Field(
         None, description="Referenced line number end, or empty if unreferenced"
     )
+    credits: float = Field(0.0, description="Number of points received/deducted")
     model_config = ConfigDict(title="Feedback")
 
 
@@ -45,6 +47,38 @@ class ImprovementModel(BaseModel):
 
     feedbacks: Sequence[FeedbackModel] = Field(description="Improvement feedbacks")
     model_config = ConfigDict(title="ImprovementModel")
+
+
+def normalize_credit_value(credits: float) -> float:
+    if credits <= 0.25:
+        return 0.0
+    if credits <= 0.75:
+        return 0.5
+    return 1.0
+
+
+def normalize_feedback_credits(feedbacks: List[Feedback], exercise: Exercise) -> List[Feedback]:
+    if not feedbacks:
+        return feedbacks
+
+    feedbacks = [
+        feedback.model_copy(update={"credits": normalize_credit_value(feedback.credits)})
+        for feedback in feedbacks
+    ]
+
+    max_total_points = exercise.max_points
+    if max_total_points <= 0:
+        return feedbacks
+
+    per_feedback_weight = max_total_points / len(feedbacks)
+    return [
+        feedback.model_copy(
+            update={
+                "credits": round(feedback.credits * per_feedback_weight, 2)
+            }
+        )
+        for feedback in feedbacks
+    ]
 
 
 # pylint: disable=too-many-locals
@@ -65,6 +99,9 @@ async def generate_suggestions_by_file(
     # Feature extraction
     template_repo = exercise.get_template_repository()
     submission_repo = submission.get_repository()
+    grading_instructions = format_grading_instructions(
+        exercise.grading_instructions, exercise.grading_criteria
+    )
 
     changed_files_from_template_to_submission = get_diff(
         src_repo=template_repo, dst_repo=submission_repo, file_path=None, name_only=True
@@ -154,6 +191,8 @@ async def generate_suggestions_by_file(
                 "submission_file": file_content,
                 "template_to_submission_diff": template_to_submission_diff,
                 "problem_statement": problem_statement,
+                "grading_instructions": grading_instructions
+                or "No grading instructions found.",
                 "file_path": file_path,
                 "summary": summary_string,
             }
@@ -162,6 +201,7 @@ async def generate_suggestions_by_file(
     omittable_features = [
         "template_to_submission_diff",
         "summary",
+        "grading_instructions",
         "problem_statement",
         # In the future we might indicate the changed lines in the submission_file additionally
     ]
@@ -251,9 +291,10 @@ async def generate_suggestions_by_file(
                     file_path=file_path,
                     line_start=feedback.line_start,
                     line_end=feedback.line_end,
+                    credits=feedback.credits,
                     is_graded=False,
                     meta={},
                 )
             )
 
-    return feedbacks
+    return normalize_feedback_credits(feedbacks, exercise)
