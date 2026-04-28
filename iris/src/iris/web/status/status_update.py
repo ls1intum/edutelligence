@@ -32,6 +32,9 @@ from iris.domain.status.lecture_chat_status_update_dto import (
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
 )
+from iris.domain.status.search_answer_status_update_dto import (
+    SearchAnswerStatusUpdateDTO,
+)
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
@@ -555,3 +558,51 @@ class AutonomousTutorCallback(StatusCallback):
             stages[stage],
             stage,
         )
+
+
+class SearchAnswerCallback:
+    """Callback for Ask Iris search answer pipeline.
+
+    Sends two HTTP POSTs to Artemis during processing:
+    - Phase 1 (cited=False): plain answer with [cite-loading:keyword] skeleton markers
+    - Phase 2 (cited=True): answer with full [cite:L:...] inline citation markers
+
+    Does not use the stage machinery of StatusCallback — search has no progress stages,
+    only two discrete result pushes.
+    """
+
+    _search_api_url: str = "api/iris/internal/search/runs"
+
+    def __init__(self, run_id: str, base_url: str):
+        self.run_id = run_id
+        self.url = f"{base_url}/{self._search_api_url}/{run_id}/status"
+
+    def send(self, dto: SearchAnswerStatusUpdateDTO) -> bool:
+        """POST a search answer update to Artemis."""
+        try:
+            resp = requests.post(
+                self.url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.run_id}",
+                },
+                json=dto.model_dump(by_alias=True),
+                timeout=200,
+            )
+            logger.info(
+                "Search answer callback to %s returned %d", self.url, resp.status_code
+            )
+            resp.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error("Search answer callback POST failed: %s", e)
+            capture_exception(e)
+            return False
+
+    def error(self, message: str, exception: Exception = None):
+        """Log a fatal pipeline error. No HTTP push — Artemis will time out the job."""
+        logger.error(
+            "Search answer pipeline fatal error for run %s: %s", self.run_id, message
+        )
+        if exception:
+            capture_exception(exception)
