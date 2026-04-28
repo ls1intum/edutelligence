@@ -11,23 +11,15 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_status_update_dto import (
     AutonomousTutorPipelineStatusUpdateDTO,
 )
-from iris.domain.chat.course_chat.course_chat_status_update_dto import (
-    CourseChatStatusUpdateDTO,
-)
-from iris.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
-    ExerciseChatStatusUpdateDTO,
-)
 from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
     TutorSuggestionStatusUpdateDTO,
 )
+from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
 from iris.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
-)
-from iris.domain.status.lecture_chat_status_update_dto import (
-    LectureChatStatusUpdateDTO,
 )
 from iris.domain.status.rewriting_status_update_dto import (
     RewritingStatusUpdateDTO,
@@ -35,9 +27,7 @@ from iris.domain.status.rewriting_status_update_dto import (
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
-from iris.domain.status.text_exercise_chat_status_update_dto import (
-    TextExerciseChatStatusUpdateDTO,
-)
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 logger = get_logger(__name__)
 
@@ -279,66 +269,85 @@ class StatusCallback(ABC):
         self.on_status_update()
 
 
-class CourseChatStatusCallback(StatusCallback):
-    """Status callback for course chat pipelines."""
+_CHAT_MODE_STAGES: dict[IrisChatMode, list[StageDTO]] = {
+    IrisChatMode.COURSE: [
+        StageDTO(
+            weight=STAGE_WEIGHT_THINKING_PRIMARY,
+            state=StageStateEnum.NOT_STARTED,
+            name="Thinking",
+        ),
+        StageDTO(
+            weight=STAGE_WEIGHT_SECONDARY,
+            state=StageStateEnum.NOT_STARTED,
+            name="Creating suggestions",
+            internal=True,
+        ),
+        StageDTO(
+            weight=STAGE_WEIGHT_SECONDARY,
+            state=StageStateEnum.NOT_STARTED,
+            name="Extracting memories",
+            internal=True,
+        ),
+    ],
+    IrisChatMode.EXERCISE: [
+        StageDTO(
+            weight=STAGE_WEIGHT_THINKING,
+            state=StageStateEnum.NOT_STARTED,
+            name="Checking available information",
+        ),
+        StageDTO(
+            weight=STAGE_WEIGHT_SECONDARY,
+            state=StageStateEnum.NOT_STARTED,
+            name="Creating suggestions",
+            internal=True,
+        ),
+    ],
+    IrisChatMode.TEXT_EXERCISE: [
+        StageDTO(
+            weight=STAGE_WEIGHT_THINKING,
+            state=StageStateEnum.NOT_STARTED,
+            name="Thinking",
+        ),
+        StageDTO(
+            weight=STAGE_WEIGHT_RESPONDING,
+            state=StageStateEnum.NOT_STARTED,
+            name="Responding",
+        ),
+    ],
+    IrisChatMode.LECTURE: [
+        StageDTO(
+            weight=STAGE_WEIGHT_THINKING,
+            state=StageStateEnum.NOT_STARTED,
+            name="Thinking",
+        ),
+        StageDTO(
+            weight=STAGE_WEIGHT_SECONDARY,
+            state=StageStateEnum.NOT_STARTED,
+            name="Extracting memories",
+            internal=True,
+        ),
+    ],
+}
+
+
+class ChatStatusCallback(StatusCallback):
+    """Unified status callback for all chat pipelines."""
 
     def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
+        self,
+        run_id: str,
+        base_url: str,
+        chat_mode: IrisChatMode,
+        initial_stages: List[StageDTO] = None,
     ):
-        url = f"{base_url}/{self.api_url}/course-chat/runs/{run_id}/status"
-        current_stage_index = len(initial_stages) if initial_stages else 0
+        url = f"{base_url}/{self.api_url}/chat/runs/{run_id}/status"
         stages = initial_stages or []
-        stages += [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING_PRIMARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Thinking",
-            ),
-            StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Creating suggestions",
-                internal=True,
-            ),
-            StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Extracting memories",
-                internal=True,
-            ),
-        ]
-        status = CourseChatStatusUpdateDTO(stages=stages)
-        stage = stages[current_stage_index]
-        super().__init__(url, run_id, status, stage, current_stage_index)
-
-
-class ExerciseChatStatusCallback(StatusCallback):
-    """Status callback for exercise chat pipelines."""
-
-    def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
-    ):
-        url = (
-            f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
+        current_stage_index = len(stages)
+        stages += [stage.model_copy() for stage in _CHAT_MODE_STAGES[chat_mode]]
+        status = ChatStatusUpdateDTO(stages=stages)
+        super().__init__(
+            url, run_id, status, stages[current_stage_index], current_stage_index
         )
-        current_stage_index = len(initial_stages) if initial_stages else 0
-        stages = initial_stages or []
-        stages += [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Checking available information",
-            ),
-            StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Creating suggestions",
-                internal=True,
-            ),
-        ]
-        status = ExerciseChatStatusUpdateDTO(stages=stages)
-        stage = stages[current_stage_index]
-        super().__init__(url, run_id, status, stage, current_stage_index)
 
 
 class ChatGPTWrapperStatusCallback(StatusCallback):
@@ -359,42 +368,9 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
                 name="Generating response",
             ),
         ]
-        status = ExerciseChatStatusUpdateDTO(stages=stages)
+        status = ChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
-
-
-class TextExerciseChatCallback(StatusCallback):
-    """Status callback for text exercise chat pipelines."""
-
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
-        url = f"{base_url}/{self.api_url}/text-exercise-chat/runs/{run_id}/status"
-        stages = initial_stages or []
-        stage = len(stages)
-        stages += [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Thinking",
-            ),
-            StageDTO(
-                weight=STAGE_WEIGHT_RESPONDING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Responding",
-            ),
-        ]
-        super().__init__(
-            url,
-            run_id,
-            TextExerciseChatStatusUpdateDTO(stages=stages),
-            stages[stage],
-            stage,
-        )
 
 
 class CompetencyExtractionCallback(StatusCallback):
@@ -464,41 +440,6 @@ class InconsistencyCheckCallback(StatusCallback):
         status = InconsistencyCheckStatusUpdateDTO(stages=stages)
         stage = stages[-1]
         super().__init__(url, run_id, status, stage, len(stages) - 1)
-
-
-class LectureChatCallback(StatusCallback):
-    """Status callback for lecture chat pipelines."""
-
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
-        url = f"{base_url}/{self.api_url}/lecture-chat/runs/{run_id}/status"
-        stages = initial_stages or []
-        stage = len(stages)
-        stages += [
-            StageDTO(
-                weight=STAGE_WEIGHT_THINKING,
-                state=StageStateEnum.NOT_STARTED,
-                name="Thinking",
-            ),
-            StageDTO(
-                weight=STAGE_WEIGHT_SECONDARY,
-                state=StageStateEnum.NOT_STARTED,
-                name="Extracting memories",
-                internal=True,
-            ),
-        ]
-        super().__init__(
-            url,
-            run_id,
-            # result should not be "" by default since empty done messages are sent but should not be shown as message
-            LectureChatStatusUpdateDTO(stages=stages),
-            stages[stage],
-            stage,
-        )
 
 
 class TutorSuggestionCallback(StatusCallback):
