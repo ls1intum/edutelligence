@@ -18,6 +18,11 @@ export default function Header({
 }: HeaderProps) {
   const router = useRouter();
   const [hue, setHue] = useState(0);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -37,7 +42,7 @@ export default function Header({
                 {
                   width: 160,
                   height: 72,
-                  filter: `hue-rotate(${hue}deg)`,
+                  filter: `hue-rotate(${mounted ? hue : 0}deg)`,
                 } as any
               }
               contentFit="contain"

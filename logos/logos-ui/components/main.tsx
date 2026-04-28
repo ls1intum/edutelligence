@@ -42,9 +42,14 @@ export default function Main({
   const hasNavigatedRef = useRef(false);
 
   const [hue, setHue] = useState(0);
+  const [mounted, setMounted] = useState(false);
 
   const sanitizeKey = (raw: string) =>
     (raw || "").replace(/[\r\n]+/g, "").trim();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -143,7 +148,7 @@ export default function Main({
           <ExpoImage
             source={require("../assets/images/logos_full.png")}
             style={
-              { width: 200, height: 90, filter: `hue-rotate(${hue}deg)` } as any
+              { width: 200, height: 90, filter: `hue-rotate(${mounted ? hue : 0}deg)` } as any
             }
             contentFit="contain"
           />
