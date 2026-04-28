@@ -150,7 +150,6 @@ class StatusCallback(ABC):
         created_memories: Optional[List[Memory]] = None,
         artifact: Optional[str] = None,
         confidence: Optional[float] = None,
-        should_post_directly: Optional[bool] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -186,8 +185,6 @@ class StatusCallback(ABC):
             self.status.artifact = artifact
         if hasattr(self.status, "confidence"):
             self.status.confidence = confidence
-        if hasattr(self.status, "should_post_directly"):
-            self.status.should_post_directly = should_post_directly
         next_stage = self.get_next_stage()
 
         if next_stage is not None:
@@ -215,8 +212,6 @@ class StatusCallback(ABC):
                 self.status.created_memories = None
             if hasattr(self.status, "confidence"):
                 self.status.confidence = None
-            if hasattr(self.status, "should_post_directly"):
-                self.status.should_post_directly = False
 
     def error(
         self,
