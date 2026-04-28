@@ -57,6 +57,43 @@ _SCRUBBED_ENV_VARS = (
     "MASTER_PORT",
 )
 
+# Cache for _discover_pip_cuda_lib_dirs() — computed once per process.
+_pip_cuda_lib_dirs: list[str] | None = None
+
+
+def _discover_pip_cuda_lib_dirs() -> list[str]:
+    """Find pip-package lib directories containing CUDA shared libraries.
+
+    PyTorch cu128 wheels depend on CUDA 12 libraries (libcudart.so.12,
+    libcublasLt.so.12) shipped by nvidia-* pip packages.  These live under
+    ``<site-packages>/nvidia/*/lib/`` and may not be in ``LD_LIBRARY_PATH``
+    or registered with ``ldconfig``.  ``torch/lib`` provides ``libc10.so``
+    and CUDA stub libraries.
+
+    Results are cached for the lifetime of the process.
+    """
+    global _pip_cuda_lib_dirs  # noqa: PLW0603
+    if _pip_cuda_lib_dirs is not None:
+        return _pip_cuda_lib_dirs
+
+    import sysconfig
+
+    dirs: list[str] = []
+    sp = sysconfig.get_path("purelib")
+    if sp:
+        nvidia_root = Path(sp) / "nvidia"
+        if nvidia_root.is_dir():
+            for child in sorted(nvidia_root.iterdir()):
+                lib_dir = child / "lib"
+                if lib_dir.is_dir():
+                    dirs.append(str(lib_dir))
+        torch_lib = Path(sp) / "torch" / "lib"
+        if torch_lib.is_dir():
+            dirs.append(str(torch_lib))
+
+    _pip_cuda_lib_dirs = dirs
+    return dirs
+
 # Model-name → vLLM --tool-call-parser mapping.  Checked in order;
 # first match wins.  Patterns are lowercased substrings of the HF model id.
 # Full list of parsers: https://docs.vllm.ai/en/latest/features/tool_calling.html
@@ -926,6 +963,18 @@ class VllmProcessHandle:
             process_env.pop("CUDA_VISIBLE_DEVICES", None)
 
         process_env.update(env)
+
+        # Ensure pip-vendored CUDA libraries (libcudart.so.12, libcublasLt.so.12
+        # from nvidia-* packages, libc10.so from torch) are discoverable.
+        # The Dockerfile registers these via ldconfig, but this is a defensive
+        # fallback for environments where ldconfig wasn't configured.
+        pip_cuda_dirs = _discover_pip_cuda_lib_dirs()
+        if pip_cuda_dirs:
+            existing_ld = process_env.get("LD_LIBRARY_PATH", "")
+            pip_cuda_path = os.pathsep.join(pip_cuda_dirs)
+            process_env["LD_LIBRARY_PATH"] = (
+                f"{pip_cuda_path}{os.pathsep}{existing_ld}" if existing_ld else pip_cuda_path
+            )
 
         # Keep helper tools from the same virtualenv (for example `ninja`
         # used by FlashInfer JIT) available even when the venv is not activated.

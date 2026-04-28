@@ -225,7 +225,16 @@ WORKDIR /app
 # bin/, lib/, and include/ are all present with correct shebangs.
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:/usr/local/cuda/bin:$PATH"
-RUN ldconfig
+# Register pip-vendored CUDA library directories with the dynamic linker so
+# child processes (vLLM) can find them.  PyTorch cu128 wheels depend on CUDA 12
+# shared libraries (libcudart.so.12, libcublasLt.so.12, …) shipped inside
+# nvidia-* pip packages under <site-packages>/nvidia/*/lib/.  torch/lib
+# contains libc10.so and CUDA stub libraries.  Neither location is in the
+# default ldconfig search path — register them explicitly.
+RUN { find /opt/venv/lib -path '*/nvidia/*/lib' -type d 2>/dev/null; \
+      find /opt/venv/lib -path '*/torch/lib' -type d 2>/dev/null; \
+    } > /etc/ld.so.conf.d/pip-cuda-libs.conf \
+    && ldconfig
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/
