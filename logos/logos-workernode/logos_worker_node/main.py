@@ -15,7 +15,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from logos_worker_node.config import load_config, get_state_dir
+from logos_worker_node.config import load_config, get_state_dir, save_lanes_state
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.logos_bridge import LogosBridgeClient
@@ -248,6 +248,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
         lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+
+    # Drop restored lanes that exceed MAX_LANES — start fresh and let the
+    # server re-assign.  This avoids a hard crash from apply_lanes validation.
+    if cfg.lanes and cfg.worker.max_lanes > 0 and len(cfg.lanes) > cfg.worker.max_lanes:
+        logger.warning(
+            "Restored %d lane(s) from lanes.json but MAX_LANES=%d; "
+            "dropping all restored lanes and starting in zero-lane mode",
+            len(cfg.lanes), cfg.worker.max_lanes,
+        )
+        cfg.lanes = []
+        save_lanes_state([])
 
     if cfg.lanes:
         logger.info("Applying %d lane(s) from config", len(cfg.lanes))

@@ -498,22 +498,16 @@ class LaneManager:
                                         exc_info=True,
                                     )
                 finally:
-                    # Always wake staggered lanes — even if an add failed
-                    for slept_lid in slept_lids:
-                        try:
-                            slept_h = self._handles.get(slept_lid)
-                            if slept_h is not None:
-                                await slept_h.wake_up()
-                                logger.info(
-                                    "Staggered startup: woke lane '%s' after adding new lanes",
-                                    slept_lid,
-                                )
-                        except Exception:
-                            logger.warning(
-                                "Staggered startup: failed to wake lane '%s'",
-                                slept_lid,
-                                exc_info=True,
-                            )
+                    # Leave staggered lanes sleeping — the Logos server manages
+                    # wake/sleep transitions based on demand.  Waking all lanes
+                    # unconditionally would OOM on hosts where not all lanes fit
+                    # in VRAM simultaneously (the common case for staggered startup).
+                    if slept_lids:
+                        logger.info(
+                            "Staggered startup complete: lanes %s remain sleeping "
+                            "until the server requests a wake",
+                            slept_lids,
+                        )
 
             except _ApplyAbort:
                 # ---- Rollback: best-effort restore previous state ----

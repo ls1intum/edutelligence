@@ -93,20 +93,11 @@ export default function Main({
     const safeKey = sanitizeKey(key);
     try {
       const response = await fetch(
-        `${API_BASE}/logosdb/get_role`,
+        `${API_BASE}/me`,
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            logos_key: safeKey,
-          },
-          body: JSON.stringify({
-            logos_key: safeKey,
-          }),
-        }
-      );
-      let [, code] = JSON.parse(await response.text());
-      return code === 200;
+            headers: { "logos-key": safeKey },
+        });
+      return response.status === 200;
     } catch (error) {
       console.error("API-Fehler:", error);
       return false;

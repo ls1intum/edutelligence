@@ -8,19 +8,24 @@ import React, {
 } from "react";
 import { ScrollView } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { usePathname } from "expo-router";
+import { usePathname, useRouter } from "expo-router";
 
 import Main from "@/components/main";
 import { Box } from "@/components/ui/box";
 import { HStack } from "@/components/ui/hstack";
 import { VStack } from "@/components/ui/vstack";
-import { Center } from "@/components/ui/center";
 import { ActivityIndicator, Text } from "react-native";
 import Sidebar from "./sidebar";
+import { API_BASE } from "@/components/statistics/constants";
+import { HOME_ROUTE, isRouteAllowed, UserRole } from "@/components/route-permissions";
+
+export type Team = { id: number; name: string };
 
 type AuthContextValue = {
   apiKey: string;
   status: "checking" | "authenticated" | "unauthenticated";
+  role: UserRole | null;
+  teams: Team[];
   setApiKey: (key: string) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -28,6 +33,8 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue>({
   apiKey: "",
   status: "checking",
+  role: null,
+  teams: [],
   setApiKey: async () => {},
   logout: async () => {},
 });
@@ -43,11 +50,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [status, setStatus] = useState<
     "checking" | "authenticated" | "unauthenticated"
   >("checking");
+  const [role, setRole] = useState<UserRole | null>(null);
+  const [teams, setTeams] = useState<Team[]>([]);
 
   const sanitizeKey = useCallback(
     (raw: string | null) => (raw || "").replace(/[\r\n]+/g, "").trim(),
     []
   );
+
+  const fetchRole = useCallback(async (key: string) => {
+      try {
+          const res = await fetch(`${API_BASE}/me`, {
+              headers: { "logos-key": key },
+          });
+          if (res.ok) {
+              const data = await res.json();
+              setRole(data.role as UserRole);
+              setTeams(data.teams ?? []);
+          } else {
+              await AsyncStorage.removeItem("logos_api_key");
+              setApiKey("");
+              setRole(null);
+              setTeams([]);
+              setStatus("unauthenticated");
+          }
+      } catch {
+          setRole(null);
+          setTeams([]);
+      }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -57,6 +88,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       if (stored.length) {
         setApiKey(stored);
         setStatus("authenticated");
+        await fetchRole(stored);
       } else {
         setStatus("unauthenticated");
       }
@@ -65,7 +97,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => {
       isMounted = false;
     };
-  }, [sanitizeKey]);
+  }, [sanitizeKey, fetchRole]);
 
   const persistKey = useCallback(
     async (key: string) => {
@@ -73,13 +105,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await AsyncStorage.setItem("logos_api_key", cleaned);
       setApiKey(cleaned);
       setStatus("authenticated");
+      await fetchRole(cleaned);
     },
-    [sanitizeKey]
+    [sanitizeKey, fetchRole]
   );
 
   const logout = useCallback(async () => {
     await AsyncStorage.removeItem("logos_api_key");
     setApiKey("");
+    setRole(null);
+    setTeams([]);
     setStatus("unauthenticated");
     // Routing back to "/" is handled by callers; keep provider focused on state.
   }, []);
@@ -88,10 +123,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
     () => ({
       apiKey,
       status,
+      role,
+      teams,
       setApiKey: persistKey,
       logout,
     }),
-    [apiKey, logout, persistKey, status]
+    [apiKey, role, teams, logout, persistKey, status]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -109,7 +146,15 @@ export function AuthenticatedShell({
   contentClassName,
 }: AuthenticatedShellProps) {
   const pathname = usePathname();
-  const { apiKey, status, setApiKey } = useAuth();
+  const router = useRouter();
+  const { apiKey, status, role, setApiKey } = useAuth();
+
+  useEffect(() => {
+    if (!role || !pathname) return;
+    if (!isRouteAllowed(role, pathname)) {
+      router.replace(HOME_ROUTE[role] as any);
+    }
+  }, [role, pathname, router]);
 
   if (status === "checking") {
     return (
@@ -128,6 +173,15 @@ export function AuthenticatedShell({
           onAuthenticated={setApiKey}
           enableAutoRedirect={false}
         />
+      </Box>
+    );
+  }
+
+  if (!role) {
+    return (
+      <Box className="min-h-screen flex-1 items-center justify-center bg-white dark:bg-[#1e1e1e]">
+        <ActivityIndicator size="large" color="#006DFF" />
+        <Text className="mt-4 text-gray-500">Loading...</Text>
       </Box>
     );
   }
