@@ -47,5 +47,5 @@ export const ROLE_LABELS: Record<UserRole, string> = {
     app_developer: "App Developer",
 };
 
-export type AdminUser = { id: number; username: string; prename: string; name: string };
+export type User = { id: number; username: string; prename: string; name: string };
 export type BasicTeam = { id: number; name: string };
