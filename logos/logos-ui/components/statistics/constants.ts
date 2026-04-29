@@ -49,5 +49,19 @@ export const ROLE_LABELS: Record<UserRole, string> = {
     app_developer: "App Developer",
 };
 
+export const STATUS_COLORS: Record<ImportRow["status"], string> = {
+    created: "#7FB069",
+    existing: "#F59E0B",
+    failed: "#E63535",
+};
+
+export type ImportRow = {
+    email: string | null;
+    username: string | null;
+    apiKey: string | null;
+    team: string | null;
+    status: "created" | "existing" | "failed";
+    error: string | null;
+};
 export type User = { id: number; username: string; prename: string; name: string };
 export type BasicTeam = { id: number; name: string };

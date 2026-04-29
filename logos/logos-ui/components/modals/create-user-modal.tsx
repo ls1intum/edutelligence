@@ -33,7 +33,6 @@ type Props = {
 const EMPTY_FORM = {
     prename: "",
     name: "",
-    username: "",
     email: "",
     role: "app_developer" as UserRole,
 };
@@ -48,6 +47,7 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
     const [selectedTeamIds, setSelectedTeamIds] = useState<number[]>([]);
     const [teamPickerOpen, setTeamPickerOpen] = useState(false);
     const [teamSearch, setTeamSearch] = useState("");
+    const [generatedUsername, setGeneratedUsername] = useState("");
 
     React.useEffect(() => {
         if (showTeamPicker && visible) {
@@ -58,7 +58,7 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
         }
     }, [visible, showTeamPicker, apiKey]);
 
-    const isAnyFieldEmpty = !form.prename.trim() || !form.name.trim() || !form.username.trim() || !form.email.trim();
+    const isAnyFieldEmpty = !form.prename.trim() || !form.name.trim() || !form.email.trim();
 
     const handleCreate = async () => {
         setError("");
@@ -77,6 +77,7 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
             const data = await res.json();
             if (res.ok) {
                 setGeneratedKey(data.logos_key);
+                setGeneratedUsername(data.username);
                 const assignedTeams = teams.filter(t => teamIds.includes(t.id));
                 onCreated({ ...data, teams: assignedTeams } as CreatedUser);
             } else {
@@ -98,6 +99,7 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
     const closeAndReset = () => {
         setForm(EMPTY_FORM);
         setGeneratedKey("");
+        setGeneratedUsername("");
         setError("");
         setSelectedTeamIds([]);
         setTeamPickerOpen(false);
@@ -129,7 +131,6 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
                             <Text style={{ fontWeight: "700", fontSize: 18 }}>Create New User</Text>
                             <Input><InputField placeholder="First Name" value={form.prename} onChangeText={v => setForm(f => ({ ...f, prename: v }))} /></Input>
                             <Input><InputField placeholder="Last Name" value={form.name} onChangeText={v => setForm(f => ({ ...f, name: v }))} /></Input>
-                            <Input><InputField placeholder="Username" value={form.username} autoCapitalize="none" onChangeText={v => setForm(f => ({ ...f, username: v }))} /></Input>
                             <Input><InputField placeholder="Email" value={form.email} autoCapitalize="none" onChangeText={v => setForm(f => ({ ...f, email: v }))} /></Input>
                             {error ? <Text style={{ color: "#e63535", fontSize: 12, fontWeight: "500" }}>{error}</Text> : null}
                             {showRoleSelector && (
@@ -199,8 +200,9 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
                         </VStack>
                     ) : (
                         <VStack space="md">
-                            <Text style={{ fontWeight: "700", fontSize: 18 }}>Success!</Text>
-                            <Text style={{ fontSize: 14 }}>Copy the key now, it won't be shown again:</Text>
+                            <Text style={{ fontWeight: "700", fontSize: 18 }}>User Created!</Text>
+                            <Text style={{ fontSize: 14 }}>Username: {generatedUsername}</Text>
+                            <Text style={{ fontSize: 14 }}>Copy the API key now, it won't be shown again:</Text>
                             <Box className="bg-gray-100 p-3 rounded-lg border border-gray-200">
                                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                                     <Text>{generatedKey}</Text>

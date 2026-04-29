@@ -12,6 +12,8 @@ import { UserRole, ALL_ROLES } from "@/components/route-permissions";
 import { BaseModal } from "@/components/modals/base-modal";
 import { ConfirmDeleteModal } from "@/components/modals/confirm-delete-modal";
 import { CreateUserModal, CreatedUser } from "@/components/modals/create-user-modal";
+import { CsvImportModal } from "@/components/modals/csv-import-modal";
+import { HStack } from "@/components/ui/hstack";
 
 type User = {
     id: number;
@@ -65,6 +67,7 @@ export default function UserManagement() {
     const [roleTarget, setRoleTarget] = useState<User | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
     const [createVisible, setCreateVisible] = useState(false);
+    const [importVisible, setImportVisible] = useState(false);
 
     const fetchUsers = useCallback(async () => {
         try {
@@ -129,11 +132,14 @@ export default function UserManagement() {
                 </Text>
             </VStack>
 
-            <Box className="self-end">
+            <HStack space="sm" className="self-end">
+                <Button variant="outline" onPress={() => setImportVisible(true)}>
+                    <ButtonText>Import CSV</ButtonText>
+                </Button>
                 <Button onPress={() => setCreateVisible(true)}>
                     <ButtonText>+ New User</ButtonText>
                 </Button>
-            </Box>
+            </HStack>
 
             {loading ? (
                 <VStack space="lg" className="items-center justify-center p-8">
@@ -206,6 +212,12 @@ export default function UserManagement() {
                 showRoleSelector={isLogosAdmin}
                 showTeamPicker={isLogosAdmin}
                 preselectedTeamIds={[]}
+            />
+            <CsvImportModal
+                visible={importVisible}
+                onClose={() => setImportVisible(false)}
+                apiKey={apiKey}
+                onImported={fetchUsers}
             />
         </VStack>
     );
