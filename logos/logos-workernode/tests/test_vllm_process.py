@@ -525,6 +525,95 @@ vllm:time_to_first_token_seconds_bucket{model_name=\"Qwen\",le=\"+Inf\"} 10
 
 
 
+@pytest.mark.asyncio
+async def test_get_backend_metrics_parses_vllm_0_20_metric_names() -> None:
+    """vLLM 0.20 renamed gpu_cache_usage_perc → kv_cache_usage_perc and replaced
+    the prefix_cache_hit_rate gauge with two counters."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+# HELP ignored ignored
+vllm:num_requests_waiting{model_name="Qwen"} 0
+vllm:num_requests_running{model_name="Qwen"} 1
+vllm:kv_cache_usage_perc{model_name="Qwen"} 0.08
+vllm:gpu_prefix_cache_queries{model_name="Qwen"} 100
+vllm:gpu_prefix_cache_hits{model_name="Qwen"} 51
+vllm:prompt_tokens_total{model_name="Qwen"} 512
+vllm:generation_tokens_total{model_name="Qwen"} 1024
+vllm:time_to_first_token_seconds_bucket{model_name="Qwen",le="1.0"} 9
+vllm:time_to_first_token_seconds_bucket{model_name="Qwen",le="+Inf"} 10
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["queue_waiting"] == 0.0
+    assert metrics["requests_running"] == 1.0
+    assert metrics["gpu_cache_usage_percent"] == pytest.approx(8.0)
+    assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.51)
+    assert metrics["prompt_tokens_total"] == 512.0
+    assert metrics["generation_tokens_total"] == 1024.0
+    assert metrics["ttft_histogram"]["1.0"] == 9.0
+    assert metrics["ttft_histogram"]["+Inf"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_prefix_hit_counter_total_suffix() -> None:
+    """Accept the _total counter suffix variant used in some vLLM builds."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_waiting{model_name="m"} 0
+vllm:num_requests_running{model_name="m"} 2
+vllm:kv_cache_usage_perc{model_name="m"} 0.5
+vllm:gpu_prefix_cache_queries_total{model_name="m"} 200
+vllm:gpu_prefix_cache_hits_total{model_name="m"} 100
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["gpu_cache_usage_percent"] == pytest.approx(50.0)
+    assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_legacy_gauge_takes_priority_over_counters() -> None:
+    """When both the legacy gauge and counters are present, the gauge wins."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_running{model_name="m"} 1
+vllm:prefix_cache_hit_rate{model_name="m"} 0.75
+vllm:gpu_prefix_cache_queries{model_name="m"} 100
+vllm:gpu_prefix_cache_hits{model_name="m"} 10
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    # Legacy gauge (0.75) must win over counter-derived rate (0.1).
+    assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.75)
+
+
 def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> None:
     handle = VllmProcessHandle(
         "lane-test",

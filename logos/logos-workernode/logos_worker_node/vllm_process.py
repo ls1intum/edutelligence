@@ -534,6 +534,8 @@ class VllmProcessHandle:
             resp = await self._http.get(f"{self._base_url()}/metrics", timeout=5.0)
             if resp.status_code != 200:
                 return metrics
+            _prefix_queries: float = 0.0
+            _prefix_hits: float = 0.0
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -550,10 +552,25 @@ class VllmProcessHandle:
                     metrics["queue_waiting"] = value
                 elif metric_name.endswith("num_requests_running"):
                     metrics["requests_running"] = value
-                elif metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent"):
+                elif (
+                    metric_name.endswith("kv_cache_usage_perc")
+                    or metric_name.endswith("gpu_cache_usage_perc")
+                    or metric_name.endswith("gpu_cache_usage_percent")
+                ):
                     metrics["gpu_cache_usage_percent"] = value * 100.0
                 elif metric_name.endswith("prefix_cache_hit_rate"):
+                    # Legacy gauge (vLLM < 0.20); kept for backward compatibility.
                     metrics["prefix_cache_hit_rate"] = value
+                elif (
+                    metric_name.endswith("gpu_prefix_cache_queries")
+                    or metric_name.endswith("gpu_prefix_cache_queries_total")
+                ):
+                    _prefix_queries += value
+                elif (
+                    metric_name.endswith("gpu_prefix_cache_hits")
+                    or metric_name.endswith("gpu_prefix_cache_hits_total")
+                ):
+                    _prefix_hits += value
                 elif metric_name.endswith("prompt_tokens_total"):
                     metrics["prompt_tokens_total"] = value
                 elif metric_name.endswith("generation_tokens_total"):
@@ -563,6 +580,10 @@ class VllmProcessHandle:
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["ttft_histogram"][bucket] = value
+            # vLLM 0.20+: compute prefix hit rate from counters when the legacy
+            # gauge was not present.
+            if metrics["prefix_cache_hit_rate"] is None and _prefix_queries > 0:
+                metrics["prefix_cache_hit_rate"] = _prefix_hits / _prefix_queries
         except httpx.HTTPError:
             return metrics
         return metrics
