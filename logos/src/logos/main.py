@@ -12,10 +12,12 @@ from typing import Any, Dict, Set, Optional, Tuple
 import grpc
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
 from logos.role_auth import require_logos_admin_key, require_app_admin_or_above
+from logos.errors import openai_error_response, coerce_upstream_error, raise_openai_error, UpstreamStreamError
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
@@ -1103,6 +1105,47 @@ app.add_middleware(
 )
 
 
+# ============================================================================
+# GLOBAL EXCEPTION HANDLERS – OpenAI-spec error shapes
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """
+    Convert every HTTPException raised in user-facing code to the OpenAI error shape.
+
+    If ``exc.detail`` is already a dict with an ``"error"`` key (as raised by
+    ``raise_openai_error()``) it is forwarded as-is so that code and param are
+    preserved.  Plain string details are wrapped automatically.
+    """
+    detail = exc.detail
+    if isinstance(detail, dict) and "error" in detail:
+        return JSONResponse(content=detail, status_code=exc.status_code)
+    return openai_error_response(exc.status_code, str(detail) if detail is not None else "")
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Convert Pydantic / FastAPI validation errors to the OpenAI error shape (HTTP 422)."""
+    errors = exc.errors()
+    param: str | None = None
+    message = "Request validation failed"
+    if errors:
+        first = errors[0]
+        loc = first.get("loc") or ()
+        if loc:
+            param = str(loc[-1])
+        message = first.get("msg") or message
+    return openai_error_response(422, message, param=param)
+
+
+@app.exception_handler(Exception)
+async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all: return HTTP 500 without leaking stack traces or internal details."""
+    logger.exception("Unhandled exception on %s", request.url.path)
+    return openai_error_response(500, "Internal server error")
+
+
 @app.get("/metrics", tags=["monitoring"])
 async def prometheus_metrics(request: Request):
     """Prometheus metrics endpoint. Requires PROMETHEUS_API_KEY env var to be set.
@@ -1487,50 +1530,149 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
-def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, request_path=None):
-    """Build streaming response using executor."""
-    from fastapi.responses import StreamingResponse
+async def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, request_path=None):
+    """Build streaming response using executor.
+
+    Returns a ``JSONResponse`` when the upstream returns a non-2xx status code
+    *before* emitting any SSE chunks so that clients receive the correct HTTP
+    status code.  Returns a ``StreamingResponse`` for normal 2xx streams;
+    mid-stream errors are appended as an OpenAI-spec SSE error frame.
+    """
+    from fastapi.responses import StreamingResponse, JSONResponse
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
 
-    async def streamer():
+    # Prepare headers and payload using context resolver
+    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
+
+    def process_headers(hdrs: dict):
+        try:
+            _pipeline.update_provider_stats(model_id, provider_id, hdrs)
+        except Exception:
+            pass
+        try:
+            _record_azure_rate_limits(scheduling_stats, hdrs)
+        except Exception:
+            pass
+
+    def _release():
+        """Release scheduler slot (called on early-return error paths)."""
+        if scheduling_stats and scheduling_stats.get("request_id"):
+            try:
+                _pipeline.scheduler.release(
+                    model_id,
+                    provider_id,
+                    scheduling_stats.get("provider_type"),
+                    scheduling_stats.get("request_id"),
+                )
+            except Exception as _e:
+                logger.error(f"Failed to release scheduler resources: {_e}")
+
+    # ── logosnode path ────────────────────────────────────────────────────
+    # LogosNode streams come via WebSocket; status errors are raised as
+    # LogosNodeOfflineError / LogosNodeCommandError *before* streaming starts
+    # (handled in _sync_response). Just wrap in StreamingResponse as before.
+    if context.provider_type == "logosnode" and context.lane_id:
+        stream_payload = {
+            **prepared_payload,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        logosnode_chunk_iter = _logosnode_registry.send_stream_command(
+            provider_id=provider_id,
+            action="infer_stream",
+            params={"lane_id": context.lane_id, "payload": stream_payload, "request_path": request_path},
+            timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+        )
+
+        async def logosnode_streamer():
+            stream_log = _StreamingLogAccumulator()
+            error_message = None
+            ttft_recorded = False
+            try:
+                async for chunk in logosnode_chunk_iter:
+                    yield chunk
+                    if chunk and not ttft_recorded:
+                        if log_id:
+                            with DBManager() as db:
+                                db.set_time_at_first_token(log_id)
+                        ttft_recorded = True
+                    stream_log.feed(chunk)
+            except Exception as e:
+                error_message = str(e)
+                raise e
+            finally:
+                if log_id:
+                    stream_log.finish()
+                    response_payload = stream_log.response_payload()
+                    usage_tokens = _usage_tokens_from_payload(response_payload)
+                    with DBManager() as db:
+                        db.set_response_payload(
+                            log_id, response_payload, provider_id, model_id,
+                            usage_tokens, policy_id, classification_stats,
+                            request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
+                            queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
+                            utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None,
+                        )
+                if scheduling_stats:
+                    _pipeline.record_completion(
+                        request_id=scheduling_stats.get("request_id"),
+                        result_status="error" if error_message else "success",
+                        error_message=error_message,
+                        cold_start=scheduling_stats.get("is_cold_start"),
+                    )
+                _release()
+
+        response_headers = {"X-Request-ID": request_id} if request_id else None
+        return StreamingResponse(logosnode_streamer(), media_type="text/event-stream", headers=response_headers)
+
+    # ── HTTP executor path ────────────────────────────────────────────────
+    chunk_iter = _pipeline.executor.execute_streaming(
+        context.forward_url,
+        headers,
+        prepared_payload,
+        on_headers=process_headers,
+    )
+
+    # Peek at the first chunk.  This triggers the initial HTTP connection so
+    # that on_headers fires and – crucially – UpstreamStreamError is raised
+    # for non-2xx responses before we commit to a StreamingResponse.
+    try:
+        first_chunk = await chunk_iter.__anext__()
+    except UpstreamStreamError as exc:
+        corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
+        logger.error(
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): "
+            "HTTP %s → %s",
+            model_id, provider_id, exc.status_code, corrected_sc,
+        )
+        _release()
+        if scheduling_stats:
+            _pipeline.record_completion(
+                request_id=scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=str(exc),
+                cold_start=scheduling_stats.get("is_cold_start"),
+            )
+        resp_headers = {"X-Request-ID": request_id} if request_id else None
+        return JSONResponse(content=error_body, status_code=corrected_sc, headers=resp_headers)
+    except StopAsyncIteration:
+        first_chunk = None
+
+    async def http_streamer():
         stream_log = _StreamingLogAccumulator()
         error_message = None
-        timed_out = False
         ttft_recorded = False
 
         try:
-            def process_headers(headers: dict):
-                try:
-                    _pipeline.update_provider_stats(model_id, provider_id, headers)
-                except Exception:
-                    pass
-                try:
-                    _record_azure_rate_limits(scheduling_stats, headers)
-                except Exception:
-                    pass
-
-            # Prepare headers and payload using context resolver
-            headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
-
-            if context.provider_type == "logosnode" and context.lane_id:
-                stream_payload = {
-                    **prepared_payload,
-                    "stream": True,
-                    "stream_options": {"include_usage": True},
-                }
-                chunk_iter = _logosnode_registry.send_stream_command(
-                    provider_id=provider_id,
-                    action="infer_stream",
-                    params={"lane_id": context.lane_id, "payload": stream_payload, "request_path": request_path},
-                    timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
-                )
-            else:
-                chunk_iter = _pipeline.executor.execute_streaming(
-                    context.forward_url,
-                    headers,
-                    prepared_payload,
-                    on_headers=process_headers,
-                )
+            # Yield the already-peeked first chunk
+            if first_chunk:
+                yield first_chunk
+                stream_log.feed(first_chunk)
+                if not ttft_recorded:
+                    if log_id:
+                        with DBManager() as db:
+                            db.set_time_at_first_token(log_id)
+                    ttft_recorded = True
 
             async for chunk in chunk_iter:
                 yield chunk
@@ -1539,18 +1681,19 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
                     ttft_recorded = True
-
                 stream_log.feed(chunk)
-        except Exception as e:
-            error_message = str(e)
-            raise e
+        except Exception as exc:
+            error_message = str(exc)
+            # Mid-stream error: append error SSE frame before stopping
+            import json as _json
+            _, error_body = coerce_upstream_error(500, {"error": str(exc)})
+            yield f"data: {_json.dumps(error_body)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
         finally:
-            # Log completion with detailed token usage
             if log_id:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(response_payload)
-
                 with DBManager() as db:
                     db.set_response_payload(
                         log_id,
@@ -1562,33 +1705,19 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         classification_stats,
                         request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
                         queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
-                        utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                        utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None,
                     )
-
             if scheduling_stats:
-                status = "timeout" if timed_out else ("error" if error_message else "success")
-                
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
-                    result_status=status,
+                    result_status="error" if error_message else "success",
                     error_message=error_message,
-                    cold_start=scheduling_stats.get("is_cold_start")
+                    cold_start=scheduling_stats.get("is_cold_start"),
                 )
-            
-            # Release scheduler resources
-            if scheduling_stats and scheduling_stats.get("request_id"):
-                try:
-                    _pipeline.scheduler.release(
-                        model_id,
-                        provider_id,
-                        scheduling_stats.get("provider_type"),
-                        scheduling_stats.get("request_id")
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to release scheduler resources: {e}")
-    
+            _release()
+
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
+    return StreamingResponse(http_streamer(), media_type="text/event-stream", headers=response_headers)
 
 
 async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, is_async_job=False, request_path=None):
@@ -1634,9 +1763,10 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 )
             except LogosNodeOfflineError as exc:
                 status_override = 503
+                _, coerced_body = coerce_upstream_error(503, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
-                    response={"error": str(exc)},
+                    response=coerced_body,
                     error=str(exc),
                     usage={},
                     is_streaming=False,
@@ -1644,9 +1774,10 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 )
             except LogosNodeCommandError as exc:
                 status_override = 502
+                _, coerced_body = coerce_upstream_error(502, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
-                    response={"error": str(exc)},
+                    response=coerced_body,
                     error=str(exc),
                     usage={},
                     is_streaming=False,
@@ -1703,14 +1834,30 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 cold_start=scheduling_stats.get("is_cold_start")
             )
 
+        # Determine effective HTTP status code:
+        #   1. status_override (from logosnode RPC result or error handlers) takes highest priority
+        #   2. exec_result.status_code from the upstream HTTP response
+        #   3. Fallback: 504 for timeout, 200 for success, 500 for error
+        if status_override is not None:
+            status_code = status_override
+        elif exec_result.status_code is not None:
+            status_code = exec_result.status_code
+        else:
+            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+
+        # Normalise error bodies to OpenAI shape and correct any wrongly-labelled
+        # 5xx status codes (e.g. vLLM context-length sent as 500 → 400).
+        if not exec_result.success:
+            status_code, response_payload = coerce_upstream_error(
+                status_code, response_payload or {"error": exec_result.error}
+            )
+
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
-            status_code = status_override if status_override is not None else (504 if timed_out else (200 if exec_result.success else 500))
             return {"status_code": status_code, "data": response_payload}
         else:
-            status_code = status_override if status_override is not None else (504 if timed_out else (200 if exec_result.success else 500))
-            headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(content=exec_result.response, status_code=status_code, headers=headers)
+            resp_headers = {"X-Request-ID": request_id} if request_id else None
+            return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -1816,15 +1963,26 @@ async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: d
                 error_message=None if exec_result.success else exec_result.error,
             )
 
+    # Use upstream HTTP status code; fall back to 200/500 if unavailable
+    status_code = exec_result.status_code if exec_result.status_code is not None else (
+        200 if exec_result.success else 500
+    )
+
+    # Normalise error bodies to OpenAI shape
+    if not exec_result.success:
+        status_code, response_payload = coerce_upstream_error(
+            status_code, response_payload or {"error": exec_result.error}
+        )
+
     # Return dict for async jobs, JSONResponse for sync endpoints
     if is_async_job:
-        return {"status_code": 200 if exec_result.success else 500, "data": response_payload}
+        return {"status_code": status_code, "data": response_payload}
     else:
-        headers = {"X-Request-ID": request_id} if request_id else None
+        resp_headers = {"X-Request-ID": request_id} if request_id else None
         return JSONResponse(
             content=response_payload,
-            status_code=200 if exec_result.success else 500,
-            headers=headers,
+            status_code=status_code,
+            headers=resp_headers,
         )
 
 
@@ -1998,7 +2156,7 @@ async def _execute_resource_mode(
         else:
             # Sync endpoints support streaming
             if body.get("stream"):
-                return _streaming_response(
+                return await _streaming_response(
                     result.execution_context,
                     body,
                     log_id,
@@ -2362,10 +2520,12 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
         models = await _filter_logosnode_deployments(models)
     except PermissionError as e:
         _record_log_failure(usage_id, request_id, str(e), result_status="error")
-        return {"status_code": 401, "data": {"error": str(e)}}
+        _, err_body = coerce_upstream_error(401, {"error": str(e)})
+        return {"status_code": 401, "data": err_body}
     except ValueError as e:
         _record_log_failure(usage_id, request_id, str(e), result_status="error")
-        return {"status_code": 400, "data": {"error": str(e)}}
+        _, err_body = coerce_upstream_error(400, {"error": str(e)})
+        return {"status_code": 400, "data": err_body}
 
     # Force non-streaming for jobs
     json_data["stream"] = False
@@ -3310,7 +3470,7 @@ async def get_job_status(job_id: int, request: Request):
             detail="Job belongs to a different profile. Use the correct use_profile header."
         )
 
-    return {
+    return_payload = {
         "job_id": job_id,
         "status": job["status"],
         "result": job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None,
@@ -3319,6 +3479,24 @@ async def get_job_status(job_id: int, request: Request):
         "updated_at": job.get("updated_at"),
         "profile_id": job_profile_id,
     }
+
+    # When a completed job has a non-2xx upstream status code, surface the
+    # error body with the correct HTTP status so OpenAI-spec clients behave
+    # correctly (e.g. don't blind-retry a 400 context-length error).
+    if job["status"] == JobStatus.SUCCESS.value:
+        result_payload = job.get("result_payload") or {}
+        job_status_code = result_payload.get("status_code") if isinstance(result_payload, dict) else None
+        if isinstance(job_status_code, int) and job_status_code >= 400:
+            job_data = result_payload.get("data") or {}
+            corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
+            return JSONResponse(content={**return_payload, "result": None, "error": error_body}, status_code=corrected_sc)
+
+    if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
+        # Wrap plain-string failure message in OpenAI error shape
+        _, error_body = coerce_upstream_error(500, {"error": job["error_message"]})
+        return JSONResponse(content={**return_payload, "error": error_body}, status_code=500)
+
+    return return_payload
 
 
 @app.post("/logosdb/latest_requests", tags=["admin"])

@@ -132,7 +132,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     pipeline, completion_calls, release_calls = _make_pipeline()
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
-    response = main._streaming_response(
+    response = await main._streaming_response(
         SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
