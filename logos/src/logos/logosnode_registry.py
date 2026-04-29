@@ -123,6 +123,20 @@ def _lane_gpu_devices(lane: dict[str, Any]) -> str:
     )
 
 
+# Fields that represent a meaningful lane structural change worthy of logging.
+# Metric/runtime fluctuations (kv_cache %, queue depth, ttft, prefix-hit) are
+# excluded so they don't spam "Lane Change" blocks on every status heartbeat.
+_LANE_STRUCTURAL_FIELDS = frozenset(
+    {
+        "model",
+        "runtime_state",
+        "sleep_state",
+        "effective_vram_mb",
+        "gpu_devices",
+    }
+)
+
+
 def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
     backend_metrics = (
         lane.get("backend_metrics")
@@ -175,7 +189,10 @@ def _render_lane_summary(
     running_text = _format_optional_float(snapshot.get("requests_running"))
     cache_text = _format_optional_float(snapshot.get("gpu_cache_usage_percent"), "%")
     ttft_text = _format_optional_float(snapshot.get("ttft_p95_seconds"), "s")
-    prefix_text = _format_optional_float(snapshot.get("prefix_cache_hit_rate"))
+    prefix_hit_raw = snapshot.get("prefix_cache_hit_rate")
+    prefix_text = _format_optional_float(
+        round(prefix_hit_raw * 100, 1) if prefix_hit_raw is not None else None, "%"
+    )
 
     lines = wrap_plain(f"model: {snapshot['model']}", indent=indent)
     lines.append(
@@ -632,15 +649,17 @@ class LogosNodeRuntimeRegistry:
                 if isinstance(runtime, dict) and isinstance(l, dict)
             )
         }
-        if old_lanes != new_lanes:
-            added = sorted(set(new_lanes) - set(old_lanes))
-            removed = sorted(set(old_lanes) - set(new_lanes))
-            changed = sorted(
-                lid
-                for lid in set(old_lanes) & set(new_lanes)
-                if old_lanes[lid] != new_lanes[lid]
+        added = sorted(set(new_lanes) - set(old_lanes))
+        removed = sorted(set(old_lanes) - set(new_lanes))
+        changed = sorted(
+            lid
+            for lid in set(old_lanes) & set(new_lanes)
+            if (
+                {k: old_lanes[lid].get(k) for k in _LANE_STRUCTURAL_FIELDS}
+                != {k: new_lanes[lid].get(k) for k in _LANE_STRUCTURAL_FIELDS}
             )
-
+        )
+        if added or removed or changed:
             body_lines: list[str] = [
                 f"provider={paint(session.worker_id, BOLD)} lanes={len(new_lanes)}"
             ]
