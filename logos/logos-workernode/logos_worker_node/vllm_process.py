@@ -568,13 +568,19 @@ class VllmProcessHandle:
                 elif metric_name.endswith("prefix_cache_hit_rate"):
                     # Legacy gauge (vLLM < 0.20); kept for backward compatibility.
                     metrics["prefix_cache_hit_rate"] = value
-                elif metric_name.endswith(
-                    "gpu_prefix_cache_queries"
-                ) or metric_name.endswith("gpu_prefix_cache_queries_total"):
+                elif (
+                    metric_name.endswith("gpu_prefix_cache_queries")
+                    or metric_name.endswith("gpu_prefix_cache_queries_total")
+                    or metric_name.endswith(":prefix_cache_queries_total")
+                    or metric_name.endswith(":prefix_cache_queries")
+                ):
                     _prefix_queries += value
-                elif metric_name.endswith(
-                    "gpu_prefix_cache_hits"
-                ) or metric_name.endswith("gpu_prefix_cache_hits_total"):
+                elif (
+                    metric_name.endswith("gpu_prefix_cache_hits")
+                    or metric_name.endswith("gpu_prefix_cache_hits_total")
+                    or metric_name.endswith(":prefix_cache_hits_total")
+                    or metric_name.endswith(":prefix_cache_hits")
+                ):
                     _prefix_hits += value
                 elif metric_name.endswith("prompt_tokens_total"):
                     metrics["prompt_tokens_total"] = value

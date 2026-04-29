@@ -448,10 +448,25 @@ class CapacityPlanner:
             or "-"
         )
 
-        queue_text = f"{queue_waiting:.1f}" if queue_waiting is not None else "--"
-        running_text = (
-            f"{requests_running:.1f}" if requests_running is not None else "--"
-        )
+        # Resolve the parallel cap reported by the lane: vLLM lanes report
+        # num_parallel=0 at runtime (continuous batching), so fall back to the
+        # saved lane_config value. Mirrors _get_runtime_parallel_capacity.
+        cap_hint = lane.get("num_parallel") or lane_config.get("num_parallel") or 0
+        try:
+            cap_int = int(cap_hint)
+        except (TypeError, ValueError):
+            cap_int = 0
+
+        running_int = int(requests_running) if requests_running is not None else None
+        queue_int = int(queue_waiting) if queue_waiting is not None else 0
+
+        running_head = paint(str(running_int), BOLD) if running_int is not None else "--"
+        if cap_int > 0:
+            running_text = f"{running_head} / {cap_int}"
+        else:
+            running_text = running_head
+        if queue_int > 0:
+            running_text = f"{running_text} ({paint(str(queue_int), BOLD)} queued)"
         cache_text = f"{cache_pressure:.0f}%" if cache_pressure is not None else "--"
         ttft_text = f"{ttft_p95:.2f}s" if ttft_p95 is not None else "--"
         prefix_text = f"{prefix_hit:.0%}" if prefix_hit is not None else "--"
@@ -468,7 +483,7 @@ class CapacityPlanner:
         demand_text = f"{demand_score:.2f}" if demand_score > 0 else "0"
         lines.append(
             f"{indent}  running={running_text} "
-            f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} "
+            f"kv_cache={cache_text} ttft_p95={ttft_text} "
             f"prefix_hit={prefix_text} demand={demand_text}"
         )
         l1, l5, l15 = self._demand.get_loadavg(model)

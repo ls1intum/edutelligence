@@ -88,10 +88,12 @@ def style_request_id(rid: str) -> str:
 
 
 def style_duration(ms: float) -> str:
-    """Dim duration value with ms/s unit."""
-    if ms >= 1000:
-        return paint(f"{ms / 1000:.1f}s", DIM)
-    return paint(f"{ms:.0f}ms", DIM)
+    """Dim duration with auto-scaled unit (ms / s / min / h).
+
+    Delegates to :func:`format_duration_ms` for the value formatting; this
+    wrapper just paints the result DIM to match other styled helpers.
+    """
+    return paint(format_duration_ms(ms), DIM)
 
 
 def style_count(n: int | float) -> str:
@@ -141,6 +143,32 @@ def format_vram(used_mb: float, total_mb: float) -> str:
     """Format VRAM usage as 'used/total (pct %)'."""
     pct = (used_mb / total_mb * 100) if total_mb > 0 else 0.0
     return f"{format_bytes(used_mb)}/{format_bytes(total_mb)} ({pct:.0f} %)"
+
+
+def format_duration_ms(duration_ms: float) -> str:
+    """Auto-scale a millisecond duration with German separators and a unit space.
+
+    Examples:
+      format_duration_ms(750)     → '750 ms'
+      format_duration_ms(12_500)  → '12,5 s'
+      format_duration_ms(751_728) → '12 min 31,7 s'
+      format_duration_ms(3_900_000) → '1 h 5 min'
+    """
+    if duration_ms is None:
+        return "? ms"
+    ms = float(duration_ms)
+    if ms < 1000:
+        return f"{int(round(ms))} ms"
+    seconds = ms / 1000.0
+    if seconds < 60:
+        return f"{_de_fmt(seconds, decimals=1)} s"
+    if seconds < 3600:
+        minutes = int(seconds // 60)
+        rem = seconds - minutes * 60
+        return f"{minutes} min {_de_fmt(rem, decimals=1)} s"
+    hours = int(seconds // 3600)
+    rem_minutes = int((seconds - hours * 3600) // 60)
+    return f"{hours} h {rem_minutes} min"
 
 
 # ── Model name cache ──────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ from logos.monitoring.recorder import MonitoringRecorder
 from logos.monitoring import prometheus_metrics as prom
 
 from logos.queue.models import Priority
+from logos.terminal_logging import BOLD, RED, paint
 
 from .scheduler_interface import (
     SchedulerInterface,
@@ -169,7 +170,12 @@ class RequestPipeline:
         try:
             scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
-            logger.warning("Request %s timed out waiting in queue", request_id)
+            logger.warning(
+                "%s Request %s %s",
+                paint("‼ QUEUE TIMEOUT", RED, BOLD),
+                request_id,
+                paint("timed out waiting in queue", RED),
+            )
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
             self.record_completion(
                 request_id=request_id,
