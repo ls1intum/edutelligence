@@ -41,7 +41,6 @@ services:
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       TZ: "${TZ:-Europe/Berlin}"
-      LOGOS_LOG_TZ: "${LOGOS_LOG_TZ:-Europe/Berlin}"
     expose:
       - "8080"
     labels:
@@ -59,7 +58,8 @@ services:
 
       # === Routing: /openai ===
       - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
-      - "traefik.http.routers.logos-server-openai.entrypoints=websecure,secure8080"
+      - "traefik.http.routers.logos-server-openai.entrypoints=websecure,secure8\
+        080"
       - "traefik.http.routers.logos-server-openai.tls=true"
       - "traefik.http.routers.logos-server-openai.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-openai.service=logos-server"
@@ -84,7 +84,8 @@ services:
       - "traefik.http.routers.logos-server-logosdb.priority=100"
 
       # === Routing: /docs ===
-      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
+      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) ||
+        PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.logos-server-docs.entrypoints=admin"
       - "traefik.http.routers.logos-server-docs.tls=true"
       - "traefik.http.routers.logos-server-docs.tls.certresolver=letsencrypt"
@@ -118,9 +119,7 @@ services:
     restart: unless-stopped
     user: postgres
     command: >
-      postgres
-      -c shared_preload_libraries=pg_cron
-      -c cron.database_name=logosdb
+      postgres -c shared_preload_libraries=pg_cron -c cron.database_name=logosdb
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
@@ -129,7 +128,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready", "--username=postgres"]
+      test: [ "CMD-SHELL", "pg_isready", "--username=postgres" ]
       interval: 1s
       timeout: 5s
       retries: 10
@@ -149,7 +148,8 @@ services:
 
       # === UI routing (admin port only) ===
       # Override: set LOGOS_DOMAIN / LOGOS_CERT_RESOLVER in .env
-      - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
+      - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}\
+        `) && PathPrefix(`/`)"
       - "traefik.http.routers.internal-ui.entrypoints=admin"
       - "traefik.http.routers.internal-ui.tls=true"
       - "traefik.http.routers.internal-ui.tls.certresolver=letsencrypt"

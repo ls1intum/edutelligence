@@ -20,6 +20,7 @@ import shutil
 import textwrap
 from datetime import datetime, timezone
 from typing import Any
+
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 except ImportError:  # Python < 3.9 fallback
@@ -75,6 +76,7 @@ def strip_ansi(text: str) -> str:
 
 # ── Semantic style helpers ────────────────────────────────────────────────────
 
+
 def style_model(name: str) -> str:
     """Bold model name."""
     return paint(str(name), BOLD)
@@ -98,6 +100,7 @@ def style_count(n: int | float) -> str:
 
 
 # ── Human-readable unit formatting (German SI) ───────────────────────────────
+
 
 def _de_fmt(value: float, decimals: int = 1) -> str:
     """Format a float with German decimal/thousands separators (no locale dep.)."""
@@ -142,6 +145,7 @@ def format_vram(used_mb: float, total_mb: float) -> str:
 
 # ── Model name cache ──────────────────────────────────────────────────────────
 
+
 class ModelNameCache:
     """Thread-safe in-memory model-id → name resolver backed by the DB.
 
@@ -163,6 +167,7 @@ class ModelNameCache:
     def _resolve(self, model_id: int) -> str:
         try:
             from logos.dbutils.dbmanager import DBManager  # noqa: PLC0415
+
             with DBManager() as db:
                 info = db.get_model(model_id)
             return (info or {}).get("name") or str(model_id)
@@ -212,7 +217,9 @@ def wrap_plain(
 def render_section(title: str, body_lines: list[str], *, accent: str = CYAN) -> str:
     """Render a compact multiline section for terminal logs."""
     header = f"{paint('╭─', DIM)} {paint(title, BOLD, accent)}"
-    body = [f"{paint('│', DIM)} {line}" if line else paint("│", DIM) for line in body_lines]
+    body = [
+        f"{paint('│', DIM)} {line}" if line else paint("│", DIM) for line in body_lines
+    ]
     footer = paint("╰────────────────────────────────────────", DIM)
     return "\n".join([header, *body, footer])
 
@@ -298,25 +305,28 @@ class MultiLineFormatter(logging.Formatter):
 
     @classmethod
     def _get_tz(cls) -> Any:
-        """Resolve LOGOS_LOG_TZ env var to a ZoneInfo object (cached)."""
+        """Resolve TZ env var to a ZoneInfo object (cached)."""
         if cls._tz_resolved:
             return cls._tz
         cls._tz_resolved = True
-        tz_name = os.environ.get("LOGOS_LOG_TZ", "Europe/Berlin")
+        tz_name = os.environ.get("TZ", "Europe/Berlin")
         if ZoneInfo is not None:
             try:
                 cls._tz = ZoneInfo(tz_name)
             except (ZoneInfoNotFoundError, KeyError):
                 import logging as _log
+
                 _log.getLogger(__name__).warning(
-                    "LOGOS_LOG_TZ=%r is not a valid IANA timezone — falling back to UTC", tz_name
+                    "TZ=%r is not a valid IANA timezone — falling back to UTC", tz_name
                 )
                 cls._tz = timezone.utc
         else:
             cls._tz = timezone.utc
         return cls._tz
 
-    def __init__(self, fmt: str | None = None, datefmt: str | None = "%H:%M:%S") -> None:
+    def __init__(
+        self, fmt: str | None = None, datefmt: str | None = "%H:%M:%S"
+    ) -> None:
         super().__init__(fmt=fmt, datefmt=datefmt)
 
     @staticmethod
@@ -358,7 +368,8 @@ class MultiLineFormatter(logging.Formatter):
             )
         if record.stack_info:
             formatted += "\n" + "\n".join(
-                continuation_prefix + line for line in self.formatStack(record.stack_info).splitlines()
+                continuation_prefix + line
+                for line in self.formatStack(record.stack_info).splitlines()
             )
         return formatted
 
@@ -367,19 +378,19 @@ class UvicornAccessFilter(logging.Filter):
     """Hide routine successful access logs already represented elsewhere."""
 
     _SUPPRESSED_PATH_SNIPPETS = (
-        'GET /health ',
-        'GET /openapi.json ',
-        'POST /logosdb/providers/logosnode/auth ',
-        'GET /logosdb/providers/logosnode/runtime ',
+        "GET /health ",
+        "GET /openapi.json ",
+        "POST /logosdb/providers/logosnode/auth ",
+        "GET /logosdb/providers/logosnode/runtime ",
     )
     # Inference endpoints: we emit our own per-request completion log line.
     _INFERENCE_PATH_SNIPPETS = (
-        'POST /v1/chat/completions ',
-        'POST /openai/chat/completions ',
-        'POST /v1/completions ',
-        'POST /openai/completions ',
-        'POST /v1/embeddings ',
-        'POST /openai/embeddings ',
+        "POST /v1/chat/completions ",
+        "POST /openai/chat/completions ",
+        "POST /v1/completions ",
+        "POST /openai/completions ",
+        "POST /v1/embeddings ",
+        "POST /openai/embeddings ",
     )
 
     def filter(self, record: logging.LogRecord) -> bool:

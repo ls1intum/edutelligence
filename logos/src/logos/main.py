@@ -50,7 +50,11 @@ from logos.logosnode_registry import (
     LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
 )
-from logos.terminal_logging import MultiLineFormatter, UvicornAccessFilter, UvicornErrorFilter
+from logos.terminal_logging import (
+    MultiLineFormatter, UvicornAccessFilter, UvicornErrorFilter,
+    model_name_cache, style_model, style_request_id, style_duration, GREEN, RED, YELLOW,
+    paint, BOLD,
+)
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from scripts import setup_proxy
 
@@ -1264,7 +1268,7 @@ async def _filter_logosnode_deployments(deployments: list[Deployment]) -> list[D
         return []
 
     filtered: list[Deployment] = []
-    model_name_cache: dict[int, str] = {}
+    _local_name_lookup: dict[int, str] = {}
 
     with DBManager() as db:
         for deployment in deployments:
@@ -1274,11 +1278,14 @@ async def _filter_logosnode_deployments(deployments: list[Deployment]) -> list[D
                 continue
 
             model_id = int(deployment["model_id"])
-            if model_id not in model_name_cache:
+            if model_id not in _local_name_lookup:
                 model_info = db.get_model(model_id)
-                model_name_cache[model_id] = (model_info or {}).get("name", "")
+                name = (model_info or {}).get("name", "")
+                _local_name_lookup[model_id] = name
+                # Prime the module-level cache so log lines resolve without a DB hit.
+                model_name_cache.prime(model_id, name)
 
-            model_name = model_name_cache[model_id]
+            model_name = _local_name_lookup[model_id]
             if not model_name:
                 continue
 
@@ -1530,6 +1537,45 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
+def _log_request_completion(
+    model_id: int,
+    request_id: Optional[str],
+    start_time: float,
+    usage: Dict[str, Any],
+    status: str,
+    is_streaming: bool,
+) -> None:
+    """Emit one consolidated INFO line summarising a completed inference request."""
+    duration_ms = (time.perf_counter() - start_time) * 1000.0
+    prompt_tokens = usage.get("prompt_tokens", 0) or 0
+    completion_tokens = usage.get("completion_tokens", 0) or 0
+    generation_s = duration_ms / 1000.0
+    tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
+
+    if status == "success":
+        status_str = paint("ok", GREEN)
+    elif status == "timeout":
+        status_str = paint("timeout", YELLOW)
+    else:
+        status_str = paint(status, RED)
+
+    mode = "stream" if is_streaming else "sync"
+    model_name = model_name_cache.get(model_id) if model_id else str(model_id)
+
+    parts = [
+        f"done {style_model(model_name)}",
+        f"req={style_request_id(request_id or '?')}",
+        f"mode={mode}",
+        f"status={status_str}",
+        f"dur={duration_ms:.0f}ms",
+    ]
+    if completion_tokens > 0:
+        parts.append(f"tokens={prompt_tokens}+{completion_tokens}")
+        if tps > 0:
+            parts.append(f"tps={tps:.1f}")
+    logger.info(" ".join(parts))
+
+
 async def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, request_path=None):
     """Build streaming response using executor.
 
@@ -1540,6 +1586,7 @@ async def _streaming_response(context, payload, log_id, provider_id, model_id, p
     """
     from fastapi.responses import StreamingResponse, JSONResponse
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
+    _req_start = time.perf_counter()
 
     # Prepare headers and payload using context resolver
     headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
@@ -1601,8 +1648,8 @@ async def _streaming_response(context, payload, log_id, provider_id, model_id, p
                 error_message = str(e)
                 raise e
             finally:
+                stream_log.finish()
                 if log_id:
-                    stream_log.finish()
                     response_payload = stream_log.response_payload()
                     usage_tokens = _usage_tokens_from_payload(response_payload)
                     with DBManager() as db:
@@ -1620,6 +1667,14 @@ async def _streaming_response(context, payload, log_id, provider_id, model_id, p
                         error_message=error_message,
                         cold_start=scheduling_stats.get("is_cold_start"),
                     )
+                _log_request_completion(
+                    model_id=model_id,
+                    request_id=request_id,
+                    start_time=_req_start,
+                    usage=stream_log.usage(),
+                    status="error" if error_message else "success",
+                    is_streaming=True,
+                )
                 _release()
 
         response_headers = {"X-Request-ID": request_id} if request_id else None
@@ -1690,8 +1745,8 @@ async def _streaming_response(context, payload, log_id, provider_id, model_id, p
             yield f"data: {_json.dumps(error_body)}\n\n".encode()
             yield b"data: [DONE]\n\n"
         finally:
+            stream_log.finish()
             if log_id:
-                stream_log.finish()
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(response_payload)
                 with DBManager() as db:
@@ -1714,6 +1769,14 @@ async def _streaming_response(context, payload, log_id, provider_id, model_id, p
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
                 )
+            _log_request_completion(
+                model_id=model_id,
+                request_id=request_id,
+                start_time=_req_start,
+                usage=stream_log.usage(),
+                status="error" if error_message else "success",
+                is_streaming=True,
+            )
             _release()
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
@@ -1724,6 +1787,7 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
+    _req_start = time.perf_counter()
 
     try:
         # Prepare headers and payload using context resolver
@@ -1833,6 +1897,15 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 error_message=error_message if timed_out else (exec_result.error if not exec_result.success else None),
                 cold_start=scheduling_stats.get("is_cold_start")
             )
+
+        _log_request_completion(
+            model_id=model_id,
+            request_id=request_id,
+            start_time=_req_start,
+            usage=_usage_tokens_from_payload(response_payload) if response_payload else {},
+            status="timeout" if timed_out else ("success" if exec_result.success else "error"),
+            is_streaming=False,
+        )
 
         # Determine effective HTTP status code:
         #   1. status_override (from logosnode RPC result or error handlers) takes highest priority
