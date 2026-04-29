@@ -92,6 +92,13 @@ class VllmConfig(BaseModel):
         "Empty (default) = infer from the model name (gemma4→gemma4, llama3→llama3_json, "
         "qwen→hermes, etc.; falls back to hermes). Set explicitly to override.",
     )
+    reasoning_parser: str = Field(
+        default="",
+        description="Reasoning parser for structured reasoning output (e.g. 'deepseek_r1', 'qwen3', 'gemma4'). "
+        "Empty (default) = infer from the model name when the model is a known reasoning model; "
+        "no flag is emitted for unknown models. Set explicitly to force a specific parser. "
+        "Set to 'none' to suppress the flag even when inference would match.",
+    )
     cuda_graph_sizes: str = Field(
         default="",
         description="Comma-separated batch sizes for CUDA graph capture (e.g. '1,2,4,8'). "

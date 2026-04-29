@@ -181,6 +181,64 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
     ("gpt-oss", "openai"),
 )
 
+# Model-name → vLLM --reasoning-parser mapping.  Checked in order; first match
+# wins.  Patterns are lowercased substrings of the HF model id.  Only models
+# confirmed in the vLLM v0.20.0 reasoning-outputs docs are listed here.
+# Full parser list: https://docs.vllm.ai/en/latest/features/reasoning_outputs.html
+_REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
+    # QwQ-32B uses deepseek_r1 (check before generic "deepseek")
+    ("qwq", "deepseek_r1"),
+    # DeepSeek R1 series (before generic deepseek — R1 != V3)
+    ("deepseek-r1", "deepseek_r1"),
+    # Google Gemma 4
+    ("gemma-4", "gemma4"),
+    ("gemma4", "gemma4"),
+    # Zhipu GLM-4.5 series (only this generation supports reasoning)
+    ("glm-4.5", "glm45"),
+    ("glm4.5", "glm45"),
+    # IBM Granite 3.x (granite-3.2 is the documented reasoning variant)
+    ("granite-3.", "granite"),
+    # Alibaba Qwen3 (all Qwen3 variants)
+    ("qwen3", "qwen3"),
+    # OpenAI GPT-OSS (gpt-oss-20b, gpt-oss-120b)
+    ("gpt-oss", "gpt_oss"),
+)
+
+# Model-name → default --default-chat-template-kwargs mapping.  Applied as a
+# base layer; explicit vllm_config.chat_template_kwargs keys win on a per-key
+# basis (merge, not replace).
+_DEFAULT_CHAT_TEMPLATE_KWARGS_RULES: tuple[tuple[str, dict[str, Any]], ...] = (
+    # Google Gemma 4 — thinking is opt-in via chat template
+    ("gemma-4", {"enable_thinking": True}),
+    ("gemma4", {"enable_thinking": True}),
+)
+
+
+def _infer_reasoning_parser(model: str) -> str | None:
+    """Infer the vLLM --reasoning-parser value from the model name.
+
+    Returns the parser name when the model is a known reasoning model, or
+    ``None`` when no rule matches (no flag should be emitted).
+    """
+    model_lower = model.lower()
+    for pattern, parser in _REASONING_PARSER_RULES:
+        if pattern in model_lower:
+            return parser
+    return None
+
+
+def _infer_default_chat_template_kwargs(model: str) -> dict[str, Any]:
+    """Infer the default chat-template-kwargs dict from the model name.
+
+    Returns the first matching dict, or ``{}`` when nothing matches.
+    The caller should merge (overlay) any explicit user-supplied kwargs on top.
+    """
+    model_lower = model.lower()
+    for pattern, kwargs in _DEFAULT_CHAT_TEMPLATE_KWARGS_RULES:
+        if pattern in model_lower:
+            return dict(kwargs)  # shallow copy so callers can mutate safely
+    return {}
+
 
 def _infer_tool_call_parser(model: str) -> str:
     """Infer the vLLM tool-call-parser from the model name.
@@ -649,6 +707,12 @@ class VllmProcessHandle:
             parser = vc.tool_call_parser or _infer_tool_call_parser(lane_config.model)
             cmd.append("--enable-auto-tool-choice")
             cmd.extend(["--tool-call-parser", parser])
+        # Reasoning parser: empty = infer from model name; explicit = use as-is;
+        # explicit "none" = skip the flag entirely.
+        if vc.reasoning_parser != "none":
+            reasoning_parser = vc.reasoning_parser or _infer_reasoning_parser(lane_config.model)
+            if reasoning_parser:
+                cmd.extend(["--reasoning-parser", reasoning_parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
         if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
@@ -661,9 +725,14 @@ class VllmProcessHandle:
             import json as _json
             cache_root = os.path.join(self._global_config.models_path, ".cache", "vllm")
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
-        if vc.chat_template_kwargs:
+        # Default chat-template-kwargs: start from inferred defaults for the
+        # model family, then overlay explicit user-supplied keys (user wins
+        # key-by-key; the entire dict is never replaced wholesale).
+        inferred_kwargs = _infer_default_chat_template_kwargs(lane_config.model)
+        merged_kwargs = {**inferred_kwargs, **vc.chat_template_kwargs}
+        if merged_kwargs:
             import json as _json
-            cmd.extend(["--default-chat-template-kwargs", _json.dumps(vc.chat_template_kwargs)])
+            cmd.extend(["--default-chat-template-kwargs", _json.dumps(merged_kwargs)])
         cmd.extend(vc.extra_args)
         return cmd
 

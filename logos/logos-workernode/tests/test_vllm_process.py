@@ -965,3 +965,152 @@ def test_build_env_sets_persistent_caches(monkeypatch):
     assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
     assert env["FLASHINFER_JIT_DIR"] == "/data/models/.cache/flashinfer"
     assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"
+
+
+# ---------------------------------------------------------------------------
+# Reasoning parser — _infer_reasoning_parser
+# ---------------------------------------------------------------------------
+
+
+def test_infer_reasoning_parser() -> None:
+    from logos_worker_node.vllm_process import _infer_reasoning_parser
+
+    # DeepSeek R1 series
+    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B") == "deepseek_r1"
+    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-R1-0528") == "deepseek_r1"
+    # QwQ-32B also uses deepseek_r1 (per vLLM docs)
+    assert _infer_reasoning_parser("Qwen/QwQ-32B") == "deepseek_r1"
+    # Google Gemma 4
+    assert _infer_reasoning_parser("google/gemma-4-27b-it") == "gemma4"
+    assert _infer_reasoning_parser("google/gemma4-2b") == "gemma4"
+    # Zhipu GLM-4.5
+    assert _infer_reasoning_parser("zai-org/GLM-4.5-Flash") == "glm45"
+    assert _infer_reasoning_parser("zai-org/GLM4.5-Air") == "glm45"
+    # IBM Granite 3.x
+    assert _infer_reasoning_parser("ibm-granite/granite-3.2-8b-instruct") == "granite"
+    assert _infer_reasoning_parser("ibm-granite/granite-3.1-2b-instruct") == "granite"
+    # Alibaba Qwen3
+    assert _infer_reasoning_parser("Qwen/Qwen3-8B") == "qwen3"
+    assert _infer_reasoning_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3"
+    assert _infer_reasoning_parser("Qwen/Qwen3-VL-7B-Instruct") == "qwen3"
+    # OpenAI GPT-OSS
+    assert _infer_reasoning_parser("openai/gpt-oss-120b") == "gpt_oss"
+    assert _infer_reasoning_parser("openai/gpt-oss-20b") == "gpt_oss"
+    # Unknown model → None (no flag emitted)
+    assert _infer_reasoning_parser("meta-llama/Llama-3.1-8B-Instruct") is None
+    assert _infer_reasoning_parser("some/unknown-model") is None
+    # Generic DeepSeek (not R1) should NOT match
+    assert _infer_reasoning_parser("deepseek-ai/DeepSeek-V2.5") is None
+    # Granite 4 should NOT match (only 3.x has confirmed reasoning support)
+    assert _infer_reasoning_parser("ibm-granite/granite-4.0-h-small") is None
+
+
+# ---------------------------------------------------------------------------
+# Default chat-template kwargs — _infer_default_chat_template_kwargs
+# ---------------------------------------------------------------------------
+
+
+def test_infer_default_chat_template_kwargs() -> None:
+    from logos_worker_node.vllm_process import _infer_default_chat_template_kwargs
+
+    # Google Gemma 4 → enable_thinking: True
+    assert _infer_default_chat_template_kwargs("google/gemma-4-27b-it") == {"enable_thinking": True}
+    assert _infer_default_chat_template_kwargs("google/gemma4-2b") == {"enable_thinking": True}
+    # Unknown model → empty dict
+    assert _infer_default_chat_template_kwargs("Qwen/Qwen3-8B") == {}
+    assert _infer_default_chat_template_kwargs("meta-llama/Llama-3.1-8B-Instruct") == {}
+    assert _infer_default_chat_template_kwargs("some/unknown-model") == {}
+
+
+# ---------------------------------------------------------------------------
+# _build_cmd integration — reasoning-parser + chat-template-kwargs
+# ---------------------------------------------------------------------------
+
+
+def test_build_cmd_gemma4_gets_reasoning_parser_and_chat_template_kwargs(monkeypatch) -> None:
+    """Gemma-4 with empty vllm_config: inferred reasoning-parser + inferred kwargs."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-4-27b-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+
+    # --reasoning-parser should be inferred as gemma4
+    assert "--reasoning-parser" in cmd
+    idx = cmd.index("--reasoning-parser")
+    assert cmd[idx + 1] == "gemma4"
+
+    # --default-chat-template-kwargs should carry {"enable_thinking": true}
+    assert "--default-chat-template-kwargs" in cmd
+    import json
+    idx2 = cmd.index("--default-chat-template-kwargs")
+    parsed = json.loads(cmd[idx2 + 1])
+    assert parsed == {"enable_thinking": True}
+
+
+def test_build_cmd_explicit_reasoning_parser_overrides_inference(monkeypatch) -> None:
+    """Explicit reasoning_parser in config wins over inferred value."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-4-27b-it",
+        vllm=True,
+        vllm_config=VllmConfig(reasoning_parser="foo"),
+    )
+    cmd = handle._build_cmd(lane)
+
+    idx = cmd.index("--reasoning-parser")
+    assert cmd[idx + 1] == "foo"
+
+
+def test_build_cmd_reasoning_parser_none_sentinel_suppresses_flag(monkeypatch) -> None:
+    """reasoning_parser='none' suppresses --reasoning-parser even when inference matches."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(reasoning_parser="none"),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--reasoning-parser" not in cmd
+
+
+def test_build_cmd_no_reasoning_parser_for_unknown_model(monkeypatch) -> None:
+    """Unknown model with no explicit reasoning_parser → flag absent from cmd."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--reasoning-parser" not in cmd
+
+
+def test_build_cmd_explicit_chat_template_kwargs_win_over_inferred(monkeypatch) -> None:
+    """Explicit chat_template_kwargs key wins over inferred default (key-level merge)."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(
+        model="google/gemma-4-27b-it",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template_kwargs={"enable_thinking": False}),
+    )
+    cmd = handle._build_cmd(lane)
+
+    import json
+    idx = cmd.index("--default-chat-template-kwargs")
+    parsed = json.loads(cmd[idx + 1])
+    # User explicitly disabled thinking — must win over inferred default True
+    assert parsed["enable_thinking"] is False
+
