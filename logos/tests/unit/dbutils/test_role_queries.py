@@ -105,16 +105,17 @@ def test_list_users_returns_empty_list():
     result = db.list_users()
     assert result == []
 
-def _make_create_db(existing_email=None, existing_username=None):
+def _make_create_db(existing_email=None, taken_usernames=None):
     db = DBManager.__new__(DBManager)
     session = MagicMock()
+    taken = set(taken_usernames or [])
 
     def fake_execute(sql, params=None):
         result = MagicMock()
         p = params or {}
         if "email" in p and existing_email and p["email"].lower() == existing_email.lower():
             result.fetchone.return_value = (1,)
-        elif "username" in p and existing_username and p["username"] == existing_username:
+        elif "username" in p and p["username"] in taken:
             result.fetchone.return_value = (1,)
         else:
             result.fetchone.return_value = None
@@ -141,18 +142,18 @@ def test_create_user_returns_user_dict_and_logos_key():
     db = _make_create_db()
 
     user_dict, logos_key, status = db.create_user(
-        "hen", "Henriette", "Maiß", "hen@example.com", "app_developer"
+        "Henriette", "Maiß", "hen@example.com", "app_developer"
     )
 
     assert status == 200
     assert user_dict["id"] == 10
-    assert user_dict["username"] == "hen"
+    assert user_dict["username"] == "hmaiß"
     assert user_dict["prename"] == "Henriette"
     assert user_dict["name"] == "Maiß"
     assert user_dict["email"] == "hen@example.com"
     assert user_dict["role"] == "app_developer"
     assert user_dict["teams"] == []
-    assert logos_key.startswith("lg-hen-")
+    assert logos_key.startswith("lg-hmaiß-")
     tables = [t for t, _ in db._insert_log]
     assert tables == ["users", "process", "profiles"]
 
@@ -161,24 +162,11 @@ def test_create_user_returns_409_on_duplicate_email():
     db = _make_create_db(existing_email="hen@example.com")
 
     user_dict, logos_key, status = db.create_user(
-        "hen", "Henriette", "Maiß", "hen@example.com", "app_developer"
+        "Henriette", "Maiß", "hen@example.com", "app_developer"
     )
 
     assert status == 409
     assert "email" in user_dict["error"].lower()
-    assert logos_key is None
-    assert db._insert_log == []
-
-
-def test_create_user_returns_409_on_duplicate_username():
-    db = _make_create_db(existing_username="hen")
-
-    user_dict, logos_key, status = db.create_user(
-        "hen", "Henriette", "Maiß", "hen@example.com", "app_developer"
-    )
-
-    assert status == 409
-    assert "username" in user_dict["error"].lower()
     assert logos_key is None
     assert db._insert_log == []
 

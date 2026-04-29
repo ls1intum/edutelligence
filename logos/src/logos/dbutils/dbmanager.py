@@ -1,8 +1,11 @@
 """
 Central Manager for all Database-related actions for Logos
 """
+import csv
 import datetime
+import io
 import os
+import re
 import secrets
 import threading
 from typing import Dict, Any, Optional, Tuple, Union, List, cast
@@ -3289,28 +3292,30 @@ class DBManager:
             result.append(data)
         return result
 
-    def create_user(self, username: str, prename: str, name: str, email: str, role: str) -> tuple:
+    def create_user(self, prename: str, name: str, email: str, role: str) -> tuple:
         if self.session.execute(
                 text("SELECT id FROM users WHERE lower(email) = lower(:email)"),
                 {"email": email},
         ).fetchone():
             return {"error": "Email already in use"}, None, 409
 
-        if self.session.execute(
-                text("SELECT id FROM users WHERE username = :username"),
-                {"username": username},
-        ).fetchone():
-            return {"error": "Username already in use"}, None, 409
+        for _ in range(10):
+            username = self._generate_username(prename, name)
+            try:
+                user_id = self.insert("users", {
+                    "username": username,
+                    "prename": prename,
+                    "name": name,
+                    "email": email,
+                    "role": role,
+                })
+                break
+            except sqlalchemy.exc.IntegrityError:
+                continue
+        else:
+            return {"error": "Could not generate a unique username"}, None, 500
 
         logos_key = generate_logos_api_key(username)
-
-        user_id = self.insert("users", {
-            "username": username,
-            "prename": prename,
-            "name": name,
-            "email": email,
-            "role": role,
-        })
         process_id = self.insert("process", {
             "logos_key": logos_key,
             "name": username,
@@ -3330,6 +3335,165 @@ class DBManager:
             "role": role,
             "teams": [],
         }, logos_key, 200
+
+    def _generate_username(self, prename: str, name: str) -> str:
+        p = "".join(prename.strip().lower().split())
+        n = "".join(name.strip().lower().split())
+
+        if not p and not n:
+            raise ValueError("Vorname und Nachname dürfen nicht beide leer sein.")
+
+        candidates: list[str] = []
+
+        for i in range(1, len(p) + 1):
+            candidates.append(p[:i] + n)
+
+        if not candidates:
+            candidates.append(n)
+
+        for candidate in candidates:
+            exists = self.session.execute(
+                text("SELECT id FROM users WHERE username = :username"),
+                {"username": candidate},
+            ).fetchone()
+
+            if not exists:
+                return candidate
+
+        base = p + n if p else n
+        i = 2
+
+        while True:
+            candidate = f"{base}{i}"
+
+            exists = self.session.execute(
+                text("SELECT id FROM users WHERE username = :username"),
+                {"username": candidate},
+            ).fetchone()
+
+            if not exists:
+                return candidate
+
+            i += 1
+
+    def _get_user_by_email(self, email: str) -> dict | None:
+        row = self.session.execute(
+            text("SELECT id, username FROM users WHERE lower(email) = lower(:email)"),
+            {"email": email},
+        ).fetchone()
+        return dict(row._mapping) if row else None
+
+    def _is_team_member(self, team_id: int, user_id: int) -> bool:
+        return self.session.execute(
+            text(
+                "SELECT * FROM team_members "
+                "WHERE team_id = :team_id AND user_id = :user_id"
+            ),
+            {"team_id": team_id, "user_id": user_id},
+        ).fetchone() is not None
+
+    def _get_team_by_name(self, name: str) -> dict | None:
+        row = self.session.execute(
+            text("SELECT id, name FROM teams WHERE name = :name"),
+            {"name": name},
+        ).fetchone()
+        return dict(row._mapping) if row else None
+
+    def import_users_from_csv(self, file_bytes: bytes) -> dict:
+        from logos.dbutils.dbrequest import (
+            CSV_HEADER_PRENAME, CSV_HEADER_NAME,
+            CSV_HEADER_EMAIL, CSV_HEADER_TEAM,
+            REQUIRED_CSV_HEADERS,
+        )
+
+        text_content = file_bytes.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text_content))
+
+        actual_headers = set(reader.fieldnames or [])
+        missing = REQUIRED_CSV_HEADERS - actual_headers
+        if missing:
+            return {"error": f"Missing required CSV headers: {', '.join(sorted(missing))}"}
+
+        rows_out = []
+        summary = {"created": 0, "existing": 0, "failed": 0}
+
+        email_re = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+        for row in reader:
+            prename = (row.get(CSV_HEADER_PRENAME) or "").strip()
+            name = (row.get(CSV_HEADER_NAME) or "").strip()
+            email = (row.get(CSV_HEADER_EMAIL) or "").strip()
+            team = (row.get(CSV_HEADER_TEAM) or "").strip()
+
+            def fail(reason: str) -> dict:
+                summary["failed"] += 1
+                return {
+                    "email": email or None,
+                    "username": None,
+                    "apiKey": None,
+                    "team": team or None,
+                    "status": "failed",
+                    "error": reason,
+                }
+
+            if not prename:
+                rows_out.append(fail("prename is required"))
+                continue
+            if not name:
+                rows_out.append(fail("name is required"))
+                continue
+            if not email:
+                rows_out.append(fail("email is required"))
+                continue
+            if not email_re.match(email):
+                rows_out.append(fail("email format is invalid"))
+                continue
+            if not team:
+                rows_out.append(fail("team is required"))
+                continue
+
+            team_obj = self._get_team_by_name(team)
+            if team_obj is None:
+                rows_out.append(fail(f"Team '{team}' not found"))
+                continue
+
+            try:
+                existing = self._get_user_by_email(email)
+                if existing:
+                    user_id = existing["id"]
+                    username = existing["username"]
+                    if not self._is_team_member(team_obj["id"], user_id):
+                        self.add_team_member(team_obj["id"], user_id)
+                    summary["existing"] += 1
+                    rows_out.append({
+                        "email": email,
+                        "username": username,
+                        "apiKey": None,
+                        "team": team,
+                        "status": "existing",
+                        "error": None,
+                    })
+                else:
+                    user_dict, logos_key, status = self.create_user(
+                        prename, name, email, "app_developer"
+                    )
+                    if status != 200:
+                        rows_out.append(fail(user_dict.get("error", "User creation failed")))
+                        continue
+                    self.add_team_member(team_obj["id"], user_dict["id"])
+                    summary["created"] += 1
+                    rows_out.append({
+                        "email": email,
+                        "username": user_dict["username"],
+                        "apiKey": logos_key,
+                        "team": team,
+                        "status": "created",
+                        "error": None,
+                    })
+            except Exception as exc:
+                rows_out.append(fail(str(exc)))
+
+        return {"summary": summary, "rows": rows_out}
 
     def delete_user(self, user_id: int) -> tuple[dict, int]:
         sql = text("""DELETE

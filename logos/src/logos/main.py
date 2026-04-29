@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, Set, Optional, Tuple
 import grpc
-from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -3575,7 +3575,7 @@ async def create_user(body: CreateUserRequest, request: Request):
                 status_code=403, detail="App admins can only create app_developer users"
             )
         user_dict, new_key, status = db.create_user(
-            body.username, body.prename, body.name, body.email, body.role
+            body.prename, body.name, body.email, body.role
         )
         if status == 200 and body.team_ids:
             for team_id in body.team_ids:
@@ -3583,6 +3583,18 @@ async def create_user(body: CreateUserRequest, request: Request):
     if status != 200:
         raise HTTPException(status_code=status, detail=user_dict.get("error"))
     return {**user_dict, "logos_key": new_key}
+
+@app.post("/users/import", tags=["users"])
+async def import_users(file: UploadFile = File(...), request: Request = None):
+    logos_key = require_app_admin_or_above(request)
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are accepted.")
+    content = await file.read()
+    with DBManager() as db:
+        result = db.import_users_from_csv(content)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @app.delete("/users/{user_id}", tags=["users"])

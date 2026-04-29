@@ -2,6 +2,17 @@ from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
+CSV_HEADER_PRENAME = "prename"
+CSV_HEADER_NAME    = "name"
+CSV_HEADER_EMAIL   = "email"
+CSV_HEADER_TEAM    = "team"
+REQUIRED_CSV_HEADERS = frozenset({
+    CSV_HEADER_PRENAME,
+    CSV_HEADER_NAME,
+    CSV_HEADER_EMAIL,
+    CSV_HEADER_TEAM,
+})
+
 
 class LogosKeyModel(BaseModel):
     logos_key: str
@@ -211,7 +222,6 @@ class UpdateRoleRequest(BaseModel):
     role: str
 
 class CreateUserRequest(BaseModel):
-    username: str
     prename: str
     name: str
     email: str
