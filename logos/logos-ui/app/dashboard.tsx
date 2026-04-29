@@ -70,22 +70,22 @@ export default function Dashboard() {
   }, [apiKey]);
 
   return (
-    <VStack className="w-full">
-      <Text size="2xl" className="mb-6 self-center font-bold">
-        Logos-Dashboard
+    <VStack className="w-full" space="lg">
+      <Text size="2xl" className="text-center font-bold text-black dark:text-white">
+        Dashboard
       </Text>
 
       {loading ? (
         <VStack
-          className="w-full items-center justify-center p-8 text-center"
+          className="items-center justify-center p-8"
           space="lg"
         >
           <ActivityIndicator size="large" color="#006DFF" />
           <Text className="mt-2 text-gray-500">Loading dashboard...</Text>
         </VStack>
       ) : stats ? (
-        <HStack space="xl" className="mb-8 w-full justify-center gap-6">
-          <VStack className="min-w-[100px] items-center rounded-2xl border border-outline-200 bg-background-50 p-4 dark:border-none">
+        <HStack space="xl" className="w-full justify-center gap-6">
+          <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
             <Text size="xl" className="font-bold text-black dark:text-white">
               {stats.models}
             </Text>
@@ -93,7 +93,7 @@ export default function Dashboard() {
               Models
             </Text>
           </VStack>
-          <VStack className="min-w-[100px] items-center rounded-2xl border border-outline-200 bg-background-50 p-4 dark:border-none">
+          <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
             <Text size="xl" className="font-bold text-black dark:text-white">
               {stats.requests}
             </Text>
@@ -101,7 +101,7 @@ export default function Dashboard() {
               Requests
             </Text>
           </VStack>
-          <VStack className="min-w-[100px] items-center rounded-2xl border border-outline-200 bg-background-50 p-4 dark:border-none">
+          <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
             <Text size="xl" className="font-bold text-black dark:text-white">
               {stats.users}
             </Text>
@@ -116,10 +116,9 @@ export default function Dashboard() {
         </Text>
       )}
 
-      <Box className="mt-5 self-center rounded-[30px] border border-[#aaa] p-5">
-        <Text className="text-black dark:text-white">
-          Hier erscheinen bald anpassbare Informationsboxen...
-        </Text>
+      <Box className="self-center rounded-2xl border border-outline-200 p-5 dark:border-outline-800 dark:bg-[#111]">
+        <Text className="mb-1 font-semibold text-black dark:text-white">Customizable information boxes</Text>
+        <Text className="text-gray-500 self-center dark:text-gray-400">Coming soon</Text>
       </Box>
     </VStack>
   );

@@ -5,31 +5,24 @@ import { VStack } from "@/components/ui/vstack";
 import { Text } from "@/components/ui/text";
 import { Box } from "@/components/ui/box";
 import { useAuth } from "./auth-shell";
-
-const menuItems = [
-  { label: "Dashboard", path: "/dashboard" },
-  { label: "Policies", path: "/policies" },
-  { label: "Models", path: "/models", aliases: ["/add_model"] },
-  { label: "Providers", path: "/providers", aliases: ["/add_provider"] },
-  { label: "Billing", path: "/billing" },
-  { label: "Routing", path: "/routing" },
-  { label: "Statistics", path: "/statistics" },
-  { label: "Settings", path: "/settings" },
-  { label: "Logout", path: "/logout" },
-] as const;
+import { MENU_ITEMS, MenuItem } from "@/components/route-permissions";
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, role } = useAuth();
   console.log("[Sidebar] Rendering");
+
+  const visibleItems = MENU_ITEMS.filter(
+    item => item.label === "Logout" || (role && item.roles.includes(role))
+  );
 
   const handleLogout = async () => {
     await logout();
     router.push("/");
   };
 
-  const handlePress = (item: (typeof menuItems)[number]) => {
+  const handlePress = (item: MenuItem) => {
     if (item.label === "Logout") {
       handleLogout();
       return;
@@ -37,7 +30,7 @@ export default function Sidebar() {
     router.push(item.path as any);
   };
 
-  const isActive = (item: (typeof menuItems)[number]) => {
+  const isActive = (item: MenuItem) => {
     if (!pathname) return false;
     if (item.label === "Logout") return false;
     const matchesBase =
@@ -52,7 +45,7 @@ export default function Sidebar() {
     <Box className="h-full w-[20%] max-w-[250px] border-r border-outline-200 bg-inherit">
       <ScrollView className="px-6 py-4">
         <VStack space="sm">
-          {menuItems.map((item) => {
+          {visibleItems.map((item) => {
             const active = isActive(item);
             return (
               <Pressable

@@ -322,8 +322,10 @@ class CapacityPlanner:
             loaded_count = int(cap.get("loaded_lane_count", 0) or 0)
             sleeping_count = int(cap.get("sleeping_lane_count", 0) or 0)
             active_requests = int(cap.get("active_requests", 0) or 0)
+            max_lanes = self._get_max_lanes(pid)
+            max_lanes_str = f" max_lanes={max_lanes}" if max_lanes > 0 else ""
             lines.append(
-                f"    lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} active_requests={active_requests}"
+                f"    lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} active_requests={active_requests}{max_lanes_str}"
             )
 
             if not isinstance(lanes_list, list) or not lanes_list:
@@ -568,6 +570,24 @@ class CapacityPlanner:
         if capacity is None:
             logger.debug("No capacity info for provider %s, cannot cold-load %s", self._facade.get_provider_name(provider_id) or provider_id, model_name)
             return None
+
+        # ── MAX_LANES gate ────────────────────────────────────────────────
+        # If the worker enforces a lane limit and all slots are occupied,
+        # evict the lowest-demand idle/sleeping lane to free a slot before
+        # attempting the cold load.
+        if not self._provider_has_lane_capacity(provider_id):
+            evicted = await self._evict_lane_for_capacity(
+                provider_id, model_name, timeout_seconds,
+            )
+            if not evicted:
+                logger.info(
+                    "Cannot cold-load %s on provider %s: MAX_LANES=%d reached "
+                    "and no idle lane available to evict",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    self._get_max_lanes(provider_id),
+                )
+                return None
 
         # No early feasibility bail-out here — the reclaim loop below will
         # sleep/stop idle lanes to free VRAM.  The feasibility check against
@@ -1445,6 +1465,21 @@ class CapacityPlanner:
             if model_lanes:
                 continue  # has an active (non-sleeping) lane
 
+            # Skip cold loads when MAX_LANES is reached — the background
+            # planner cycle cannot orchestrate the stop-then-load sequence
+            # atomically.  Request-time cold loads handle this via
+            # _evict_lane_for_capacity.
+            if not self._provider_has_lane_capacity(provider_id):
+                logger.info(
+                    "Skipping planner load of %s on provider %s: "
+                    "MAX_LANES=%d reached (lanes=%d)",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    self._get_max_lanes(provider_id),
+                    len(lanes),
+                )
+                continue
+
             if self._would_evict_cooled_lane(provider_id, model_name, profiles, capacity):
                 logger.debug(
                     "Skipping planner load of %s: would evict a recently loaded lane (cooldown=%.0fs)",
@@ -1715,6 +1750,15 @@ class CapacityPlanner:
         if available_vram / total_vram < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
             return []
 
+        # Skip preemptive loads when MAX_LANES is already reached
+        if not self._provider_has_lane_capacity(provider_id):
+            logger.info(
+                "Preemptive sleep: skipping provider=%s (MAX_LANES=%d reached)",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                self._get_max_lanes(provider_id),
+            )
+            return []
+
         active_models = {lane.model_name for lane in lanes}
 
         # Candidates: stopped models with a known sleeping residual (vLLM only).
@@ -1875,6 +1919,78 @@ class CapacityPlanner:
         except Exception:
             return []
 
+    def _get_max_lanes(self, provider_id: int) -> int:
+        """Return the MAX_LANES limit for a provider (0 = unlimited)."""
+        if not self._registry:
+            return 0
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return 0
+        return snap.get("max_lanes", 0)
+
+    def _provider_has_lane_capacity(self, provider_id: int) -> bool:
+        """Check whether the provider can accept another lane."""
+        max_lanes = self._get_max_lanes(provider_id)
+        if max_lanes <= 0:
+            return True  # unlimited
+        current_lanes = len(self._safe_get_lanes(provider_id))
+        return current_lanes < max_lanes
+
+    async def _evict_lane_for_capacity(
+        self,
+        provider_id: int,
+        target_model: str,
+        timeout_seconds: float,
+    ) -> bool:
+        """Stop and remove the lowest-demand idle lane to free a lane slot.
+
+        Called when MAX_LANES is reached and a new lane is needed.
+        Prefers sleeping lanes with zero demand, then idle awake lanes.
+        Returns True if a lane was successfully evicted.
+        """
+        lanes = self._safe_get_lanes(provider_id)
+        candidates: list[tuple[float, LaneSchedulerSignals]] = []
+        for lane in lanes:
+            if lane.model_name == target_model:
+                continue
+            if lane.active_requests > 0 or lane.queue_waiting > 0:
+                continue
+            if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+            if self._lane_is_in_load_cooldown(provider_id, lane.lane_id):
+                continue
+            demand = self._effective_demand(lane.model_name)
+            # Sleeping lanes with 0 demand are the best eviction candidates
+            sleep_bonus = 0.0 if lane.sleep_state == "sleeping" else 1000.0
+            candidates.append((demand + sleep_bonus, lane))
+
+        if not candidates:
+            return False
+
+        # Evict the candidate with the lowest score
+        candidates.sort(key=lambda x: x[0])
+        _, victim = candidates[0]
+        logger.info(
+            "Evicting lane %s (model=%s, demand=%.2f) on provider %s "
+            "to free lane slot for %s (MAX_LANES=%d)",
+            victim.lane_id, victim.model_name,
+            self._effective_demand(victim.model_name),
+            self._facade.get_provider_name(provider_id) or provider_id,
+            target_model, self._get_max_lanes(provider_id),
+        )
+        stop_action = CapacityPlanAction(
+            action="stop",
+            provider_id=provider_id,
+            lane_id=victim.lane_id,
+            model_name=victim.model_name,
+            reason=f"Evict for MAX_LANES capacity: make room for {target_model}",
+        )
+        async with self._lane_lock(provider_id, victim.lane_id):
+            ok = await self._execute_action_with_confirmation(
+                stop_action, timeout_seconds=min(timeout_seconds, 60.0),
+            )
+        return ok
+
     def _pick_request_target_lane(
         self,
         provider_id: int,
@@ -1928,6 +2044,10 @@ class CapacityPlanner:
             params=self._build_load_params(target.model_name, target.lane_id, profile, capacity, provider_id),
             reason="Request-time lane preparation",
         )
+
+        # Tracks when we first detected phantom VRAM (lanes=0, VRAM still occupied
+        # by a recently-killed process whose CUDA context hasn't been freed yet).
+        _phantom_wait_started: Optional[float] = None
 
         while True:
             capacity = self._safe_get_capacity(provider_id)
@@ -2037,14 +2157,47 @@ class CapacityPlanner:
                 )
                 return True
 
+            lanes_now = self._safe_get_lanes(provider_id)
             reclaim = self._next_request_reclaim_action(
                 provider_id=provider_id,
                 target=target,
-                lanes=self._safe_get_lanes(provider_id),
+                lanes=lanes_now,
                 profiles=self._safe_get_profiles(provider_id),
                 required_free_mb=shortfall,
             )
             if reclaim is None:
+                # Phantom-VRAM path: no lanes exist but VRAM is still occupied by
+                # a recently-killed process whose CUDA context hasn't been released
+                # by the driver yet.  Wait up to 60 s for the driver to free memory
+                # before giving up — the worker will re-report fresh VRAM numbers
+                # on each heartbeat cycle.
+                total_vram = float(getattr(capacity, "total_vram_mb", 0) or 0)
+                phantom_mb = total_vram - available
+                if (
+                    not lanes_now
+                    and total_vram > 0
+                    and phantom_mb > needed * 0.5
+                ):
+                    if _phantom_wait_started is None:
+                        _phantom_wait_started = time.monotonic()
+                        logger.info(
+                            "ensure_capacity provider=%s model=%s: "
+                            "phantom VRAM detected (%.0f MB occupied, 0 lanes) — "
+                            "waiting up to 60 s for CUDA driver to release contexts",
+                            provider_id, target.model_name, phantom_mb,
+                        )
+                    elapsed = time.monotonic() - _phantom_wait_started
+                    if elapsed < 60.0:
+                        await asyncio.sleep(2.0)
+                        capacity = self._safe_get_capacity(provider_id)
+                        if capacity is None:
+                            return False
+                        continue
+                    logger.info(
+                        "ensure_capacity provider=%s model=%s: "
+                        "phantom VRAM still present after %.0f s — giving up",
+                        provider_id, target.model_name, elapsed,
+                    )
                 logger.info(
                     "No idle reclaim action available for provider=%s model=%s "
                     "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
@@ -2783,9 +2936,21 @@ class CapacityPlanner:
                     cumulative_vram.get(action.provider_id, 0.0) - freed
                 )
 
-        # For consuming actions, check VRAM budget
+        # For consuming actions, check VRAM budget and lane capacity
         for action in consume_actions:
             provider_id = action.provider_id
+
+            # Reject load actions when MAX_LANES is reached
+            if action.action == "load" and not self._provider_has_lane_capacity(provider_id):
+                max_lanes = self._get_max_lanes(provider_id)
+                logger.warning(
+                    "Lane capacity check failed for load of %s on provider %s: "
+                    "MAX_LANES=%d reached",
+                    action.model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    max_lanes,
+                )
+                continue
 
             try:
                 capacity = self._facade.get_capacity_info(provider_id)
@@ -2848,7 +3013,6 @@ class CapacityPlanner:
         params["vllm"] = True
         vllm_config: Dict[str, Any] = {
             "enable_sleep_mode": True,
-            "server_dev_mode": True,
         }
         # Send TP if profile has an observed value, or infer from model size vs GPU VRAM.
         tp = 1

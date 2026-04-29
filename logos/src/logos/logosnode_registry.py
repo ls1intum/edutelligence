@@ -255,6 +255,7 @@ class ProviderSession:
     pending_streams: dict[str, asyncio.Queue] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
 
     def is_stale(self, stale_after_seconds: int) -> bool:
         return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
@@ -524,12 +525,14 @@ class LogosNodeRuntimeRegistry:
         provider_id: int,
         worker_id: str,
         capabilities_models: list[str] | None = None,
+        max_lanes: int = 0,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
             return
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
+        session.max_lanes = max_lanes
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
@@ -822,6 +825,7 @@ class LogosNodeRuntimeRegistry:
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
             "events": list(session.latest_events),
+            "max_lanes": session.max_lanes,
         }
 
     def has_received_first_status(self, provider_id: int) -> bool:

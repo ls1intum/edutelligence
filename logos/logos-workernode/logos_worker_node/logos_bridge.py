@@ -7,7 +7,7 @@ import base64
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 import httpx
@@ -493,6 +493,19 @@ class LogosBridgeClient:
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
+    # vLLM endpoints that must never be reachable through proxied inference
+    # requests.  These are internal management endpoints (sleep/wake, cache
+    # reset, weight updates, etc.) that should only be triggered by the
+    # lane manager or capacity planner, not by external API clients.
+    _BLOCKED_REQUEST_PATHS: ClassVar[frozenset[str]] = frozenset({
+        "sleep", "wake_up", "is_sleeping",
+        "pause", "resume", "is_paused",
+        "reset_prefix_cache", "reset_mm_cache", "reset_encoder_cache",
+        "update_weights", "init_weight_transfer_engine",
+        "scale_elastic_ep", "is_scaling_elastic_ep",
+        "collective_rpc",
+    })
+
     @staticmethod
     def _lane_target_url(
         lane_status: dict[str, Any],
@@ -503,6 +516,10 @@ class LogosBridgeClient:
         # "v2/embed", "tokenize"), use it directly so vLLM decides what it supports.
         if request_path:
             endpoint = request_path.strip("/")
+            # Block internal vLLM management endpoints from being reached
+            # through proxied inference requests.
+            if endpoint in LogosBridgeClient._BLOCKED_REQUEST_PATHS:
+                raise ValueError(f"Request path '/{endpoint}' is not allowed through the inference proxy")
         else:
             endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
         return f"http://127.0.0.1:{lane_status['port']}/{endpoint}"

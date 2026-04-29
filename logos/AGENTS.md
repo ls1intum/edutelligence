@@ -262,6 +262,104 @@ docker compose up --build
 # Database is at logos-db:5432/logosdb (user: postgres, pass: root)
 ```
 
+## Operations Runbook
+
+### Creating Logos API Keys for a New Consumer
+
+API keys are managed via REST endpoints on the Logos server. The production server is accessed via `ssh logos`. All API calls go through `docker exec logos-server curl -s -X POST http://localhost:8080/...`. The root API key is in the `process` table (`SELECT logos_key FROM process WHERE name='root'`).
+
+**Hierarchy**: Service → Process (holds the `logos_key`) → Profile → Model Permissions
+
+**Step-by-step**:
+
+1. **Get the root key** (needed for all admin calls):
+   ```bash
+   ssh logos "docker exec logos-db psql -U postgres -d logosdb -t -A -c \"SELECT logos_key FROM process WHERE name='root';\""
+   ```
+
+2. **Create a service** for the consumer (if it doesn't already exist):
+   ```bash
+   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/add_service \
+     -H 'Content-Type: application/json' \
+     -d '{\"logos_key\": \"<ROOT_KEY>\", \"name\": \"<service-name>\"}'"
+   ```
+   Returns `service-id`. Note: this auto-creates a process — delete it if you create dedicated processes below.
+
+3. **Create a process** (API key) under that service for each environment:
+   ```bash
+   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/connect_service_process \
+     -H 'Content-Type: application/json' \
+     -d '{\"logos_key\": \"<ROOT_KEY>\", \"service_id\": <SERVICE_ID>, \"process_name\": \"<name>-prod\"}'"
+   ```
+   Returns `api-key`. **Known bug**: the generated key prefix is `lg-root-...` instead of `lg-<name>-...`. Fix with:
+   ```bash
+   ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"UPDATE process SET logos_key='lg-<name>-<random_part>' WHERE id=<ID>;\""
+   ```
+
+4. **Create a profile** for each process:
+   ```bash
+   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/add_profile \
+     -H 'Content-Type: application/json' \
+     -d '{\"logos_key\": \"<ROOT_KEY>\", \"profile_name\": \"<name>-profile\", \"process_id\": <PROCESS_ID>}'"
+   ```
+   Returns `profile-id`.
+
+5. **Grant model access** — connect each profile to each model it should access:
+   ```bash
+   ssh logos "docker exec logos-server curl -s -X POST http://localhost:8080/logosdb/connect_profile_model \
+     -H 'Content-Type: application/json' \
+     -d '{\"logos_key\": \"<ROOT_KEY>\", \"profile_id\": <PROFILE_ID>, \"model_id\": <MODEL_ID>}'"
+   ```
+   To find model IDs: `ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name FROM models ORDER BY name;\""`.
+
+6. **Verify** the final setup:
+   ```bash
+   ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"
+     SELECT s.name AS service, p.name AS process, pr.name AS profile,
+            string_agg(m.name, ', ' ORDER BY m.name) AS models
+     FROM services s
+     JOIN process p ON p.service_id = s.id
+     JOIN profiles pr ON pr.process_id = p.id
+     JOIN profile_model_permissions pmp ON pmp.profile_id = pr.id
+     JOIN models m ON m.id = pmp.model_id
+     WHERE s.name = '<service-name>'
+     GROUP BY s.name, p.name, pr.name ORDER BY p.name;\""
+   ```
+
+### Testing an API Key with curl
+
+The external URL is `https://logos.aet.cit.tum.de:8080`. Traefik handles TLS on port 8080.
+
+```bash
+curl -X POST https://logos.aet.cit.tum.de:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <LOGOS_KEY>" \
+  -d '{
+    "model": "<model-name>",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+**Important**: Use `/v1/...` path (not `/openai/v1/...`). The `/openai/` prefix is a separate proxy route, not a path prefix for the OpenAI-compatible API.
+
+### Useful DB Queries
+
+```bash
+# List all processes (API keys) with their services
+ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"
+  SELECT p.id, p.name, LEFT(p.logos_key, 30) AS key_prefix, s.name AS service
+  FROM process p LEFT JOIN services s ON s.id = p.service_id ORDER BY p.id;\""
+
+# List all model permissions for a specific consumer
+ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"
+  SELECT p.name, m.name AS model FROM profile_model_permissions pmp
+  JOIN profiles pr ON pr.id = pmp.profile_id JOIN process p ON p.id = pr.process_id
+  JOIN models m ON m.id = pmp.model_id WHERE p.name LIKE '<name>%' ORDER BY p.name, m.name;\""
+
+# List all available models
+ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name FROM models ORDER BY name;\""
+```
+
 ## Important Notes for AI Agents
 
 1. **main.py is large** (~1690+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
