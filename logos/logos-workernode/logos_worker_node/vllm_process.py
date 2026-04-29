@@ -184,65 +184,11 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
 
 # Model-name → vLLM --reasoning-parser mapping.  Checked in order; first match
 # wins.  Patterns are lowercased substrings of the HF model id.
-# Registered parser names are taken from the official vLLM reasoning-outputs
-# docs table at https://docs.vllm.ai/en/latest/features/reasoning_outputs.html
+# Registered parser names sourced directly from vllm/reasoning/__init__.py
+# (_REASONING_PARSERS_TO_REGISTER dict) — these are the only valid values.
 _REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
-    # QwQ-32B uses deepseek_r1 (check before generic "deepseek")
-    ("qwq", "deepseek_r1"),
-    # DeepSeek R1 series (check before "deepseek-v3")
-    ("deepseek-r1", "deepseek_r1"),
-    # DeepSeek-V3.1
-    ("deepseek-v3", "deepseek_v3"),
-    # Baidu ERNIE-4.5 series
-    ("ernie-4.5", "ernie45"),
-    ("ernie4.5", "ernie45"),
-    ("ernie45", "ernie45"),
-    # Google Gemma 4
     ("gemma-4", "gemma4"),
-    ("gemma4", "gemma4"),
-    # Zhipu GLM-4.5 series (only this generation supports reasoning)
-    ("glm-4.5", "glm45"),
-    ("glm4.5", "glm45"),
-    # Holo AI Holo2 series
-    ("holo2", "holo2"),
-    # Tencent Hunyuan A13B (check before generic "hunyuan")
-    ("hunyuan-a13b", "hunyuan_a13b"),
-    ("hunyuan_a13b", "hunyuan_a13b"),
-    # Tencent HunyuanLarge V3
-    ("hy-v3", "hy_v3"),
-    ("hy_v3", "hy_v3"),
-    # IBM Granite 3.x (granite-3.2 is the documented reasoning variant)
-    ("granite-3.", "granite"),
-    # Moonshot Kimi K2
-    ("kimi-k2", "kimi_k2"),
-    ("kimi_k2", "kimi_k2"),
-    # MistralAI Magistral reasoning models
-    ("magistral", "mistral"),
-    # MiniMax-M2
-    ("minimax-m2", "minimax_m2_append_think"),
-    ("minimax_m2", "minimax_m2_append_think"),
-    # NVIDIA Nemotron-3 reasoning models
-    ("nemotron-3", "nemotron_v3"),
-    ("nemotron3", "nemotron_v3"),
-    # AllenAI OLMo 3
-    ("olmo-3", "olmo3"),
-    ("olmo3", "olmo3"),
-    # Poolside Muse
-    ("poolside", "poolside_v1"),
-    # Alibaba Qwen3 (all Qwen3 variants)
-    ("qwen3", "qwen3"),
-    # ByteDance Seed-OSS
-    ("seed-oss", "seed_oss"),
-    ("seed_oss", "seed_oss"),
-    # StepFun (3.5 before 3 — "step-3" is a prefix of "step-3.5")
-    ("step-3.5", "step3p5"),
-    ("step3p5", "step3p5"),
-    ("step-3", "step3"),
-    ("step3-", "step3"),
-    # Cohere Command A Reasoning
-    ("command-a", "cohere_command3"),
-    # OpenAI GPT-OSS (gpt-oss-20b, gpt-oss-120b)
-    ("gpt-oss", "gpt_oss"),
+    ("gpt-oss", "openai_gptoss"),
 )
 
 # Model-name → default --default-chat-template-kwargs mapping.  Applied as a
@@ -251,7 +197,6 @@ _REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
 _DEFAULT_CHAT_TEMPLATE_KWARGS_RULES: tuple[tuple[str, dict[str, Any]], ...] = (
     # Google Gemma 4 — thinking is opt-in via chat template
     ("gemma-4", {"enable_thinking": True}),
-    ("gemma4", {"enable_thinking": True}),
 )
 
 
