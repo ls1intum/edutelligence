@@ -9,7 +9,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
 
@@ -60,7 +59,9 @@ class VllmConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    vllm_binary: str = Field(default="vllm", description="Path to vllm CLI or 'vllm' on PATH")
+    vllm_binary: str = Field(
+        default="vllm", description="Path to vllm CLI or 'vllm' on PATH"
+    )
     tensor_parallel_size: int = Field(default=1, ge=1)
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
@@ -105,13 +106,14 @@ class VllmConfig(BaseModel):
         "Empty = vLLM default. Only effective when enforce_eager is False.",
     )
     cpu_offload_gb: float = Field(
-        default=0.0, ge=0.0,
+        default=0.0,
+        ge=0.0,
         description="CPU RAM for KV cache offloading (GB). Passed as --cpu-offload-gb to vLLM. 0 = disabled.",
     )
     chat_template_kwargs: dict[str, Any] = Field(
         default_factory=dict,
         description="Default chat_template_kwargs passed to vLLM via --default-chat-template-kwargs. "
-        "e.g. {\"enable_thinking\": false} to disable Qwen3/3.5 thinking mode.",
+        'e.g. {"enable_thinking": false} to disable Qwen3/3.5 thinking mode.',
     )
     extra_args: list[str] = Field(default_factory=list)
 
@@ -271,7 +273,7 @@ class LaneConfig(BaseModel):
     lane_id: str | None = None
     model: str
     vllm: bool = False
-    num_parallel: int = Field(default=4, ge=1)
+    num_parallel: int = Field(default=20, ge=1)
     context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
     keep_alive: str = "5m"
     kv_cache_type: str = "q8_0"
@@ -393,7 +395,9 @@ class LaneStatus(BaseModel):
     vllm: bool = False
     is_static: bool = False
     process: ProcessStatus
-    runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
+    runtime_state: Literal[
+        "cold", "starting", "loaded", "running", "sleeping", "stopped", "error"
+    ]
     routing_url: str = ""
     inference_endpoint: str = "/v1/chat/completions"
     num_parallel: int = 0
@@ -450,9 +454,6 @@ class LaneSetRequest(BaseModel):
         return self
 
 
-
-
-
 class LaneAction(BaseModel):
     action: str
     lane_id: str
@@ -477,6 +478,3 @@ class LaneEvent(BaseModel):
     details: str = ""
     port: int | None = None
     old_port: int | None = None
-
-
-

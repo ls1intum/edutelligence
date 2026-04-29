@@ -86,7 +86,7 @@ def test_logosnode_runtime_parallel_capacity_overrides_static_config(monkeypatch
 
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
-        lambda self: {"parallel_capacity": 1},
+        lambda self: {"parallel_capacity": 20},
     )
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
@@ -224,7 +224,7 @@ def test_logosnode_runtime_vllm_lane_uses_lane_config_capacity_hint(monkeypatch)
 
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
-        lambda self: {"parallel_capacity": 1},
+        lambda self: {"parallel_capacity": 20},
     )
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",

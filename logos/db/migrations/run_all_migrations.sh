@@ -63,6 +63,7 @@ MIGRATIONS=(
     "026_create_schema_migrations.sql"
     "027_logosnode_dynamic_deployments.sql"
     "028_rbac_roles_and_teams.sql"
+    "029_bump_parallel_capacity_default.sql"
 )
 
 FAILED=0

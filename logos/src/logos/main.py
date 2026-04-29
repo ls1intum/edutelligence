@@ -67,6 +67,7 @@ from logos.terminal_logging import (
     style_model,
     style_request_id,
     style_duration,
+    format_number,
     GREEN,
     RED,
     YELLOW,
@@ -1765,7 +1766,11 @@ def _log_request_completion(
         f"dur={style_duration(duration_ms)}",
     ]
     if completion_tokens > 0:
-        parts.append(f"tokens={prompt_tokens}+{completion_tokens}")
+        total_tokens = prompt_tokens + completion_tokens
+        parts.append(
+            f"tokens={format_number(prompt_tokens)} + {format_number(completion_tokens)} "
+            f"= {format_number(total_tokens)}"
+        )
         if tps > 0:
             parts.append(f"tps={tps:.1f}")
     logger.info(" ".join(parts))
