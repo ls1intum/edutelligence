@@ -40,6 +40,8 @@ services:
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
+      TZ: "${TZ:-Europe/Berlin}"
+      LOGOS_LOG_TZ: "${LOGOS_LOG_TZ:-Europe/Berlin}"
     expose:
       - "8080"
     labels:

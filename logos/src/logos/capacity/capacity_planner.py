@@ -26,6 +26,8 @@ from logos.terminal_logging import (
     GREEN,
     RED,
     YELLOW,
+    format_bytes,
+    format_vram,
     format_state,
     lane_metric_float,
     lane_ttft_p95_seconds,
@@ -306,14 +308,13 @@ class CapacityPlanner:
                 if isinstance(lane, dict):
                     rs = str(lane.get("runtime_state") or "unknown")
                     state_counts[rs] = state_counts.get(rs, 0) + 1
-            used_pct = ((total_vram - free_vram) / total_vram * 100) if total_vram > 0 else 0
             heartbeat_age_s = self._heartbeat_age_seconds(snap.get("last_heartbeat"))
             worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
 
             lines.append(
                 f"{paint('●', worker_color)} provider={paint(str(worker_id), BOLD)} "
                 f"status={paint('active', worker_color)} hb={heartbeat_age_s:.0f}s "
-                f"vram={paint(f'{total_vram - free_vram:.0f}/{total_vram:.0f}MB', BOLD)} ({used_pct:.0f}%)"
+                f"vram={paint(format_vram(total_vram - free_vram, total_vram), BOLD)}"
             )
             capabilities_text = ", ".join(caps) if caps else "none"
             lines.extend(wrap_plain(f"capabilities: {capabilities_text}", indent="    "))
@@ -321,11 +322,15 @@ class CapacityPlanner:
             lane_count = int(cap.get("lane_count", len(lanes_list)) or len(lanes_list))
             loaded_count = int(cap.get("loaded_lane_count", 0) or 0)
             sleeping_count = int(cap.get("sleeping_lane_count", 0) or 0)
-            active_requests = int(cap.get("active_requests", 0) or 0)
+            running_sum = sum(
+                float(lane.get("backend_metrics", {}).get("requests_running") or 0)
+                for lane in (lanes_list if isinstance(lanes_list, list) else [])
+                if isinstance(lane, dict)
+            )
             max_lanes = self._get_max_lanes(pid)
             max_lanes_str = f" max_lanes={max_lanes}" if max_lanes > 0 else ""
             lines.append(
-                f"    lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} active_requests={active_requests}{max_lanes_str}"
+                f"    lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} running={running_sum:.0f}{max_lanes_str}"
             )
 
             if not isinstance(lanes_list, list) or not lanes_list:
@@ -389,15 +394,13 @@ class CapacityPlanner:
         model = str(lane.get("model") or "?")
         runtime_state = str(lane.get("runtime_state") or "?")
         sleep_state = str(lane.get("sleep_state") or "?")
-        active_requests = int(lane.get("active_requests", 0) or 0)
         effective_vram_mb = float(lane.get("effective_vram_mb", 0.0) or 0.0)
         backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
 
         queue_waiting = lane_metric_float(backend_metrics.get("queue_waiting"))
         requests_running = lane_metric_float(backend_metrics.get("requests_running"))
-        if requests_running is None:
-            requests_running = float(active_requests)
+        # No fallback to active_requests — render "--" when the scrape is missing.
         cache_pressure = lane_metric_float(
             backend_metrics.get("gpu_cache_usage_percent", backend_metrics.get("gpu_cache_usage_perc"))
         )
@@ -420,12 +423,12 @@ class CapacityPlanner:
         lines.extend(wrap_plain(f"model: {model}", indent=f"{indent}  "))
         lines.append(
             f"{indent}  state={format_state(runtime_state, sleep_state)} "
-            f"mem={effective_vram_mb:.0f}MB gpus={gpu_devices}"
+            f"mem={format_bytes(effective_vram_mb)} gpus={gpu_devices}"
         )
         demand_score = self._demand.get_score(model)
         demand_text = f"{demand_score:.2f}" if demand_score > 0 else "0"
         lines.append(
-            f"{indent}  active={active_requests} run={running_text} "
+            f"{indent}  running={running_text} "
             f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} "
             f"prefix_hit={prefix_text} demand={demand_text}"
         )
@@ -986,10 +989,10 @@ class CapacityPlanner:
             "Eviction candidates for provider=%s gpus=%s deficit=%s: [%s]",
             provider_id,
             sorted(required_gpus) if required_gpus else "any",
-            {g: f"{d:.0f}MB" for g, d in per_gpu_deficit.items()},
+            {g: format_bytes(d) for g, d in per_gpu_deficit.items()},
             ", ".join(
                 f"{c.lane.lane_id}(eff={c.eff_demand:.2f}, action={c.action}, "
-                f"free={sum(c.freed_per_gpu.values()):.0f}MB)"
+                f"free={format_bytes(sum(c.freed_per_gpu.values()))})"  
                 for c in candidates
             ) if candidates else "none",
         )
@@ -1017,7 +1020,7 @@ class CapacityPlanner:
             return chosen
         logger.info(
             "Eviction set INSUFFICIENT for provider=%s: remaining deficit=%s after %d candidates",
-            provider_id, {g: f"{d:.0f}MB" for g, d in remaining.items() if d > 0}, len(chosen),
+            provider_id, {g: format_bytes(d) for g, d in remaining.items() if d > 0}, len(chosen),
         )
         return None  # couldn't cover the deficit
 
@@ -1402,7 +1405,7 @@ class CapacityPlanner:
                     "wake_cost_per_gpu=%.0f deficit=%s eviction_needed=%s",
                     model_name, target.lane_id, target.gpu_devices,
                     loaded_mb, residual_mb, wake_cost_per_gpu,
-                    {g: f"{d:.0f}MB" for g, d in per_gpu_deficit.items()} if per_gpu_deficit else "none",
+                    {g: format_bytes(d) for g, d in per_gpu_deficit.items()} if per_gpu_deficit else "none",
                     "yes" if per_gpu_deficit else "no",
                 )
 
@@ -1859,15 +1862,17 @@ class CapacityPlanner:
             # Load cost: full base + KV — what vLLM actually allocates at startup.
             load_cost = self._estimate_action_vram(load_action, profile, capacity)
             logger.info(
-                "Preemptive load check model=%s: load_cost=%.0fMB remaining_vram=%.0fMB "
-                "margin=%.1f needed=%.0fMB residual=%.0fMB",
-                model_name, load_cost, remaining_vram,
-                self.VRAM_SAFETY_MARGIN, load_cost * self.VRAM_SAFETY_MARGIN, residual,
+                "Preemptive load check model=%s: load_cost=%s remaining_vram=%s "
+                "margin=%.1f needed=%s residual=%s",
+                model_name, format_bytes(load_cost), format_bytes(remaining_vram),
+                self.VRAM_SAFETY_MARGIN, format_bytes(load_cost * self.VRAM_SAFETY_MARGIN),
+                format_bytes(residual),
             )
             if remaining_vram < load_cost * self.VRAM_SAFETY_MARGIN:
                 logger.info(
-                    "Preemptive load SKIP model=%s: insufficient VRAM (have %.0fMB, need %.0fMB)",
-                    model_name, remaining_vram, load_cost * self.VRAM_SAFETY_MARGIN,
+                    "Preemptive load SKIP model=%s: insufficient VRAM (have %s, need %s)",
+                    model_name, format_bytes(remaining_vram),
+                    format_bytes(load_cost * self.VRAM_SAFETY_MARGIN),
                 )
                 continue
             # Net cost after load+sleep is just the residual; keep ≥ 20 % free.
@@ -2065,9 +2070,10 @@ class CapacityPlanner:
 
             logger.info(
                 "ensure_capacity provider=%s model=%s action=%s: "
-                "needed=%.0fMB available=%.0fMB(raw=%.0fMB) provider_ready=%s shortfall=%.0fMB",
+                "needed=%s available=%s(raw=%s) provider_ready=%s shortfall=%s",
                 provider_id, target.model_name, target_action.action,
-                needed, available, raw_available, provider_ready, shortfall,
+                format_bytes(needed), format_bytes(available), format_bytes(raw_available),
+                provider_ready, format_bytes(shortfall),
             )
 
             target_gpu_devices = target.gpu_devices
@@ -2092,11 +2098,11 @@ class CapacityPlanner:
                 per_gpu_ready = all(free_mb >= per_gpu_needed for free_mb in gpu_effective)
                 logger.info(
                     "ensure_capacity provider=%s model=%s: known-GPU path "
-                    "target_gpus=%s per_gpu_needed=%.0fMB gpu_effective=%s per_gpu_ready=%s",
+                    "target_gpus=%s per_gpu_needed=%s gpu_effective=%s per_gpu_ready=%s",
                     provider_id, target.model_name,
                     list(target_gpu_ids),
-                    per_gpu_needed,
-                    [f"{v:.0f}MB" for v in gpu_effective],
+                    format_bytes(per_gpu_needed),
+                    [format_bytes(v) for v in gpu_effective],
                     per_gpu_ready,
                 )
                 if provider_ready and per_gpu_ready:
@@ -2136,19 +2142,19 @@ class CapacityPlanner:
                 nth_gpu_free = sorted_free[tp - 1] if len(sorted_free) >= tp else 0.0
                 logger.info(
                     "ensure_capacity provider=%s model=%s: unknown-GPU path "
-                    "tp=%d per_gpu_needed=%.0fMB sorted_free=%s nth_gpu_free=%.0fMB fits=%s",
+                    "tp=%d per_gpu_needed=%s sorted_free=%s nth_gpu_free=%s fits=%s",
                     provider_id, target.model_name,
-                    tp, per_gpu_needed,
-                    [f"{v:.0f}MB" for v in sorted_free],
-                    nth_gpu_free,
+                    tp, format_bytes(per_gpu_needed),
+                    [format_bytes(v) for v in sorted_free],
+                    format_bytes(nth_gpu_free),
                     nth_gpu_free >= per_gpu_needed,
                 )
                 if nth_gpu_free >= per_gpu_needed:
                     return True
                 shortfall = max(shortfall, (per_gpu_needed - nth_gpu_free) * tp)
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: per-GPU shortfall → total shortfall=%.0fMB",
-                    provider_id, target.model_name, shortfall,
+                    "ensure_capacity provider=%s model=%s: per-GPU shortfall → total shortfall=%s",
+                    provider_id, target.model_name, format_bytes(shortfall),
                 )
             elif provider_ready:
                 logger.info(
@@ -2813,10 +2819,11 @@ class CapacityPlanner:
         feasible = available_mb >= minimum_needed * self.VRAM_SAFETY_MARGIN
         if not feasible:
             logger.info(
-                "Feasibility FAILED for %s: need %.0fMB%s × %.2f margin, have %.0fMB",
-                model_name, minimum_needed,
-                " (calibrated, KV+TP included)" if is_calibrated else f" (base={base_mb:.0f}MB + kv={kv_mb:.0f}MB)",
-                self.VRAM_SAFETY_MARGIN, available_mb,
+                "Feasibility FAILED for %s: need %s%s × %.2f margin, have %s",
+                model_name, format_bytes(minimum_needed),
+                " (calibrated, KV+TP included)" if is_calibrated else
+                f" (base={format_bytes(base_mb)} + kv={format_bytes(kv_mb)})",
+                self.VRAM_SAFETY_MARGIN, format_bytes(available_mb),
             )
             return False
 
@@ -2892,11 +2899,11 @@ class CapacityPlanner:
 
         if weakest_gpu[1] < per_gpu_needed:
             logger.info(
-                "Per-GPU feasibility FAILED for %s (TP=%d): need %.0fMB/GPU, "
+                "Per-GPU feasibility FAILED for %s (TP=%d): need %s/GPU, "
                 "best %d GPUs have %s free (after ledger commitments)",
-                model_name, tp, per_gpu_needed,
+                model_name, tp, format_bytes(per_gpu_needed),
                 tp,
-                ", ".join(f"GPU{did}={free:.0f}MB" for did, free in best_tp_gpus),
+                ", ".join(f"GPU{did}={format_bytes(free)}" for did, free in best_tp_gpus),
             )
             return False
         return True
@@ -2973,18 +2980,20 @@ class CapacityPlanner:
 
             if available < estimated_vram * self.VRAM_SAFETY_MARGIN:
                 logger.warning(
-                    "VRAM budget check failed for %s on %s: available=%.0fMB, "
-                    "estimated=%.0fMB (with margin=%.0fMB)",
+                    "VRAM budget check failed for %s on %s: available=%s, "
+                    "estimated=%s (with margin=%s)",
                     action.action, action.model_name,
-                    available, estimated_vram, estimated_vram * self.VRAM_SAFETY_MARGIN,
+                    format_bytes(available), format_bytes(estimated_vram),
+                    format_bytes(estimated_vram * self.VRAM_SAFETY_MARGIN),
                 )
                 continue
             else:
                 logger.info(
-                    "VRAM budget OK for %s on provider=%s: available=%.0fMB estimated=%.0fMB (margin=%.0fMB) cumulative=%.0fMB",
+                    "VRAM budget OK for %s on provider=%s: available=%s estimated=%s (margin=%s) cumulative=%s",
                     action.model_name, provider_id,
-                    available, estimated_vram, estimated_vram * self.VRAM_SAFETY_MARGIN,
-                    cumulative_vram.get(provider_id, 0.0),
+                    format_bytes(available), format_bytes(estimated_vram),
+                    format_bytes(estimated_vram * self.VRAM_SAFETY_MARGIN),
+                    format_bytes(cumulative_vram.get(provider_id, 0.0)),
                 )
 
             cumulative_vram[provider_id] = cumulative_vram.get(provider_id, 0.0) + estimated_vram
