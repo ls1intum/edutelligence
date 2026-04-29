@@ -12,6 +12,9 @@ import logging
 from typing import List, Tuple, Optional
 
 from logos.queue.priority_queue import Priority
+from logos.terminal_logging import (
+    model_name_cache, style_model, style_request_id, MAGENTA, YELLOW, paint,
+)
 
 from .base_scheduler import BaseScheduler
 from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
@@ -76,6 +79,14 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             )
             result.ettft_estimate_ms = ettft.ettft_ms
             result.ettft_tier = ettft.tier.value
+            logger.info(
+                "%s accepted → %s (provider=%s type=%s score=%.2f tier=%s ettft=%s)",
+                style_request_id(request.request_id),
+                style_model(model_name_cache.get(model_id)),
+                provider_id, provider_type, score,
+                paint(ettft.tier.value, MAGENTA),
+                f"{ettft.ettft_ms:.0f}ms",
+            )
             return result
 
         # No immediate candidate — queue on the best scored one
@@ -199,8 +210,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         entry_id = self._queue_mgr.enqueue(future, model_id, provider_id, priority)
         logger.info(
-            "Request %s queued for model %s (corrected_score=%.2f, tier=%s, depth=%s)",
-            request.request_id, model_id, score, ettft.tier.value,
+            "%s %s → %s (provider=%s score=%.2f tier=%s depth=%s)",
+            paint("queued", YELLOW),
+            style_request_id(request.request_id),
+            style_model(model_name_cache.get(model_id)),
+            provider_id, score, paint(ettft.tier.value, MAGENTA),
             self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id),
         )
 

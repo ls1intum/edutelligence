@@ -11,6 +11,7 @@ from typing import Dict
 from logos.queue.priority_queue import PriorityQueueManager, Priority
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.terminal_logging import model_name_cache, style_model, style_request_id
 
 from .scheduler_interface import SchedulerInterface, SchedulingResult
 
@@ -162,9 +163,9 @@ class BaseScheduler(SchedulerInterface):
                     provider_id=provider_id,
                 )
                 logger.info(
-                    "Request %s released model %s. Reusing slot? %s",
-                    request_id,
-                    model_id,
+                    "released %s → %s reuse=%s",
+                    style_request_id(request_id),
+                    style_model(model_name_cache.get(model_id)),
                     has_waiters,
                 )
             except KeyError:
@@ -215,7 +216,7 @@ class BaseScheduler(SchedulerInterface):
                     azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
                 )
 
-                logger.info("Waking up queued request for model %s", model_id)
+                logger.info("waking queued %s", style_model(model_name_cache.get(model_id)))
                 next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
 
     def _check_starvation(self, model_id: int, provider_id: int) -> None:
