@@ -20,7 +20,7 @@ def _discover_logos_models() -> List[str]:
         if not _headers:
             return []
 
-        resp = requests.get(f"{LOGOS_BASE_URL}/models", headers=_headers, timeout=15)
+        resp = requests.get(f"{LOGOS_BASE_URL}/models", headers=_headers, timeout=(1, 5))
         resp.raise_for_status()
 
         data = resp.json()
