@@ -43,27 +43,27 @@ def test_list_teams_filtered_by_owner():
 def test_create_team_inserts_team_and_owners():
     db = DBManager.__new__(DBManager)
     session = MagicMock()
-    session.execute.return_value = MagicMock(
-        fetchone=MagicMock(return_value=SimpleNamespace(id=5))
-    )
+    no_existing = MagicMock(fetchone=MagicMock(return_value=None))
+    inserted = MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(id=5)))
+    session.execute.side_effect = [no_existing, inserted, MagicMock(), MagicMock()]
     db.session = session
     team_id, status = db.create_team("Alpha", [1, 2])
     assert status == 200
     assert team_id == 5
-    assert session.execute.call_count == 3
+    assert session.execute.call_count == 4
     session.commit.assert_called_once()
 
 def test_create_team_no_owners():
     db = DBManager.__new__(DBManager)
     session = MagicMock()
-    session.execute.return_value = MagicMock(
-        fetchone=MagicMock(return_value=SimpleNamespace(id=7))
-    )
+    no_existing = MagicMock(fetchone=MagicMock(return_value=None))
+    inserted = MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(id=7)))
+    session.execute.side_effect = [no_existing, inserted]
     db.session = session
     team_id, status = db.create_team("Maiß", [])
     assert status == 200
     assert team_id == 7
-    assert session.execute.call_count == 1
+    assert session.execute.call_count == 2
 
 def test_get_team_returns_team():
     row = SimpleNamespace(_mapping={"id": 1, "name": "Maiß"})
