@@ -95,7 +95,7 @@ CREATE TABLE providers (
 
 
     -- SDI: Configuration defaults for this provider
-    parallel_capacity INTEGER DEFAULT 1,
+    parallel_capacity INTEGER DEFAULT 20,
     keep_alive_seconds INTEGER DEFAULT 300,
     max_loaded_models INTEGER DEFAULT 3,
 

@@ -432,26 +432,7 @@ class OllamaDataProvider:
             logger.debug(f"Decremented active count for model {model_id}: {current_active} -> {self._model_active[model_id]}")
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
-        """
-        Atomically check availability and reserve capacity.
-        
-        Returns:
-            True if capacity was available and reserved.
-            False if busy (should queue).
-        """
-        with self._lock:
-            current_active = self._model_active.get(model_id, 0)
-            max_capacity = self.get_config_value(model_id, "parallel_capacity", self.DEFAULT_PARALLEL_CAPACITY)
-            
-            if current_active < max_capacity:
-                if request_id in self._active_request_ids:
-                    return True
-                self._active_request_ids[request_id] = model_id
-                self._model_active[model_id] = current_active + 1
-                logger.debug(f"Reserved capacity for model {model_id}: {current_active} -> {self._model_active[model_id]} (max={max_capacity})")
-                return True
-            logger.debug(f"Capacity full for model {model_id}: {current_active}/{max_capacity}")
-            return False
+        raise NotImplementedError("try_reserve_capacity removed — scheduler no longer gates on local counters")
 
     def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
         """

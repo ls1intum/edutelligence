@@ -6,6 +6,7 @@ can proactively wake or load lanes.
 """
 
 import collections
+import math
 import threading
 import time
 from typing import List, Tuple
@@ -22,12 +23,43 @@ class DemandTracker:
     BURST_THRESHOLD = 5
     BURST_DEMAND_MULTIPLIER = 1.5  # super-linear scaling during bursts
 
+    # Loadavg time constants (seconds), modeled on Linux 1/5/15-minute loadavg.
+    # Each EWMA reports requests-per-minute: a constant rate r req/sec converges
+    # to 60·r in steady state because each request bumps EWMA[tau] by 60/tau.
+    LOAD_TAUS_SECONDS: tuple[tuple[str, float], ...] = (
+        ("1m", 60.0),
+        ("5m", 300.0),
+        ("15m", 900.0),
+    )
+
     def __init__(self) -> None:
         self._demand: dict[str, float] = {}
         self._raw_count: dict[str, int] = {}
         self._last_request: dict[str, float] = {}
         self._request_timestamps: dict[str, collections.deque] = {}
+        self._load_avg: dict[str, dict[str, float]] = {}
+        self._load_avg_last_update: dict[str, float] = {}
         self._lock = threading.Lock()
+
+    def _decay_load_locked(self, model_name: str, now: float) -> dict[str, float]:
+        """Decay this model's load EWMAs to `now`. Caller must hold ``self._lock``."""
+        loads = self._load_avg.setdefault(
+            model_name, {window: 0.0 for window, _ in self.LOAD_TAUS_SECONDS}
+        )
+        last = self._load_avg_last_update.get(model_name)
+        if last is not None:
+            dt = max(0.0, now - last)
+            if dt > 0.0:
+                for window, tau in self.LOAD_TAUS_SECONDS:
+                    loads[window] *= math.exp(-dt / tau)
+        self._load_avg_last_update[model_name] = now
+        return loads
+
+    def _record_load_locked(self, model_name: str, increment: float, now: float) -> None:
+        """Decay then add ``increment`` requests to the EWMAs. Caller must hold the lock."""
+        loads = self._decay_load_locked(model_name, now)
+        for window, tau in self.LOAD_TAUS_SECONDS:
+            loads[window] += increment * (60.0 / tau)
 
     # Latent demand: half-weight signal for models that classification wanted
     # but the scheduler couldn't serve due to availability penalties.
@@ -57,6 +89,9 @@ class DemandTracker:
             self._demand[model_name] = self._demand.get(model_name, 0.0) + increment
             self._raw_count[model_name] = self._raw_count.get(model_name, 0) + 1
             self._last_request[model_name] = now
+            # Loadavg uses raw requests (not the burst multiplier) so that the
+            # rendered req/min figure stays calibrated against actual traffic.
+            self._record_load_locked(model_name, 1.0, now)
 
     def record_latent_demand(self, model_name: str) -> None:
         """Record that classification preferred this model but the scheduler picked another.
@@ -97,6 +132,8 @@ class DemandTracker:
                 self._raw_count.pop(model, None)
                 self._last_request.pop(model, None)
                 self._request_timestamps.pop(model, None)
+                self._load_avg.pop(model, None)
+                self._load_avg_last_update.pop(model, None)
 
     def get_ranked_models(self) -> List[Tuple[str, float]]:
         """Return (model_name, score) sorted by score descending."""
@@ -109,6 +146,19 @@ class DemandTracker:
         """Return current demand score for a model (0.0 if untracked)."""
         with self._lock:
             return self._demand.get(model_name, 0.0)
+
+    def get_loadavg(self, model_name: str) -> Tuple[float, float, float]:
+        """Return (1m, 5m, 15m) request-per-minute EWMAs for a model.
+
+        Loadavg is decayed lazily on read so values reflect time elapsed since
+        the last request, not just request counts.
+        """
+        now = time.time()
+        with self._lock:
+            if model_name not in self._load_avg_last_update:
+                return (0.0, 0.0, 0.0)
+            loads = self._decay_load_locked(model_name, now)
+            return (loads["1m"], loads["5m"], loads["15m"])
 
     def get_raw_count(self, model_name: str) -> int:
         """Return total request count for a model (not decayed)."""
