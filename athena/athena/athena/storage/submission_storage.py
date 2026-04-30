@@ -1,7 +1,7 @@
 from typing import List, Iterable, Union, Type, Optional
 
 from athena.contextvars import get_lms_url
-from athena.database import get_db
+from athena.database import get_db, is_database_enabled
 from athena.schemas import Submission
 
 
@@ -9,6 +9,8 @@ def count_stored_submissions(
         submission_cls: Type[Submission], exercise_id: int, lms_url: Optional[str] = None
 ) -> int:
     """Returns the number of submissions for the given exercise."""
+    if not is_database_enabled():
+        return 0
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -27,6 +29,8 @@ def get_stored_submissions(
     Returns a list of submissions for the given exercise and submission ids.
     If only_ids is None, returns all submissions for the given exercise.
     """
+    if not is_database_enabled():
+        return ()
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -41,6 +45,8 @@ def get_stored_submissions(
 
 def get_stored_submission_meta(submission: Submission, lms_url: Optional[str] = None) -> Optional[dict]:
     """Returns the stored metadata associated with the submission."""
+    if not is_database_enabled():
+        return None
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -53,6 +59,8 @@ def get_stored_submission_meta(submission: Submission, lms_url: Optional[str] = 
 
 def store_submissions(submissions: List[Submission], lms_url: Optional[str] = None):
     """Stores the given submissions, all at once."""
+    if not is_database_enabled():
+        return
 
     if lms_url is None:
         lms_url = get_lms_url()
