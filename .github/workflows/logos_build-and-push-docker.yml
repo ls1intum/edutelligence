@@ -35,11 +35,11 @@ jobs:
       output: image
       push: true
       context: .
-      file: ./logos/Dockerfile
+      file: logos/Dockerfile
       platforms: linux/amd64
       runner: amd64
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -63,11 +63,11 @@ jobs:
       output: image
       push: true
       context: ./logos/logos-ui
-      file: ./logos/logos-ui/Dockerfile
+      file: Dockerfile
       platforms: linux/amd64
       runner: amd64
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos-ui
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-ui
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -91,11 +91,11 @@ jobs:
       output: image
       push: true
       context: ./logos/logos-landing
-      file: ./logos/logos-landing/Dockerfile
+      file: Dockerfile
       platforms: linux/amd64
       runner: amd64
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos-landing
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-landing
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -119,11 +119,11 @@ jobs:
       output: image
       push: true
       context: ./logos/db
-      file: ./logos/db/Dockerfile
+      file: Dockerfile
       platforms: linux/amd64
       runner: amd64
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos-db
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-db
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -147,7 +147,7 @@ jobs:
       output: image
       push: true
       context: ./logos/logos-workernode
-      file: ./logos/logos-workernode/Dockerfile
+      file: Dockerfile
       platforms: linux/amd64
       runner: amd64
       sign: false
@@ -156,7 +156,7 @@ jobs:
         RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
         INSTALL_VLLM=1
         INSTALL_OLLAMA=0
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos-workernode-vllm
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -180,7 +180,7 @@ jobs:
       output: image
       push: true
       context: ./logos/logos-workernode
-      file: ./logos/logos-workernode/Dockerfile
+      file: Dockerfile
       platforms: linux/amd64
       runner: amd64
       sign: false
@@ -188,7 +188,7 @@ jobs:
         BASE_IMAGE=python:3.12-slim
         INSTALL_VLLM=0
         INSTALL_OLLAMA=1
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos-workernode-ollama
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-ollama
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
