@@ -80,34 +80,6 @@ jobs:
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
 
-  build-landing:
-    name: Build Logos Landing
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
-    uses: docker/github-builder/.github/workflows/build.yml@v1
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      output: image
-      push: true
-      context: ./logos/logos-landing
-      file: Dockerfile
-      platforms: linux/amd64
-      runner: amd64
-      sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-landing
-      meta-tags: |
-        type=ref,event=pr
-        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
-        type=semver,pattern={{version}}
-      meta-flavor: |
-        latest=false
-    secrets:
-      registry-auths: |
-        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
-          username: ${{ vars.LOGOS_HARBOR_USER }}
-          password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
-
   build-db:
     name: Build Logos DB
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
