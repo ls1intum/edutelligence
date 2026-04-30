@@ -74,12 +74,22 @@ services:
 
       # ── Admin routes (port 9443) ──
 
-      # === Routing: /logosdb ===
-      - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
-      - "traefik.http.routers.logos-server-logosdb.entrypoints=admin"
-      - "traefik.http.routers.logos-server-logosdb.tls=true"
-      - "traefik.http.routers.logos-server-logosdb.service=logos-server"
-      - "traefik.http.routers.logos-server-logosdb.priority=100"
+      # === Routing: /api (all UI-internal endpoints) ===
+      # Backend strips the `/api` prefix, so adding a new admin endpoint
+      # requires no change here — just a new FastAPI route under any path.
+      - "traefik.http.routers.logos-server-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.logos-server-api.entrypoints=admin"
+      - "traefik.http.routers.logos-server-api.tls=true"
+      - "traefik.http.routers.logos-server-api.service=logos-server"
+      - "traefik.http.routers.logos-server-api.priority=100"
+
+      # === Routing: /logosdb/providers/logosnode (workernode protocol) ===
+      - "traefik.http.routers.logos-server-logosnode.rule=PathPrefix(`/logosdb/p\
+        roviders/logosnode`)"
+      - "traefik.http.routers.logos-server-logosnode.entrypoints=admin"
+      - "traefik.http.routers.logos-server-logosnode.tls=true"
+      - "traefik.http.routers.logos-server-logosnode.service=logos-server"
+      - "traefik.http.routers.logos-server-logosnode.priority=100"
 
       # === Routing: /docs ===
       - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) ||
@@ -95,13 +105,6 @@ services:
       - "traefik.http.routers.logos-server-metrics.tls=true"
       - "traefik.http.routers.logos-server-metrics.service=logos-server"
       - "traefik.http.routers.logos-server-metrics.priority=100"
-
-      # === Routing: /ws (WebSocket) ===
-      - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
-      - "traefik.http.routers.logos-server-ws.entrypoints=admin"
-      - "traefik.http.routers.logos-server-ws.tls=true"
-      - "traefik.http.routers.logos-server-ws.service=logos-server"
-      - "traefik.http.routers.logos-server-ws.priority=100"
 
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
