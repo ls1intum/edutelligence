@@ -254,8 +254,7 @@ class LogosNodeSchedulingDataFacade:
             )
 
     def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
-        provider = self._get_provider_for_model(model_id, provider_id)
-        return provider.try_reserve_capacity(model_id, request_id)
+        raise NotImplementedError("try_reserve_capacity removed — scheduler no longer gates on local counters")
 
     def _get_provider_for_model(self, model_id: int, provider_id: Optional[int] = None) -> LogosNodeDataProvider:
         with self._lock:

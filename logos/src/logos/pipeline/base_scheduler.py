@@ -15,7 +15,6 @@ from logos.terminal_logging import model_name_cache, style_model, style_request_
 
 from .scheduler_interface import SchedulerInterface, SchedulingResult
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +43,7 @@ class BaseScheduler(SchedulerInterface):
         provider_type: str,
         priority_int: int,
         request_id: str,
-        was_queued: bool
+        was_queued: bool,
     ) -> SchedulingResult:
         """Helper to create SchedulingResult and update stats."""
         queue_depth = 0
@@ -53,9 +52,9 @@ class BaseScheduler(SchedulerInterface):
         priority_str = Priority.from_int(priority_int).name.lower()
         is_cold_start = False
 
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             priority = Priority.from_int(priority_int)
-            queue_state = self._queue_mgr.get_state(model_id, provider_id)
+            queue_state = self._queue_mgr.get_state(model_id)
             queue_depth = queue_state.total
             tracking_started = False
 
@@ -96,19 +95,23 @@ class BaseScheduler(SchedulerInterface):
 
         provider_metrics = {}
 
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             try:
                 cap = self._logosnode.get_capacity_info(provider_id)
-                provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                provider_metrics["available_vram_mb"] = cap.available_vram_mb
             except Exception:
                 pass
 
-        elif provider_type == 'azure':
+        elif provider_type == "azure":
             try:
                 cap = self._azure.get_model_capacity(model_id, provider_id)
                 if cap:
-                    provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
-                    provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
+                    provider_metrics["azure_rate_remaining_requests"] = (
+                        cap.rate_limit_remaining_requests
+                    )
+                    provider_metrics["azure_rate_remaining_tokens"] = (
+                        cap.rate_limit_remaining_tokens
+                    )
             except Exception:
                 pass
 
@@ -122,29 +125,35 @@ class BaseScheduler(SchedulerInterface):
             queue_depth_at_arrival=queue_depth,
             utilization_at_arrival=utilization,
             provider_metrics=provider_metrics,
-            available_vram_mb=provider_metrics.get('available_vram_mb'),
-            azure_rate_remaining_requests=provider_metrics.get('azure_rate_remaining_requests'),
-            azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
+            available_vram_mb=provider_metrics.get("available_vram_mb"),
+            azure_rate_remaining_requests=provider_metrics.get(
+                "azure_rate_remaining_requests"
+            ),
+            azure_rate_remaining_tokens=provider_metrics.get(
+                "azure_rate_remaining_tokens"
+            ),
             priority_when_scheduled=priority_str,
             is_cold_start=is_cold_start,
         )
 
-    def release(self, model_id: int, provider_id: int, provider_type: str, request_id: str) -> None:
+    def release(
+        self, model_id: int, provider_id: int, provider_type: str, request_id: str
+    ) -> None:
         """
         Called when a request completes.
         1. Notify SDI facade.
         2. Check starvation (priority aging).
-        3. Wake up next queued request if any.
+        3. Wake up next queued request for this model (any provider).
         """
 
-        self._check_starvation(model_id, provider_id)
+        self._check_starvation(model_id)
 
-        depth_before = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
+        depth_before = self._queue_mgr.get_total_depth_by_model(model_id)
 
         next_task = None
         entry = None
         while True:
-            next_task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
+            next_task, entry = self._queue_mgr.dequeue_with_entry(model_id)
             if not next_task:
                 break
             if isinstance(next_task, asyncio.Future) and next_task.done():
@@ -153,7 +162,7 @@ class BaseScheduler(SchedulerInterface):
 
         has_waiters = next_task is not None
 
-        if provider_type == 'logosnode':
+        if provider_type == "logosnode":
             try:
                 self._logosnode.on_request_complete(
                     request_id,
@@ -163,7 +172,7 @@ class BaseScheduler(SchedulerInterface):
                     provider_id=provider_id,
                 )
                 logger.info(
-                    "released %s → %s reuse=%s",
+                    "released %s -> %s reuse=%s",
                     style_request_id(request_id),
                     style_model(model_name_cache.get(model_id)),
                     has_waiters,
@@ -173,13 +182,19 @@ class BaseScheduler(SchedulerInterface):
 
         if next_task and isinstance(next_task, asyncio.Future):
             if not next_task.done():
-                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
-                priority_int = entry.current_priority.value if entry else Priority.NORMAL.value
+                priority_str = (
+                    entry.current_priority.name.lower()
+                    if entry
+                    else Priority.NORMAL.name.lower()
+                )
+                priority_int = (
+                    entry.current_priority.value if entry else Priority.NORMAL.value
+                )
 
                 provider_metrics = {}
                 is_cold_start = None
 
-                if provider_type == 'logosnode':
+                if provider_type == "logosnode":
                     try:
                         status = self._logosnode.get_model_status(model_id, provider_id)
                         is_cold_start = not status.is_loaded
@@ -188,15 +203,19 @@ class BaseScheduler(SchedulerInterface):
 
                     try:
                         cap = self._logosnode.get_capacity_info(provider_id)
-                        provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                        provider_metrics["available_vram_mb"] = cap.available_vram_mb
                     except Exception:
                         pass
-                elif provider_type == 'azure':
+                elif provider_type == "azure":
                     try:
                         cap = self._azure.get_model_capacity(model_id, provider_id)
                         if cap:
-                            provider_metrics['azure_rate_remaining_requests'] = cap.rate_limit_remaining_requests
-                            provider_metrics['azure_rate_remaining_tokens'] = cap.rate_limit_remaining_tokens
+                            provider_metrics["azure_rate_remaining_requests"] = (
+                                cap.rate_limit_remaining_requests
+                            )
+                            provider_metrics["azure_rate_remaining_tokens"] = (
+                                cap.rate_limit_remaining_tokens
+                            )
                     except Exception:
                         pass
 
@@ -211,15 +230,21 @@ class BaseScheduler(SchedulerInterface):
                     priority_when_scheduled=priority_str,
                     is_cold_start=is_cold_start,
                     provider_metrics=provider_metrics,
-                    available_vram_mb=provider_metrics.get('available_vram_mb'),
-                    azure_rate_remaining_requests=provider_metrics.get('azure_rate_remaining_requests'),
-                    azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
+                    available_vram_mb=provider_metrics.get("available_vram_mb"),
+                    azure_rate_remaining_requests=provider_metrics.get(
+                        "azure_rate_remaining_requests"
+                    ),
+                    azure_rate_remaining_tokens=provider_metrics.get(
+                        "azure_rate_remaining_tokens"
+                    ),
                 )
 
-                logger.info("waking queued %s", style_model(model_name_cache.get(model_id)))
+                logger.info(
+                    "waking queued %s", style_model(model_name_cache.get(model_id))
+                )
                 next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
 
-    def _check_starvation(self, model_id: int, provider_id: int) -> None:
+    def _check_starvation(self, model_id: int) -> None:
         """
         Check for starved requests and bump their priority.
         Rule: If waiting > 10s in LOW, move to NORMAL.
@@ -227,7 +252,7 @@ class BaseScheduler(SchedulerInterface):
         """
         now = datetime.now()
 
-        low_entries = self._queue_mgr.get_entries_for_priority(model_id, provider_id, Priority.LOW)
+        low_entries = self._queue_mgr.get_entries_for_priority(model_id, Priority.LOW)
         for entry in low_entries:
             if (now - entry.enqueue_time).total_seconds() > 10:
                 self._queue_mgr.move_priority(entry.entry_id, Priority.NORMAL)
@@ -239,10 +264,11 @@ class BaseScheduler(SchedulerInterface):
         """Get total queued requests."""
         return self._queue_mgr.get_total_depth_all()
 
-    def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
+    def update_provider_stats(
+        self, model_id: int, provider_id: int, headers: Dict[str, str]
+    ) -> None:
         """
         Update provider-specific statistics (e.g., rate limits) from response headers.
-        Currently only Azure uses response headers for rate-limits; logosnode is no-op.
         """
         provider_type = self._model_registry.get((model_id, provider_id))
         if not provider_type:
@@ -252,66 +278,94 @@ class BaseScheduler(SchedulerInterface):
             try:
                 self._azure.update_model_rate_limits(model_id, provider_id, headers)
             except Exception:
-                logger.debug("Failed to update Azure rate limits for model %s", model_id, exc_info=False)
+                logger.debug(
+                    "Failed to update Azure rate limits for model %s",
+                    model_id,
+                    exc_info=False,
+                )
 
     def reevaluate_model_queues(self, model_name: str) -> None:
         """Reevaluate queued requests for a model after state change (load/wake).
 
-        When a provider state changes (e.g. a new lane becomes available),
-        queued futures for that model may be resolvable immediately.
+        When a worker's snapshot shows queue_waiting drops to 0 or a new lane
+        becomes available, queued futures for that model may be resolvable.
+        Only wakes one request at a time to avoid overwhelming a newly-loaded lane.
         """
-        # Find all (model_id, provider_id) pairs for this model name
-        for (model_id, provider_id), ptype in self._model_registry.items():
-            if ptype != "logosnode":
-                continue
-            # Check if this provider now has capacity for the model
-            try:
-                status = self._logosnode.get_model_status(model_id, provider_id)
-            except (ValueError, KeyError):
-                continue
-            if not status.is_loaded:
-                continue
+        # Resolve model_name -> model_id(s) via the model_registry
+        model_ids = {
+            model_id
+            for (model_id, _), ptype in self._model_registry.items()
+            if ptype == "logosnode"
+        }
 
-            # Try to dequeue and resolve waiting futures
-            while True:
-                task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
-                if task is None:
-                    break
-                if not isinstance(task, asyncio.Future):
-                    break
-                if task.done():
+        # Filter by model name using model_name_cache
+        matching_model_ids = {
+            mid for mid in model_ids
+            if model_name_cache.get(mid) == model_name
+        }
+
+        for model_id in matching_model_ids:
+            # Find a provider that now has capacity (loaded + queue_waiting == 0)
+            ready_provider_id = None
+            for (mid, provider_id), ptype in self._model_registry.items():
+                if mid != model_id or ptype != "logosnode":
                     continue
-
-                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
-                queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
-
-                provider_metrics = {}
                 try:
-                    cap = self._logosnode.get_capacity_info(provider_id)
-                    provider_metrics['available_vram_mb'] = cap.available_vram_mb
+                    view = self._logosnode.get_model_scheduler_view(model_id, provider_id)
                 except Exception:
-                    pass
+                    continue
+                if view is None:
+                    continue
+                if view.best_lane_state in ("loaded", "running") and view.aggregate_queue_waiting == 0:
+                    ready_provider_id = provider_id
+                    break
 
-                result = SchedulingResult(
-                    model_id=model_id,
-                    provider_id=provider_id,
-                    provider_type="logosnode",
-                    queue_entry_id=None,
-                    was_queued=True,
-                    queue_depth_at_schedule=queue_depth,
-                    queue_depth_at_arrival=queue_depth,
-                    priority_when_scheduled=priority_str,
-                    is_cold_start=False,
-                    provider_metrics=provider_metrics,
-                    available_vram_mb=provider_metrics.get('available_vram_mb'),
-                )
+            if ready_provider_id is None:
+                continue
 
-                logger.info(
-                    "Reevaluation: resolving queued request for model %s (provider=%s) after state change",
-                    model_name, provider_id,
-                )
-                task.get_loop().call_soon_threadsafe(task.set_result, result)
-                break  # One at a time to avoid overwhelming the newly loaded lane
+            # Wake one queued request
+            task, entry = self._queue_mgr.dequeue_with_entry(model_id)
+            if task is None:
+                continue
+            if not isinstance(task, asyncio.Future):
+                continue
+            if task.done():
+                continue
+
+            priority_str = (
+                entry.current_priority.name.lower()
+                if entry
+                else Priority.NORMAL.name.lower()
+            )
+            queue_depth = self._queue_mgr.get_total_depth_by_model(model_id)
+
+            provider_metrics = {}
+            try:
+                cap = self._logosnode.get_capacity_info(ready_provider_id)
+                provider_metrics["available_vram_mb"] = cap.available_vram_mb
+            except Exception:
+                pass
+
+            result = SchedulingResult(
+                model_id=model_id,
+                provider_id=ready_provider_id,
+                provider_type="logosnode",
+                queue_entry_id=None,
+                was_queued=True,
+                queue_depth_at_schedule=queue_depth,
+                queue_depth_at_arrival=queue_depth,
+                priority_when_scheduled=priority_str,
+                is_cold_start=False,
+                provider_metrics=provider_metrics,
+                available_vram_mb=provider_metrics.get("available_vram_mb"),
+            )
+
+            logger.info(
+                "Reevaluation: waking queued %s (provider=%s)",
+                style_model(model_name),
+                ready_provider_id,
+            )
+            task.get_loop().call_soon_threadsafe(task.set_result, result)
 
     def update_model_registry(self, model_registry: Dict[tuple[int, int], str]) -> None:
         self._model_registry = dict(model_registry or {})

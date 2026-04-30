@@ -42,7 +42,6 @@ _LOGGER_ALIASES = {
     "LogosLogger": "app",
     "logos.capacity.capacity_planner": "planner",
     "logos.logosnode_registry": "registry",
-    "logos.pipeline.correcting_scheduler": "scheduler",
     "logos.pipeline.base_scheduler": "scheduler",
     "logos.pipeline.executor": "executor",
     "logos.sdi.logosnode_facade": "logosnode",

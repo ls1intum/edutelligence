@@ -43,8 +43,7 @@ from logos.responses import (
     extract_token_usage,
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
-from logos.pipeline.fcfs_scheduler import FcfScheduler
-from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.simple_scheduler import SimpleScheduler
 from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
 from logos.capacity.demand_tracker import DemandTracker
@@ -1519,18 +1518,14 @@ async def start_pipeline():
 
     model_registry = _build_model_registry()
 
-    # Scheduler: use ETTFT-correcting scheduler (ablatable via env var)
-    ettft_enabled = os.getenv("LOGOS_SCHEDULER_ETTFT_ENABLED", "true").lower() == "true"
-    scheduler = ClassificationCorrectingScheduler(
+    # Scheduler: trust vLLM queue signals
+    scheduler = SimpleScheduler(
         queue_manager=_queue_mgr,
         logosnode_facade=_logosnode_facade,
         azure_facade=_azure_facade,
         model_registry=model_registry,
-        ettft_enabled=ettft_enabled,
     )
-    logger.info(
-        "Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled
-    )
+    logger.info("Scheduler: SimpleScheduler (trust-vLLM-queue-signals)")
 
     # 5. Executor
     executor = Executor()
@@ -1572,9 +1567,8 @@ async def start_pipeline():
     await _capacity_planner.start()
 
     logger.info(
-        "Request Pipeline Initialized with ETTFT-correcting scheduler "
-        "(ettft=%s, planner=%s)",
-        ettft_enabled,
+        "Request Pipeline Initialized with SimpleScheduler "
+        "(planner=%s)",
         planner_enabled,
     )
 
