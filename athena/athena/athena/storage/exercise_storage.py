@@ -1,7 +1,7 @@
 from typing import List, Iterable, Optional, Type
 
 from athena.contextvars import get_lms_url
-from athena.database import get_db
+from athena.database import get_db, is_database_enabled
 from athena.schemas import Exercise
 
 
@@ -11,6 +11,8 @@ Iterable[Exercise]:
     Returns a list of exercises for the given exercise type and exercise ids.
     If only_ids is None, returns all exercises for the given exercise type.
     """
+    if not is_database_enabled():
+        return ()
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -26,6 +28,8 @@ Iterable[Exercise]:
 
 def get_stored_exercise_meta(exercise: Exercise, lms_url: Optional[str] = None, ) -> Optional[dict]:
     """Returns the stored metadata associated with the exercise."""
+    if not is_database_enabled():
+        return None
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -38,6 +42,8 @@ def get_stored_exercise_meta(exercise: Exercise, lms_url: Optional[str] = None, 
 
 def store_exercises(exercises: List[Exercise], lms_url: Optional[str] = None):
     """Stores the given exercises, all at once."""
+    if not is_database_enabled():
+        return
 
     if lms_url is None:
         lms_url = get_lms_url()

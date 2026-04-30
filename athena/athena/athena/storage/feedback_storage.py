@@ -1,7 +1,7 @@
 from typing import Iterable, Union, Type, Optional, List
 
 from athena.contextvars import get_lms_url
-from athena.database import get_db
+from athena.database import get_db, is_database_enabled
 from athena.schemas import Feedback
 
 
@@ -12,6 +12,8 @@ def get_stored_feedback(
     Returns a list of feedbacks for the given exercise in the given submission.
     If submission_id is None, returns all feedbacks for the given exercise.
     """
+    if not is_database_enabled():
+        return ()
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -26,6 +28,8 @@ def get_stored_feedback(
 
 def get_stored_feedback_meta(feedback: Feedback, lms_url: Optional[str] = None) -> Optional[dict]:
     """Returns the stored metadata associated with the feedback."""
+    if not is_database_enabled():
+        return None
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -46,6 +50,8 @@ def store_feedback(feedback: Feedback, is_lms_id=False, lms_url: Optional[str] =
     Returns:
         Feedback: The stored feedback with its internal ID assigned.
     """
+    if not is_database_enabled():
+        return feedback
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -68,6 +74,8 @@ def get_stored_feedback_suggestions(
         feedback_cls: Type[Feedback], exercise_id: int, submission_id: int, lms_url: Optional[str] = None
 ) -> Iterable[Feedback]:
     """Returns a list of feedback suggestions for the given exercise in the given submission."""
+    if not is_database_enabled():
+        return ()
 
     if lms_url is None:
         lms_url = get_lms_url()
@@ -87,6 +95,8 @@ def store_feedback_suggestions(feedbacks: List[Feedback], lms_url: Optional[str]
     Returns:
         List[Feedback]: The stored feedback suggestions with their internal IDs assigned.
     """
+    if not is_database_enabled():
+        return feedbacks
 
     if lms_url is None:
         lms_url = get_lms_url()
