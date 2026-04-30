@@ -213,7 +213,7 @@ RUN if ! command -v python3.13 >/dev/null 2>&1 \
 RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
         CUDA_VER=$(echo "${CUDA_VERSION}" | cut -d. -f1,2 | tr '.' '-'); \
         apt-get update \
-        && apt-get install -y --no-install-recommends \
+        && apt-get install -y --allow-change-held-packages --no-install-recommends \
             gcc \
             cuda-nvcc-${CUDA_VER} \
             cuda-cudart-${CUDA_VER} \
