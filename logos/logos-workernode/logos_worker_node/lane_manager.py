@@ -252,10 +252,15 @@ class LaneManager:
         self._status_event = asyncio.Event()
         self._model_profiles = model_profiles
         self._last_profile_state: dict[str, str] = {}
-        # Stuck-inference detection: track generation_tokens_total per lane
+        # Stuck-inference detection: track BOTH prompt_tokens_total and
+        # generation_tokens_total per lane. A real engine hang freezes every
+        # metric; gpt-oss with reasoning_parser='openai_gptoss' on vLLM 0.20
+        # can leave generation_tokens_total at 0 while still serving traffic,
+        # so checking only one counter produces false positives.
         self._last_gen_tokens: dict[str, float] = {}
+        self._last_prompt_tokens: dict[str, float] = {}
         self._stuck_polls: dict[str, int] = {}  # consecutive polls with no progress
-        _STUCK_POLL_THRESHOLD = 6  # ~30s at 5s heartbeat
+        _STUCK_POLL_THRESHOLD = 12  # ~60s at 5s heartbeat
         self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
@@ -1682,11 +1687,16 @@ class LaneManager:
         *,
         auto_restart: bool = True,
     ) -> None:
-        """Detect vLLM lanes that have stopped generating tokens while requests are active.
+        """Detect vLLM lanes that have stopped making any token-level progress.
 
-        If ``generation_tokens_total`` doesn't increase for several consecutive
-        polls while ``requests_running > 0``, the lane is likely stuck in an
-        NCCL deadlock or similar hang.  Kill and log the event.
+        A lane is considered stuck only when BOTH ``prompt_tokens_total`` AND
+        ``generation_tokens_total`` are unchanged for several consecutive polls
+        while ``requests_running > 0``.  Requiring both counters to freeze
+        avoids a known false positive on vLLM 0.20 V1 engine where
+        ``generation_tokens_total`` can stay at 0 for gpt-oss reasoning models
+        even while requests complete successfully — a real engine hang freezes
+        every metric, so requiring both is still sufficient to catch genuine
+        NCCL deadlocks and similar hangs.
 
         When *auto_restart* is True (the default), the lane is automatically
         restarted with its previous configuration.  Pass ``False`` when the
@@ -1698,35 +1708,52 @@ class LaneManager:
                 continue
             metrics = status.backend_metrics or {}
             gen_tokens = metrics.get("generation_tokens_total")
+            prompt_tokens = metrics.get("prompt_tokens_total")
             requests_running = metrics.get("requests_running")
 
-            if gen_tokens is None or requests_running is None:
+            if (
+                gen_tokens is None
+                or prompt_tokens is None
+                or requests_running is None
+            ):
                 # Metrics not available — can't detect stuck state
                 self._stuck_polls.pop(lid, None)
                 continue
 
-            prev_tokens = self._last_gen_tokens.get(lid)
+            prev_gen = self._last_gen_tokens.get(lid)
+            prev_prompt = self._last_prompt_tokens.get(lid)
             self._last_gen_tokens[lid] = gen_tokens
+            self._last_prompt_tokens[lid] = prompt_tokens
 
-            if prev_tokens is None:
+            if prev_gen is None or prev_prompt is None:
                 self._stuck_polls.pop(lid, None)
                 continue
 
-            if requests_running > 0 and gen_tokens <= prev_tokens:
+            no_gen_progress = gen_tokens <= prev_gen
+            no_prompt_progress = prompt_tokens <= prev_prompt
+            if requests_running > 0 and no_gen_progress and no_prompt_progress:
                 count = self._stuck_polls.get(lid, 0) + 1
                 self._stuck_polls[lid] = count
                 if count >= self._stuck_poll_threshold:
                     logger.error(
                         "Lane '%s' appears stuck: %d consecutive polls with "
-                        "requests_running=%.0f but generation_tokens_total unchanged (%.0f). "
+                        "requests_running=%.0f but prompt_tokens_total unchanged "
+                        "(%.0f) and generation_tokens_total unchanged (%.0f). "
                         "Killing the lane process.",
-                        lid, count, requests_running, gen_tokens,
+                        lid, count, requests_running, prompt_tokens, gen_tokens,
                     )
-                    self._record_event(lid, "stuck_detected",
-                                       model=status.model,
-                                       details=f"gen_tokens={gen_tokens}, running={requests_running}, polls={count}")
+                    self._record_event(
+                        lid, "stuck_detected",
+                        model=status.model,
+                        details=(
+                            f"prompt_tokens={prompt_tokens}, "
+                            f"gen_tokens={gen_tokens}, "
+                            f"running={requests_running}, polls={count}"
+                        ),
+                    )
                     self._stuck_polls.pop(lid, None)
                     self._last_gen_tokens.pop(lid, None)
+                    self._last_prompt_tokens.pop(lid, None)
                     # Kill the stuck lane and attempt automatic restart
                     handle = self._handles.get(lid)
                     if handle is not None:

@@ -715,6 +715,7 @@ def _make_vllm_lane_status(
     model: str = "Qwen/Qwen3-Embedding-8B",
     *,
     gen_tokens: float = 100.0,
+    prompt_tokens: float = 100.0,
     requests_running: float = 2.0,
 ) -> LaneStatus:
     """Helper to build a minimal vLLM LaneStatus with backend_metrics."""
@@ -728,6 +729,7 @@ def _make_vllm_lane_status(
         runtime_state="running",
         backend_metrics={
             "generation_tokens_total": gen_tokens,
+            "prompt_tokens_total": prompt_tokens,
             "requests_running": requests_running,
         },
     )
@@ -801,8 +803,11 @@ async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
     # Simulate stuck detection: prime the counters so the next poll trips the threshold
     manager._stuck_poll_threshold = 1  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
 
-    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    status = _make_vllm_lane_status(
+        lane_id, gen_tokens=0.0, prompt_tokens=0.0, requests_running=2.0,
+    )
     await manager._check_stuck_lanes([status])  # noqa: SLF001
 
     # Lane should have been stopped then restarted
@@ -843,8 +848,11 @@ async def test_stuck_lane_no_restart_when_auto_restart_false(monkeypatch) -> Non
     manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
     manager._stuck_poll_threshold = 1  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
 
-    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    status = _make_vllm_lane_status(
+        lane_id, gen_tokens=0.0, prompt_tokens=0.0, requests_running=2.0,
+    )
     await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
 
     assert stopped is True
@@ -908,8 +916,11 @@ async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
 
     manager._stuck_poll_threshold = 1  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
 
-    status = _make_vllm_lane_status(lane_id, gen_tokens=0.0, requests_running=2.0)
+    status = _make_vllm_lane_status(
+        lane_id, gen_tokens=0.0, prompt_tokens=0.0, requests_running=2.0,
+    )
     # Should not raise — error is caught internally
     await manager._check_stuck_lanes([status])  # noqa: SLF001
 
@@ -1009,20 +1020,72 @@ async def test_stuck_detection_resets_after_token_progress() -> None:
     manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
     manager._stuck_poll_threshold = 3  # noqa: SLF001
 
-    # Poll 1: no progress (gen_tokens=100, prev=None → baseline, no increment)
-    s1 = _make_vllm_lane_status(lane_id, gen_tokens=100.0, requests_running=2.0)
+    # Poll 1: prev=None → baseline, no increment
+    s1 = _make_vllm_lane_status(
+        lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=2.0,
+    )
     await manager._check_stuck_lanes([s1], auto_restart=False)  # noqa: SLF001
-    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001 — first poll sets baseline
+    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
 
-    # Poll 2: still stuck at 100
-    s2 = _make_vllm_lane_status(lane_id, gen_tokens=100.0, requests_running=2.0)
+    # Poll 2: both counters frozen → stuck count increments
+    s2 = _make_vllm_lane_status(
+        lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=2.0,
+    )
     await manager._check_stuck_lanes([s2], auto_restart=False)  # noqa: SLF001
     assert manager._stuck_polls.get(lane_id, 0) == 1  # noqa: SLF001
 
-    # Poll 3: tokens increased → counter should reset
-    s3 = _make_vllm_lane_status(lane_id, gen_tokens=200.0, requests_running=2.0)
+    # Poll 3: gen tokens increased → counter resets
+    s3 = _make_vllm_lane_status(
+        lane_id, gen_tokens=200.0, prompt_tokens=500.0, requests_running=2.0,
+    )
     await manager._check_stuck_lanes([s3], auto_restart=False)  # noqa: SLF001
     assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_stuck_detection_skips_when_only_gen_tokens_frozen() -> None:
+    """When prompt_tokens advances but gen_tokens doesn't, lane is NOT stuck.
+
+    Regression test for the gpt-oss / vLLM 0.20 V1 false positive: the
+    generation_tokens_total counter can stay at 0 for reasoning models even
+    while requests complete successfully. The detector must require BOTH
+    counters to freeze before declaring a hang.
+    """
+    lane_id = "planner-openai_gpt-oss-120b"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="openai/gpt-oss-120b",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+    manager._stuck_poll_threshold = 2  # noqa: SLF001
+
+    # Baseline poll
+    s1 = _make_vllm_lane_status(
+        lane_id, gen_tokens=0.0, prompt_tokens=1000.0, requests_running=1.0,
+    )
+    await manager._check_stuck_lanes([s1], auto_restart=False)  # noqa: SLF001
+
+    # Subsequent polls: gen_tokens stays at 0 (V1 metric quirk) but
+    # prompt_tokens keeps growing — the engine is making progress.
+    for prompt_total in (2000.0, 3000.0, 4000.0):
+        s = _make_vllm_lane_status(
+            lane_id,
+            gen_tokens=0.0,
+            prompt_tokens=prompt_total,
+            requests_running=1.0,
+        )
+        await manager._check_stuck_lanes([s], auto_restart=False)  # noqa: SLF001
+        assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
 
 
 # ── Circuit-breaker tests ─────────────────────────────────────────────────────
