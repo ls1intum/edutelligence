@@ -800,10 +800,13 @@ async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
     monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
 
-    # Simulate stuck detection: prime the counters so the next poll trips the threshold
-    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    # Simulate stuck detection: prime the token baselines and the
+    # _stuck_since timestamp so the next poll's elapsed time trips the
+    # (zero-second) threshold.
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
     manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
 
     status = _make_vllm_lane_status(
         lane_id, gen_tokens=0.0, prompt_tokens=0.0, requests_running=2.0,
@@ -846,9 +849,10 @@ async def test_stuck_lane_no_restart_when_auto_restart_false(monkeypatch) -> Non
             return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
 
     manager._handles[lane_id] = FakeStuckHandle()  # noqa: SLF001
-    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
     manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
 
     status = _make_vllm_lane_status(
         lane_id, gen_tokens=0.0, prompt_tokens=0.0, requests_running=2.0,
@@ -914,9 +918,10 @@ async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
     monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
 
-    manager._stuck_poll_threshold = 1  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
     manager._last_gen_tokens[lane_id] = 0.0  # noqa: SLF001
     manager._last_prompt_tokens[lane_id] = 0.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
 
     status = _make_vllm_lane_status(
         lane_id, gen_tokens=0.0, prompt_tokens=0.0, requests_running=2.0,
@@ -1001,7 +1006,7 @@ async def test_recover_dead_lanes_restarts_stopped_lane(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_stuck_detection_resets_after_token_progress() -> None:
-    """Stuck poll counter resets when generation tokens make progress."""
+    """Stuck-since timestamp clears when generation tokens make progress."""
     lane_id = "planner-Qwen_Qwen3-Embedding-8B"
     lane_config = LaneConfig(
         lane_id=lane_id,
@@ -1018,28 +1023,27 @@ async def test_stuck_detection_resets_after_token_progress() -> None:
             self.lane_config = lane_config
 
     manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
-    manager._stuck_poll_threshold = 3  # noqa: SLF001
 
-    # Poll 1: prev=None → baseline, no increment
+    # Poll 1: prev=None → baseline, no _stuck_since recorded
     s1 = _make_vllm_lane_status(
         lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=2.0,
     )
     await manager._check_stuck_lanes([s1], auto_restart=False)  # noqa: SLF001
-    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
+    assert lane_id not in manager._stuck_since  # noqa: SLF001
 
-    # Poll 2: both counters frozen → stuck count increments
+    # Poll 2: both counters frozen → _stuck_since is set (but not yet elapsed)
     s2 = _make_vllm_lane_status(
         lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=2.0,
     )
     await manager._check_stuck_lanes([s2], auto_restart=False)  # noqa: SLF001
-    assert manager._stuck_polls.get(lane_id, 0) == 1  # noqa: SLF001
+    assert lane_id in manager._stuck_since  # noqa: SLF001
 
-    # Poll 3: gen tokens increased → counter resets
+    # Poll 3: gen tokens increased → _stuck_since clears
     s3 = _make_vllm_lane_status(
         lane_id, gen_tokens=200.0, prompt_tokens=500.0, requests_running=2.0,
     )
     await manager._check_stuck_lanes([s3], auto_restart=False)  # noqa: SLF001
-    assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
+    assert lane_id not in manager._stuck_since  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -1067,7 +1071,7 @@ async def test_stuck_detection_skips_when_only_gen_tokens_frozen() -> None:
             self.lane_config = lane_config
 
     manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
-    manager._stuck_poll_threshold = 2  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
 
     # Baseline poll
     s1 = _make_vllm_lane_status(
@@ -1076,7 +1080,8 @@ async def test_stuck_detection_skips_when_only_gen_tokens_frozen() -> None:
     await manager._check_stuck_lanes([s1], auto_restart=False)  # noqa: SLF001
 
     # Subsequent polls: gen_tokens stays at 0 (V1 metric quirk) but
-    # prompt_tokens keeps growing — the engine is making progress.
+    # prompt_tokens keeps growing — the engine is making progress.  Even
+    # with a zero-second threshold, _stuck_since must never be recorded.
     for prompt_total in (2000.0, 3000.0, 4000.0):
         s = _make_vllm_lane_status(
             lane_id,
@@ -1085,7 +1090,59 @@ async def test_stuck_detection_skips_when_only_gen_tokens_frozen() -> None:
             requests_running=1.0,
         )
         await manager._check_stuck_lanes([s], auto_restart=False)  # noqa: SLF001
-        assert manager._stuck_polls.get(lane_id, 0) == 0  # noqa: SLF001
+        assert lane_id not in manager._stuck_since  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_stuck_detection_does_not_trip_during_request_burst() -> None:
+    """A burst of get_lanes/get_runtime calls must not trip stuck detection.
+
+    Regression test: get_all_statuses (and therefore _check_stuck_lanes) is
+    invoked by request-driven endpoints, so many polls can land in seconds
+    during normal prefill.  The detector must measure wall-clock time, not
+    consecutive call count, so the threshold cannot be reached without real
+    elapsed time.
+    """
+    lane_id = "planner-Qwen_Qwen3-Embedding-8B"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+
+    # Baseline poll
+    await manager._check_stuck_lanes(  # noqa: SLF001
+        [_make_vllm_lane_status(
+            lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=2.0,
+        )],
+        auto_restart=False,
+    )
+
+    # Burst: 50 polls back-to-back with metrics frozen.  Real wall-clock
+    # elapsed is well below the default 60s threshold, so the lane must
+    # not be declared stuck regardless of how many times we polled.
+    for _ in range(50):
+        await manager._check_stuck_lanes(  # noqa: SLF001
+            [_make_vllm_lane_status(
+                lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=2.0,
+            )],
+            auto_restart=False,
+        )
+
+    # _stuck_since should be set (we did observe no progress) but the
+    # handle must still be present — no kill should have happened.
+    assert lane_id in manager._stuck_since  # noqa: SLF001
+    assert isinstance(manager._handles.get(lane_id), FakeHandle)  # noqa: SLF001
 
 
 # ── Circuit-breaker tests ─────────────────────────────────────────────────────
