@@ -1,10 +1,12 @@
 import { Platform } from "react-native";
 import { UserRole } from "@/components/route-permissions";
 
+// All UI-internal endpoints live under `/api/*` so a single Traefik route
+// (and a single backend prefix-stripper middleware) covers every call.
 export const API_BASE =
   Platform.OS === "web"
-    ? ""
-    : process.env.EXPO_PUBLIC_API_BASE || "http://localhost:8080";
+    ? "/api"
+    : `${process.env.EXPO_PUBLIC_API_BASE || "http://localhost:8080"}/api`;
 
 export const CHART_PALETTE = {
   total: "#1E3A8A", // Dark Blue for cumulative total

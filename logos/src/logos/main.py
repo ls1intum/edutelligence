@@ -12,16 +12,27 @@ from typing import Any, Dict, Set, Optional, Tuple
 import grpc
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
 from logos.role_auth import require_logos_admin_key, require_app_admin_or_above, require_logos_admin
+from logos.errors import (
+    openai_error_response,
+    coerce_upstream_error,
+    raise_openai_error,
+    UpstreamStreamError,
+)
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
+from logos.dbutils.types import (
+    Deployment,
+    get_unique_models_from_deployments,
+    normalize_provider_type,
+)
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.jobs.job_service import JobService, JobSubmission
@@ -29,11 +40,10 @@ from logos.responses import (
     get_client_ip,
     extract_model,
     request_setup,
-    extract_token_usage
+    extract_token_usage,
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
-from logos.pipeline.fcfs_scheduler import FcfScheduler
-from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.simple_scheduler import SimpleScheduler
 from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
 from logos.capacity.demand_tracker import DemandTracker
@@ -48,8 +58,24 @@ from logos.logosnode_registry import (
     LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
 )
-from logos.terminal_logging import MultiLineFormatter, UvicornAccessFilter, UvicornErrorFilter
-from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
+from logos.terminal_logging import (
+    MultiLineFormatter,
+    UvicornAccessFilter,
+    UvicornErrorFilter,
+    model_name_cache,
+    style_model,
+    style_request_id,
+    style_duration,
+    format_number,
+    GREEN,
+    RED,
+    YELLOW,
+    paint,
+    BOLD,
+)
+from logos.monitoring.prometheus_metrics import (
+    metrics_response as _prometheus_metrics_response,
+)
 from scripts import setup_proxy
 
 _SERVER_START_TIME = int(time.time())
@@ -57,6 +83,8 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
+
+
 def _resolve_provider_name(provider_id: int) -> str:
     """Best-effort resolve a provider ID to its worker name."""
     snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
@@ -65,7 +93,9 @@ def _resolve_provider_name(provider_id: int) -> str:
     return str(provider_id)
 
 
-def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
+def _sync_logosnode_capabilities_to_db(
+    provider_id: int, model_names: list[str]
+) -> None:
     """Callback: sync announced capabilities into DB tables."""
     pname = _resolve_provider_name(provider_id)
     try:
@@ -73,7 +103,8 @@ def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str])
             db.sync_logosnode_capabilities(provider_id, model_names)
         logger.info(
             "Synced %d capability model(s) to DB for provider %s",
-            len(model_names), pname,
+            len(model_names),
+            pname,
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
@@ -101,7 +132,9 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
     "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
     _LOGOSNODE_INFER_TIMEOUT_SECONDS,
 )
-_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
+_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int(
+    "LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30
+)
 
 
 def _record_azure_rate_limits(
@@ -147,7 +180,9 @@ def _is_today_or_all_utc(day: str) -> bool:
     normalized = str(day or "").strip().lower()
     if normalized == "all":
         return True
-    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%d"
+    )
 
 
 def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool:
@@ -157,7 +192,9 @@ def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool
     if last_heartbeat is None:
         return False
     now = datetime.datetime.now(datetime.timezone.utc)
-    return (now - last_heartbeat) <= datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS)
+    return (now - last_heartbeat) <= datetime.timedelta(
+        seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS
+    )
 
 
 def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -190,7 +227,13 @@ def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _planner_model_alias(model_name: str) -> str:
     """Return the planner/worker-safe alias used in lane ids and logs."""
-    return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
+    return (
+        str(model_name or "")
+        .strip()
+        .replace("/", "_")
+        .replace(":", "_")
+        .replace(" ", "_")
+    )
 
 
 def _resolve_requested_model_name(
@@ -265,7 +308,9 @@ def _merge_histogram_buckets(target: dict[str, float], source: Any) -> None:
         target[bucket] = target.get(bucket, 0.0) + count
 
 
-def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optional[float]:
+def _histogram_quantile_seconds(
+    histogram: Any, quantile: float = 0.95
+) -> Optional[float]:
     if not isinstance(histogram, dict) or not histogram:
         return None
 
@@ -328,8 +373,12 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         return {}
 
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    capacity = (
+        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    )
+    transport = (
+        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    )
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
 
     provider_signals: Dict[str, Any] = {
@@ -337,7 +386,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
-        "device_count": len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0,
+        "device_count": (
+            len(devices.get("devices") or [])
+            if isinstance(devices.get("devices"), list)
+            else 0
+        ),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
         "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
@@ -346,7 +399,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
         "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
         "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
-        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
+        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb"))
+        or 0.0,
         "runtime_modes": _runtime_modes_for_lanes(lanes),
     }
 
@@ -396,7 +450,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         runtime_state = str(lane.get("runtime_state") or "").strip()
         is_vllm = bool(lane.get("vllm"))
         active_requests = _safe_int(lane.get("active_requests")) or 0
-        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+        backend_metrics = (
+            lane.get("backend_metrics")
+            if isinstance(lane.get("backend_metrics"), dict)
+            else {}
+        )
         ttft_histogram = (
             backend_metrics.get("ttft_histogram")
             if isinstance(backend_metrics.get("ttft_histogram"), dict)
@@ -417,10 +475,18 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vram_source": lane.get("vram_source"),
             "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
-            "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
-            "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
-            "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
-            "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
+            "gpu_cache_usage_percent": _safe_float(
+                backend_metrics.get("gpu_cache_usage_percent")
+            ),
+            "prefix_cache_hit_rate": _safe_float(
+                backend_metrics.get("prefix_cache_hit_rate")
+            ),
+            "prompt_tokens_total": _safe_float(
+                backend_metrics.get("prompt_tokens_total")
+            ),
+            "generation_tokens_total": _safe_float(
+                backend_metrics.get("generation_tokens_total")
+            ),
             "ttft_histogram": ttft_histogram,
             "ttft_p95_seconds": lane_ttft_p95,
         }
@@ -2879,9 +2945,6 @@ async def create_user(body: CreateUserRequest, request: Request):
         user_dict, new_key, status = db.create_user(
             body.username, body.prename, body.name, body.email, body.role
         )
-        if status == 200 and body.team_ids:
-            for team_id in body.team_ids:
-                db.add_team_member(team_id, user_dict["id"])
     if status != 200:
         raise HTTPException(status_code=status, detail=user_dict.get("error"))
     return {**user_dict, "logos_key": new_key}
@@ -2893,101 +2956,6 @@ async def delete_user(user_id: int, request: Request):
     with DBManager() as db:
         require_logos_admin_key(logos_key, db)
         result, status = db.delete_user(user_id)
-    if status != 200:
-        raise HTTPException(status_code=status, detail=result.get("error"))
-    return result
-
-@app.get("/users/admins", tags=["users"])
-async def list_admin_users(request: Request):
-    require_logos_admin(request)
-    with DBManager() as db:
-        return db.list_admin_users()
-
-
-@app.get("/teams", tags=["teams"])
-async def list_teams(request: Request):
-    logos_key = require_app_admin_or_above(request)
-    with DBManager() as db:
-        caller = db.get_user_by_logos_key(logos_key)
-        if caller["role"] == "logos_admin":
-            return db.list_teams()
-        return db.list_teams(owner_user_id=caller["id"])
-
-
-@app.post("/teams", tags=["teams"])
-async def create_team(body: CreateTeamRequest, request: Request):
-    logos_key = require_app_admin_or_above(request)
-    with DBManager() as db:
-        caller = db.get_user_by_logos_key(logos_key)
-        if caller["role"] == "logos_admin":
-            owner_ids = body.owner_ids if body.owner_ids else [caller["id"]]
-        else:
-            owner_ids = [caller["id"]]
-        team_id, status = db.create_team(body.name, owner_ids)
-    if status == 409:
-        raise HTTPException(status_code=409, detail="A team with this name already exists.")
-    if status != 200:
-        raise HTTPException(status_code=status, detail="Failed to create team")
-    return {"id": team_id, "name": body.name}
-
-
-@app.delete("/teams/{team_id}", tags=["teams"])
-async def delete_team(team_id: int, request: Request):
-    logos_key = require_app_admin_or_above(request)
-    with DBManager() as db:
-        caller = db.get_user_by_logos_key(logos_key)
-        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
-            raise HTTPException(status_code=403, detail="You do not own this team")
-        result, status = db.delete_team(team_id)
-    if status != 200:
-        raise HTTPException(status_code=status, detail=result.get("error"))
-    return result
-
-
-@app.get("/teams/{team_id}/members", tags=["teams"])
-async def get_team_detail(team_id: int, request: Request):
-    logos_key = require_app_admin_or_above(request)
-    with DBManager() as db:
-        caller = db.get_user_by_logos_key(logos_key)
-        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
-            raise HTTPException(status_code=403, detail="You do not own this team")
-        team = db.get_team(team_id)
-        if team is None:
-            raise HTTPException(status_code=404, detail="Team not found")
-        members = db.list_team_members(team_id)
-    return {"team": team, "members": members}
-
-
-@app.post("/teams/{team_id}/members", tags=["teams"])
-async def add_team_member(team_id: int, body: AddTeamMemberRequest, request: Request):
-    logos_key = require_app_admin_or_above(request)
-    with DBManager() as db:
-        caller = db.get_user_by_logos_key(logos_key)
-        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
-            raise HTTPException(status_code=403, detail="You do not own this team")
-        result, status = db.add_team_member(team_id, body.user_id, body.is_owner)
-    if status != 200:
-        raise HTTPException(status_code=status, detail=result.get("error"))
-    return result
-
-
-@app.delete("/teams/{team_id}/members/{user_id}", tags=["teams"])
-async def remove_team_member(team_id: int, user_id: int, request: Request):
-    logos_key = require_app_admin_or_above(request)
-    with DBManager() as db:
-        caller = db.get_user_by_logos_key(logos_key)
-        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
-            raise HTTPException(status_code=403, detail="You do not own this team")
-        result, status = db.remove_team_member(team_id, user_id)
-    if status != 200:
-        raise HTTPException(status_code=status, detail=result.get("error"))
-    return result
-
-@app.patch("/teams/{team_id}/members/{user_id}", tags=["teams"])
-async def set_team_member_owner(team_id: int, user_id: int, body: SetOwnerRequest, request: Request):
-    require_logos_admin(request)
-    with DBManager() as db:
-        result, status = db.set_team_owner(team_id, user_id, body.is_owner)
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
     return result

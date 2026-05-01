@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from logos_worker_node.config import load_config, get_state_dir, save_lanes_state
 from logos_worker_node.gpu import GpuMetricsCollector
-from logos_worker_node.lane_manager import LaneManager
+from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.model_cache import create_model_cache
@@ -249,13 +249,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if cfg.logos and cfg.logos.capabilities_models:
         lane_manager.validate_capabilities(cfg.logos.capabilities_models)
 
+    # ── Static lanes (pinned, never removed by the capacity planner) ──────
+    static_lane_ids: set[str] = set()
+    if cfg.static_lanes:
+        for sl in cfg.static_lanes:
+            static_lane_ids.add(_lane_id_from_config(sl))
+        lane_manager.register_static_lanes(static_lane_ids)
+        logger.info("Applying %d static lane(s) from config", len(cfg.static_lanes))
+        try:
+            result = await lane_manager.apply_lanes(cfg.static_lanes)
+            if result.errors:
+                raise RuntimeError("; ".join(result.errors))
+        except Exception:
+            logger.exception("Failed to apply static lanes from config")
+            await lane_manager.close()
+            await gpu_collector.stop()
+            raise
+
     # Drop restored lanes that exceed MAX_LANES — start fresh and let the
     # server re-assign.  This avoids a hard crash from apply_lanes validation.
-    if cfg.lanes and cfg.worker.max_lanes > 0 and len(cfg.lanes) > cfg.worker.max_lanes:
+    # Account for static lanes already occupying slots.
+    effective_max_dynamic = cfg.worker.max_lanes - len(static_lane_ids) if cfg.worker.max_lanes > 0 else 0
+    # Filter out static lane IDs from restored dynamic lanes to avoid duplicates
+    if cfg.lanes and static_lane_ids:
+        cfg.lanes = [lc for lc in cfg.lanes if _lane_id_from_config(lc) not in static_lane_ids]
+
+    if cfg.lanes and cfg.worker.max_lanes > 0 and len(cfg.lanes) > effective_max_dynamic:
         logger.warning(
-            "Restored %d lane(s) from lanes.json but MAX_LANES=%d; "
+            "Restored %d dynamic lane(s) from lanes.json but MAX_LANES=%d "
+            "(%d static lane(s) already active); "
             "dropping all restored lanes and starting in zero-lane mode",
-            len(cfg.lanes), cfg.worker.max_lanes,
+            len(cfg.lanes), cfg.worker.max_lanes, len(static_lane_ids),
         )
         cfg.lanes = []
         save_lanes_state([])

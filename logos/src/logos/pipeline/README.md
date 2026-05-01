@@ -89,8 +89,8 @@ The Request Pipeline orchestrates the lifecycle of a request from entry to execu
 
 1.  **Request Arrives**: `main.py` receives the request and delegates to `RequestPipeline.process()`.
 2.  **Classification**: `ClassificationManager` ranks models based on policy and weights.
-3.  **Scheduling**: `UtilizationAwareScheduler` checks SDI for the top candidate.
-    *   If available, it reserves the slot (conceptually) and returns immediate success.
+3.  **Scheduling**: `SimpleScheduler` checks SDI for the top candidate.
+    *   If a worker reports `queue_waiting == 0`, the request is forwarded immediately.
 4.  **Execution**: `Executor` resolves the model's endpoint and API key from the DB and sends the request.
 5.  **Release**: Upon completion, `scheduler.release()` is called to free capacity and check for queued requests.
 
@@ -117,8 +117,7 @@ pipeline/
 ├── pipeline.py                 # Main RequestPipeline orchestrator
 ├── scheduler_interface.py      # Abstract scheduler interface & data models
 ├── base_scheduler.py          # Base scheduler with shared SDI/queue logic
-├── fcfs_scheduler.py          # First-Come-First-Served scheduler
-├── utilization_scheduler.py   # Utilization-aware scheduler (primary)
+├── simple_scheduler.py        # Production scheduler (trust vLLM queue signals)
 ├── executor.py                # Backend execution & API calling
 └── context_resolver.py        # Database resolution for models/providers
 ```
@@ -149,19 +148,13 @@ pipeline/
 - Provides helper methods for queue management and metrics collection
 - Anti-starvation logic for queued requests
 
-### `fcfs_scheduler.py` - FcfsScheduler
-**Simple FCFS implementation.** Selects first available model without utilization awareness:
-- Iterates through candidates in weight order
-- No queue management (blocks if no model available)
-- Useful for testing and baseline benchmarks
-
-### `utilization_scheduler.py` - UtilizationAwareScheduler
-**Production scheduler.** The brain of the operation:
-- **Availability Awareness**: Queries SDI to check VRAM, rate limits, and capacity
-- **Intelligent Selection**: Avoids overloaded models, respects parallel capacity
-- **Async Queuing**: Enqueues requests when all models busy, resumes when capacity frees
+### `simple_scheduler.py` - SimpleScheduler
+**Production scheduler.** Trusts vLLM's queue signals directly:
+- **Forward Immediately**: If any candidate worker reports `queue_waiting == 0`, the request is forwarded without local queuing
+- **Local Queuing**: Only queues locally when every candidate worker is itself queueing
+- **Async Queuing**: Enqueues requests as `asyncio.Future` objects; woken on release or SDI update
 - **Priority Management**: HIGH/NORMAL/LOW priority queues with anti-starvation
-- **Cold Start Detection**: Tracks model loading state to predict latency
+- **Model-only Queue Key**: Queue is keyed by `model_id` so queued requests can re-route across workers
 
 ### `executor.py` - Executor
 **Backend execution engine.** Performs the actual API calls:
