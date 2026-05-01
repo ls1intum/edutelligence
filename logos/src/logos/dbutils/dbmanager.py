@@ -562,8 +562,23 @@ class DBManager:
             logging.info("All migrations already applied")
             return
 
-        # Get migrations directory
-        migrations_dir = pathlib.Path(__file__).parent.parent.parent.parent / "db" / "migrations"
+        # Get migrations directory. The path differs between dev (running from a
+        # repo checkout) and the Docker image: the Dockerfile copies logos/src
+        # flat to /app/src but preserves the logos/ prefix for logos/db, so the
+        # files land at /app/logos/db/migrations rather than /app/db/migrations.
+        _here = pathlib.Path(__file__).resolve().parent
+        _candidates = [
+            _here.parent.parent.parent / "db" / "migrations",            # dev: <repo>/logos/db/migrations
+            _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker: /app/logos/db/migrations
+            pathlib.Path("./logos/db/migrations"),                       # CWD fallback
+        ]
+        migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
+        if not migrations_dir.exists():
+            logging.error(
+                "Migrations directory not found. Tried: %s",
+                ", ".join(str(p) for p in _candidates),
+            )
+            return
 
         if is_fresh_install:
             # Fresh install: just record all migrations without executing

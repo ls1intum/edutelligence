@@ -1008,17 +1008,10 @@ async def lifespan(app: FastAPI):
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
-    # Start Pipeline
-    await start_pipeline()
-
-    # Start gRPC server
-    global _grpc_server
-    _grpc_server = grpc.aio.server()
-    model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(_pipeline), _grpc_server)
-    _grpc_server.add_insecure_port("[::]:50051")
-    await _grpc_server.start()
-
-    # Auto-setup: create root user + API key on first startup
+    # Auto-setup + migrations must run BEFORE start_pipeline(), because the
+    # pipeline immediately queries the schema (e.g. get_all_deployments). If
+    # migrations ran after, an out-of-date schema crashes the lifespan and the
+    # migrator is never reached, producing a permanent crash loop.
     with DBManager() as db:
         db.is_root_initialized()
     if not DBManager.is_initialized():
@@ -1039,6 +1032,16 @@ async def lifespan(app: FastAPI):
         with DBManager() as db:
             logging.info("Checking for pending migrations...")
             db.run_migrations(is_fresh_install=False)
+
+    # Start Pipeline
+    await start_pipeline()
+
+    # Start gRPC server
+    global _grpc_server
+    _grpc_server = grpc.aio.server()
+    model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(_pipeline), _grpc_server)
+    _grpc_server.add_insecure_port("[::]:50051")
+    await _grpc_server.start()
 
     yield
 
