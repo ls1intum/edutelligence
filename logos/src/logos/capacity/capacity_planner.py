@@ -26,6 +26,8 @@ from logos.terminal_logging import (
     GREEN,
     RED,
     YELLOW,
+    format_bytes,
+    format_vram,
     format_state,
     lane_metric_float,
     lane_ttft_p95_seconds,
@@ -57,17 +59,17 @@ class CapacityPlanner:
     """
 
     # Idle tier thresholds (seconds of no activity)
-    IDLE_SLEEP_L1 = 300      # vLLM lane idle 5min → sleep level 1
-    IDLE_SLEEP_L2 = 600      # vLLM lane sleeping L1 for 10min → sleep level 2
+    IDLE_SLEEP_L1 = 300  # vLLM lane idle 5min → sleep level 1
+    IDLE_SLEEP_L2 = 600  # vLLM lane sleeping L1 for 10min → sleep level 2
     # Demand floors: minimum score to act at all (noise filter).
     # Applied only when VRAM is freely available and no eviction is required.
-    DEMAND_WAKE_FLOOR = 0.5    # one partial-demand signal is enough to wake
-    DEMAND_LOAD_FLOOR = 1.0    # one real request is enough to load on empty VRAM
+    DEMAND_WAKE_FLOOR = 0.5  # one partial-demand signal is enough to wake
+    DEMAND_LOAD_FLOOR = 1.0  # one real request is enough to load on empty VRAM
 
     # Competitive ratios: applied when eviction IS required.
     # target_effective_demand > max(eviction_set_demand) * RATIO to proceed.
-    WAKE_COMPETITIVE_RATIO = 1.2   # target must beat eviction set by 20%
-    LOAD_COMPETITIVE_RATIO = 1.5   # target must beat eviction set by 50%
+    WAKE_COMPETITIVE_RATIO = 1.2  # target must beat eviction set by 20%
+    LOAD_COMPETITIVE_RATIO = 1.5  # target must beat eviction set by 50%
     DRAIN_COMPETITIVE_RATIO = 2.0  # target must 2× outweigh victim (prevents flip-flop)
 
     # Queue depth contribution to effective demand at decision time.
@@ -78,9 +80,9 @@ class CapacityPlanner:
     DEMAND_LOAD_THRESHOLD = DEMAND_LOAD_FLOOR
 
     # Demand-preemptive drain: graceful swap of busy lanes for starving models
-    DRAIN_TIMEOUT_SECONDS = 60.0           # Max wait for active requests to finish
-    DRAIN_MIN_COLD_LOADED_SECONDS = 30.0   # Don't drain cold-loaded lanes for 30s
-    DRAIN_MIN_WOKEN_SECONDS = 8.0          # Don't drain woken lanes for 8s
+    DRAIN_TIMEOUT_SECONDS = 60.0  # Max wait for active requests to finish
+    DRAIN_MIN_COLD_LOADED_SECONDS = 30.0  # Don't drain cold-loaded lanes for 30s
+    DRAIN_MIN_WOKEN_SECONDS = 8.0  # Don't drain woken lanes for 8s
     DRAIN_DEMAND_SCORE_THRESHOLD = DRAIN_COMPETITIVE_RATIO  # backward-compat alias
 
     # GPU utilization tuning
@@ -90,7 +92,9 @@ class CapacityPlanner:
     GPU_CACHE_LOW = 40.0
 
     # VRAM safety margin
-    VRAM_SAFETY_MARGIN = 1.0  # no margin — calibrated profiles include KV, measurements are exact
+    VRAM_SAFETY_MARGIN = (
+        1.0  # no margin — calibrated profiles include KV, measurements are exact
+    )
     # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
     TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
 
@@ -162,7 +166,9 @@ class CapacityPlanner:
         self._vram_ledger = VRAMLedger()
 
         # Phase 2: KV cache pressure history and rebalance timing
-        self._kv_cache_pressure_history: dict[tuple[int, str], list[tuple[float, float]]] = {}
+        self._kv_cache_pressure_history: dict[
+            tuple[int, str], list[tuple[float, float]]
+        ] = {}
         # Initialize to now so the first rebalance waits the full interval
         # (prevents immediate sleep of freshly loaded lanes for KV resizing)
         self._last_kv_rebalance_time: float = time.time()
@@ -233,7 +239,9 @@ class CapacityPlanner:
             # Skip providers that haven't sent their first status yet —
             # we don't know what lanes are already loaded and acting on
             # stale/empty state can destroy existing lanes.
-            if self._registry and not self._registry.has_received_first_status(provider_id):
+            if self._registry and not self._registry.has_received_first_status(
+                provider_id
+            ):
                 logger.debug(
                     "Skipping provider %s: waiting for first status report after connect",
                     provider_id,
@@ -254,7 +262,9 @@ class CapacityPlanner:
             # worker VRAM instead of per-lane GPU VRAM, causing OOM on reconfigure.
             # Re-enable after the per-GPU fix is verified in production.
             # all_actions.extend(self._compute_fleet_kv_allocation(provider_id, lanes))
-            all_actions.extend(self._compute_preemptive_sleep_actions(provider_id, lanes))
+            all_actions.extend(
+                self._compute_preemptive_sleep_actions(provider_id, lanes)
+            )
             # Execute any deferred KV reconfigs for lanes that have gone idle
             # all_actions.extend(self._flush_deferred_kv_reconfigs(provider_id, lanes))
 
@@ -273,7 +283,8 @@ class CapacityPlanner:
             except Exception:
                 logger.exception(
                     "Failed to execute capacity action: %s on lane %s",
-                    action.action, action.lane_id,
+                    action.action,
+                    action.lane_id,
                 )
 
         prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
@@ -289,7 +300,9 @@ class CapacityPlanner:
             snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
             if snap is None:
                 name = self._facade.get_provider_name(pid) or "?"
-                lines.append(f"{paint('⊘', RED)} provider={paint(name, BOLD)} {paint('offline', DIM)}")
+                lines.append(
+                    f"{paint('⊘', RED)} provider={paint(name, BOLD)} {paint('offline', DIM)}"
+                )
                 continue
 
             connected += 1
@@ -306,24 +319,35 @@ class CapacityPlanner:
                 if isinstance(lane, dict):
                     rs = str(lane.get("runtime_state") or "unknown")
                     state_counts[rs] = state_counts.get(rs, 0) + 1
-            used_pct = ((total_vram - free_vram) / total_vram * 100) if total_vram > 0 else 0
             heartbeat_age_s = self._heartbeat_age_seconds(snap.get("last_heartbeat"))
-            worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
+            worker_color = (
+                GREEN
+                if heartbeat_age_s <= 15
+                else YELLOW if heartbeat_age_s <= 30 else RED
+            )
 
             lines.append(
                 f"{paint('●', worker_color)} provider={paint(str(worker_id), BOLD)} "
                 f"status={paint('active', worker_color)} hb={heartbeat_age_s:.0f}s "
-                f"vram={paint(f'{total_vram - free_vram:.0f}/{total_vram:.0f}MB', BOLD)} ({used_pct:.0f}%)"
+                f"vram={paint(format_vram(total_vram - free_vram, total_vram), BOLD)}"
             )
             capabilities_text = ", ".join(caps) if caps else "none"
-            lines.extend(wrap_plain(f"capabilities: {capabilities_text}", indent="    "))
+            lines.extend(
+                wrap_plain(f"capabilities: {capabilities_text}", indent="    ")
+            )
 
             lane_count = int(cap.get("lane_count", len(lanes_list)) or len(lanes_list))
             loaded_count = int(cap.get("loaded_lane_count", 0) or 0)
             sleeping_count = int(cap.get("sleeping_lane_count", 0) or 0)
-            active_requests = int(cap.get("active_requests", 0) or 0)
+            running_sum = sum(
+                float(lane.get("backend_metrics", {}).get("requests_running") or 0)
+                for lane in (lanes_list if isinstance(lanes_list, list) else [])
+                if isinstance(lane, dict)
+            )
+            max_lanes = self._get_max_lanes(pid)
+            max_lanes_str = f" max_lanes={max_lanes}" if max_lanes > 0 else ""
             lines.append(
-                f"    lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} active_requests={active_requests}"
+                f"    lanes={lane_count} loaded={loaded_count} sleeping={sleeping_count} running={running_sum:.0f}{max_lanes_str}"
             )
 
             if not isinstance(lanes_list, list) or not lanes_list:
@@ -335,9 +359,7 @@ class CapacityPlanner:
                     continue
                 lines.extend(self._format_runtime_lane_lines(lane, indent="    "))
 
-        lines.append(
-            paint(f"Workers connected: {connected}/{len(provider_ids)}", DIM)
-        )
+        lines.append(paint(f"Workers connected: {connected}/{len(provider_ids)}", DIM))
         logger.info(
             render_section(
                 f"Planner Cycle {self._cycle_count}",
@@ -350,8 +372,18 @@ class CapacityPlanner:
         prom.WORKER_NODES_CONNECTED.set(connected)
         prom.WORKER_VRAM_USED_MB.set(total_used_vram)
         prom.WORKER_VRAM_FREE_MB.set(total_free_vram)
-        for state in ("cold", "starting", "loaded", "running", "sleeping", "stopped", "error"):
-            prom.WORKER_LANES_BY_STATE.labels(state=state).set(state_counts.get(state, 0))
+        for state in (
+            "cold",
+            "starting",
+            "loaded",
+            "running",
+            "sleeping",
+            "stopped",
+            "error",
+        ):
+            prom.WORKER_LANES_BY_STATE.labels(state=state).set(
+                state_counts.get(state, 0)
+            )
 
     @staticmethod
     def _heartbeat_age_seconds(last_heartbeat: Any) -> float:
@@ -381,23 +413,31 @@ class CapacityPlanner:
         }
         return (order.get(runtime_state, 99), str(lane.get("lane_id") or ""))
 
-    def _format_runtime_lane_lines(self, lane: dict[str, Any], *, indent: str) -> list[str]:
+    def _format_runtime_lane_lines(
+        self, lane: dict[str, Any], *, indent: str
+    ) -> list[str]:
         """Render a single runtime lane into concise, wrapped log lines."""
         lane_id = str(lane.get("lane_id") or "?")
         model = str(lane.get("model") or "?")
         runtime_state = str(lane.get("runtime_state") or "?")
         sleep_state = str(lane.get("sleep_state") or "?")
-        active_requests = int(lane.get("active_requests", 0) or 0)
         effective_vram_mb = float(lane.get("effective_vram_mb", 0.0) or 0.0)
-        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
-        lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+        backend_metrics = (
+            lane.get("backend_metrics")
+            if isinstance(lane.get("backend_metrics"), dict)
+            else {}
+        )
+        lane_config = (
+            lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
+        )
 
         queue_waiting = lane_metric_float(backend_metrics.get("queue_waiting"))
         requests_running = lane_metric_float(backend_metrics.get("requests_running"))
-        if requests_running is None:
-            requests_running = float(active_requests)
+        # No fallback to active_requests — render "--" when the scrape is missing.
         cache_pressure = lane_metric_float(
-            backend_metrics.get("gpu_cache_usage_percent", backend_metrics.get("gpu_cache_usage_perc"))
+            backend_metrics.get(
+                "gpu_cache_usage_percent", backend_metrics.get("gpu_cache_usage_perc")
+            )
         )
         ttft_p95 = lane_ttft_p95_seconds(backend_metrics)
         prefix_hit = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
@@ -408,24 +448,47 @@ class CapacityPlanner:
             or "-"
         )
 
-        queue_text = f"{queue_waiting:.1f}" if queue_waiting is not None else "--"
-        running_text = f"{requests_running:.1f}" if requests_running is not None else "--"
+        # Resolve the parallel cap reported by the lane: vLLM lanes report
+        # num_parallel=0 at runtime (continuous batching), so fall back to the
+        # saved lane_config value. Mirrors _get_runtime_parallel_capacity.
+        cap_hint = lane.get("num_parallel") or lane_config.get("num_parallel") or 0
+        try:
+            cap_int = int(cap_hint)
+        except (TypeError, ValueError):
+            cap_int = 0
+
+        running_int = int(requests_running) if requests_running is not None else None
+        queue_int = int(queue_waiting) if queue_waiting is not None else 0
+
+        running_head = paint(str(running_int), BOLD) if running_int is not None else "--"
+        if cap_int > 0:
+            running_text = f"{running_head} / {cap_int}"
+        else:
+            running_text = running_head
+        if queue_int > 0:
+            running_text = f"{running_text} ({paint(str(queue_int), BOLD)} queued)"
         cache_text = f"{cache_pressure:.0f}%" if cache_pressure is not None else "--"
         ttft_text = f"{ttft_p95:.2f}s" if ttft_p95 is not None else "--"
         prefix_text = f"{prefix_hit:.0%}" if prefix_hit is not None else "--"
 
-        lines = [f"{indent}{paint('▸', GREEN if runtime_state in {'loaded', 'running'} else YELLOW)} {lane_id}"]
+        lines = [
+            f"{indent}{paint('▸', GREEN if runtime_state in {'loaded', 'running'} else YELLOW)} {lane_id}"
+        ]
         lines.extend(wrap_plain(f"model: {model}", indent=f"{indent}  "))
         lines.append(
             f"{indent}  state={format_state(runtime_state, sleep_state)} "
-            f"mem={effective_vram_mb:.0f}MB gpus={gpu_devices}"
+            f"mem={format_bytes(effective_vram_mb)} gpus={gpu_devices}"
         )
         demand_score = self._demand.get_score(model)
         demand_text = f"{demand_score:.2f}" if demand_score > 0 else "0"
         lines.append(
-            f"{indent}  active={active_requests} run={running_text} "
-            f"queue={queue_text} kv_cache={cache_text} ttft_p95={ttft_text} "
+            f"{indent}  running={running_text} "
+            f"kv_cache={cache_text} ttft_p95={ttft_text} "
             f"prefix_hit={prefix_text} demand={demand_text}"
+        )
+        l1, l5, l15 = self._demand.get_loadavg(model)
+        lines.append(
+            f"{indent}  load={l1:.1f} / {l5:.1f} / {l15:.1f} req/min  (1m / 5m / 15m)"
         )
         return lines
 
@@ -442,7 +505,9 @@ class CapacityPlanner:
         }
         for action in actions:
             color = action_colors.get(action.action, CYAN)
-            pname = self._facade.get_provider_name(action.provider_id) or str(action.provider_id)
+            pname = self._facade.get_provider_name(action.provider_id) or str(
+                action.provider_id
+            )
             lines.append(
                 f"{paint('→', color)} {paint(action.action, color, BOLD)} "
                 f"provider={pname} lane={action.lane_id}"
@@ -476,14 +541,18 @@ class CapacityPlanner:
             logger.info(
                 "Deferring lane preparation for provider=%s model=%s: "
                 "waiting for first status report after connect",
-                provider_id, model_name,
+                provider_id,
+                model_name,
             )
             return None
 
         target = self._pick_request_target_lane(provider_id, model_name)
         if target is not None and target.runtime_state not in {"sleeping", "cold"}:
             return await self._prepare_existing_lane(
-                provider_id, model_name, target, timeout_seconds,
+                provider_id,
+                model_name,
+                target,
+                timeout_seconds,
             )
 
         async with self._model_prepare_lock(provider_id, model_name):
@@ -493,12 +562,17 @@ class CapacityPlanner:
 
             if target is not None:
                 return await self._prepare_existing_lane(
-                    provider_id, model_name, target, timeout_seconds,
+                    provider_id,
+                    model_name,
+                    target,
+                    timeout_seconds,
                 )
 
             # No lane exists — attempt request-time cold load
             return await self._cold_load_for_request(
-                provider_id, model_name, timeout_seconds,
+                provider_id,
+                model_name,
+                timeout_seconds,
             )
 
     async def _prepare_existing_lane(
@@ -540,7 +614,9 @@ class CapacityPlanner:
                         model_name=model_name,
                         reason="Request-time wake for selected sleeping lane",
                     ),
-                    timeout_seconds=max(timeout_seconds, self.REQUEST_WAKE_TIMEOUT_SECONDS),
+                    timeout_seconds=max(
+                        timeout_seconds, self.REQUEST_WAKE_TIMEOUT_SECONDS
+                    ),
                 )
             if not woke:
                 return None
@@ -566,8 +642,32 @@ class CapacityPlanner:
         profile = self._safe_get_profiles(provider_id).get(model_name)
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
-            logger.debug("No capacity info for provider %s, cannot cold-load %s", self._facade.get_provider_name(provider_id) or provider_id, model_name)
+            logger.debug(
+                "No capacity info for provider %s, cannot cold-load %s",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                model_name,
+            )
             return None
+
+        # ── MAX_LANES gate ────────────────────────────────────────────────
+        # If the worker enforces a lane limit and all slots are occupied,
+        # evict the lowest-demand idle/sleeping lane to free a slot before
+        # attempting the cold load.
+        if not self._provider_has_lane_capacity(provider_id):
+            evicted = await self._evict_lane_for_capacity(
+                provider_id,
+                model_name,
+                timeout_seconds,
+            )
+            if not evicted:
+                logger.info(
+                    "Cannot cold-load %s on provider %s: MAX_LANES=%d reached "
+                    "and no idle lane available to evict",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    self._get_max_lanes(provider_id),
+                )
+                return None
 
         # No early feasibility bail-out here — the reclaim loop below will
         # sleep/stop idle lanes to free VRAM.  The feasibility check against
@@ -581,7 +681,9 @@ class CapacityPlanner:
             provider_id=provider_id,
             lane_id=lane_id,
             model_name=model_name,
-            params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
+            params=self._build_load_params(
+                model_name, lane_id, profile, capacity, provider_id
+            ),
             reason="Request-time cold load",
         )
 
@@ -593,7 +695,10 @@ class CapacityPlanner:
             "Cold-load VRAM check for %s on provider %s: "
             "estimated=%.0f MB, available=%.0f MB, "
             "base_residency=%s MB (%s), engine=%s, total_vram=%s",
-            model_name, provider_id, estimated, available,
+            model_name,
+            provider_id,
+            estimated,
+            available,
             getattr(profile, "base_residency_mb", None) if profile else None,
             residency_src or "no-profile",
             getattr(profile, "engine", None),
@@ -618,10 +723,16 @@ class CapacityPlanner:
                 # free. Check by taking the tp-th largest free value — if that
                 # GPU doesn't have enough room, the load will OOM.
                 tp = 1
-                if profile and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+                if (
+                    profile
+                    and profile.tensor_parallel_size
+                    and int(profile.tensor_parallel_size) > 1
+                ):
                     tp = int(profile.tensor_parallel_size)
                 elif profile is not None and capacity is not None:
-                    inferred = self._infer_tensor_parallel(profile, capacity, provider_id)
+                    inferred = self._infer_tensor_parallel(
+                        profile, capacity, provider_id
+                    )
                     if inferred and inferred > 1:
                         tp = inferred
                 per_gpu_estimated = estimated / tp
@@ -634,8 +745,13 @@ class CapacityPlanner:
                         "Cold-load per-GPU check for %s on provider %s: "
                         "%d-th best GPU has %.0f MB free, need %.0f MB per GPU "
                         "(estimated=%.0f MB / tp=%d) — triggering reclaim",
-                        model_name, provider_id, tp, nth_gpu_free,
-                        per_gpu_estimated * self.VRAM_SAFETY_MARGIN, estimated, tp,
+                        model_name,
+                        provider_id,
+                        tp,
+                        nth_gpu_free,
+                        per_gpu_estimated * self.VRAM_SAFETY_MARGIN,
+                        estimated,
+                        tp,
                     )
 
         if needs_reclaim:
@@ -663,14 +779,21 @@ class CapacityPlanner:
             if not ok:
                 logger.info(
                     "Cannot reclaim enough VRAM for cold load of %s on provider %s",
-                    model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
                 )
                 return None
 
-        logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id)
+        logger.info(
+            "Cold-loading %s on provider %s (lane=%s)",
+            model_name,
+            self._facade.get_provider_name(provider_id) or provider_id,
+            lane_id,
+        )
         async with self._lane_lock(provider_id, lane_id):
             loaded = await self._execute_action_with_confirmation(
-                load_action, timeout_seconds=max(timeout_seconds, 300.0),
+                load_action,
+                timeout_seconds=max(timeout_seconds, 300.0),
             )
         if not loaded:
             return None
@@ -680,7 +803,9 @@ class CapacityPlanner:
         except Exception:
             logger.debug(
                 "Failed to select cold-loaded lane for provider=%s model=%s",
-                provider_id, model_name, exc_info=True,
+                provider_id,
+                model_name,
+                exc_info=True,
             )
             return None
 
@@ -765,7 +890,7 @@ class CapacityPlanner:
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
             self._lane_loaded_at[key] = confirmed_at
-            self._lane_was_cold_loaded[key] = (action.action == "load")
+            self._lane_was_cold_loaded[key] = action.action == "load"
             if action.action == "load" and self._is_preemptive_load_action(action):
                 self._preemptive_sleep_ready.add(key)
             else:
@@ -779,11 +904,15 @@ class CapacityPlanner:
 
     @classmethod
     def _is_preemptive_load_action(cls, action: CapacityPlanAction) -> bool:
-        return action.action == "load" and action.reason.startswith(cls.PREEMPTIVE_LOAD_REASON)
+        return action.action == "load" and action.reason.startswith(
+            cls.PREEMPTIVE_LOAD_REASON
+        )
 
     @classmethod
     def _is_preemptive_sleep_action(cls, action: CapacityPlanAction) -> bool:
-        return action.action == "sleep_l1" and action.reason.startswith(cls.PREEMPTIVE_SLEEP_REASON)
+        return action.action == "sleep_l1" and action.reason.startswith(
+            cls.PREEMPTIVE_SLEEP_REASON
+        )
 
     def _lane_is_in_load_cooldown(
         self,
@@ -807,9 +936,14 @@ class CapacityPlanner:
             lanes = ((snap or {}).get("runtime") or {}).get("lanes") or []
             if isinstance(lanes, list):
                 for lane in lanes:
-                    if isinstance(lane, dict) and str(lane.get("lane_id") or "") == lane_id:
+                    if (
+                        isinstance(lane, dict)
+                        and str(lane.get("lane_id") or "") == lane_id
+                    ):
                         return True
-        return any(lane.lane_id == lane_id for lane in self._safe_get_lanes(provider_id))
+        return any(
+            lane.lane_id == lane_id for lane in self._safe_get_lanes(provider_id)
+        )
 
     # ------------------------------------------------------------------
     # GPU-aware eviction helpers
@@ -860,7 +994,9 @@ class CapacityPlanner:
                 if total_mb > 0:
                     free_mb = max(total_mb - used_mb, 0.0)
             free_mb = self._vram_ledger.get_gpu_effective_available_mb(
-                provider_id, gid, free_mb,
+                provider_id,
+                gid,
+                free_mb,
             )
             result[gid] = free_mb
         return result
@@ -896,6 +1032,7 @@ class CapacityPlanner:
 
         class _Cand:
             __slots__ = ("lane", "action", "eff_demand", "freed_per_gpu")
+
             def __init__(self, lane, action, eff_demand, freed_per_gpu):
                 self.lane = lane
                 self.action = action
@@ -924,12 +1061,18 @@ class CapacityPlanner:
             tp = max(len(lane_gpus), 1)
 
             # Prefer sleep (less disruptive); fall back to stop
-            if lane.is_vllm and lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake":
+            if (
+                lane.is_vllm
+                and lane.runtime_state in ("loaded", "running")
+                and lane.sleep_state == "awake"
+            ):
                 action = "sleep_l1"
                 current_mb = float(lane.effective_vram_mb or 0.0)
                 if current_mb <= 0 and profile:
                     current_mb = self._estimate_model_loaded_vram(profile)
-                residual_mb = float(profile.sleeping_residual_mb or 0.0) if profile else 0.0
+                residual_mb = (
+                    float(profile.sleeping_residual_mb or 0.0) if profile else 0.0
+                )
                 freed_total = max(current_mb - residual_mb, 0.0)
             elif lane.runtime_state in ("sleeping",) and lane.sleep_state == "sleeping":
                 action = "stop"
@@ -940,7 +1083,9 @@ class CapacityPlanner:
                 # the CUDA allocator keeps model weights in its pool, invisible to
                 # per-process queries.  Use profile base_residency as a floor.
                 if lane.is_vllm and profile is not None:
-                    base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
+                    base_residency = float(
+                        getattr(profile, "base_residency_mb", 0) or 0
+                    )
                     if base_residency > residual_mb:
                         residual_mb = base_residency
                 freed_total = residual_mb
@@ -966,12 +1111,16 @@ class CapacityPlanner:
             "Eviction candidates for provider=%s gpus=%s deficit=%s: [%s]",
             provider_id,
             sorted(required_gpus) if required_gpus else "any",
-            {g: f"{d:.0f}MB" for g, d in per_gpu_deficit.items()},
-            ", ".join(
-                f"{c.lane.lane_id}(eff={c.eff_demand:.2f}, action={c.action}, "
-                f"free={sum(c.freed_per_gpu.values()):.0f}MB)"
-                for c in candidates
-            ) if candidates else "none",
+            {g: format_bytes(d) for g, d in per_gpu_deficit.items()},
+            (
+                ", ".join(
+                    f"{c.lane.lane_id}(eff={c.eff_demand:.2f}, action={c.action}, "
+                    f"free={format_bytes(sum(c.freed_per_gpu.values()))})"
+                    for c in candidates
+                )
+                if candidates
+                else "none"
+            ),
         )
 
         # Greedy covering: pick candidates until all per-GPU deficits are met
@@ -982,10 +1131,7 @@ class CapacityPlanner:
             if all(v <= 0 for v in remaining.values()):
                 break
             # Only include if it helps at least one still-deficient GPU
-            useful = any(
-                remaining.get(g, 0) > 0
-                for g in cand.freed_per_gpu
-            )
+            useful = any(remaining.get(g, 0) > 0 for g in cand.freed_per_gpu)
             if not useful:
                 continue
             chosen.append((cand.lane, cand.action, cand.eff_demand))
@@ -997,7 +1143,9 @@ class CapacityPlanner:
             return chosen
         logger.info(
             "Eviction set INSUFFICIENT for provider=%s: remaining deficit=%s after %d candidates",
-            provider_id, {g: f"{d:.0f}MB" for g, d in remaining.items() if d > 0}, len(chosen),
+            provider_id,
+            {g: format_bytes(d) for g, d in remaining.items() if d > 0},
+            len(chosen),
         )
         return None  # couldn't cover the deficit
 
@@ -1029,7 +1177,11 @@ class CapacityPlanner:
             if deficit <= 0:
                 return frozenset(), []
             eviction_set = self._find_eviction_set(
-                provider_id, frozenset(), {}, lanes, profiles,
+                provider_id,
+                frozenset(),
+                {},
+                lanes,
+                profiles,
             )
             # Can't do proper per-GPU accounting; return aggregate result
             if eviction_set is None:
@@ -1040,7 +1192,9 @@ class CapacityPlanner:
         if len(all_gpu_ids) < tp:
             return None  # Not enough GPUs
 
-        best: Optional[tuple[frozenset[int], list, float]] = None  # (gpus, eviction, max_score)
+        best: Optional[tuple[frozenset[int], list, float]] = (
+            None  # (gpus, eviction, max_score)
+        )
 
         for gpu_combo in combinations(all_gpu_ids, tp):
             gpu_set = frozenset(gpu_combo)
@@ -1052,7 +1206,11 @@ class CapacityPlanner:
                     per_gpu_deficit[g] = deficit
 
             eviction_set = self._find_eviction_set(
-                provider_id, gpu_set, per_gpu_deficit, lanes, profiles,
+                provider_id,
+                gpu_set,
+                per_gpu_deficit,
+                lanes,
+                profiles,
             )
             if eviction_set is None:
                 continue  # Can't cover this GPU combo
@@ -1076,7 +1234,9 @@ class CapacityPlanner:
                 result.add(int(part))
         return tuple(sorted(result))
 
-    def _update_idle_tracking(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
+    def _update_idle_tracking(
+        self, provider_id: int, lanes: List[LaneSchedulerSignals]
+    ) -> None:
         """Track idle durations per lane."""
         now = time.time()
         active_keys = set()
@@ -1085,7 +1245,9 @@ class CapacityPlanner:
             active_keys.add(key)
             is_active = lane.active_requests > 0 or lane.queue_waiting > 0
             is_sleeping = lane.sleep_state == "sleeping"
-            was_sleeping = key in self._lane_sleep_since or self._lane_sleep_level.get(key, 0) > 0
+            was_sleeping = (
+                key in self._lane_sleep_since or self._lane_sleep_level.get(key, 0) > 0
+            )
 
             if is_active:
                 self._lane_idle_since[key] = now
@@ -1115,7 +1277,6 @@ class CapacityPlanner:
         for k in stale:
             self._clear_lane_tracking(k)
 
-
     def _compute_idle_actions(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
     ) -> List[CapacityPlanAction]:
@@ -1131,8 +1292,7 @@ class CapacityPlanner:
         # Never sleep the only usable lane on a worker — it would leave
         # the worker with zero serving capacity.
         active_lanes = [
-            l for l in lanes
-            if l.runtime_state not in ("stopped", "error", "cold")
+            l for l in lanes if l.runtime_state not in ("stopped", "error", "cold")
         ]
         if len(active_lanes) <= 1:
             if active_lanes:
@@ -1154,8 +1314,13 @@ class CapacityPlanner:
             if idle_seconds is not None or sleep_seconds is not None:
                 logger.info(
                     "Idle check lane=%s model=%s state=%s/%s idle=%.0fs sleep=%.0fs sleep_level=%d",
-                    lane.lane_id, lane.model_name, lane.runtime_state, lane.sleep_state,
-                    idle_seconds or 0.0, sleep_seconds or 0.0, sleep_level,
+                    lane.lane_id,
+                    lane.model_name,
+                    lane.runtime_state,
+                    lane.sleep_state,
+                    idle_seconds or 0.0,
+                    sleep_seconds or 0.0,
+                    sleep_level,
                 )
 
             # Skip lanes that are already stopped/error
@@ -1174,14 +1339,16 @@ class CapacityPlanner:
                 and sleep_seconds is not None
                 and sleep_seconds >= self.IDLE_SLEEP_L2
             ):
-                actions.append(CapacityPlanAction(
-                    action="sleep_l2",
-                    provider_id=provider_id,
-                    lane_id=lane.lane_id,
-                    model_name=lane.model_name,
-                    params={"level": 2},
-                    reason=f"Sleeping L1 for {sleep_seconds:.0f}s, deepening to L2",
-                ))
+                actions.append(
+                    CapacityPlanAction(
+                        action="sleep_l2",
+                        provider_id=provider_id,
+                        lane_id=lane.lane_id,
+                        model_name=lane.model_name,
+                        params={"level": 2},
+                        reason=f"Sleeping L1 for {sleep_seconds:.0f}s, deepening to L2",
+                    )
+                )
                 continue
 
             # Sleep L1 after 5 minutes idle (awake or unknown state, no active requests)
@@ -1193,14 +1360,16 @@ class CapacityPlanner:
                 and idle_seconds is not None
                 and idle_seconds >= self.IDLE_SLEEP_L1
             ):
-                actions.append(CapacityPlanAction(
-                    action="sleep_l1",
-                    provider_id=provider_id,
-                    lane_id=lane.lane_id,
-                    model_name=lane.model_name,
-                    params={"level": 1},
-                    reason=f"Idle for {idle_seconds:.0f}s, sleeping L1",
-                ))
+                actions.append(
+                    CapacityPlanAction(
+                        action="sleep_l1",
+                        provider_id=provider_id,
+                        lane_id=lane.lane_id,
+                        model_name=lane.model_name,
+                        params={"level": 1},
+                        reason=f"Idle for {idle_seconds:.0f}s, sleeping L1",
+                    )
+                )
 
         return actions
 
@@ -1252,7 +1421,8 @@ class CapacityPlanner:
         """
         ranked = self._demand.get_ranked_models()
         other_demand = [
-            (name, score) for name, score in ranked
+            (name, score)
+            for name, score in ranked
             if name != exclude_model and score > 0
         ]
         if not other_demand:
@@ -1273,7 +1443,10 @@ class CapacityPlanner:
         if capacity is not None:
             total = float(capacity.total_vram_mb)
             available = float(capacity.available_vram_mb)
-            if total > 0 and available / total < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
+            if (
+                total > 0
+                and available / total < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO
+            ):
                 return True
 
         return False
@@ -1340,14 +1513,17 @@ class CapacityPlanner:
             eff = self._effective_demand(model_name)
             logger.info(
                 "Demand eval model=%s score=%.2f eff=%.2f caps=%s lanes=%d",
-                model_name, score, eff,
+                model_name,
+                score,
+                eff,
                 "yes" if (not capabilities or model_name in capabilities) else "NO-cap",
                 len(model_lanes),
             )
 
             # ── WAKE: sleeping lane exists ────────────────────────────────────
             sleeping_lanes = [
-                l for l in model_lanes
+                l
+                for l in model_lanes
                 if l.sleep_state == "sleeping"
                 and not self._lane_is_in_wake_failure_cooldown(provider_id, l.lane_id)
             ]
@@ -1358,8 +1534,12 @@ class CapacityPlanner:
                 # Per-GPU deficit on the GPUs the sleeping lane occupies
                 target_gpus = frozenset(self._parse_gpu_device_ids(target.gpu_devices))
                 tp = max(len(target_gpus), 1)
-                loaded_mb = self._estimate_model_loaded_vram(profile) if profile else 4096.0
-                residual_mb = float(profile.sleeping_residual_mb or 0.0) if profile else 0.0
+                loaded_mb = (
+                    self._estimate_model_loaded_vram(profile) if profile else 4096.0
+                )
+                residual_mb = (
+                    float(profile.sleeping_residual_mb or 0.0) if profile else 0.0
+                )
                 wake_cost_per_gpu = max(loaded_mb - residual_mb, 0.0) / tp
 
                 per_gpu_free = self._get_per_gpu_free(provider_id)
@@ -1367,43 +1547,63 @@ class CapacityPlanner:
                 if target_gpus and per_gpu_free:
                     for g in target_gpus:
                         free = per_gpu_free.get(g, 0.0)
-                        deficit = max(0.0, wake_cost_per_gpu * self.VRAM_SAFETY_MARGIN - free)
+                        deficit = max(
+                            0.0, wake_cost_per_gpu * self.VRAM_SAFETY_MARGIN - free
+                        )
                         if deficit > 0:
                             per_gpu_deficit[g] = deficit
                 else:
                     # No per-GPU info: fall back to aggregate
                     avail = float(capacity.available_vram_mb) if capacity else 0.0
-                    deficit = max(0.0, (loaded_mb - residual_mb) * self.VRAM_SAFETY_MARGIN - avail)
+                    deficit = max(
+                        0.0, (loaded_mb - residual_mb) * self.VRAM_SAFETY_MARGIN - avail
+                    )
                     if deficit > 0:
                         per_gpu_deficit[-1] = deficit  # sentinel for aggregate
 
                 logger.info(
                     "Wake candidate model=%s lane=%s gpus=%s loaded_mb=%.0f residual_mb=%.0f "
                     "wake_cost_per_gpu=%.0f deficit=%s eviction_needed=%s",
-                    model_name, target.lane_id, target.gpu_devices,
-                    loaded_mb, residual_mb, wake_cost_per_gpu,
-                    {g: f"{d:.0f}MB" for g, d in per_gpu_deficit.items()} if per_gpu_deficit else "none",
+                    model_name,
+                    target.lane_id,
+                    target.gpu_devices,
+                    loaded_mb,
+                    residual_mb,
+                    wake_cost_per_gpu,
+                    (
+                        {g: format_bytes(d) for g, d in per_gpu_deficit.items()}
+                        if per_gpu_deficit
+                        else "none"
+                    ),
                     "yes" if per_gpu_deficit else "no",
                 )
 
                 # Remove already-claimed victims from eviction candidates
                 available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
                 eviction_set = self._find_eviction_set(
-                    provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
+                    provider_id,
+                    target_gpus,
+                    per_gpu_deficit,
+                    available_lanes,
+                    profiles,
                 )
 
                 if eviction_set is None:
-                    logger.debug("Skipping wake of %s: cannot free enough GPU memory", model_name)
+                    logger.debug(
+                        "Skipping wake of %s: cannot free enough GPU memory", model_name
+                    )
                 elif not eviction_set:
                     # Plenty of VRAM — act on floor score
                     if eff >= self.DEMAND_WAKE_FLOOR:
-                        actions.append(CapacityPlanAction(
-                            action="wake",
-                            provider_id=provider_id,
-                            lane_id=target.lane_id,
-                            model_name=model_name,
-                            reason=f"Demand score={score:.2f}, eff={eff:.2f} ≥ floor={self.DEMAND_WAKE_FLOOR}; VRAM free",
-                        ))
+                        actions.append(
+                            CapacityPlanAction(
+                                action="wake",
+                                provider_id=provider_id,
+                                lane_id=target.lane_id,
+                                model_name=model_name,
+                                reason=f"Demand score={score:.2f}, eff={eff:.2f} ≥ floor={self.DEMAND_WAKE_FLOOR}; VRAM free",
+                            )
+                        )
                         planned_models.add(model_name)
                 else:
                     # Contention — target must outweigh the eviction set
@@ -1413,31 +1613,38 @@ class CapacityPlanner:
                             if vlane.lane_id in claimed_victims:
                                 continue
                             claimed_victims.add(vlane.lane_id)
-                            actions.append(CapacityPlanAction(
-                                action=vaction,
+                            actions.append(
+                                CapacityPlanAction(
+                                    action=vaction,
+                                    provider_id=provider_id,
+                                    lane_id=vlane.lane_id,
+                                    model_name=vlane.model_name,
+                                    reason=(
+                                        f"Evicted for {model_name} wake "
+                                        f"(target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.WAKE_COMPETITIVE_RATIO})"
+                                    ),
+                                )
+                            )
+                        actions.append(
+                            CapacityPlanAction(
+                                action="wake",
                                 provider_id=provider_id,
-                                lane_id=vlane.lane_id,
-                                model_name=vlane.model_name,
+                                lane_id=target.lane_id,
+                                model_name=model_name,
                                 reason=(
-                                    f"Evicted for {model_name} wake "
-                                    f"(target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.WAKE_COMPETITIVE_RATIO})"
+                                    f"Demand eff={eff:.2f} > eviction_max={max_victim_score:.2f}"
+                                    f"×{self.WAKE_COMPETITIVE_RATIO} (competitive wake)"
                                 ),
-                            ))
-                        actions.append(CapacityPlanAction(
-                            action="wake",
-                            provider_id=provider_id,
-                            lane_id=target.lane_id,
-                            model_name=model_name,
-                            reason=(
-                                f"Demand eff={eff:.2f} > eviction_max={max_victim_score:.2f}"
-                                f"×{self.WAKE_COMPETITIVE_RATIO} (competitive wake)"
-                            ),
-                        ))
+                            )
+                        )
                         planned_models.add(model_name)
                     else:
                         logger.debug(
                             "Skipping wake of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f",
-                            model_name, eff, max_victim_score, self.WAKE_COMPETITIVE_RATIO,
+                            model_name,
+                            eff,
+                            max_victim_score,
+                            self.WAKE_COMPETITIVE_RATIO,
                         )
                 continue  # sleeping lane found; don't also try cold load
 
@@ -1445,53 +1652,97 @@ class CapacityPlanner:
             if model_lanes:
                 continue  # has an active (non-sleeping) lane
 
-            if self._would_evict_cooled_lane(provider_id, model_name, profiles, capacity):
+            # Skip cold loads when MAX_LANES is reached — the background
+            # planner cycle cannot orchestrate the stop-then-load sequence
+            # atomically.  Request-time cold loads handle this via
+            # _evict_lane_for_capacity.
+            if not self._provider_has_lane_capacity(provider_id):
+                logger.info(
+                    "Skipping planner load of %s on provider %s: "
+                    "MAX_LANES=%d reached (lanes=%d)",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    self._get_max_lanes(provider_id),
+                    len(lanes),
+                )
+                continue
+
+            if self._would_evict_cooled_lane(
+                provider_id, model_name, profiles, capacity
+            ):
                 logger.debug(
                     "Skipping planner load of %s: would evict a recently loaded lane (cooldown=%.0fs)",
-                    model_name, self._load_cooldown_seconds,
+                    model_name,
+                    self._load_cooldown_seconds,
                 )
                 continue
 
             profile = profiles.get(model_name)
             tp = 1
-            if profile and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+            if (
+                profile
+                and profile.tensor_parallel_size
+                and int(profile.tensor_parallel_size) > 1
+            ):
                 tp = int(profile.tensor_parallel_size)
             load_cost = self._estimate_model_loaded_vram(profile) if profile else 4096.0
             if tp > 1:
-                load_cost *= (1.0 + self.TP_OVERHEAD_RATIO)
+                load_cost *= 1.0 + self.TP_OVERHEAD_RATIO
 
             available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
             placement = self._pick_cold_load_placement(
-                provider_id, load_cost, tp, available_lanes, profiles,
+                provider_id,
+                load_cost,
+                tp,
+                available_lanes,
+                profiles,
             )
 
             if placement is None:
-                logger.debug("Skipping load of %s: cannot find feasible GPU placement", model_name)
+                logger.debug(
+                    "Skipping load of %s: cannot find feasible GPU placement",
+                    model_name,
+                )
                 continue
 
             _, eviction_set = placement
             logger.info(
                 "Load candidate model=%s tp=%d load_cost=%.0fMB placement=%s eviction_needed=%s",
-                model_name, tp, load_cost,
+                model_name,
+                tp,
+                load_cost,
                 "feasible" if placement is not None else "INFEASIBLE",
-                ("yes: " + ", ".join(f"{v.lane_id}({a})" for v, a, _ in eviction_set)) if eviction_set else "no",
+                (
+                    (
+                        "yes: "
+                        + ", ".join(f"{v.lane_id}({a})" for v, a, _ in eviction_set)
+                    )
+                    if eviction_set
+                    else "no"
+                ),
             )
 
             if not eviction_set:
                 # Resources freely available — act on floor score
                 if eff < self.DEMAND_LOAD_FLOOR:
                     continue
-                if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
+                if not self._passes_minimum_load_feasibility(
+                    model_name, profile, capacity, provider_id=provider_id
+                ):
                     continue
                 lane_id = self._planner_lane_id(model_name)
-                actions.append(CapacityPlanAction(
-                    action="load",
-                    provider_id=provider_id,
-                    lane_id=lane_id,
-                    model_name=model_name,
-                    params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                    reason=f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free",
-                ))
+                actions.append(
+                    CapacityPlanAction(
+                        action="load",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model_name,
+                        params=self._build_load_params(
+                            model_name, lane_id, profile, capacity, provider_id
+                        ),
+                        reason=f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free",
+                    )
+                )
                 planned_models.add(model_name)
             else:
                 # Contention — target must outweigh the eviction set
@@ -1502,34 +1753,45 @@ class CapacityPlanner:
                         if vlane.lane_id in claimed_victims:
                             continue
                         claimed_victims.add(vlane.lane_id)
-                        actions.append(CapacityPlanAction(
-                            action=vaction,
-                            provider_id=provider_id,
-                            lane_id=vlane.lane_id,
-                            model_name=vlane.model_name,
-                            reason=(
-                                f"Evicted for {model_name} load "
-                                f"(target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.LOAD_COMPETITIVE_RATIO})"
-                            ),
-                        ))
-                    if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
+                        actions.append(
+                            CapacityPlanAction(
+                                action=vaction,
+                                provider_id=provider_id,
+                                lane_id=vlane.lane_id,
+                                model_name=vlane.model_name,
+                                reason=(
+                                    f"Evicted for {model_name} load "
+                                    f"(target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.LOAD_COMPETITIVE_RATIO})"
+                                ),
+                            )
+                        )
+                    if not self._passes_minimum_load_feasibility(
+                        model_name, profile, capacity, provider_id=provider_id
+                    ):
                         continue
-                    actions.append(CapacityPlanAction(
-                        action="load",
-                        provider_id=provider_id,
-                        lane_id=lane_id,
-                        model_name=model_name,
-                        params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                        reason=(
-                            f"Demand eff={eff:.2f} > eviction_max={max_victim_score:.2f}"
-                            f"×{self.LOAD_COMPETITIVE_RATIO} (competitive load)"
-                        ),
-                    ))
+                    actions.append(
+                        CapacityPlanAction(
+                            action="load",
+                            provider_id=provider_id,
+                            lane_id=lane_id,
+                            model_name=model_name,
+                            params=self._build_load_params(
+                                model_name, lane_id, profile, capacity, provider_id
+                            ),
+                            reason=(
+                                f"Demand eff={eff:.2f} > eviction_max={max_victim_score:.2f}"
+                                f"×{self.LOAD_COMPETITIVE_RATIO} (competitive load)"
+                            ),
+                        )
+                    )
                     planned_models.add(model_name)
                 else:
                     logger.debug(
                         "Skipping load of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f",
-                        model_name, eff, max_victim_score, self.LOAD_COMPETITIVE_RATIO,
+                        model_name,
+                        eff,
+                        max_victim_score,
+                        self.LOAD_COMPETITIVE_RATIO,
                     )
 
         # ── CAPABILITY SEEDING: empty worker ─────────────────────────────────
@@ -1543,22 +1805,30 @@ class CapacityPlanner:
                 if eff < self.DEMAND_LOAD_FLOOR:
                     continue
                 profile = profiles.get(model_name)
-                if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
+                if not self._passes_minimum_load_feasibility(
+                    model_name, profile, capacity, provider_id=provider_id
+                ):
                     continue
                 lane_id = self._planner_lane_id(model_name)
-                actions.append(CapacityPlanAction(
-                    action="load",
-                    provider_id=provider_id,
-                    lane_id=lane_id,
-                    model_name=model_name,
-                    params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                    reason=f"Capability seeding: worker declares {model_name}, eff={eff:.2f}",
-                ))
+                actions.append(
+                    CapacityPlanAction(
+                        action="load",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model_name,
+                        params=self._build_load_params(
+                            model_name, lane_id, profile, capacity, provider_id
+                        ),
+                        reason=f"Capability seeding: worker declares {model_name}, eff={eff:.2f}",
+                    )
+                )
 
         return actions
 
     def _compute_demand_drain_actions(
-        self, provider_id: int, lanes: List[LaneSchedulerSignals],
+        self,
+        provider_id: int,
+        lanes: List[LaneSchedulerSignals],
     ) -> List[CapacityPlanAction]:
         """Return stop actions to evict busy lanes for starving high-demand models.
 
@@ -1589,13 +1859,14 @@ class CapacityPlanner:
                 continue
             model_lanes = lanes_by_model.get(model_name, [])
             has_usable = any(
-                l.runtime_state in ("loaded", "running")
-                and l.sleep_state != "sleeping"
+                l.runtime_state in ("loaded", "running") and l.sleep_state != "sleeping"
                 for l in model_lanes
             )
             logger.info(
                 "Drain eval model=%s score=%.2f has_usable_lane=%s",
-                model_name, score, has_usable,
+                model_name,
+                score,
+                has_usable,
             )
             if has_usable:
                 continue  # Model already has a serving lane
@@ -1645,7 +1916,10 @@ class CapacityPlanner:
                 if lane.active_requests == 0 and lane.queue_waiting == 0:
                     continue  # Already idle — normal reclaim handles this
                 if self._should_initiate_drain(
-                    provider_id, lane, synthetic_target, profiles,
+                    provider_id,
+                    lane,
+                    synthetic_target,
+                    profiles,
                 ):
                     current_vram = float(lane.effective_vram_mb or 0.0)
                     if current_vram <= 0:
@@ -1653,17 +1927,23 @@ class CapacityPlanner:
                         if profile is not None:
                             current_vram = self._estimate_model_loaded_vram(profile)
                     if current_vram > 0:
-                        actions.append(CapacityPlanAction(
-                            action="stop",
-                            provider_id=provider_id,
-                            lane_id=lane.lane_id,
-                            model_name=lane.model_name,
-                            params={"_stop_penalty": 1},
-                            reason=f"Demand drain: free VRAM for {model_name}",
-                        ))
+                        actions.append(
+                            CapacityPlanAction(
+                                action="stop",
+                                provider_id=provider_id,
+                                lane_id=lane.lane_id,
+                                model_name=lane.model_name,
+                                params={"_stop_penalty": 1},
+                                reason=f"Demand drain: free VRAM for {model_name}",
+                            )
+                        )
                         logger.info(
                             "Drain initiated: stopping lane=%s model=%s (vram=%.0fMB) for starving model=%s score=%.2f",
-                            lane.lane_id, lane.model_name, current_vram, model_name, score,
+                            lane.lane_id,
+                            lane.model_name,
+                            current_vram,
+                            model_name,
+                            score,
                         )
                     break  # Only one lane at a time per cycle
 
@@ -1715,6 +1995,15 @@ class CapacityPlanner:
         if available_vram / total_vram < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
             return []
 
+        # Skip preemptive loads when MAX_LANES is already reached
+        if not self._provider_has_lane_capacity(provider_id):
+            logger.info(
+                "Preemptive sleep: skipping provider=%s (MAX_LANES=%d reached)",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                self._get_max_lanes(provider_id),
+            )
+            return []
+
         active_models = {lane.model_name for lane in lanes}
 
         # Candidates: stopped models with a known sleeping residual (vLLM only).
@@ -1736,17 +2025,22 @@ class CapacityPlanner:
         # has asked for can trigger pre-sleep of active lanes and cause 503s for
         # real traffic while the speculative load is in flight.
         candidates = [c for c in candidates if c[0] > 0]
-        candidates = candidates[:self.PREEMPTIVE_SLEEP_MAX_MODELS]
+        candidates = candidates[: self.PREEMPTIVE_SLEEP_MAX_MODELS]
 
         if candidates:
             logger.info(
                 "Preemptive sleep candidates for provider=%s: %s",
                 self._facade.get_provider_name(provider_id) or provider_id,
-                ", ".join(f"{name}(demand={score:.2f}, residual={profile.sleeping_residual_mb:.0f}MB)"
-                          for score, name, profile in candidates),
+                ", ".join(
+                    f"{name}(demand={score:.2f}, residual={profile.sleeping_residual_mb:.0f}MB)"
+                    for score, name, profile in candidates
+                ),
             )
         else:
-            logger.info("Preemptive sleep: no candidates for provider=%s (no stopped models with known residual and demand>0)", self._facade.get_provider_name(provider_id) or provider_id)
+            logger.info(
+                "Preemptive sleep: no candidates for provider=%s (no stopped models with known residual and demand>0)",
+                self._facade.get_provider_name(provider_id) or provider_id,
+            )
 
         now = time.time()
 
@@ -1766,7 +2060,9 @@ class CapacityPlanner:
             if self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
                 continue
             # Skip lanes that the idle path will already sleep this cycle
-            idle_start = self._lane_idle_since.get(self._lane_key(provider_id, lane.lane_id))
+            idle_start = self._lane_idle_since.get(
+                self._lane_key(provider_id, lane.lane_id)
+            )
             idle_seconds = (now - idle_start) if idle_start is not None else 0.0
             if idle_seconds >= self.IDLE_SLEEP_L1:
                 continue  # _compute_idle_actions covers this lane — no duplicate needed
@@ -1775,23 +2071,27 @@ class CapacityPlanner:
             current_vram = float(lane.effective_vram_mb or 0.0)
             if current_vram <= 0 and lane_profile is not None:
                 current_vram = self._estimate_model_loaded_vram(lane_profile)
-            lane_residual = float(lane_profile.sleeping_residual_mb or 0.0) if lane_profile else 0.0
+            lane_residual = (
+                float(lane_profile.sleeping_residual_mb or 0.0) if lane_profile else 0.0
+            )
             freed = max(current_vram - lane_residual, 0.0)
             if freed > 0:
-                pre_sleep_candidates.append((
-                    lane.lane_id,
-                    CapacityPlanAction(
-                        action="sleep_l1",
-                        provider_id=provider_id,
-                        lane_id=lane.lane_id,
-                        model_name=lane.model_name,
-                        reason=(
-                            f"Preemptive reclaim: sleeping idle awake lane "
-                            f"(idle={idle_seconds:.0f}s) before new load"
+                pre_sleep_candidates.append(
+                    (
+                        lane.lane_id,
+                        CapacityPlanAction(
+                            action="sleep_l1",
+                            provider_id=provider_id,
+                            lane_id=lane.lane_id,
+                            model_name=lane.model_name,
+                            reason=(
+                                f"Preemptive reclaim: sleeping idle awake lane "
+                                f"(idle={idle_seconds:.0f}s) before new load"
+                            ),
                         ),
-                    ),
-                    freed,
-                ))
+                        freed,
+                    )
+                )
 
         freed_by_pre_sleep = sum(f for _, _, f in pre_sleep_candidates)
         actions: list[CapacityPlanAction] = []
@@ -1808,26 +2108,36 @@ class CapacityPlanner:
                 provider_id=provider_id,
                 lane_id=lane_id,
                 model_name=model_name,
-                params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
+                params=self._build_load_params(
+                    model_name, lane_id, profile, capacity, provider_id
+                ),
                 reason=f"{self.PREEMPTIVE_LOAD_REASON} (residual={residual:.0f}MB)",
             )
 
             # Load cost: full base + KV — what vLLM actually allocates at startup.
             load_cost = self._estimate_action_vram(load_action, profile, capacity)
             logger.info(
-                "Preemptive load check model=%s: load_cost=%.0fMB remaining_vram=%.0fMB "
-                "margin=%.1f needed=%.0fMB residual=%.0fMB",
-                model_name, load_cost, remaining_vram,
-                self.VRAM_SAFETY_MARGIN, load_cost * self.VRAM_SAFETY_MARGIN, residual,
+                "Preemptive load check model=%s: load_cost=%s remaining_vram=%s "
+                "margin=%.1f needed=%s residual=%s",
+                model_name,
+                format_bytes(load_cost),
+                format_bytes(remaining_vram),
+                self.VRAM_SAFETY_MARGIN,
+                format_bytes(load_cost * self.VRAM_SAFETY_MARGIN),
+                format_bytes(residual),
             )
             if remaining_vram < load_cost * self.VRAM_SAFETY_MARGIN:
                 logger.info(
-                    "Preemptive load SKIP model=%s: insufficient VRAM (have %.0fMB, need %.0fMB)",
-                    model_name, remaining_vram, load_cost * self.VRAM_SAFETY_MARGIN,
+                    "Preemptive load SKIP model=%s: insufficient VRAM (have %s, need %s)",
+                    model_name,
+                    format_bytes(remaining_vram),
+                    format_bytes(load_cost * self.VRAM_SAFETY_MARGIN),
                 )
                 continue
             # Net cost after load+sleep is just the residual; keep ≥ 20 % free.
-            if (remaining_vram - residual) / total_vram < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
+            if (
+                remaining_vram - residual
+            ) / total_vram < self.PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO:
                 continue
 
             # Emit the pre-sleep actions once, before the first load, so the
@@ -1838,14 +2148,16 @@ class CapacityPlanner:
                 pre_sleeps_emitted = True
 
             actions.append(load_action)
-            actions.append(CapacityPlanAction(
-                action="sleep_l1",
-                provider_id=provider_id,
-                lane_id=lane_id,
-                model_name=model_name,
-                params={"level": 1},
-                reason=f"{self.PREEMPTIVE_SLEEP_REASON} (residual={residual:.0f}MB)",
-            ))
+            actions.append(
+                CapacityPlanAction(
+                    action="sleep_l1",
+                    provider_id=provider_id,
+                    lane_id=lane_id,
+                    model_name=model_name,
+                    params={"level": 1},
+                    reason=f"{self.PREEMPTIVE_SLEEP_REASON} (residual={residual:.0f}MB)",
+                )
+            )
             # Deduct the full load cost, not just the sleeping residual. Loads in the
             # same batch are executed sequentially with async confirmations — the sleep
             # of model A is not confirmed before the load of model B is dispatched, so
@@ -1875,6 +2187,81 @@ class CapacityPlanner:
         except Exception:
             return []
 
+    def _get_max_lanes(self, provider_id: int) -> int:
+        """Return the MAX_LANES limit for a provider (0 = unlimited)."""
+        if not self._registry:
+            return 0
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return 0
+        return snap.get("max_lanes", 0)
+
+    def _provider_has_lane_capacity(self, provider_id: int) -> bool:
+        """Check whether the provider can accept another lane."""
+        max_lanes = self._get_max_lanes(provider_id)
+        if max_lanes <= 0:
+            return True  # unlimited
+        current_lanes = len(self._safe_get_lanes(provider_id))
+        return current_lanes < max_lanes
+
+    async def _evict_lane_for_capacity(
+        self,
+        provider_id: int,
+        target_model: str,
+        timeout_seconds: float,
+    ) -> bool:
+        """Stop and remove the lowest-demand idle lane to free a lane slot.
+
+        Called when MAX_LANES is reached and a new lane is needed.
+        Prefers sleeping lanes with zero demand, then idle awake lanes.
+        Returns True if a lane was successfully evicted.
+        """
+        lanes = self._safe_get_lanes(provider_id)
+        candidates: list[tuple[float, LaneSchedulerSignals]] = []
+        for lane in lanes:
+            if lane.model_name == target_model:
+                continue
+            if lane.active_requests > 0 or lane.queue_waiting > 0:
+                continue
+            if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
+                continue
+            if self._lane_is_in_load_cooldown(provider_id, lane.lane_id):
+                continue
+            demand = self._effective_demand(lane.model_name)
+            # Sleeping lanes with 0 demand are the best eviction candidates
+            sleep_bonus = 0.0 if lane.sleep_state == "sleeping" else 1000.0
+            candidates.append((demand + sleep_bonus, lane))
+
+        if not candidates:
+            return False
+
+        # Evict the candidate with the lowest score
+        candidates.sort(key=lambda x: x[0])
+        _, victim = candidates[0]
+        logger.info(
+            "Evicting lane %s (model=%s, demand=%.2f) on provider %s "
+            "to free lane slot for %s (MAX_LANES=%d)",
+            victim.lane_id,
+            victim.model_name,
+            self._effective_demand(victim.model_name),
+            self._facade.get_provider_name(provider_id) or provider_id,
+            target_model,
+            self._get_max_lanes(provider_id),
+        )
+        stop_action = CapacityPlanAction(
+            action="stop",
+            provider_id=provider_id,
+            lane_id=victim.lane_id,
+            model_name=victim.model_name,
+            reason=f"Evict for MAX_LANES capacity: make room for {target_model}",
+        )
+        async with self._lane_lock(provider_id, victim.lane_id):
+            ok = await self._execute_action_with_confirmation(
+                stop_action,
+                timeout_seconds=min(timeout_seconds, 60.0),
+            )
+        return ok
+
     def _pick_request_target_lane(
         self,
         provider_id: int,
@@ -1883,7 +2270,8 @@ class CapacityPlanner:
         lanes = [
             lane
             for lane in self._safe_get_lanes(provider_id)
-            if lane.model_name == model_name and lane.runtime_state not in {"stopped", "error"}
+            if lane.model_name == model_name
+            and lane.runtime_state not in {"stopped", "error"}
         ]
         if not lanes:
             return None
@@ -1925,29 +2313,45 @@ class CapacityPlanner:
             provider_id=provider_id,
             lane_id=target.lane_id,
             model_name=target.model_name,
-            params=self._build_load_params(target.model_name, target.lane_id, profile, capacity, provider_id),
+            params=self._build_load_params(
+                target.model_name, target.lane_id, profile, capacity, provider_id
+            ),
             reason="Request-time lane preparation",
         )
+
+        # Tracks when we first detected phantom VRAM (lanes=0, VRAM still occupied
+        # by a recently-killed process whose CUDA context hasn't been freed yet).
+        _phantom_wait_started: Optional[float] = None
 
         while True:
             capacity = self._safe_get_capacity(provider_id)
             if capacity is None:
                 return False
 
-            needed = self._estimate_action_vram(target_action, profile, capacity) * self.VRAM_SAFETY_MARGIN
+            needed = (
+                self._estimate_action_vram(target_action, profile, capacity)
+                * self.VRAM_SAFETY_MARGIN
+            )
             # Use ledger-aware available VRAM (subtracts in-flight reservations)
             raw_available = float(capacity.available_vram_mb)
             available = self._vram_ledger.get_effective_available_mb(
-                provider_id, raw_available,
+                provider_id,
+                raw_available,
             )
             provider_ready = available >= needed
             shortfall = max(needed - available, 0.0)
 
             logger.info(
                 "ensure_capacity provider=%s model=%s action=%s: "
-                "needed=%.0fMB available=%.0fMB(raw=%.0fMB) provider_ready=%s shortfall=%.0fMB",
-                provider_id, target.model_name, target_action.action,
-                needed, available, raw_available, provider_ready, shortfall,
+                "needed=%s available=%s(raw=%s) provider_ready=%s shortfall=%s",
+                provider_id,
+                target.model_name,
+                target_action.action,
+                format_bytes(needed),
+                format_bytes(available),
+                format_bytes(raw_available),
+                provider_ready,
+                format_bytes(shortfall),
             )
 
             target_gpu_devices = target.gpu_devices
@@ -1969,14 +2373,17 @@ class CapacityPlanner:
                     )
                     for dev in target_gpu_ids
                 ]
-                per_gpu_ready = all(free_mb >= per_gpu_needed for free_mb in gpu_effective)
+                per_gpu_ready = all(
+                    free_mb >= per_gpu_needed for free_mb in gpu_effective
+                )
                 logger.info(
                     "ensure_capacity provider=%s model=%s: known-GPU path "
-                    "target_gpus=%s per_gpu_needed=%.0fMB gpu_effective=%s per_gpu_ready=%s",
-                    provider_id, target.model_name,
+                    "target_gpus=%s per_gpu_needed=%s gpu_effective=%s per_gpu_ready=%s",
+                    provider_id,
+                    target.model_name,
                     list(target_gpu_ids),
-                    per_gpu_needed,
-                    [f"{v:.0f}MB" for v in gpu_effective],
+                    format_bytes(per_gpu_needed),
+                    [format_bytes(v) for v in gpu_effective],
                     per_gpu_ready,
                 )
                 if provider_ready and per_gpu_ready:
@@ -1988,7 +2395,9 @@ class CapacityPlanner:
                 shortfall = max(shortfall, gpu_shortfall)
                 logger.info(
                     "ensure_capacity provider=%s model=%s: GPU shortfall=%.0fMB → reclaim needed",
-                    provider_id, target.model_name, shortfall,
+                    provider_id,
+                    target.model_name,
+                    shortfall,
                 )
             elif per_gpu_free and not target_gpu_ids:
                 # GPU placement unknown — infer TP from profile so TP>1 models
@@ -1997,17 +2406,25 @@ class CapacityPlanner:
                 # tp>1: model spreads across tp GPUs → check tp-th best GPU against
                 #        need/tp (same logic as _cold_load_for_request).
                 tp = 1
-                if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+                if (
+                    profile is not None
+                    and profile.tensor_parallel_size
+                    and int(profile.tensor_parallel_size) > 1
+                ):
                     tp = int(profile.tensor_parallel_size)
                 elif profile is not None and capacity is not None:
-                    inferred = self._infer_tensor_parallel(profile, capacity, provider_id)
+                    inferred = self._infer_tensor_parallel(
+                        profile, capacity, provider_id
+                    )
                     if inferred and inferred > 1:
                         tp = inferred
                 per_gpu_needed = needed / tp
                 sorted_free = sorted(
                     (
                         self._vram_ledger.get_gpu_effective_available_mb(
-                            provider_id, dev, float(free_mb),
+                            provider_id,
+                            dev,
+                            float(free_mb),
                         )
                         for dev, free_mb in per_gpu_free.items()
                     ),
@@ -2016,35 +2433,73 @@ class CapacityPlanner:
                 nth_gpu_free = sorted_free[tp - 1] if len(sorted_free) >= tp else 0.0
                 logger.info(
                     "ensure_capacity provider=%s model=%s: unknown-GPU path "
-                    "tp=%d per_gpu_needed=%.0fMB sorted_free=%s nth_gpu_free=%.0fMB fits=%s",
-                    provider_id, target.model_name,
-                    tp, per_gpu_needed,
-                    [f"{v:.0f}MB" for v in sorted_free],
-                    nth_gpu_free,
+                    "tp=%d per_gpu_needed=%s sorted_free=%s nth_gpu_free=%s fits=%s",
+                    provider_id,
+                    target.model_name,
+                    tp,
+                    format_bytes(per_gpu_needed),
+                    [format_bytes(v) for v in sorted_free],
+                    format_bytes(nth_gpu_free),
                     nth_gpu_free >= per_gpu_needed,
                 )
                 if nth_gpu_free >= per_gpu_needed:
                     return True
                 shortfall = max(shortfall, (per_gpu_needed - nth_gpu_free) * tp)
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: per-GPU shortfall → total shortfall=%.0fMB",
-                    provider_id, target.model_name, shortfall,
+                    "ensure_capacity provider=%s model=%s: per-GPU shortfall → total shortfall=%s",
+                    provider_id,
+                    target.model_name,
+                    format_bytes(shortfall),
                 )
             elif provider_ready:
                 logger.info(
                     "ensure_capacity provider=%s model=%s: no per-GPU data, provider_ready → proceed",
-                    provider_id, target.model_name,
+                    provider_id,
+                    target.model_name,
                 )
                 return True
 
+            lanes_now = self._safe_get_lanes(provider_id)
             reclaim = self._next_request_reclaim_action(
                 provider_id=provider_id,
                 target=target,
-                lanes=self._safe_get_lanes(provider_id),
+                lanes=lanes_now,
                 profiles=self._safe_get_profiles(provider_id),
                 required_free_mb=shortfall,
             )
             if reclaim is None:
+                # Phantom-VRAM path: no lanes exist but VRAM is still occupied by
+                # a recently-killed process whose CUDA context hasn't been released
+                # by the driver yet.  Wait up to 60 s for the driver to free memory
+                # before giving up — the worker will re-report fresh VRAM numbers
+                # on each heartbeat cycle.
+                total_vram = float(getattr(capacity, "total_vram_mb", 0) or 0)
+                phantom_mb = total_vram - available
+                if not lanes_now and total_vram > 0 and phantom_mb > needed * 0.5:
+                    if _phantom_wait_started is None:
+                        _phantom_wait_started = time.monotonic()
+                        logger.info(
+                            "ensure_capacity provider=%s model=%s: "
+                            "phantom VRAM detected (%.0f MB occupied, 0 lanes) — "
+                            "waiting up to 60 s for CUDA driver to release contexts",
+                            provider_id,
+                            target.model_name,
+                            phantom_mb,
+                        )
+                    elapsed = time.monotonic() - _phantom_wait_started
+                    if elapsed < 60.0:
+                        await asyncio.sleep(2.0)
+                        capacity = self._safe_get_capacity(provider_id)
+                        if capacity is None:
+                            return False
+                        continue
+                    logger.info(
+                        "ensure_capacity provider=%s model=%s: "
+                        "phantom VRAM still present after %.0f s — giving up",
+                        provider_id,
+                        target.model_name,
+                        elapsed,
+                    )
                 logger.info(
                     "No idle reclaim action available for provider=%s model=%s "
                     "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
@@ -2093,26 +2548,32 @@ class CapacityPlanner:
                 if self._should_initiate_drain(provider_id, lane, target, profiles):
                     current_vram = float(lane.effective_vram_mb or 0.0)
                     if current_vram <= 0 and profiles.get(lane.model_name) is not None:
-                        current_vram = self._estimate_model_loaded_vram(profiles[lane.model_name])
+                        current_vram = self._estimate_model_loaded_vram(
+                            profiles[lane.model_name]
+                        )
                     if current_vram > 0:
-                        stop_candidates.append((
-                            current_vram,
-                            CapacityPlanAction(
-                                action="stop",
-                                provider_id=provider_id,
-                                lane_id=lane.lane_id,
-                                model_name=lane.model_name,
-                                params={"_stop_penalty": 1},
-                                reason=f"Request-time drain+stop for {target.model_name}",
-                            ),
-                        ))
+                        stop_candidates.append(
+                            (
+                                current_vram,
+                                CapacityPlanAction(
+                                    action="stop",
+                                    provider_id=provider_id,
+                                    lane_id=lane.lane_id,
+                                    model_name=lane.model_name,
+                                    params={"_stop_penalty": 1},
+                                    reason=f"Request-time drain+stop for {target.model_name}",
+                                ),
+                            )
+                        )
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
                 continue
             # Load cooldown blocks stop (prevents thrashing) but not sleep —
             # sleeping only releases KV-cache memory without evicting the model,
             # so it is safe to sleep even a recently-loaded idle lane.
-            in_cooldown = self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now)
+            in_cooldown = self._lane_is_in_load_cooldown(
+                provider_id, lane.lane_id, now=now
+            )
 
             profile = profiles.get(lane.model_name)
             current_vram = float(lane.effective_vram_mb or 0.0)
@@ -2124,13 +2585,25 @@ class CapacityPlanner:
             # base_residency_mb (measured weights-only footprint) closely matches the
             # true GPU usage shown by --query-gpu after an L1 sleep, so use it as a
             # floor to avoid discarding valid stop candidates.
-            if lane.is_vllm and lane.runtime_state == "sleeping" and profile is not None:
+            if (
+                lane.is_vllm
+                and lane.runtime_state == "sleeping"
+                and profile is not None
+            ):
                 base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
                 if base_residency > current_vram:
                     current_vram = base_residency
-            residual_vram = float(profile.sleeping_residual_mb or 0.0) if profile is not None else 0.0
+            residual_vram = (
+                float(profile.sleeping_residual_mb or 0.0)
+                if profile is not None
+                else 0.0
+            )
 
-            if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
+            if (
+                lane.is_vllm
+                and lane.runtime_state in {"loaded", "running"}
+                and lane.sleep_state == "awake"
+            ):
                 freed = max(current_vram - residual_vram, 0.0)
                 # Sleep is allowed even within load cooldown (frees KV cache only,
                 # does not evict the model — no thrashing risk).
@@ -2175,7 +2648,9 @@ class CapacityPlanner:
                             lane_id=lane.lane_id,
                             model_name=lane.model_name,
                             params={
-                                "_stop_penalty": 0 if lane.runtime_state == "sleeping" else 1,
+                                "_stop_penalty": (
+                                    0 if lane.runtime_state == "sleeping" else 1
+                                ),
                             },
                             reason=f"Request-time reclaim for {target.model_name}",
                         ),
@@ -2189,7 +2664,9 @@ class CapacityPlanner:
         if target_gpus:
             for lane in lanes:
                 if lane.lane_id != target.lane_id:
-                    gpu_overlap_by_lane[lane.lane_id] = self._gpu_overlap(target_gpus, lane.gpu_devices)
+                    gpu_overlap_by_lane[lane.lane_id] = self._gpu_overlap(
+                        target_gpus, lane.gpu_devices
+                    )
 
         has_low_penalty_stop = any(
             (candidate[1].params or {}).get("_stop_penalty", 1) <= 0
@@ -2206,7 +2683,9 @@ class CapacityPlanner:
                 required_free_mb=required_free_mb,
             )
             if combined_plan:
-                return self._pick_next_reclaim_action_from_plan(combined_plan, gpu_overlap_by_lane)
+                return self._pick_next_reclaim_action_from_plan(
+                    combined_plan, gpu_overlap_by_lane
+                )
 
         # Phase 3c: Try sleep-only first when there is no cheap sleeping-lane stop.
         if sleep_candidates:
@@ -2215,7 +2694,9 @@ class CapacityPlanner:
                 required_free_mb=required_free_mb,
             )
             if sleep_plan:
-                return self._pick_next_reclaim_action_from_plan(sleep_plan, gpu_overlap_by_lane)
+                return self._pick_next_reclaim_action_from_plan(
+                    sleep_plan, gpu_overlap_by_lane
+                )
 
         if combined:
             combined_plan = self._best_reclaim_plan_combined(
@@ -2223,17 +2704,21 @@ class CapacityPlanner:
                 required_free_mb=required_free_mb,
             )
             if combined_plan:
-                return self._pick_next_reclaim_action_from_plan(combined_plan, gpu_overlap_by_lane)
+                return self._pick_next_reclaim_action_from_plan(
+                    combined_plan, gpu_overlap_by_lane
+                )
             # Fallback: pick the single largest action (prefer sleep over stop, prefer GPU overlap)
-            combined.sort(key=lambda item: (
-                (item[1].params or {}).get(
-                    "_stop_penalty",
-                    0 if item[1].action != "stop" else 1,
-                ),
-                -gpu_overlap_by_lane.get(item[1].lane_id, 0),
-                -item[0],
-                item[1].lane_id,
-            ))
+            combined.sort(
+                key=lambda item: (
+                    (item[1].params or {}).get(
+                        "_stop_penalty",
+                        0 if item[1].action != "stop" else 1,
+                    ),
+                    -gpu_overlap_by_lane.get(item[1].lane_id, 0),
+                    -item[0],
+                    item[1].lane_id,
+                )
+            )
             return combined[0][1]
         return None
 
@@ -2298,7 +2783,9 @@ class CapacityPlanner:
         best_combo: tuple[int, ...] | None = None
         best_score: tuple[int, float, float, int, tuple[str, ...]] | None = None
 
-        for size in range(1, min(len(candidates) + 1, 6)):  # cap at 5 to avoid explosion
+        for size in range(
+            1, min(len(candidates) + 1, 6)
+        ):  # cap at 5 to avoid explosion
             for combo in combinations(range(len(candidates)), size):
                 # Check for duplicate lanes (same lane as both sleep and stop)
                 lane_ids_in_combo = [candidates[i][1].lane_id for i in combo]
@@ -2336,11 +2823,14 @@ class CapacityPlanner:
         then largest freed VRAM, then stable lane ordering.
         """
         overlap = gpu_overlap_by_lane or {}
-        plan = sorted(plan, key=lambda item: (
-            -overlap.get(item[1].lane_id, 0),
-            -item[0],
-            item[1].lane_id,
-        ))
+        plan = sorted(
+            plan,
+            key=lambda item: (
+                -overlap.get(item[1].lane_id, 0),
+                -item[0],
+                item[1].lane_id,
+            ),
+        )
         return plan[0][1]
 
     # ------------------------------------------------------------------
@@ -2360,7 +2850,9 @@ class CapacityPlanner:
     KV_PRESSURE_HISTORY_SIZE = 60  # ~30 min at 30s cycles
 
     def _record_kv_pressure_history(
-        self, provider_id: int, lanes: List[LaneSchedulerSignals],
+        self,
+        provider_id: int,
+        lanes: List[LaneSchedulerSignals],
     ) -> None:
         """Record per-lane KV cache pressure every cycle (cheap, no actions)."""
         now = time.time()
@@ -2374,7 +2866,9 @@ class CapacityPlanner:
             history.append((now, lane.gpu_cache_usage_percent))
             # Trim old entries
             if len(history) > self.KV_PRESSURE_HISTORY_SIZE:
-                self._kv_cache_pressure_history[key] = history[-self.KV_PRESSURE_HISTORY_SIZE:]
+                self._kv_cache_pressure_history[key] = history[
+                    -self.KV_PRESSURE_HISTORY_SIZE :
+                ]
 
     def _avg_kv_pressure(self, provider_id: int, lane_id: str) -> float:
         """Return average KV cache pressure from history (0.0 if no history)."""
@@ -2390,7 +2884,7 @@ class CapacityPlanner:
         history = self._kv_cache_pressure_history.get(key, [])
         if len(history) < self.KV_CACHE_EMERGENCY_MIN_READINGS:
             return False
-        recent = history[-self.KV_CACHE_EMERGENCY_MIN_READINGS:]
+        recent = history[-self.KV_CACHE_EMERGENCY_MIN_READINGS :]
         return all(pct >= self.KV_CACHE_EMERGENCY_THRESHOLD for _, pct in recent)
 
     def _compute_fleet_kv_allocation(
@@ -2407,9 +2901,14 @@ class CapacityPlanner:
         # Check if any lane has an emergency (bypasses interval)
         has_emergency = any(
             self._is_kv_emergency(provider_id, lane.lane_id)
-            for lane in lanes if lane.is_vllm
+            for lane in lanes
+            if lane.is_vllm
         )
-        if not has_emergency and (now - self._last_kv_rebalance_time) < self.KV_CACHE_REBALANCE_INTERVAL_SECONDS:
+        if (
+            not has_emergency
+            and (now - self._last_kv_rebalance_time)
+            < self.KV_CACHE_REBALANCE_INTERVAL_SECONDS
+        ):
             return []
 
         try:
@@ -2423,8 +2922,14 @@ class CapacityPlanner:
 
         # Determine per-GPU VRAM from runtime snapshot
         total_vram = float(capacity.total_vram_mb)
-        snap = self._registry.peek_runtime_snapshot(provider_id) if self._registry else None
-        devices_info = ((snap.get("runtime") or {}).get("devices") or {}) if snap else {}
+        snap = (
+            self._registry.peek_runtime_snapshot(provider_id)
+            if self._registry
+            else None
+        )
+        devices_info = (
+            ((snap.get("runtime") or {}).get("devices") or {}) if snap else {}
+        )
         device_list = devices_info.get("devices") or []
         gpu_count = len(device_list) if isinstance(device_list, list) else 1
         per_gpu_vram = total_vram / max(gpu_count, 1)
@@ -2447,7 +2952,11 @@ class CapacityPlanner:
             if lane.tensor_parallel_size and int(lane.tensor_parallel_size) > 1:
                 lane_gpu_count = int(lane.tensor_parallel_size)
             elif lane.gpu_devices:
-                devs = [d.strip() for d in lane.gpu_devices.split(",") if d.strip().isdigit()]
+                devs = [
+                    d.strip()
+                    for d in lane.gpu_devices.split(",")
+                    if d.strip().isdigit()
+                ]
                 if devs:
                     lane_gpu_count = len(devs)
             vllm_lanes.append((lane, profile, lane_gpu_count))
@@ -2477,7 +2986,11 @@ class CapacityPlanner:
             if current_kv_mb <= 0:
                 continue
 
-            delta_pct = abs(kv_share - current_kv_mb) / current_kv_mb if current_kv_mb > 0 else 1.0
+            delta_pct = (
+                abs(kv_share - current_kv_mb) / current_kv_mb
+                if current_kv_mb > 0
+                else 1.0
+            )
 
             # Dampening: skip if change is < 20% (avoid thrashing)
             if delta_pct < self.KV_CACHE_REBALANCE_DAMPENING:
@@ -2529,7 +3042,9 @@ class CapacityPlanner:
                 self._deferred_kv_reconfigs[key] = action
                 logger.info(
                     "Deferring KV reconfig for busy lane %s (active=%d, queue=%.1f)",
-                    lane.lane_id, lane.active_requests, lane.queue_waiting,
+                    lane.lane_id,
+                    lane.active_requests,
+                    lane.queue_waiting,
                 )
                 continue
 
@@ -2556,8 +3071,7 @@ class CapacityPlanner:
         active_lanes = {lane.lane_id: lane for lane in lanes}
 
         keys_to_flush = [
-            key for key in list(self._deferred_kv_reconfigs)
-            if key[0] == provider_id
+            key for key in list(self._deferred_kv_reconfigs) if key[0] == provider_id
         ]
         for key in keys_to_flush:
             lane = active_lanes.get(key[1])
@@ -2620,13 +3134,16 @@ class CapacityPlanner:
                 _base_residency_from_bytes,
                 _estimated_disk_size_bytes_from_model_name,
             )
+
             disk = _estimated_disk_size_bytes_from_model_name(model_name)
             base_mb = _base_residency_from_bytes(disk)
         if base_mb is None:
             return True  # can't estimate, allow
 
-        is_calibrated = (profile is not None and
-                         profile.residency_source in ("calibrated", "measured"))
+        is_calibrated = profile is not None and profile.residency_source in (
+            "calibrated",
+            "measured",
+        )
 
         if is_calibrated:
             # base_residency_mb already includes KV cache and TP overhead — use directly.
@@ -2645,32 +3162,49 @@ class CapacityPlanner:
 
             # Determine TP size for this model
             tp = 1
-            if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+            if (
+                profile is not None
+                and profile.tensor_parallel_size
+                and int(profile.tensor_parallel_size) > 1
+            ):
                 tp = int(profile.tensor_parallel_size)
             elif provider_id is not None and base_mb is not None:
-                inferred = self._infer_tensor_parallel(profile, capacity, provider_id) if profile else None
+                inferred = (
+                    self._infer_tensor_parallel(profile, capacity, provider_id)
+                    if profile
+                    else None
+                )
                 if inferred and inferred > 1:
                     tp = inferred
 
             if tp > 1:
                 # Add TP overhead: NCCL buffers, duplicated embedding/output layers
-                minimum_needed *= (1.0 + self.TP_OVERHEAD_RATIO)
+                minimum_needed *= 1.0 + self.TP_OVERHEAD_RATIO
 
         # Total VRAM check
         feasible = available_mb >= minimum_needed * self.VRAM_SAFETY_MARGIN
         if not feasible:
             logger.info(
-                "Feasibility FAILED for %s: need %.0fMB%s × %.2f margin, have %.0fMB",
-                model_name, minimum_needed,
-                " (calibrated, KV+TP included)" if is_calibrated else f" (base={base_mb:.0f}MB + kv={kv_mb:.0f}MB)",
-                self.VRAM_SAFETY_MARGIN, available_mb,
+                "Feasibility FAILED for %s: need %s%s × %.2f margin, have %s",
+                model_name,
+                format_bytes(minimum_needed),
+                (
+                    " (calibrated, KV+TP included)"
+                    if is_calibrated
+                    else f" (base={format_bytes(base_mb)} + kv={format_bytes(kv_mb)})"
+                ),
+                self.VRAM_SAFETY_MARGIN,
+                format_bytes(available_mb),
             )
             return False
 
         # Per-GPU feasibility check for TP models
         if tp > 1 and provider_id is not None:
             per_gpu_ok = self._check_per_gpu_feasibility(
-                provider_id, minimum_needed, tp, model_name,
+                provider_id,
+                minimum_needed,
+                tp,
+                model_name,
             )
             if not per_gpu_ok:
                 return False
@@ -2724,7 +3258,9 @@ class CapacityPlanner:
                 dev_id_int = -1
             if dev_id_int >= 0:
                 free_mb = self._vram_ledger.get_gpu_effective_available_mb(
-                    provider_id, dev_id_int, free_mb,
+                    provider_id,
+                    dev_id_int,
+                    free_mb,
                 )
             per_gpu_free.append((dev_id, free_mb))
 
@@ -2739,11 +3275,15 @@ class CapacityPlanner:
 
         if weakest_gpu[1] < per_gpu_needed:
             logger.info(
-                "Per-GPU feasibility FAILED for %s (TP=%d): need %.0fMB/GPU, "
+                "Per-GPU feasibility FAILED for %s (TP=%d): need %s/GPU, "
                 "best %d GPUs have %s free (after ledger commitments)",
-                model_name, tp, per_gpu_needed,
+                model_name,
                 tp,
-                ", ".join(f"GPU{did}={free:.0f}MB" for did, free in best_tp_gpus),
+                format_bytes(per_gpu_needed),
+                tp,
+                ", ".join(
+                    f"GPU{did}={format_bytes(free)}" for did, free in best_tp_gpus
+                ),
             )
             return False
         return True
@@ -2762,9 +3302,15 @@ class CapacityPlanner:
         cumulative_vram: dict[int, float] = {}
 
         # Process sleep/stop first (they free VRAM)
-        free_actions = [a for a in actions if a.action in ("sleep_l1", "sleep_l2", "stop")]
+        free_actions = [
+            a for a in actions if a.action in ("sleep_l1", "sleep_l2", "stop")
+        ]
         consume_actions = [a for a in actions if a.action in ("wake", "load")]
-        other_actions = [a for a in actions if a.action not in ("sleep_l1", "sleep_l2", "stop", "wake", "load")]
+        other_actions = [
+            a
+            for a in actions
+            if a.action not in ("sleep_l1", "sleep_l2", "stop", "wake", "load")
+        ]
 
         # Always allow sleep/stop and reconfigure actions
         validated_ids.update(id(action) for action in free_actions)
@@ -2783,9 +3329,23 @@ class CapacityPlanner:
                     cumulative_vram.get(action.provider_id, 0.0) - freed
                 )
 
-        # For consuming actions, check VRAM budget
+        # For consuming actions, check VRAM budget and lane capacity
         for action in consume_actions:
             provider_id = action.provider_id
+
+            # Reject load actions when MAX_LANES is reached
+            if action.action == "load" and not self._provider_has_lane_capacity(
+                provider_id
+            ):
+                max_lanes = self._get_max_lanes(provider_id)
+                logger.warning(
+                    "Lane capacity check failed for load of %s on provider %s: "
+                    "MAX_LANES=%d reached",
+                    action.model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    max_lanes,
+                )
+                continue
 
             try:
                 capacity = self._facade.get_capacity_info(provider_id)
@@ -2795,7 +3355,11 @@ class CapacityPlanner:
                     - self.get_pending_vram_mb(provider_id)
                 )
             except Exception:
-                logger.debug("Cannot check VRAM for provider %s, rejecting %s", self._facade.get_provider_name(provider_id) or provider_id, action.action)
+                logger.debug(
+                    "Cannot check VRAM for provider %s, rejecting %s",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    action.action,
+                )
                 continue
 
             try:
@@ -2808,21 +3372,29 @@ class CapacityPlanner:
 
             if available < estimated_vram * self.VRAM_SAFETY_MARGIN:
                 logger.warning(
-                    "VRAM budget check failed for %s on %s: available=%.0fMB, "
-                    "estimated=%.0fMB (with margin=%.0fMB)",
-                    action.action, action.model_name,
-                    available, estimated_vram, estimated_vram * self.VRAM_SAFETY_MARGIN,
+                    "VRAM budget check failed for %s on %s: available=%s, "
+                    "estimated=%s (with margin=%s)",
+                    action.action,
+                    action.model_name,
+                    format_bytes(available),
+                    format_bytes(estimated_vram),
+                    format_bytes(estimated_vram * self.VRAM_SAFETY_MARGIN),
                 )
                 continue
             else:
                 logger.info(
-                    "VRAM budget OK for %s on provider=%s: available=%.0fMB estimated=%.0fMB (margin=%.0fMB) cumulative=%.0fMB",
-                    action.model_name, provider_id,
-                    available, estimated_vram, estimated_vram * self.VRAM_SAFETY_MARGIN,
-                    cumulative_vram.get(provider_id, 0.0),
+                    "VRAM budget OK for %s on provider=%s: available=%s estimated=%s (margin=%s) cumulative=%s",
+                    action.model_name,
+                    provider_id,
+                    format_bytes(available),
+                    format_bytes(estimated_vram),
+                    format_bytes(estimated_vram * self.VRAM_SAFETY_MARGIN),
+                    format_bytes(cumulative_vram.get(provider_id, 0.0)),
                 )
 
-            cumulative_vram[provider_id] = cumulative_vram.get(provider_id, 0.0) + estimated_vram
+            cumulative_vram[provider_id] = (
+                cumulative_vram.get(provider_id, 0.0) + estimated_vram
+            )
             validated_ids.add(id(action))
 
         return [action for action in actions if id(action) in validated_ids]
@@ -2848,7 +3420,6 @@ class CapacityPlanner:
         params["vllm"] = True
         vllm_config: Dict[str, Any] = {
             "enable_sleep_mode": True,
-            "server_dev_mode": True,
         }
         # Send TP if profile has an observed value, or infer from model size vs GPU VRAM.
         tp = 1
@@ -2891,7 +3462,10 @@ class CapacityPlanner:
         return True
 
     def _infer_tensor_parallel(
-        self, profile: ModelProfile, capacity, provider_id: int,
+        self,
+        profile: ModelProfile,
+        capacity,
+        provider_id: int,
     ) -> Optional[int]:
         """Infer tensor_parallel_size from model size vs per-GPU VRAM.
 
@@ -2909,7 +3483,11 @@ class CapacityPlanner:
             return None
 
         # Get device count from runtime snapshot
-        snap = self._registry.peek_runtime_snapshot(provider_id) if self._registry else None
+        snap = (
+            self._registry.peek_runtime_snapshot(provider_id)
+            if self._registry
+            else None
+        )
         if snap is None:
             return None
         devices_info = (snap.get("runtime") or {}).get("devices") or {}
@@ -2932,8 +3510,8 @@ class CapacityPlanner:
 
     # KV cache estimation
     KV_CACHE_HEADROOM_RATIO = 0.35  # last-resort fallback for models without HF config
-    DEFAULT_CONTEXT_CAP = 8192      # conservative initial context window
-    DEFAULT_CONCURRENCY = 4         # target concurrent sequences
+    DEFAULT_CONTEXT_CAP = 8192  # conservative initial context window
+    DEFAULT_CONCURRENCY = 4  # target concurrent sequences
 
     def _compute_kv_cache_bytes(self, profile: Optional[ModelProfile]) -> Optional[str]:
         """Compute the --kv-cache-memory-bytes string to pass to vLLM on startup.
@@ -2983,8 +3561,13 @@ class CapacityPlanner:
         if profile.kv_budget_mb and profile.kv_budget_mb > 0:
             return float(profile.kv_budget_mb)
         if profile.kv_per_token_bytes and profile.kv_per_token_bytes > 0:
-            ctx = min(profile.max_context_length or self.DEFAULT_CONTEXT_CAP, self.DEFAULT_CONTEXT_CAP)
-            return (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+            ctx = min(
+                profile.max_context_length or self.DEFAULT_CONTEXT_CAP,
+                self.DEFAULT_CONTEXT_CAP,
+            )
+            return (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (
+                1024 * 1024
+            )
         base = profile.estimate_base_residency_mb()
         if base and base > 0:
             return base * self.KV_CACHE_HEADROOM_RATIO
@@ -3035,7 +3618,11 @@ class CapacityPlanner:
             else:
                 # Uncalibrated: base_residency is weights only — add KV estimate.
                 params = action.params or {}
-                vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
+                vllm_config = (
+                    params.get("vllm_config")
+                    if isinstance(params.get("vllm_config"), dict)
+                    else {}
+                )
                 kv_str = vllm_config.get("kv_cache_memory_bytes", "")
                 kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
                 if kv_mb <= 0:
@@ -3046,7 +3633,7 @@ class CapacityPlanner:
                 if tp <= 0 and profile.tensor_parallel_size:
                     tp = int(profile.tensor_parallel_size)
                 if tp > 1:
-                    loaded_vram *= (1.0 + self.TP_OVERHEAD_RATIO)
+                    loaded_vram *= 1.0 + self.TP_OVERHEAD_RATIO
 
             sleeping_residual = float(profile.sleeping_residual_mb or 0.0)
 
@@ -3109,7 +3696,11 @@ class CapacityPlanner:
                 return True  # no snapshot = no active requests visible
             lanes = (snap.get("runtime") or {}).get("lanes") or []
             lane = next(
-                (l for l in lanes if isinstance(l, dict) and l.get("lane_id") == lane_id),
+                (
+                    l
+                    for l in lanes
+                    if isinstance(l, dict) and l.get("lane_id") == lane_id
+                ),
                 None,
             )
             if lane is None:
@@ -3119,12 +3710,16 @@ class CapacityPlanner:
                 return True
             logger.info(
                 "Waiting for lane %s to drain (%d active requests, %.0fs remaining)",
-                lane_id, active, deadline - time.time(),
+                lane_id,
+                active,
+                deadline - time.time(),
             )
             await asyncio.sleep(poll_interval)
         logger.warning(
             "Drain timeout for lane %s on provider %s after %.0fs",
-            lane_id, provider_id, timeout_seconds,
+            lane_id,
+            provider_id,
+            timeout_seconds,
         )
         return False
 
@@ -3175,7 +3770,10 @@ class CapacityPlanner:
     # ------------------------------------------------------------------
 
     def _record_inflight_add(
-        self, provider_id: int, lane_id: str, lane_config: dict[str, Any],
+        self,
+        provider_id: int,
+        lane_id: str,
+        lane_config: dict[str, Any],
     ) -> None:
         """Record an inflight lane addition so subsequent builds include it."""
         if provider_id not in self._inflight_desired:
@@ -3231,7 +3829,8 @@ class CapacityPlanner:
         self._registry.mark_lane_cold(provider_id, lane_id)
         logger.info(
             "Marked lane %s on provider %s as cold (scheduler will exclude)",
-            lane_id, provider_id,
+            lane_id,
+            provider_id,
         )
 
     def _unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
@@ -3240,7 +3839,8 @@ class CapacityPlanner:
         self._registry.unmark_lane_cold(provider_id, lane_id)
         logger.info(
             "Unmarked lane %s on provider %s as cold (scheduler routing restored)",
-            lane_id, provider_id,
+            lane_id,
+            provider_id,
         )
 
     def is_lane_marked_cold(self, provider_id: int, lane_id: str) -> bool:
@@ -3280,7 +3880,10 @@ class CapacityPlanner:
         if target_eff <= busy_eff * self.DRAIN_COMPETITIVE_RATIO:
             logger.info(
                 "Drain skip lane=%s: target_eff=%.2f not > busy_eff=%.2f × ratio=%.1f",
-                busy_lane.lane_id, target_eff, busy_eff, self.DRAIN_COMPETITIVE_RATIO,
+                busy_lane.lane_id,
+                target_eff,
+                busy_eff,
+                self.DRAIN_COMPETITIVE_RATIO,
             )
             return False
 
@@ -3290,23 +3893,33 @@ class CapacityPlanner:
         if loaded_at is not None:
             was_cold = self._lane_was_cold_loaded.get(key, True)
             min_seconds = (
-                self.DRAIN_MIN_COLD_LOADED_SECONDS if was_cold
+                self.DRAIN_MIN_COLD_LOADED_SECONDS
+                if was_cold
                 else self.DRAIN_MIN_WOKEN_SECONDS
             )
             if (time.time() - loaded_at) < min_seconds:
                 logger.info(
                     "Drain skip lane=%s: in cooldown (loaded %.0fs ago, min=%.0fs, cold=%s)",
-                    busy_lane.lane_id, time.time() - loaded_at, min_seconds, was_cold,
+                    busy_lane.lane_id,
+                    time.time() - loaded_at,
+                    min_seconds,
+                    was_cold,
                 )
                 return False
 
         # 3. GPU overlap: busy lane must share GPUs with target
         target_gpu_ids = self._parse_gpu_device_ids(target.gpu_devices)
         busy_gpu_ids = self._parse_gpu_device_ids(busy_lane.gpu_devices)
-        if target_gpu_ids and busy_gpu_ids and not (set(target_gpu_ids) & set(busy_gpu_ids)):
+        if (
+            target_gpu_ids
+            and busy_gpu_ids
+            and not (set(target_gpu_ids) & set(busy_gpu_ids))
+        ):
             logger.info(
                 "Drain skip lane=%s: no GPU overlap (busy=%s, target=%s)",
-                busy_lane.lane_id, busy_gpu_ids, target_gpu_ids,
+                busy_lane.lane_id,
+                busy_gpu_ids,
+                target_gpu_ids,
             )
             return False
 
@@ -3315,13 +3928,17 @@ class CapacityPlanner:
         profile = profiles.get(busy_lane.model_name)
         target_profile = profiles.get(target.model_name)
         if target_profile is not None:
-            target_cost = self._estimate_model_loaded_vram(target_profile) * self.VRAM_SAFETY_MARGIN
+            target_cost = (
+                self._estimate_model_loaded_vram(target_profile)
+                * self.VRAM_SAFETY_MARGIN
+            )
             current_vram = float(busy_lane.effective_vram_mb or 0.0)
             if current_vram <= 0 and profile is not None:
                 current_vram = self._estimate_model_loaded_vram(profile)
             residual = (
                 float(profile.sleeping_residual_mb or 0.0)
-                if profile and busy_lane.is_vllm else 0.0
+                if profile and busy_lane.is_vllm
+                else 0.0
             )
             freed_by_sleep = max(current_vram - residual, 0.0)
             capacity = self._safe_get_capacity(provider_id)
@@ -3329,17 +3946,22 @@ class CapacityPlanner:
             if (available + freed_by_sleep) < target_cost:
                 logger.info(
                     "Drain skip lane=%s: VRAM infeasible (avail=%.0f + freed=%.0f < target_cost=%.0f)",
-                    busy_lane.lane_id, available, freed_by_sleep, target_cost,
+                    busy_lane.lane_id,
+                    available,
+                    freed_by_sleep,
+                    target_cost,
                 )
                 return False
 
         logger.info(
             "Drain approved: busy_lane=%s model=%s busy_eff=%.2f → target=%s target_eff=%.2f",
-            busy_lane.lane_id, busy_lane.model_name, busy_eff,
-            target.model_name, target_eff,
+            busy_lane.lane_id,
+            busy_lane.model_name,
+            busy_eff,
+            target.model_name,
+            target_eff,
         )
         return True
-
 
     # ------------------------------------------------------------------
     # VRAM ledger helpers
@@ -3355,7 +3977,11 @@ class CapacityPlanner:
     ) -> str:
         """Create a VRAM reservation in the ledger.  Returns reservation_id."""
         return self._vram_ledger.reserve(
-            provider_id, lane_id, operation, vram_mb, gpu_devices,
+            provider_id,
+            lane_id,
+            operation,
+            vram_mb,
+            gpu_devices,
         )
 
     def _try_reserve_vram_atomic(
@@ -3370,9 +3996,14 @@ class CapacityPlanner:
     ) -> str | None:
         """Atomic check-and-reserve.  Returns reservation_id or None."""
         return self._vram_ledger.try_reserve_atomic(
-            provider_id, lane_id, operation, vram_mb,
-            raw_available_mb, safety_margin=self.VRAM_SAFETY_MARGIN,
-            gpu_devices=gpu_devices, per_gpu_free=per_gpu_free,
+            provider_id,
+            lane_id,
+            operation,
+            vram_mb,
+            raw_available_mb,
+            safety_margin=self.VRAM_SAFETY_MARGIN,
+            gpu_devices=gpu_devices,
+            per_gpu_free=per_gpu_free,
         )
 
     def _release_vram(self, reservation_id: str | None) -> None:
@@ -3424,13 +4055,17 @@ class CapacityPlanner:
                 if total_mb > 0 and used_mb >= 0:
                     free_mb = max(total_mb - used_mb, 0.0)
             free_mb = self._vram_ledger.get_gpu_effective_available_mb(
-                provider_id, dev_id, free_mb,
+                provider_id,
+                dev_id,
+                free_mb,
             )
             result[dev_id] = free_mb
         return result if result else None
 
     def _lane_gpu_devices_str(
-        self, provider_id: int, lane_id: str,
+        self,
+        provider_id: int,
+        lane_id: str,
     ) -> str | None:
         """Get the gpu_devices string for an existing lane from the runtime snapshot."""
         lanes = self._safe_get_lanes(provider_id)
@@ -3448,8 +4083,11 @@ class CapacityPlanner:
         """
         logger.info(
             "Executing capacity action: %s on lane %s (model=%s, provider=%s) — %s",
-            action.action, action.lane_id, action.model_name,
-            action.provider_id, action.reason,
+            action.action,
+            action.lane_id,
+            action.model_name,
+            action.provider_id,
+            action.reason,
         )
 
         # KV cache reconfiguration: mark cold (stop routing), sleep, reconfigure, unmark
@@ -3472,7 +4110,8 @@ class CapacityPlanner:
             except Exception:
                 logger.warning(
                     "Sleep before reconfigure failed for lane %s, proceeding with cold restart",
-                    action.lane_id, exc_info=True,
+                    action.lane_id,
+                    exc_info=True,
                 )
             try:
                 await self._registry.send_command(
@@ -3483,7 +4122,8 @@ class CapacityPlanner:
                 )
             except Exception:
                 logger.exception(
-                    "Failed to send reconfigure_lane for lane %s", action.lane_id,
+                    "Failed to send reconfigure_lane for lane %s",
+                    action.lane_id,
                 )
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
                 return False
@@ -3494,7 +4134,8 @@ class CapacityPlanner:
             if not confirmed:
                 logger.warning(
                     "Confirmation timeout for reconfigure_kv_cache on lane %s after %.0fs",
-                    action.lane_id, timeout_seconds,
+                    action.lane_id,
+                    timeout_seconds,
                 )
             return confirmed
 
@@ -3523,7 +4164,9 @@ class CapacityPlanner:
                 if isinstance(_vllm_cfg, dict):
                     _tp = int(_vllm_cfg.get("tensor_parallel_size") or 1)
             if _tp > 1 and len(_per_gpu_free) >= _tp:
-                _sorted_gpus = sorted(_per_gpu_free, key=lambda g: _per_gpu_free[g], reverse=True)
+                _sorted_gpus = sorted(
+                    _per_gpu_free, key=lambda g: _per_gpu_free[g], reverse=True
+                )
                 _lane_gpus = ",".join(str(g) for g in _sorted_gpus[:_tp])
 
         # Sleep/wake are lightweight individual commands.
@@ -3535,7 +4178,8 @@ class CapacityPlanner:
                     logger.info(
                         "Skipping stale preemptive sleep for lane %s on provider %s: "
                         "paired preemptive load was not confirmed",
-                        action.lane_id, action.provider_id,
+                        action.lane_id,
+                        action.provider_id,
                     )
                     return False
             # Sleeping frees VRAM: record a negative reservation so concurrent
@@ -3546,8 +4190,10 @@ class CapacityPlanner:
                 freed = max(current_vram - residual, 0.0)
                 if freed > 0:
                     _reservation_id = self._reserve_vram(
-                        action.provider_id, action.lane_id,
-                        f"reclaim_{action.action}", -freed,
+                        action.provider_id,
+                        action.lane_id,
+                        f"reclaim_{action.action}",
+                        -freed,
                         gpu_devices=_lane_gpus,
                     )
 
@@ -3558,13 +4204,16 @@ class CapacityPlanner:
             command_action, command_params = command_map[action.action]
             try:
                 await self._registry.send_command(
-                    action.provider_id, command_action, command_params,
+                    action.provider_id,
+                    command_action,
+                    command_params,
                     timeout_seconds=int(min(timeout_seconds, 120)),
                 )
             except Exception:
                 logger.exception(
                     "Failed to send %s command for lane %s",
-                    action.action, action.lane_id,
+                    action.action,
+                    action.lane_id,
                 )
                 self._release_vram(_reservation_id)
                 return False
@@ -3572,15 +4221,22 @@ class CapacityPlanner:
         elif action.action == "wake":
             # Wake consumes VRAM: reserve the delta above sleeping residual.
             # E.g. model sleeping at 1.5 GB, fully loaded = 6 GB → reserve 4.5 GB.
-            if _reservation_id is None and _profile is not None and _capacity is not None:
+            if (
+                _reservation_id is None
+                and _profile is not None
+                and _capacity is not None
+            ):
                 current_vram = self._estimate_model_loaded_vram(_profile)
                 residual = float(_profile.sleeping_residual_mb or 0.0)
                 wake_delta = max(current_vram - residual, 0.0)
                 if wake_delta > 0:
                     raw_avail = float(_capacity.available_vram_mb)
                     _reservation_id = self._try_reserve_vram_atomic(
-                        action.provider_id, action.lane_id,
-                        "wake", wake_delta, raw_avail,
+                        action.provider_id,
+                        action.lane_id,
+                        "wake",
+                        wake_delta,
+                        raw_avail,
                         gpu_devices=_lane_gpus,
                         per_gpu_free=_per_gpu_free,
                     )
@@ -3588,15 +4244,19 @@ class CapacityPlanner:
                         logger.warning(
                             "VRAM reservation denied for wake of %s on lane %s "
                             "(need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s)",
-                            action.model_name, action.lane_id, wake_delta,
-                            raw_avail, self.get_pending_vram_mb(action.provider_id),
+                            action.model_name,
+                            action.lane_id,
+                            wake_delta,
+                            raw_avail,
+                            self.get_pending_vram_mb(action.provider_id),
                             _lane_gpus or "unknown",
                         )
                         return False
 
             try:
                 await self._registry.send_command(
-                    action.provider_id, "wake_lane",
+                    action.provider_id,
+                    "wake_lane",
                     {"lane_id": action.lane_id},
                     timeout_seconds=int(timeout_seconds),
                 )
@@ -3607,30 +4267,41 @@ class CapacityPlanner:
                     details=str(exc),
                 )
                 logger.exception(
-                    "Failed to send wake command for lane %s", action.lane_id,
+                    "Failed to send wake command for lane %s",
+                    action.lane_id,
                 )
                 self._release_vram(_reservation_id)
                 return False
 
         elif action.action == "load":
             if self._is_preemptive_load_action(action) and self._lane_exists_in_runtime(
-                action.provider_id, action.lane_id,
+                action.provider_id,
+                action.lane_id,
             ):
                 logger.info(
                     "Skipping stale preemptive load for lane %s on provider %s: lane already exists",
-                    action.lane_id, action.provider_id,
+                    action.lane_id,
+                    action.provider_id,
                 )
                 return False
             # Estimate VRAM and atomically reserve
             _estimated_load_vram = (
                 self._estimate_action_vram(action, _profile, _capacity)
-                if _capacity else 0.0
+                if _capacity
+                else 0.0
             )
-            if _reservation_id is None and _estimated_load_vram > 0 and _capacity is not None:
+            if (
+                _reservation_id is None
+                and _estimated_load_vram > 0
+                and _capacity is not None
+            ):
                 raw_avail = float(_capacity.available_vram_mb)
                 _reservation_id = self._try_reserve_vram_atomic(
-                    action.provider_id, action.lane_id,
-                    "load", _estimated_load_vram, raw_avail,
+                    action.provider_id,
+                    action.lane_id,
+                    "load",
+                    _estimated_load_vram,
+                    raw_avail,
                     gpu_devices=_lane_gpus,
                     per_gpu_free=_per_gpu_free,
                 )
@@ -3638,32 +4309,40 @@ class CapacityPlanner:
                     logger.warning(
                         "VRAM reservation denied for load of %s: "
                         "need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s",
-                        action.model_name, _estimated_load_vram,
-                        raw_avail, self.get_pending_vram_mb(action.provider_id),
+                        action.model_name,
+                        _estimated_load_vram,
+                        raw_avail,
+                        self.get_pending_vram_mb(action.provider_id),
                         _lane_gpus or "unknown",
                     )
                     return False
             elif _reservation_id is None and _estimated_load_vram > 0:
                 # No capacity info — unconditional reservation as fallback
                 _reservation_id = self._reserve_vram(
-                    action.provider_id, action.lane_id,
-                    "load", _estimated_load_vram,
+                    action.provider_id,
+                    action.lane_id,
+                    "load",
+                    _estimated_load_vram,
                     gpu_devices=_lane_gpus,
                 )
 
             if self._use_additive_loads:
                 try:
                     await self._registry.send_command(
-                        action.provider_id, "add_lane", action.params,
+                        action.provider_id,
+                        "add_lane",
+                        action.params,
                         timeout_seconds=int(max(timeout_seconds, 300)),
                         stale_after_seconds=360,
                     )
                     self._registry.update_desired_lane_add(
-                        action.provider_id, action.params,
+                        action.provider_id,
+                        action.params,
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to send add_lane for lane %s", action.lane_id,
+                        "Failed to send add_lane for lane %s",
+                        action.lane_id,
                     )
                     self._release_vram(_reservation_id)
                     return False
@@ -3676,11 +4355,13 @@ class CapacityPlanner:
                 self._record_inflight_add(action.provider_id, action.lane_id, new_lane)
 
                 desired = self._build_desired_lane_set(
-                    action.provider_id, add_lane=new_lane,
+                    action.provider_id,
+                    add_lane=new_lane,
                 )
                 try:
                     result = await self._registry.send_command(
-                        action.provider_id, "apply_lanes",
+                        action.provider_id,
+                        "apply_lanes",
                         {"lanes": desired},
                         timeout_seconds=int(max(timeout_seconds, 300)),
                         stale_after_seconds=360,
@@ -3689,7 +4370,8 @@ class CapacityPlanner:
                     if rolled_back:
                         logger.warning(
                             "apply_lanes rolled back for load of %s on provider %s",
-                            action.model_name, action.provider_id,
+                            action.model_name,
+                            action.provider_id,
                         )
                         self._clear_inflight_add(action.provider_id, action.lane_id)
                         self._release_vram(_reservation_id)
@@ -3699,7 +4381,8 @@ class CapacityPlanner:
                     self._clear_inflight_add(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
-                        "Failed to send apply_lanes for load of %s", action.lane_id,
+                        "Failed to send apply_lanes for load of %s",
+                        action.lane_id,
                     )
                     self._clear_inflight_add(action.provider_id, action.lane_id)
                     self._release_vram(_reservation_id)
@@ -3710,7 +4393,9 @@ class CapacityPlanner:
             if self._lane_is_in_load_cooldown(action.provider_id, action.lane_id):
                 logger.info(
                     "Skipping stop of lane %s on provider %s: within %.0fs load cooldown",
-                    action.lane_id, action.provider_id, self._load_cooldown_seconds,
+                    action.lane_id,
+                    action.provider_id,
+                    self._load_cooldown_seconds,
                 )
                 return False
 
@@ -3720,8 +4405,10 @@ class CapacityPlanner:
                 freed = self._estimate_model_loaded_vram(_profile)
                 if freed > 0:
                     _reservation_id = self._reserve_vram(
-                        action.provider_id, action.lane_id,
-                        "reclaim_stop", -freed,
+                        action.provider_id,
+                        action.lane_id,
+                        "reclaim_stop",
+                        -freed,
                         gpu_devices=_lane_gpus,
                     )
 
@@ -3730,7 +4417,9 @@ class CapacityPlanner:
 
             # Phase 3b: Drain active requests — abort if drain fails
             drained = await self._drain_lane(
-                action.provider_id, action.lane_id, timeout_seconds=60.0,
+                action.provider_id,
+                action.lane_id,
+                timeout_seconds=60.0,
             )
             if not drained:
                 logger.warning(
@@ -3744,16 +4433,19 @@ class CapacityPlanner:
             if self._use_additive_loads:
                 try:
                     await self._registry.send_command(
-                        action.provider_id, "delete_lane",
+                        action.provider_id,
+                        "delete_lane",
                         {"lane_id": action.lane_id},
                         timeout_seconds=int(min(timeout_seconds, 30)),
                     )
                     self._registry.update_desired_lane_remove(
-                        action.provider_id, action.lane_id,
+                        action.provider_id,
+                        action.lane_id,
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to send delete_lane for lane %s", action.lane_id,
+                        "Failed to send delete_lane for lane %s",
+                        action.lane_id,
                     )
                     self._unmark_lane_cold(action.provider_id, action.lane_id)
                     self._release_vram(_reservation_id)
@@ -3763,11 +4455,13 @@ class CapacityPlanner:
                 self._record_inflight_removal(action.provider_id, action.lane_id)
 
                 desired = self._build_desired_lane_set(
-                    action.provider_id, remove_lane_id=action.lane_id,
+                    action.provider_id,
+                    remove_lane_id=action.lane_id,
                 )
                 try:
                     result = await self._registry.send_command(
-                        action.provider_id, "apply_lanes",
+                        action.provider_id,
+                        "apply_lanes",
                         {"lanes": desired},
                         timeout_seconds=int(min(timeout_seconds, 30)),
                     )
@@ -3775,7 +4469,8 @@ class CapacityPlanner:
                     if rolled_back:
                         logger.warning(
                             "apply_lanes rolled back for stop of %s on provider %s",
-                            action.lane_id, action.provider_id,
+                            action.lane_id,
+                            action.provider_id,
                         )
                         self._clear_inflight_removal(action.provider_id, action.lane_id)
                         self._unmark_lane_cold(action.provider_id, action.lane_id)
@@ -3785,7 +4480,8 @@ class CapacityPlanner:
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
-                        "Failed to send apply_lanes for stop of %s", action.lane_id,
+                        "Failed to send apply_lanes for stop of %s",
+                        action.lane_id,
                     )
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
                     self._unmark_lane_cold(action.provider_id, action.lane_id)
@@ -3814,7 +4510,9 @@ class CapacityPlanner:
                 )
             logger.warning(
                 "Confirmation timeout for %s on lane %s after %.0fs",
-                action.action, action.lane_id, timeout_seconds,
+                action.action,
+                action.lane_id,
+                timeout_seconds,
             )
         else:
             if action.action == "stop":
@@ -3827,14 +4525,19 @@ class CapacityPlanner:
                 # previous stop of the same lane_id.
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
 
-        if confirmed and action.action in ("load", "wake") and self._on_state_change is not None:
+        if (
+            confirmed
+            and action.action in ("load", "wake")
+            and self._on_state_change is not None
+        ):
             # Notify scheduler to reevaluate queued requests for this model
             try:
                 self._on_state_change(action.model_name)
             except Exception:
                 logger.debug(
                     "on_state_change callback failed for model %s",
-                    action.model_name, exc_info=True,
+                    action.model_name,
+                    exc_info=True,
                 )
         return confirmed
 
@@ -3858,7 +4561,11 @@ class CapacityPlanner:
                 continue
 
             lane_dict = next(
-                (l for l in lanes if isinstance(l, dict) and l.get("lane_id") == action.lane_id),
+                (
+                    l
+                    for l in lanes
+                    if isinstance(l, dict) and l.get("lane_id") == action.lane_id
+                ),
                 None,
             )
 
@@ -3866,7 +4573,9 @@ class CapacityPlanner:
                 self._record_confirmed_action_state(action, time.time())
                 logger.info(
                     "Confirmed %s on lane %s (model=%s)",
-                    action.action, action.lane_id, action.model_name,
+                    action.action,
+                    action.lane_id,
+                    action.model_name,
                 )
                 return True
 
@@ -3879,12 +4588,18 @@ class CapacityPlanner:
         if action.action in ("sleep_l1", "sleep_l2"):
             return lane is not None and lane.get("sleep_state") == "sleeping"
         if action.action == "wake":
-            return lane is not None and lane.get("runtime_state") in ("loaded", "running")
+            return lane is not None and lane.get("runtime_state") in (
+                "loaded",
+                "running",
+            )
         if action.action == "stop":
             return lane is None  # Lane should be gone
         if action.action == "load":
             # Look for any lane with the model name in loaded/running state
-            return lane is not None and lane.get("runtime_state") in ("loaded", "running")
+            return lane is not None and lane.get("runtime_state") in (
+                "loaded",
+                "running",
+            )
         if action.action == "reconfigure_kv_cache":
             return True  # Reconfiguration confirmed by command success
         return False
@@ -3909,6 +4624,7 @@ class CapacityPlanner:
                 _base_residency_from_bytes,
                 _estimated_disk_size_bytes_from_model_name,
             )
+
             disk = _estimated_disk_size_bytes_from_model_name(model_name)
             base = _base_residency_from_bytes(disk)
             estimated_mb = float(base) if base else 4096.0
@@ -3920,7 +4636,7 @@ class CapacityPlanner:
             if inferred and inferred > 1:
                 tp = inferred
         if tp > 1:
-            estimated_mb *= (1.0 + self.TP_OVERHEAD_RATIO)
+            estimated_mb *= 1.0 + self.TP_OVERHEAD_RATIO
 
         available = float(capacity.available_vram_mb)
         return available < estimated_mb * self.VRAM_SAFETY_MARGIN

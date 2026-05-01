@@ -194,6 +194,7 @@ class IngestionStatusCallback(StatusCallback):
         message: str,
         exception=None,
         tokens=None,
+        error_code: Optional[str] = None,
     ):
         """Send error status to Artemis (best-effort, never raises).
 
@@ -207,6 +208,8 @@ class IngestionStatusCallback(StatusCallback):
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
+        if error_code is not None and hasattr(self.status, "error_code"):
+            self.status.error_code = error_code
 
         rest_of_index = self.current_stage_index + 1
         for stage in self.status.stages[rest_of_index:]:

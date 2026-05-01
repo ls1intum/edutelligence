@@ -1,0 +1,209 @@
+"""YouTube-specific helpers: validation and download via yt-dlp.
+
+Surfaces failures via structured error codes that Pyris propagates to
+Artemis in the status-update callback for instructor-visible messaging.
+"""
+
+import json
+import re
+import subprocess  # nosec B404
+from pathlib import Path
+from typing import Any, Dict
+
+from iris.common.logging_config import get_logger
+from iris.tracing import observe
+
+logger = get_logger(__name__)
+
+
+class YouTubeDownloadError(Exception):
+    """Raised when yt-dlp cannot validate or download a YouTube video.
+
+    Carries a structured ``error_code`` (one of YOUTUBE_PRIVATE,
+    YOUTUBE_LIVE, YOUTUBE_TOO_LONG, YOUTUBE_UNAVAILABLE,
+    YOUTUBE_DOWNLOAD_FAILED) so that upstream callers can attach it
+    to the status callback verbatim.
+    """
+
+    def __init__(self, error_code: str, message: str) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
+# Timeout for `yt-dlp --dump-json`. Metadata fetch is fast; 30 s is generous.
+_VALIDATE_TIMEOUT_SECONDS = 30
+
+# Cap download resolution. Transcription/slide-detection is fine at 1080p;
+# an uncapped "bestvideo+bestaudio" can pull 4K/8K and balloon disk, bandwidth,
+# and merge time — and increase the chance of hitting the download timeout.
+_FORMAT_SELECTOR = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+
+# yt-dlp exposes two signals for livestreams:
+#   * metadata["is_live"] — bool, true while a stream is live
+#   * metadata["live_status"] — string, one of:
+#       "not_live"      — regular VOD, safe to transcribe
+#       "is_live"       — currently live, reject
+#       "is_upcoming"   — scheduled future stream/premiere, reject
+#       "post_live"     — stream just ended, not yet a clean VOD, reject
+#       "was_live"      — formerly-live VOD; we treat it as a stream artifact
+#                         and reject, since the policy is "normal uploads only"
+# Anything other than `"not_live"` (or missing/None, which we treat as VOD for
+# backwards compat with older yt-dlp outputs) is rejected as YOUTUBE_LIVE.
+_LIVE_REJECT_STATUSES = frozenset({"is_live", "is_upcoming", "post_live", "was_live"})
+
+# Private patterns are intentionally narrow: a bare "sign in" message also
+# appears in age-restricted / geo-blocked errors, which are UNAVAILABLE, not
+# PRIVATE. So we match "Private video" explicitly and leave the broader
+# auth-gated cases to UNAVAILABLE classification below.
+_PRIVATE_PATTERNS = (re.compile(r"private video", re.IGNORECASE),)
+_UNAVAILABLE_PATTERNS = (
+    re.compile(r"video unavailable", re.IGNORECASE),
+    re.compile(r"removed", re.IGNORECASE),
+    re.compile(r"age[- ]restricted", re.IGNORECASE),
+    re.compile(r"not available in your country", re.IGNORECASE),
+    re.compile(r"sign in", re.IGNORECASE),
+)
+
+
+def _classify_yt_dlp_error(stderr: str) -> str:
+    """Map yt-dlp stderr to one of our structured error codes."""
+    if any(p.search(stderr) for p in _PRIVATE_PATTERNS):
+        return "YOUTUBE_PRIVATE"
+    if any(p.search(stderr) for p in _UNAVAILABLE_PATTERNS):
+        return "YOUTUBE_UNAVAILABLE"
+    # Default: DOWNLOAD_FAILED (retryable per spec lines 88-91).
+    # An unrecognized stderr could be a transient network/yt-dlp issue;
+    # UNAVAILABLE is terminal and would block instructor-initiated retries.
+    return "YOUTUBE_DOWNLOAD_FAILED"
+
+
+def _is_stream(metadata: Dict[str, Any]) -> bool:
+    """True if the video is any kind of livestream (live, upcoming, or
+    formerly-live VOD). Only fully non-stream uploads are accepted."""
+    if metadata.get("is_live"):
+        return True
+    live_status = metadata.get("live_status")
+    return live_status in _LIVE_REJECT_STATUSES
+
+
+def validate_youtube_video(url: str, max_duration_seconds: int) -> Dict[str, Any]:
+    """Validate a YouTube URL by fetching metadata via ``yt-dlp --dump-json``.
+
+    Performs no download; only network cost is the metadata fetch.
+
+    Raises:
+        YouTubeDownloadError: with a structured ``error_code`` on any failure.
+    """
+    command = ["yt-dlp", "--dump-json", "--no-warnings", "--no-playlist", "--", url]
+    try:
+        result = subprocess.run(  # nosec B603
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=_VALIDATE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp metadata fetch timed out after "
+            f"{_VALIDATE_TIMEOUT_SECONDS}s for {url}",
+        ) from e
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr or ""
+        code = _classify_yt_dlp_error(stderr)
+        raise YouTubeDownloadError(
+            code,
+            f"yt-dlp failed to validate {url}: {stderr.strip()}",
+        ) from e
+    except FileNotFoundError as e:
+        # yt-dlp binary not installed — treat as download failure
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED", "yt-dlp binary not found on PATH"
+        ) from e
+
+    try:
+        metadata = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp returned non-JSON output for {url}",
+        ) from e
+
+    if _is_stream(metadata):
+        raise YouTubeDownloadError(
+            "YOUTUBE_LIVE",
+            "Livestreams and stream-derived VODs cannot be transcribed; "
+            "only regular uploads are supported",
+        )
+    duration = metadata.get("duration")
+    if duration is not None and duration > max_duration_seconds:
+        raise YouTubeDownloadError(
+            "YOUTUBE_TOO_LONG",
+            f"Video duration {duration}s exceeds max {max_duration_seconds}s",
+        )
+    return metadata
+
+
+@observe(name="Download YouTube Video")
+def download_youtube_video(
+    url: str,
+    output_path: Path,
+    timeout: int,
+) -> Path:
+    """Download a YouTube video as an MP4 to ``output_path``.
+
+    Uses a 1080p-capped format selector so long videos don't unexpectedly
+    pull multi-GB 4K/8K sources and blow the timeout/disk budget.
+
+    Raises:
+        YouTubeDownloadError: with error_code="YOUTUBE_DOWNLOAD_FAILED" on
+        timeout, non-zero exit, a successful exit that nonetheless produced
+        no output file, or the ``yt-dlp`` binary being absent from PATH.
+    """
+    output_path = Path(output_path)
+    command = [
+        "yt-dlp",
+        "-f",
+        _FORMAT_SELECTOR,
+        "--merge-output-format",
+        "mp4",
+        "--no-warnings",
+        "--no-playlist",
+        "-o",
+        str(output_path),
+        "--",
+        url,
+    ]
+    logger.info("Downloading YouTube video %s -> %s", url, output_path)
+    try:
+        subprocess.run(  # nosec B603
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError as e:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            "yt-dlp binary not found on PATH",
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp download timed out after {timeout}s for {url}",
+        ) from e
+    except subprocess.CalledProcessError as e:
+        stderr_text = (e.stderr or "").strip()
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp download failed (exit {e.returncode}): {stderr_text}",
+        ) from e
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise YouTubeDownloadError(
+            "YOUTUBE_DOWNLOAD_FAILED",
+            f"yt-dlp reported success but no output at {output_path}",
+        )
+    return output_path

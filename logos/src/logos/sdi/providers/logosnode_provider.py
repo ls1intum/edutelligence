@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -16,7 +15,6 @@ from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_se
 from ..models import (
     ModelStatus,
     OllamaCapacity,
-    QueueStatePerPriority,
     LaneSchedulerSignals,
     ModelSchedulerView,
     ModelProfile,
@@ -33,7 +31,7 @@ logger = logging.getLogger(__name__)
 class LogosNodeDataProvider:
     """Unified local-provider SDI source for direct Ollama and worker-backed lanes."""
 
-    DEFAULT_PARALLEL_CAPACITY = 1
+    DEFAULT_PARALLEL_CAPACITY = 20
 
     def __init__(
         self,
@@ -58,7 +56,6 @@ class LogosNodeDataProvider:
         self._model_id_to_name: Dict[int, str] = {}
         self._loaded_models: Dict[str, Dict[str, Any]] = {}
         self._last_refresh = 0.0
-        self._model_active: Dict[int, int] = {}
         self._active_request_ids: Dict[str, int] = {}
         self._db_parallel_ceiling: Dict[int, int] = {}
         self._lock = threading.RLock()
@@ -85,7 +82,6 @@ class LogosNodeDataProvider:
     def register_model(self, model_id: int, model_name: str) -> None:
         with self._lock:
             self._model_id_to_name[model_id] = model_name
-            self._model_active.setdefault(model_id, 0)
 
     def update_registration(self, *, name: str, base_url: Optional[str], total_vram_mb: int) -> None:
         with self._lock:
@@ -97,12 +93,7 @@ class LogosNodeDataProvider:
     def set_registered_models(self, models: Dict[int, str]) -> None:
         with self._lock:
             desired = {int(model_id): model_name for model_id, model_name in models.items()}
-            removed_ids = set(self._model_id_to_name) - set(desired)
             self._model_id_to_name = desired
-            for model_id in removed_ids:
-                self._model_active.pop(model_id, None)
-            for model_id in desired:
-                self._model_active.setdefault(model_id, 0)
             stale_request_ids = [
                 request_id
                 for request_id, model_id in self._active_request_ids.items()
@@ -404,8 +395,10 @@ class LogosNodeDataProvider:
 
         with self._lock:
             loaded_info = self._loaded_models.get(model_name)
-            queue_state = self.queue_manager.get_state(model_id, self.provider_id)
-            active_requests = self._model_active.get(model_id, 0)
+            queue_state = self.queue_manager.get_state(model_id)
+            active_requests = len(
+                [rid for rid, mid in self._active_request_ids.items() if mid == model_id]
+            )
             is_loaded = bool(loaded_info)
             vram_mb = int((loaded_info or {}).get("size_vram", 0) // (1024 * 1024))
             expires_at = (loaded_info or {}).get("expires_at")
@@ -686,96 +679,53 @@ class LogosNodeDataProvider:
         caps = snap.get("capabilities_models")
         return list(caps) if caps else []
 
-    def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
-        with self._lock:
-            if request_id:
-                if request_id in self._active_request_ids:
-                    return
-                self._active_request_ids[request_id] = model_id
-            self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
-
-    def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:
+    def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:  # noqa: ARG002
+        """Remove request from active tracking. Counter is now derived from _active_request_ids."""
         if request_id:
             with self._lock:
-                mapped_model = self._active_request_ids.pop(request_id, None)
-                if mapped_model is not None:
-                    model_id = mapped_model
-        if reuse_slot:
-            return
-        with self._lock:
-            current_active = self._model_active.get(model_id, 0)
-            self._model_active[model_id] = max(0, current_active - 1)
+                self._active_request_ids.pop(request_id, None)
 
-    # Maximum backend queue_waiting before we refuse new reservations.
-    # Prevents piling requests on an already-backlogged vLLM process.
-    BACKEND_QUEUE_PRESSURE_THRESHOLD = 2
-
-    def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
+    def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:  # noqa: ARG002
+        """Record request_id -> model_id mapping for monitoring lookups."""
         with self._lock:
-            current_active = self._model_active.get(model_id, 0)
-            max_capacity, _source = self.get_parallel_capacity(model_id)
-            if current_active < max_capacity:
-                # Check backend queue pressure before accepting
-                if self._backend_queue_exceeds_threshold(model_id):
-                    logger.debug(
-                        "Refusing reservation for model %d: backend queue pressure exceeds threshold",
-                        model_id,
-                    )
-                    return False
-                if request_id in self._active_request_ids:
-                    return True
+            if request_id not in self._active_request_ids:
                 self._active_request_ids[request_id] = model_id
-                self._model_active[model_id] = current_active + 1
-                return True
-            return False
 
-    def _backend_queue_exceeds_threshold(self, model_id: int) -> bool:
-        """Check if the backend (vLLM) queue_waiting exceeds the threshold."""
+    def get_active_count(self, model_id: int) -> int:
+        """Return number of active requests from the runtime snapshot (sum of requests_running)."""
         if self._runtime_registry is None:
-            return False
+            return 0
         model_name = self._model_id_to_name.get(model_id)
         if not model_name:
-            return False
+            return 0
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
-            return False
+            return 0
         lanes = ((snap.get("runtime") or {}).get("lanes") or [])
+        total = 0
         for lane in lanes:
             if not isinstance(lane, dict):
                 continue
             if lane.get("model") != model_name:
                 continue
-            if lane.get("runtime_state") in {"stopped", "error"}:
-                continue
-            backend = lane.get("backend_metrics")
-            if isinstance(backend, dict):
-                queue_waiting = float(backend.get("queue_waiting") or 0)
-                if queue_waiting > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
-                    return True
-        return False
-
-    def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
-        with self._lock:
-            if request_id in self._active_request_ids:
-                return
-            self._active_request_ids[request_id] = model_id
-            if increment_active:
-                self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
-
-    def get_active_count(self, model_id: int) -> int:
-        with self._lock:
-            return self._model_active.get(model_id, 0)
+            backend = lane.get("backend_metrics") or {}
+            try:
+                total += int(float(backend.get("requests_running") or 0))
+            except (TypeError, ValueError):
+                pass
+        return total
 
     def get_debug_state(self) -> Dict[int, Dict[str, Any]]:
         with self._lock:
             models = {}
             for model_id, model_name in self._model_id_to_name.items():
                 max_capacity, capacity_source = self.get_parallel_capacity(model_id)
-                queue_state = self.queue_manager.get_state(model_id, self.provider_id)
+                queue_state = self.queue_manager.get_state(model_id)
                 recent_signals = self._get_recent_model_scheduler_signals(model_id)
+                active = len([rid for rid, mid in self._active_request_ids.items() if mid == model_id])
                 models[model_id] = {
                     "model_name": model_name,
-                    "active": self._model_active.get(model_id, 0),
+                    "active": active,
                     "max_capacity": max_capacity,
                     "capacity_source": capacity_source,
                     "queue_depth": queue_state.total,

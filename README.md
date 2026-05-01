@@ -77,8 +77,6 @@ A comprehensive LLM Engineering Platform that provides centralized management an
 
 **Technology Stack:** Python 3.13, Poetry, FastAPI, Docker
 
-[More information](https://logos.ase.cit.tum.de/)
-
 ## 🚀 Quick Start
 
 ### Prerequisites

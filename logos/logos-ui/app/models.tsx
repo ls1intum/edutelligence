@@ -103,20 +103,22 @@ export default function Models() {
   };
 
   return (
-    <VStack className="w-full">
-      <Text
-        size="2xl"
-        className="text-center font-bold text-black dark:text-white"
-      >
-        Models
-      </Text>
-      <Text className="mb-6 text-center text-gray-500">
-        Administrate Models.
-      </Text>
+    <VStack className="w-full" space="lg">
+      <VStack className="items-center space-y-1">
+        <Text
+          size="2xl"
+          className="text-center font-bold text-black dark:text-white"
+        >
+          Models
+        </Text>
+        <Text className="text-center text-gray-500 dark:text-gray-300">
+          Administrate Models.
+        </Text>
+      </VStack>
 
       {stats && (
-        <HStack space="xl" className="mb-8 justify-center">
-          <VStack className="min-w-[100px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
+        <HStack space="xl" className="justify-center">
+          <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
             <Text size="xl" className="font-bold text-black dark:text-white">
               {stats.totalModels}
             </Text>
@@ -124,7 +126,7 @@ export default function Models() {
               Models
             </Text>
           </VStack>
-          <VStack className="min-w-[100px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
+          <VStack className="min-w-[120px] items-center rounded-xl border border-outline-200 bg-background-50 p-4 dark:border-none">
             <Text size="xl" className="font-bold text-black dark:text-white">
               {stats.mostUsedModel}
             </Text>
@@ -135,7 +137,7 @@ export default function Models() {
         </HStack>
       )}
 
-      <Box className="mb-6 self-end">
+      <Box className="self-end">
         <Button onPress={() => router.push("/add_model")}>
           <ButtonText>+ Add</ButtonText>
         </Button>

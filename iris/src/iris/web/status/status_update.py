@@ -223,6 +223,7 @@ class StatusCallback(ABC):
         message: str,
         exception=None,
         tokens: Optional[List[TokenUsageDTO]] = None,
+        error_code: Optional[str] = None,
     ):
         """
         Transition the current stage to ERROR and update the status.
@@ -234,6 +235,8 @@ class StatusCallback(ABC):
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
+        if error_code is not None and hasattr(self.status, "error_code"):
+            self.status.error_code = error_code
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
             self.current_stage_index + 1

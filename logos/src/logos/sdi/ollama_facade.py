@@ -236,21 +236,7 @@ class OllamaSchedulingDataFacade:
             return metrics
 
     def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
-        """
-        Attempt to reserve execution capacity for a model.
-        Atomic check-and-increment.
-        
-        Returns:
-            True if reserved, False if full (queue needed).
-        """
-        try:
-            ollama_data_provider = self._providers[int(provider_id)]
-
-            return ollama_data_provider.try_reserve_capacity(model_id, request_id)
-        except ValueError:
-            return False
-        except KeyError:
-            return False
+        raise NotImplementedError("try_reserve_capacity removed — scheduler no longer gates on local counters")
 
     def _get_provider_for_model(self, model_id: int, provider_id: Optional[int] = None) -> OllamaDataProvider:
         """

@@ -12,15 +12,27 @@ from typing import Any, Dict, Set, Optional, Tuple
 import grpc
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from logos.auth import authenticate_logos_key
+from logos.role_auth import require_logos_admin_key, require_app_admin_or_above
+from logos.errors import (
+    openai_error_response,
+    coerce_upstream_error,
+    raise_openai_error,
+    UpstreamStreamError,
+)
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
-from logos.dbutils.types import Deployment, get_unique_models_from_deployments, normalize_provider_type
+from logos.dbutils.types import (
+    Deployment,
+    get_unique_models_from_deployments,
+    normalize_provider_type,
+)
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.jobs.job_service import JobService, JobSubmission
@@ -28,11 +40,10 @@ from logos.responses import (
     get_client_ip,
     extract_model,
     request_setup,
-    extract_token_usage
+    extract_token_usage,
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
-from logos.pipeline.fcfs_scheduler import FcfScheduler
-from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.simple_scheduler import SimpleScheduler
 from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
 from logos.capacity.demand_tracker import DemandTracker
@@ -47,8 +58,24 @@ from logos.logosnode_registry import (
     LogosNodeSessionConflictError,
     LogosNodeRuntimeRegistry,
 )
-from logos.terminal_logging import MultiLineFormatter, UvicornAccessFilter, UvicornErrorFilter
-from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
+from logos.terminal_logging import (
+    MultiLineFormatter,
+    UvicornAccessFilter,
+    UvicornErrorFilter,
+    model_name_cache,
+    style_model,
+    style_request_id,
+    style_duration,
+    format_number,
+    GREEN,
+    RED,
+    YELLOW,
+    paint,
+    BOLD,
+)
+from logos.monitoring.prometheus_metrics import (
+    metrics_response as _prometheus_metrics_response,
+)
 from scripts import setup_proxy
 
 _SERVER_START_TIME = int(time.time())
@@ -56,6 +83,8 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
+
+
 def _resolve_provider_name(provider_id: int) -> str:
     """Best-effort resolve a provider ID to its worker name."""
     snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
@@ -64,7 +93,9 @@ def _resolve_provider_name(provider_id: int) -> str:
     return str(provider_id)
 
 
-def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str]) -> None:
+def _sync_logosnode_capabilities_to_db(
+    provider_id: int, model_names: list[str]
+) -> None:
     """Callback: sync announced capabilities into DB tables."""
     pname = _resolve_provider_name(provider_id)
     try:
@@ -72,7 +103,8 @@ def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str])
             db.sync_logosnode_capabilities(provider_id, model_names)
         logger.info(
             "Synced %d capability model(s) to DB for provider %s",
-            len(model_names), pname,
+            len(model_names),
+            pname,
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
@@ -100,7 +132,9 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = _env_int(
     "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
     _LOGOSNODE_INFER_TIMEOUT_SECONDS,
 )
-_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
+_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int(
+    "LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30
+)
 
 
 def _record_azure_rate_limits(
@@ -146,7 +180,9 @@ def _is_today_or_all_utc(day: str) -> bool:
     normalized = str(day or "").strip().lower()
     if normalized == "all":
         return True
-    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%d"
+    )
 
 
 def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool:
@@ -156,7 +192,9 @@ def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool
     if last_heartbeat is None:
         return False
     now = datetime.datetime.now(datetime.timezone.utc)
-    return (now - last_heartbeat) <= datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS)
+    return (now - last_heartbeat) <= datetime.timedelta(
+        seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS
+    )
 
 
 def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -189,7 +227,13 @@ def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _planner_model_alias(model_name: str) -> str:
     """Return the planner/worker-safe alias used in lane ids and logs."""
-    return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
+    return (
+        str(model_name or "")
+        .strip()
+        .replace("/", "_")
+        .replace(":", "_")
+        .replace(" ", "_")
+    )
 
 
 def _resolve_requested_model_name(
@@ -264,7 +308,9 @@ def _merge_histogram_buckets(target: dict[str, float], source: Any) -> None:
         target[bucket] = target.get(bucket, 0.0) + count
 
 
-def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optional[float]:
+def _histogram_quantile_seconds(
+    histogram: Any, quantile: float = 0.95
+) -> Optional[float]:
     if not isinstance(histogram, dict) or not histogram:
         return None
 
@@ -327,8 +373,12 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         return {}
 
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    capacity = (
+        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    )
+    transport = (
+        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    )
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
 
     provider_signals: Dict[str, Any] = {
@@ -336,7 +386,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
-        "device_count": len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0,
+        "device_count": (
+            len(devices.get("devices") or [])
+            if isinstance(devices.get("devices"), list)
+            else 0
+        ),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
         "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
@@ -345,7 +399,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
         "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
         "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
-        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
+        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb"))
+        or 0.0,
         "runtime_modes": _runtime_modes_for_lanes(lanes),
     }
 
@@ -395,7 +450,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         runtime_state = str(lane.get("runtime_state") or "").strip()
         is_vllm = bool(lane.get("vllm"))
         active_requests = _safe_int(lane.get("active_requests")) or 0
-        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+        backend_metrics = (
+            lane.get("backend_metrics")
+            if isinstance(lane.get("backend_metrics"), dict)
+            else {}
+        )
         ttft_histogram = (
             backend_metrics.get("ttft_histogram")
             if isinstance(backend_metrics.get("ttft_histogram"), dict)
@@ -416,10 +475,18 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vram_source": lane.get("vram_source"),
             "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
-            "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
-            "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
-            "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
-            "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
+            "gpu_cache_usage_percent": _safe_float(
+                backend_metrics.get("gpu_cache_usage_percent")
+            ),
+            "prefix_cache_hit_rate": _safe_float(
+                backend_metrics.get("prefix_cache_hit_rate")
+            ),
+            "prompt_tokens_total": _safe_float(
+                backend_metrics.get("prompt_tokens_total")
+            ),
+            "generation_tokens_total": _safe_float(
+                backend_metrics.get("generation_tokens_total")
+            ),
             "ttft_histogram": ttft_histogram,
             "ttft_p95_seconds": lane_ttft_p95,
         }
@@ -468,12 +535,20 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             current_prompt = _safe_float(entry.get("prompt_tokens_total")) or 0.0
             entry["prompt_tokens_total"] = current_prompt + prompt_tokens_total
 
-        generation_tokens_total = _safe_float(backend_metrics.get("generation_tokens_total"))
+        generation_tokens_total = _safe_float(
+            backend_metrics.get("generation_tokens_total")
+        )
         if generation_tokens_total is not None:
-            current_generation = _safe_float(entry.get("generation_tokens_total")) or 0.0
-            entry["generation_tokens_total"] = current_generation + generation_tokens_total
+            current_generation = (
+                _safe_float(entry.get("generation_tokens_total")) or 0.0
+            )
+            entry["generation_tokens_total"] = (
+                current_generation + generation_tokens_total
+            )
 
-        gpu_cache_usage_percent = _safe_float(backend_metrics.get("gpu_cache_usage_percent"))
+        gpu_cache_usage_percent = _safe_float(
+            backend_metrics.get("gpu_cache_usage_percent")
+        )
         if gpu_cache_usage_percent is not None:
             entry["_gpu_cache_usage_percent_sum"] += gpu_cache_usage_percent
             entry["_gpu_cache_usage_percent_count"] += 1
@@ -484,7 +559,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 else max(current_max, gpu_cache_usage_percent)
             )
 
-        prefix_cache_hit_rate = _safe_float(backend_metrics.get("prefix_cache_hit_rate"))
+        prefix_cache_hit_rate = _safe_float(
+            backend_metrics.get("prefix_cache_hit_rate")
+        )
         if prefix_cache_hit_rate is not None:
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
@@ -502,7 +579,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
 
-        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
+        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(
+            entry.get("ttft_histogram")
+        )
 
     return {
         "provider": provider_signals,
@@ -524,15 +603,23 @@ def _build_live_local_provider_sample(
 
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
     devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    capacity = (
+        runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
+    )
+    transport = (
+        runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    )
 
     used_vram_mb = float(devices.get("used_memory_mb") or 0.0)
     if used_vram_mb <= 0:
         used_vram_mb = float(capacity.get("total_effective_vram_mb") or 0.0)
 
     total_vram_mb = float(devices.get("total_memory_mb") or 0.0)
-    if total_vram_mb <= 0 and isinstance(provider, dict) and provider.get("total_vram_mb") is not None:
+    if (
+        total_vram_mb <= 0
+        and isinstance(provider, dict)
+        and provider.get("total_vram_mb") is not None
+    ):
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
@@ -555,7 +642,9 @@ def _build_live_local_provider_sample(
     return {
         "timestamp": timestamp,
         "snapshot_source": "logosnode-runtime",
-        "provider_type": provider.get("provider_type") if isinstance(provider, dict) else "logosnode",
+        "provider_type": (
+            provider.get("provider_type") if isinstance(provider, dict) else "logosnode"
+        ),
         "connection_state": "online",
         "connected": True,
         "transport_connected": bool(transport.get("connected", True)),
@@ -611,9 +700,13 @@ def _load_persisted_local_provider_vram_payload(
                 after_snapshot_id=int(after_snapshot_id or 0),
             )
         elif str(day).strip().lower() == "all":
-            payload, status = db.get_ollama_vram_deltas(logos_key, day="all", after_snapshot_id=0)
+            payload, status = db.get_ollama_vram_deltas(
+                logos_key, day="all", after_snapshot_id=0
+            )
         else:
-            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+            payload, status = db.get_ollama_vram_stats(
+                logos_key, day=day, bucket_seconds=5
+            )
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -628,10 +721,13 @@ def _capture_logosnode_provider_snapshot(
     provider_id: int,
     runtime: Dict[str, Any],
 ) -> None:
-    sample = _build_live_local_provider_sample(None, {
-        "last_heartbeat": runtime.get("timestamp"),
-        "runtime": runtime,
-    })
+    sample = _build_live_local_provider_sample(
+        None,
+        {
+            "last_heartbeat": runtime.get("timestamp"),
+            "runtime": runtime,
+        },
+    )
     if sample is None:
         return
 
@@ -656,8 +752,16 @@ def _capture_logosnode_provider_snapshot(
             free_memory_bytes=free_bytes,
             loaded_models=list(sample.get("loaded_models") or []),
             snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-            runtime_payload=sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {},
-            scheduler_signals=sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {},
+            runtime_payload=(
+                sample.get("runtime_payload")
+                if isinstance(sample.get("runtime_payload"), dict)
+                else {}
+            ),
+            scheduler_signals=(
+                sample.get("scheduler_signals")
+                if isinstance(sample.get("scheduler_signals"), dict)
+                else {}
+            ),
             poll_success=True,
         )
         # Persist calibrated model profiles into the dedicated table
@@ -668,7 +772,11 @@ def _capture_logosnode_provider_snapshot(
                 try:
                     db.upsert_model_profiles(provider_id, model_profiles)
                 except Exception:
-                    logger.debug("Failed to upsert model profiles for provider %s", _resolve_provider_name(provider_id), exc_info=True)
+                    logger.debug(
+                        "Failed to upsert model profiles for provider %s",
+                        _resolve_provider_name(provider_id),
+                        exc_info=True,
+                    )
 
     sample["snapshot_id"] = snapshot_id
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
@@ -682,7 +790,9 @@ def _merge_local_provider_vram_payload(
     after_snapshot_id: int = 0,
     include_live_runtime: bool,
 ) -> Dict[str, Any]:
-    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
+    providers = (
+        payload.get("providers") if isinstance(payload.get("providers"), list) else []
+    )
     providers_by_id: Dict[int, Dict[str, Any]] = {}
     unnamed_providers: list[Dict[str, Any]] = []
 
@@ -731,14 +841,28 @@ def _merge_local_provider_vram_payload(
         connected = _logosnode_snapshot_is_connected(runtime_snapshot)
         entry["connected"] = connected
         entry["connection_state"] = "online" if connected else "offline"
-        entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
+        entry["last_heartbeat"] = (
+            runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
+        )
 
-        runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
-        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
+        runtime = (
+            runtime_snapshot.get("runtime")
+            if isinstance(runtime_snapshot, dict)
+            else {}
+        )
+        lanes = (
+            runtime.get("lanes")
+            if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list)
+            else []
+        )
         runtime_modes = _runtime_modes_for_lanes(lanes)
         if runtime_modes:
             entry["runtime_modes"] = runtime_modes
-        transport = runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
+        transport = (
+            runtime.get("transport")
+            if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict)
+            else {}
+        )
         if transport:
             entry["transport_connected"] = bool(transport.get("connected", connected))
 
@@ -752,7 +876,9 @@ def _merge_local_provider_vram_payload(
             if recent_samples:
                 data = _merge_provider_samples(data, recent_samples)
             elif connected:
-                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
+                live_sample = _build_live_local_provider_sample(
+                    provider, runtime_snapshot
+                )
                 if live_sample is not None:
                     data = _merge_provider_samples(data, [live_sample])
 
@@ -835,7 +961,11 @@ def _record_log_failure(
                 cold_start=scheduling_stats.get("is_cold_start"),
             )
     except Exception:
-        logger.exception("Failed to record terminal log failure (log_id=%s, request_id=%s)", log_id, request_id)
+        logger.exception(
+            "Failed to record terminal log failure (log_id=%s, request_id=%s)",
+            log_id,
+            request_id,
+        )
 
 
 @dataclass
@@ -906,7 +1036,11 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
+        if (
+            not stripped
+            or stripped == "data: [DONE]"
+            or not stripped.startswith("data: ")
+        ):
             return
         try:
             blob = json.loads(stripped[6:])
@@ -945,11 +1079,10 @@ async def lifespan(app: FastAPI):
     """
 
     # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True
+    logging.basicConfig(level=logging.INFO, force=True)
+    formatter = MultiLineFormatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    formatter = MultiLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
@@ -1022,17 +1155,28 @@ app = FastAPI(
     lifespan=lifespan,
     swagger_ui_init_oauth={},
     openapi_tags=[
-        {"name": "user-facing", "description": "OpenAI-compatible API endpoints for model inference, model listing, and async jobs"},
-        {"name": "admin", "description": "Database management, statistics, dashboards, and system configuration"},
-        {"name": "logosnode", "description": "LogosWorkerNode provider registration, sessions, and lane management"},
+        {
+            "name": "user-facing",
+            "description": "OpenAI-compatible API endpoints for model inference, model listing, and async jobs",
+        },
+        {
+            "name": "admin",
+            "description": "Database management, statistics, dashboards, and system configuration",
+        },
+        {
+            "name": "logosnode",
+            "description": "LogosWorkerNode provider registration, sessions, and lane management",
+        },
         {"name": "monitoring", "description": "Prometheus metrics and health checks"},
     ],
 )
+
 
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     from fastapi.openapi.utils import get_openapi
+
     schema = get_openapi(
         title=app.title or "Logos",
         version=app.version or "0.1.0",
@@ -1102,24 +1246,115 @@ app.add_middleware(
 )
 
 
+class APIPrefixStripperMiddleware:
+    """Strip a leading `/api` from incoming HTTP and WebSocket paths.
+
+    Lets the UI namespace all of its calls under `/api/*` so a single Traefik
+    route handles every UI-internal endpoint, while existing bare paths
+    (workernode protocol, public `/v1`/`/openai`/`/jobs`, `/docs`, `/metrics`)
+    still resolve unchanged.
+    """
+
+    def __init__(self, app, prefix: str = "/api") -> None:
+        self.app = app
+        self.prefix = prefix.rstrip("/")
+        self._prefix_bytes = self.prefix.encode("ascii")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path == self.prefix or path.startswith(self.prefix + "/"):
+                new_scope = dict(scope)
+                new_scope["path"] = path[len(self.prefix) :] or "/"
+                raw = scope.get("raw_path")
+                if isinstance(raw, bytes) and raw.startswith(self._prefix_bytes):
+                    rest = raw[len(self._prefix_bytes) :]
+                    q = rest.find(b"?")
+                    path_part = rest[:q] if q >= 0 else rest
+                    query_part = rest[q:] if q >= 0 else b""
+                    new_scope["raw_path"] = (path_part or b"/") + query_part
+                scope = new_scope
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
+
+
+# ============================================================================
+# GLOBAL EXCEPTION HANDLERS – OpenAI-spec error shapes
+# ============================================================================
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """
+    Convert every HTTPException raised in user-facing code to the OpenAI error shape.
+
+    If ``exc.detail`` is already a dict with an ``"error"`` key (as raised by
+    ``raise_openai_error()``) it is forwarded as-is so that code and param are
+    preserved.  Plain string details are wrapped automatically.
+    """
+    detail = exc.detail
+    if isinstance(detail, dict) and "error" in detail:
+        return JSONResponse(content=detail, status_code=exc.status_code)
+    return openai_error_response(
+        exc.status_code, str(detail) if detail is not None else ""
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Convert Pydantic / FastAPI validation errors to the OpenAI error shape (HTTP 422)."""
+    errors = exc.errors()
+    param: str | None = None
+    message = "Request validation failed"
+    if errors:
+        first = errors[0]
+        loc = first.get("loc") or ()
+        if loc:
+            param = str(loc[-1])
+        message = first.get("msg") or message
+    return openai_error_response(422, message, param=param)
+
+
+@app.exception_handler(Exception)
+async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all: return HTTP 500 without leaking stack traces or internal details."""
+    logger.exception("Unhandled exception on %s", request.url.path)
+    return openai_error_response(500, "Internal server error")
+
+
 @app.get("/metrics", tags=["monitoring"])
 async def prometheus_metrics(request: Request):
     """Prometheus metrics endpoint. Requires PROMETHEUS_API_KEY env var to be set.
     Pass the key via `Authorization: Bearer <key>` header."""
     if not _PROMETHEUS_API_KEY:
-        raise HTTPException(status_code=403, detail="Metrics endpoint disabled (PROMETHEUS_API_KEY not configured)")
+        raise HTTPException(
+            status_code=403,
+            detail="Metrics endpoint disabled (PROMETHEUS_API_KEY not configured)",
+        )
     auth = request.headers.get("authorization", "")
-    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
+    token = (
+        auth.removeprefix("Bearer ").strip()
+        if auth.lower().startswith("bearer ")
+        else auth.strip()
+    )
     if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing metrics API key"
+        )
     body, content_type = _prometheus_metrics_response()
     from starlette.responses import Response
+
     return Response(content=body, media_type=content_type)
 
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
 
 def _extract_policy(headers: dict, logos_key: str, body: dict):
     """
@@ -1138,7 +1373,9 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
         try:
             policy_id = int(headers["policy"])
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="policy header must be an integer")
+            raise HTTPException(
+                status_code=400, detail="policy header must be an integer"
+            )
         try:
             with DBManager() as db:
                 policy = db.get_policy(logos_key, policy_id)
@@ -1176,8 +1413,7 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
 
 def _require_root_access(logos_key: str) -> None:
     with DBManager() as db:
-        if not db.check_authorization(logos_key):
-            raise HTTPException(status_code=403, detail="Root authorization required")
+        require_logos_admin_key(logos_key, db)
 
 
 def _normalize_provider_type(provider_type: str | None) -> str:
@@ -1195,13 +1431,18 @@ def _is_tls_request(request: Request) -> bool:
     if request.url.scheme == "https":
         return True
     forwarded = request.headers.get("x-forwarded-proto", "")
-    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
+    forwarded_values = [
+        item.strip().lower() for item in forwarded.split(",") if item.strip()
+    ]
     return "https" in forwarded_values
 
 
 def _require_tls_request(request: Request) -> None:
     if not _is_tls_request(request):
-        raise HTTPException(status_code=400, detail="TLS is required for logosnode auth/session endpoints")
+        raise HTTPException(
+            status_code=400,
+            detail="TLS is required for logosnode auth/session endpoints",
+        )
 
 
 def _build_logosnode_ws_url(request: Request, token: str) -> str:
@@ -1209,11 +1450,15 @@ def _build_logosnode_ws_url(request: Request, token: str) -> str:
     ws_scheme = "ws" if _logosnode_insecure_dev_mode_enabled() else "wss"
     host = request.headers.get("host", "")
     if not host:
-        raise HTTPException(status_code=400, detail="Missing Host header for websocket URL generation")
+        raise HTTPException(
+            status_code=400, detail="Missing Host header for websocket URL generation"
+        )
     return f"{ws_scheme}://{host}/logosdb/providers/logosnode/session?token={token}"
 
 
-async def _filter_logosnode_deployments(deployments: list[Deployment]) -> list[Deployment]:
+async def _filter_logosnode_deployments(
+    deployments: list[Deployment],
+) -> list[Deployment]:
     """
     Enforce provider model scope intersection:
     DB deployment assignment AND node capabilities.
@@ -1222,21 +1467,26 @@ async def _filter_logosnode_deployments(deployments: list[Deployment]) -> list[D
         return []
 
     filtered: list[Deployment] = []
-    model_name_cache: dict[int, str] = {}
+    _local_name_lookup: dict[int, str] = {}
 
     with DBManager() as db:
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
-                filtered.append({**deployment, "type": provider_type or deployment.get("type", "")})
+                filtered.append(
+                    {**deployment, "type": provider_type or deployment.get("type", "")}
+                )
                 continue
 
             model_id = int(deployment["model_id"])
-            if model_id not in model_name_cache:
+            if model_id not in _local_name_lookup:
                 model_info = db.get_model(model_id)
-                model_name_cache[model_id] = (model_info or {}).get("name", "")
+                name = (model_info or {}).get("name", "")
+                _local_name_lookup[model_id] = name
+                # Prime the module-level cache so log lines resolve without a DB hit.
+                model_name_cache.prime(model_id, name)
 
-            model_name = model_name_cache[model_id]
+            model_name = _local_name_lookup[model_id]
             if not model_name:
                 continue
 
@@ -1259,23 +1509,23 @@ async def start_pipeline():
 
     _queue_mgr = PriorityQueueManager()
 
-    _logosnode_facade = LogosNodeSchedulingDataFacade(_queue_mgr, None, runtime_registry=_logosnode_registry)
+    _logosnode_facade = LogosNodeSchedulingDataFacade(
+        _queue_mgr, None, runtime_registry=_logosnode_registry
+    )
     _azure_facade = AzureSchedulingDataFacade(None)
 
     await _register_models_with_facades(_logosnode_facade, _azure_facade)
 
     model_registry = _build_model_registry()
 
-    # Scheduler: use ETTFT-correcting scheduler (ablatable via env var)
-    ettft_enabled = os.getenv("LOGOS_SCHEDULER_ETTFT_ENABLED", "true").lower() == "true"
-    scheduler = ClassificationCorrectingScheduler(
+    # Scheduler: trust vLLM queue signals
+    scheduler = SimpleScheduler(
         queue_manager=_queue_mgr,
         logosnode_facade=_logosnode_facade,
         azure_facade=_azure_facade,
         model_registry=model_registry,
-        ettft_enabled=ettft_enabled,
     )
-    logger.info("Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled)
+    logger.info("Scheduler: SimpleScheduler (trust-vLLM-queue-signals)")
 
     # 5. Executor
     executor = Executor()
@@ -1299,7 +1549,9 @@ async def start_pipeline():
     )
 
     # 10. Capacity Planner (ablatable via env var)
-    planner_enabled = os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
+    planner_enabled = (
+        os.getenv("LOGOS_CAPACITY_PLANNER_ENABLED", "true").lower() == "true"
+    )
     _capacity_planner = CapacityPlanner(
         logosnode_facade=_logosnode_facade,
         logosnode_registry=_logosnode_registry,
@@ -1315,12 +1567,16 @@ async def start_pipeline():
     await _capacity_planner.start()
 
     logger.info(
-        "Request Pipeline Initialized with ETTFT-correcting scheduler "
-        "(ettft=%s, planner=%s)", ettft_enabled, planner_enabled,
+        "Request Pipeline Initialized with SimpleScheduler "
+        "(planner=%s)",
+        planner_enabled,
     )
 
 
-async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDataFacade, azure_facade: AzureSchedulingDataFacade):
+async def _register_models_with_facades(
+    logosnode_facade: LogosNodeSchedulingDataFacade,
+    azure_facade: AzureSchedulingDataFacade,
+):
     """Register all models with their respective SDI facades."""
     logosnode_registrations: list[dict[str, Any]] = []
     azure_registrations: list[dict[str, Any]] = []
@@ -1342,7 +1598,9 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
             if model_id not in model_cache:
                 model_info = db.get_model(model_id)
                 if not model_info:
-                    logger.warning("Model %s not found when registering providers", model_id)
+                    logger.warning(
+                        "Model %s not found when registering providers", model_id
+                    )
                     continue
                 model_cache[model_id] = model_info
             model_info = model_cache[model_id]
@@ -1375,7 +1633,10 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                     {
                         "model_id": model_id,
                         "provider_name": provider_name,
-                        "logosnode_admin_url": (provider_config.get("ollama_admin_url") or provider_info.get("base_url")),
+                        "logosnode_admin_url": (
+                            provider_config.get("ollama_admin_url")
+                            or provider_info.get("base_url")
+                        ),
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
                         "provider_id": provider_id,
@@ -1390,7 +1651,9 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                         "model_id": model_id,
                         "provider_name": provider_name,
                         "model_name": model_name,
-                        "deployment_name": extract_azure_deployment_name(deployment_name),
+                        "deployment_name": extract_azure_deployment_name(
+                            deployment_name
+                        ),
                         "provider_id": provider_id,
                     }
                 )
@@ -1403,7 +1666,9 @@ async def _register_models_with_facades(logosnode_facade: LogosNodeSchedulingDat
                     provider_type,
                 )
 
-    azure_registrations = [item for item in azure_registrations if item.get("deployment_name")]
+    azure_registrations = [
+        item for item in azure_registrations if item.get("deployment_name")
+    ]
     logosnode_facade.replace_registrations(logosnode_registrations)
     azure_facade.replace_registrations(azure_registrations)
 
@@ -1433,19 +1698,21 @@ def classifier() -> ClassificationManager:
         for model_id in db.get_all_models():
             tpl = db.get_model(model_id)
             if tpl:
-                mdls.append({
-                    "id": tpl["id"],
-                    "name": tpl["name"],
-                    "weight_privacy": tpl["weight_privacy"],
-                    "weight_latency": tpl["weight_latency"],
-                    "weight_accuracy": tpl["weight_accuracy"],
-                    "weight_cost": tpl["weight_cost"],
-                    "weight_quality": tpl["weight_quality"],
-                    "tags": tpl["tags"],
-                    "parallel": tpl["parallel"],
-                    "description": tpl["description"],
-                    "classification_weight": Balancer(),
-                })
+                mdls.append(
+                    {
+                        "id": tpl["id"],
+                        "name": tpl["name"],
+                        "weight_privacy": tpl["weight_privacy"],
+                        "weight_latency": tpl["weight_latency"],
+                        "weight_accuracy": tpl["weight_accuracy"],
+                        "weight_cost": tpl["weight_cost"],
+                        "weight_quality": tpl["weight_quality"],
+                        "tags": tpl["tags"],
+                        "parallel": tpl["parallel"],
+                        "description": tpl["description"],
+                        "classification_weight": Balancer(),
+                    }
+                )
 
     manager = ClassificationManager(mdls)
     manager.update_manager(mdls)
@@ -1465,7 +1732,9 @@ def rebuild_classifier():
         logger.info("Classifier rebuilt with updated models")
 
 
-async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False) -> None:
+async def refresh_pipeline_runtime_state(
+    *, rebuild_model_classifier: bool = False
+) -> None:
     """
     Refresh in-memory DB-derived runtime state without rebuilding the whole pipeline.
 
@@ -1488,50 +1757,248 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
-def _streaming_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, request_path=None):
-    """Build streaming response using executor."""
-    from fastapi.responses import StreamingResponse
-    request_id = scheduling_stats.get("request_id") if scheduling_stats else None
+def _log_request_completion(
+    model_id: int,
+    request_id: Optional[str],
+    start_time: float,
+    usage: Dict[str, Any],
+    status: str,
+    is_streaming: bool,
+) -> None:
+    """Emit one consolidated INFO line summarising a completed inference request."""
+    duration_ms = (time.perf_counter() - start_time) * 1000.0
+    prompt_tokens = usage.get("prompt_tokens", 0) or 0
+    completion_tokens = usage.get("completion_tokens", 0) or 0
+    generation_s = duration_ms / 1000.0
+    tps = (
+        (completion_tokens / generation_s)
+        if generation_s > 0 and completion_tokens > 0
+        else 0.0
+    )
 
-    async def streamer():
+    if status == "success":
+        status_str = paint("ok", GREEN)
+    elif status == "timeout":
+        status_str = paint("timeout", YELLOW)
+    else:
+        status_str = paint(status, RED)
+
+    mode = "stream" if is_streaming else "sync"
+    model_name = model_name_cache.get(model_id) if model_id else str(model_id)
+
+    parts = [
+        f"done {style_model(model_name)}",
+        f"req={style_request_id(request_id or '?')}",
+        f"mode={mode}",
+        f"status={status_str}",
+        f"dur={style_duration(duration_ms)}",
+    ]
+    if completion_tokens > 0:
+        total_tokens = prompt_tokens + completion_tokens
+        parts.append(
+            f"tokens={format_number(prompt_tokens)} + {format_number(completion_tokens)} "
+            f"= {format_number(total_tokens)}"
+        )
+        if tps > 0:
+            parts.append(f"tps={tps:.1f}")
+    logger.info(" ".join(parts))
+
+
+async def _streaming_response(
+    context,
+    payload,
+    log_id,
+    provider_id,
+    model_id,
+    policy_id,
+    classification_stats,
+    scheduling_stats=None,
+    request_path=None,
+):
+    """Build streaming response using executor.
+
+    Returns a ``JSONResponse`` when the upstream returns a non-2xx status code
+    *before* emitting any SSE chunks so that clients receive the correct HTTP
+    status code.  Returns a ``StreamingResponse`` for normal 2xx streams;
+    mid-stream errors are appended as an OpenAI-spec SSE error frame.
+    """
+    from fastapi.responses import StreamingResponse, JSONResponse
+
+    request_id = scheduling_stats.get("request_id") if scheduling_stats else None
+    _req_start = time.perf_counter()
+
+    # Prepare headers and payload using context resolver
+    headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
+        context, payload
+    )
+
+    def process_headers(hdrs: dict):
+        try:
+            _pipeline.update_provider_stats(model_id, provider_id, hdrs)
+        except Exception:
+            pass
+        try:
+            _record_azure_rate_limits(scheduling_stats, hdrs)
+        except Exception:
+            pass
+
+    def _release():
+        """Release scheduler slot (called on early-return error paths)."""
+        if scheduling_stats and scheduling_stats.get("request_id"):
+            try:
+                _pipeline.scheduler.release(
+                    model_id,
+                    provider_id,
+                    scheduling_stats.get("provider_type"),
+                    scheduling_stats.get("request_id"),
+                )
+            except Exception as _e:
+                logger.error(f"Failed to release scheduler resources: {_e}")
+
+    # ── logosnode path ────────────────────────────────────────────────────
+    # LogosNode streams come via WebSocket; status errors are raised as
+    # LogosNodeOfflineError / LogosNodeCommandError *before* streaming starts
+    # (handled in _sync_response). Just wrap in StreamingResponse as before.
+    if context.provider_type == "logosnode" and context.lane_id:
+        stream_payload = {
+            **prepared_payload,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        logosnode_chunk_iter = _logosnode_registry.send_stream_command(
+            provider_id=provider_id,
+            action="infer_stream",
+            params={
+                "lane_id": context.lane_id,
+                "payload": stream_payload,
+                "request_path": request_path,
+            },
+            timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+        )
+
+        async def logosnode_streamer():
+            stream_log = _StreamingLogAccumulator()
+            error_message = None
+            ttft_recorded = False
+            try:
+                async for chunk in logosnode_chunk_iter:
+                    yield chunk
+                    if chunk and not ttft_recorded:
+                        if log_id:
+                            with DBManager() as db:
+                                db.set_time_at_first_token(log_id)
+                        ttft_recorded = True
+                    stream_log.feed(chunk)
+            except Exception as e:
+                error_message = str(e)
+                raise e
+            finally:
+                stream_log.finish()
+                if log_id:
+                    response_payload = stream_log.response_payload()
+                    usage_tokens = _usage_tokens_from_payload(response_payload)
+                    with DBManager() as db:
+                        db.set_response_payload(
+                            log_id,
+                            response_payload,
+                            provider_id,
+                            model_id,
+                            usage_tokens,
+                            policy_id,
+                            classification_stats,
+                            request_id=(
+                                scheduling_stats.get("request_id")
+                                if scheduling_stats
+                                else None
+                            ),
+                            queue_depth_at_arrival=(
+                                scheduling_stats.get("queue_depth_at_arrival")
+                                if scheduling_stats
+                                else None
+                            ),
+                            utilization_at_arrival=(
+                                scheduling_stats.get("utilization_at_arrival")
+                                if scheduling_stats
+                                else None
+                            ),
+                        )
+                if scheduling_stats:
+                    _pipeline.record_completion(
+                        request_id=scheduling_stats.get("request_id"),
+                        result_status="error" if error_message else "success",
+                        error_message=error_message,
+                        cold_start=scheduling_stats.get("is_cold_start"),
+                    )
+                _log_request_completion(
+                    model_id=model_id,
+                    request_id=request_id,
+                    start_time=_req_start,
+                    usage=stream_log.usage(),
+                    status="error" if error_message else "success",
+                    is_streaming=True,
+                )
+                _release()
+
+        response_headers = {"X-Request-ID": request_id} if request_id else None
+        return StreamingResponse(
+            logosnode_streamer(),
+            media_type="text/event-stream",
+            headers=response_headers,
+        )
+
+    # ── HTTP executor path ────────────────────────────────────────────────
+    chunk_iter = _pipeline.executor.execute_streaming(
+        context.forward_url,
+        headers,
+        prepared_payload,
+        on_headers=process_headers,
+    )
+
+    # Peek at the first chunk.  This triggers the initial HTTP connection so
+    # that on_headers fires and – crucially – UpstreamStreamError is raised
+    # for non-2xx responses before we commit to a StreamingResponse.
+    try:
+        first_chunk = await chunk_iter.__anext__()
+    except UpstreamStreamError as exc:
+        corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
+        logger.error(
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): "
+            "HTTP %s → %s",
+            model_id,
+            provider_id,
+            exc.status_code,
+            corrected_sc,
+        )
+        _release()
+        if scheduling_stats:
+            _pipeline.record_completion(
+                request_id=scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=str(exc),
+                cold_start=scheduling_stats.get("is_cold_start"),
+            )
+        resp_headers = {"X-Request-ID": request_id} if request_id else None
+        return JSONResponse(
+            content=error_body, status_code=corrected_sc, headers=resp_headers
+        )
+    except StopAsyncIteration:
+        first_chunk = None
+
+    async def http_streamer():
         stream_log = _StreamingLogAccumulator()
         error_message = None
-        timed_out = False
         ttft_recorded = False
 
         try:
-            def process_headers(headers: dict):
-                try:
-                    _pipeline.update_provider_stats(model_id, provider_id, headers)
-                except Exception:
-                    pass
-                try:
-                    _record_azure_rate_limits(scheduling_stats, headers)
-                except Exception:
-                    pass
-
-            # Prepare headers and payload using context resolver
-            headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
-
-            if context.provider_type == "logosnode" and context.lane_id:
-                stream_payload = {
-                    **prepared_payload,
-                    "stream": True,
-                    "stream_options": {"include_usage": True},
-                }
-                chunk_iter = _logosnode_registry.send_stream_command(
-                    provider_id=provider_id,
-                    action="infer_stream",
-                    params={"lane_id": context.lane_id, "payload": stream_payload, "request_path": request_path},
-                    timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
-                )
-            else:
-                chunk_iter = _pipeline.executor.execute_streaming(
-                    context.forward_url,
-                    headers,
-                    prepared_payload,
-                    on_headers=process_headers,
-                )
+            # Yield the already-peeked first chunk
+            if first_chunk:
+                yield first_chunk
+                stream_log.feed(first_chunk)
+                if not ttft_recorded:
+                    if log_id:
+                        with DBManager() as db:
+                            db.set_time_at_first_token(log_id)
+                    ttft_recorded = True
 
             async for chunk in chunk_iter:
                 yield chunk
@@ -1540,18 +2007,20 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
                     ttft_recorded = True
-
                 stream_log.feed(chunk)
-        except Exception as e:
-            error_message = str(e)
-            raise e
+        except Exception as exc:
+            error_message = str(exc)
+            # Mid-stream error: append error SSE frame before stopping
+            import json as _json
+
+            _, error_body = coerce_upstream_error(500, {"error": str(exc)})
+            yield f"data: {_json.dumps(error_body)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
         finally:
-            # Log completion with detailed token usage
+            stream_log.finish()
             if log_id:
-                stream_log.finish()
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(response_payload)
-
                 with DBManager() as db:
                     db.set_response_payload(
                         log_id,
@@ -1561,45 +2030,68 @@ def _streaming_response(context, payload, log_id, provider_id, model_id, policy_
                         usage_tokens,
                         policy_id,
                         classification_stats,
-                        request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
-                        queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
-                        utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                        request_id=(
+                            scheduling_stats.get("request_id")
+                            if scheduling_stats
+                            else None
+                        ),
+                        queue_depth_at_arrival=(
+                            scheduling_stats.get("queue_depth_at_arrival")
+                            if scheduling_stats
+                            else None
+                        ),
+                        utilization_at_arrival=(
+                            scheduling_stats.get("utilization_at_arrival")
+                            if scheduling_stats
+                            else None
+                        ),
                     )
-
             if scheduling_stats:
-                status = "timeout" if timed_out else ("error" if error_message else "success")
-                
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
-                    result_status=status,
+                    result_status="error" if error_message else "success",
                     error_message=error_message,
-                    cold_start=scheduling_stats.get("is_cold_start")
+                    cold_start=scheduling_stats.get("is_cold_start"),
                 )
-            
-            # Release scheduler resources
-            if scheduling_stats and scheduling_stats.get("request_id"):
-                try:
-                    _pipeline.scheduler.release(
-                        model_id,
-                        provider_id,
-                        scheduling_stats.get("provider_type"),
-                        scheduling_stats.get("request_id")
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to release scheduler resources: {e}")
-    
+            _log_request_completion(
+                model_id=model_id,
+                request_id=request_id,
+                start_time=_req_start,
+                usage=stream_log.usage(),
+                status="error" if error_message else "success",
+                is_streaming=True,
+            )
+            _release()
+
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
+    return StreamingResponse(
+        http_streamer(), media_type="text/event-stream", headers=response_headers
+    )
 
 
-async def _sync_response(context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats=None, is_async_job=False, request_path=None):
+async def _sync_response(
+    context,
+    payload,
+    log_id,
+    provider_id,
+    model_id,
+    policy_id,
+    classification_stats,
+    scheduling_stats=None,
+    is_async_job=False,
+    request_path=None,
+):
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
+
     request_id = scheduling_stats.get("request_id") if scheduling_stats else None
+    _req_start = time.perf_counter()
 
     try:
         # Prepare headers and payload using context resolver
-        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
+        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(
+            context, payload
+        )
 
         timed_out = False
         error_message = None
@@ -1611,7 +2103,11 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 rpc_result = await _logosnode_registry.send_command(
                     provider_id=provider_id,
                     action="infer",
-                    params={"lane_id": context.lane_id, "payload": sync_payload, "request_path": request_path},
+                    params={
+                        "lane_id": context.lane_id,
+                        "payload": sync_payload,
+                        "request_path": request_path,
+                    },
                     timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
                 )
                 status_override = int(rpc_result.get("status_code", 200))
@@ -1629,15 +2125,18 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     error=rpc_error,
                     usage={},
                     is_streaming=False,
-                    headers=rpc_result.get("headers")
-                    if isinstance(rpc_result.get("headers"), dict)
-                    else None,
+                    headers=(
+                        rpc_result.get("headers")
+                        if isinstance(rpc_result.get("headers"), dict)
+                        else None
+                    ),
                 )
             except LogosNodeOfflineError as exc:
                 status_override = 503
+                _, coerced_body = coerce_upstream_error(503, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
-                    response={"error": str(exc)},
+                    response=coerced_body,
                     error=str(exc),
                     usage={},
                     is_streaming=False,
@@ -1645,21 +2144,26 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                 )
             except LogosNodeCommandError as exc:
                 status_override = 502
+                _, coerced_body = coerce_upstream_error(502, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
-                    response={"error": str(exc)},
+                    response=coerced_body,
                     error=str(exc),
                     usage={},
                     is_streaming=False,
                     headers=None,
                 )
         else:
-            exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+            exec_result = await _pipeline.executor.execute_sync(
+                context.forward_url, headers, prepared_payload
+            )
 
         # Update rate limits from response headers
         if exec_result.headers:
             try:
-                _pipeline.update_provider_stats(model_id, provider_id, exec_result.headers)
+                _pipeline.update_provider_stats(
+                    model_id, provider_id, exec_result.headers
+                )
             except Exception:
                 pass
             try:
@@ -1690,28 +2194,79 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     usage_tokens,
                     policy_id,
                     classification_stats,
-                    request_id=scheduling_stats.get("request_id") if scheduling_stats else None,
-                    queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None,
-                    utilization_at_arrival=scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                    request_id=(
+                        scheduling_stats.get("request_id") if scheduling_stats else None
+                    ),
+                    queue_depth_at_arrival=(
+                        scheduling_stats.get("queue_depth_at_arrival")
+                        if scheduling_stats
+                        else None
+                    ),
+                    utilization_at_arrival=(
+                        scheduling_stats.get("utilization_at_arrival")
+                        if scheduling_stats
+                        else None
+                    ),
                 )
 
         if scheduling_stats:
-            status = "timeout" if timed_out else ("success" if exec_result.success else "error")
+            status = (
+                "timeout"
+                if timed_out
+                else ("success" if exec_result.success else "error")
+            )
             _pipeline.record_completion(
                 request_id=scheduling_stats.get("request_id"),
                 result_status=status,
-                error_message=error_message if timed_out else (exec_result.error if not exec_result.success else None),
-                cold_start=scheduling_stats.get("is_cold_start")
+                error_message=(
+                    error_message
+                    if timed_out
+                    else (exec_result.error if not exec_result.success else None)
+                ),
+                cold_start=scheduling_stats.get("is_cold_start"),
+            )
+
+        _log_request_completion(
+            model_id=model_id,
+            request_id=request_id,
+            start_time=_req_start,
+            usage=(
+                _usage_tokens_from_payload(response_payload) if response_payload else {}
+            ),
+            status=(
+                "timeout"
+                if timed_out
+                else ("success" if exec_result.success else "error")
+            ),
+            is_streaming=False,
+        )
+
+        # Determine effective HTTP status code:
+        #   1. status_override (from logosnode RPC result or error handlers) takes highest priority
+        #   2. exec_result.status_code from the upstream HTTP response
+        #   3. Fallback: 504 for timeout, 200 for success, 500 for error
+        if status_override is not None:
+            status_code = status_override
+        elif exec_result.status_code is not None:
+            status_code = exec_result.status_code
+        else:
+            status_code = 504 if timed_out else (200 if exec_result.success else 500)
+
+        # Normalise error bodies to OpenAI shape and correct any wrongly-labelled
+        # 5xx status codes (e.g. vLLM context-length sent as 500 → 400).
+        if not exec_result.success:
+            status_code, response_payload = coerce_upstream_error(
+                status_code, response_payload or {"error": exec_result.error}
             )
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
-            status_code = status_override if status_override is not None else (504 if timed_out else (200 if exec_result.success else 500))
             return {"status_code": status_code, "data": response_payload}
         else:
-            status_code = status_override if status_override is not None else (504 if timed_out else (200 if exec_result.success else 500))
-            headers = {"X-Request-ID": request_id} if request_id else None
-            return JSONResponse(content=exec_result.response, status_code=status_code, headers=headers)
+            resp_headers = {"X-Request-ID": request_id} if request_id else None
+            return JSONResponse(
+                content=response_payload, status_code=status_code, headers=resp_headers
+            )
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -1720,15 +2275,23 @@ async def _sync_response(context, payload, log_id, provider_id, model_id, policy
                     model_id,
                     provider_id,
                     scheduling_stats.get("provider_type"),
-                    scheduling_stats.get("request_id")
+                    scheduling_stats.get("request_id"),
                 )
             except Exception as e:
                 logger.error(f"Failed to release scheduler resources: {e}")
 
 
-def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: dict,
-                               log_id: Optional[int], provider_id: int, model_id: Optional[int],
-                               policy_id: int, classified: dict, request_id: Optional[str] = None):
+def _proxy_streaming_response(
+    forward_url: str,
+    proxy_headers: dict,
+    payload: dict,
+    log_id: Optional[int],
+    provider_id: int,
+    model_id: Optional[int],
+    policy_id: int,
+    classified: dict,
+    request_id: Optional[str] = None,
+):
     """
     Build streaming response for PROXY MODE using executor.
     """
@@ -1765,11 +2328,20 @@ def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: di
                 usage_tokens = _usage_tokens_from_payload(response_payload)
 
                 with DBManager() as db:
-                    if ttft is None and stream_log.first_chunk is not None and not error_message:
+                    if (
+                        ttft is None
+                        and stream_log.first_chunk is not None
+                        and not error_message
+                    ):
                         db.set_time_at_first_token(log_id)
                     db.set_response_payload(
-                        log_id, response_payload, provider_id, model_id,
-                        usage_tokens, policy_id, classified
+                        log_id,
+                        response_payload,
+                        provider_id,
+                        model_id,
+                        usage_tokens,
+                        policy_id,
+                        classified,
                     )
                     db.update_log_entry_metrics(
                         log_id=log_id,
@@ -1780,12 +2352,23 @@ def _proxy_streaming_response(forward_url: str, proxy_headers: dict, payload: di
                     )
 
     response_headers = {"X-Request-ID": request_id} if request_id else None
-    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
+    return StreamingResponse(
+        streamer(), media_type="text/event-stream", headers=response_headers
+    )
 
 
-async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: dict,
-                                log_id: Optional[int], provider_id: int, model_id: Optional[int],
-                                policy_id: int, classified: dict, is_async_job=False, request_id: Optional[str] = None):
+async def _proxy_sync_response(
+    forward_url: str,
+    proxy_headers: dict,
+    payload: dict,
+    log_id: Optional[int],
+    provider_id: int,
+    model_id: Optional[int],
+    policy_id: int,
+    classified: dict,
+    is_async_job=False,
+    request_id: Optional[str] = None,
+):
     """
     Build synchronous response for PROXY MODE using executor.
     """
@@ -1806,8 +2389,13 @@ async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: d
             if exec_result.success:
                 db.set_time_at_first_token(log_id)
             db.set_response_payload(
-                log_id, response_payload, provider_id, model_id,
-                usage_tokens, policy_id, classified
+                log_id,
+                response_payload,
+                provider_id,
+                model_id,
+                usage_tokens,
+                policy_id,
+                classified,
             )
             db.update_log_entry_metrics(
                 log_id=log_id,
@@ -1817,15 +2405,28 @@ async def _proxy_sync_response(forward_url: str, proxy_headers: dict, payload: d
                 error_message=None if exec_result.success else exec_result.error,
             )
 
+    # Use upstream HTTP status code; fall back to 200/500 if unavailable
+    status_code = (
+        exec_result.status_code
+        if exec_result.status_code is not None
+        else (200 if exec_result.success else 500)
+    )
+
+    # Normalise error bodies to OpenAI shape
+    if not exec_result.success:
+        status_code, response_payload = coerce_upstream_error(
+            status_code, response_payload or {"error": exec_result.error}
+        )
+
     # Return dict for async jobs, JSONResponse for sync endpoints
     if is_async_job:
-        return {"status_code": 200 if exec_result.success else 500, "data": response_payload}
+        return {"status_code": status_code, "data": response_payload}
     else:
-        headers = {"X-Request-ID": request_id} if request_id else None
+        resp_headers = {"X-Request-ID": request_id} if request_id else None
         return JSONResponse(
             content=response_payload,
-            status_code=200 if exec_result.success else 500,
-            headers=headers,
+            status_code=status_code,
+            headers=resp_headers,
         )
 
 
@@ -1848,7 +2449,9 @@ async def _execute_proxy_mode(
     """
     requested_model_name = str(body.get("model") or "").strip()
     if not requested_model_name:
-        raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
+        raise HTTPException(
+            status_code=400, detail="Proxy mode requires 'model' in payload"
+        )
 
     with DBManager() as db:
         models_info = db.get_models_info(logos_key)
@@ -1858,7 +2461,10 @@ async def _execute_proxy_mode(
         [str(row[1]) for row in models_info if len(row) > 1 and str(row[1]).strip()],
     )
     if model_name is None:
-        raise HTTPException(status_code=404, detail=f"Model '{requested_model_name}' not available for this key")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{requested_model_name}' not available for this key",
+        )
 
     model_id = None
     for row in models_info:
@@ -1868,7 +2474,10 @@ async def _execute_proxy_mode(
             break
 
     if model_id is None:
-        raise HTTPException(status_code=404, detail=f"Model '{requested_model_name}' not available for this key")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{requested_model_name}' not available for this key",
+        )
 
     # Ensure payload model matches DB name (avoid user-supplied mismatch)
     body = {**body, "model": model_name}
@@ -1876,7 +2485,9 @@ async def _execute_proxy_mode(
     # Narrow deployments to the requested model to preserve provider metadata
     model_deployments = [d for d in deployments if d["model_id"] == model_id]
     if not model_deployments:
-        raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
+        raise HTTPException(
+            status_code=404, detail=f"No deployment found for model '{model_name}'"
+        )
 
     # Proxy mode still routes through classification/scheduling with a single allowed model.
     # This preserves policy screening while constraining execution to the requested model.
@@ -1957,7 +2568,7 @@ async def _execute_resource_mode(
         policy=policy,
         allowed_models=allowed_models,
         deployments=deployments,
-        profile_id=profile_id
+        profile_id=profile_id,
     )
 
     # Process through classification and scheduling
@@ -1999,7 +2610,7 @@ async def _execute_resource_mode(
         else:
             # Sync endpoints support streaming
             if body.get("stream"):
-                return _streaming_response(
+                return await _streaming_response(
                     result.execution_context,
                     body,
                     log_id,
@@ -2028,7 +2639,7 @@ async def _execute_resource_mode(
             _pipeline.record_completion(
                 request_id=result.scheduling_stats.get("request_id"),
                 result_status="error",
-                error_message=str(e)
+                error_message=str(e),
             )
         except Exception as record_err:
             logger.error(f"Failed to record completion: {record_err}")
@@ -2108,13 +2719,20 @@ async def route_and_execute(
     """
     # No models available → ERROR
     if not deployments:
-        _record_log_failure(log_id, request_id, "No models available for this user.", result_status="error")
+        _record_log_failure(
+            log_id,
+            request_id,
+            "No models available for this user.",
+            result_status="error",
+        )
         if is_async_job:
-            return {"status_code": 404, "data": {"error": "No models available for this user."}}
+            return {
+                "status_code": 404,
+                "data": {"error": "No models available for this user."},
+            }
         else:
             raise HTTPException(
-                status_code=404,
-                detail="No models available for this user."
+                status_code=404, detail="No models available for this user."
             )
 
     try:
@@ -2168,7 +2786,9 @@ async def handle_sync_request(path: str, request: Request):
         Response (StreamingResponse or JSONResponse)
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
-    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+    headers, auth, body, client_ip, log_id = await auth_parse_log(
+        request, use_profile_auth=True
+    )
     request_id = secrets.token_urlsafe(16)
     if log_id:
         with DBManager() as db:
@@ -2197,7 +2817,12 @@ async def handle_sync_request(path: str, request: Request):
 
     # Route and execute request with profile context
     return await route_and_execute(
-        deployments, body, headers, auth.logos_key, path, log_id,
+        deployments,
+        body,
+        headers,
+        auth.logos_key,
+        path,
+        log_id,
         profile_id=auth.profile_id,
         request_id=request_id,
     )
@@ -2242,6 +2867,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     # Authenticate
     if use_profile_auth:
         from logos.auth import authenticate_with_profile
+
         auth = authenticate_with_profile(headers)
         process_id = auth.process_id
 
@@ -2282,7 +2908,9 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         HTTPException(400/401) on invalid payload or auth.
     """
     # Auth with profile + logging
-    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+    headers, auth, json_data, client_ip, log_id = await auth_parse_log(
+        request, use_profile_auth=True
+    )
 
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
@@ -2298,13 +2926,29 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     status_url = str(request.url_for("get_job_status", job_id=job_id))
 
     # Fire-and-forget: run the heavy proxy/classification pipeline off the request path.
-    task = asyncio.create_task(process_job(job_id, path, headers, dict(json_data), client_ip, auth))
+    task = asyncio.create_task(
+        process_job(job_id, path, headers, dict(json_data), client_ip, auth)
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    return JSONResponse(status_code=202, content={"job_id": job_id, "status_url": status_url, "profile_id": auth.profile_id})
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status_url": status_url,
+            "profile_id": auth.profile_id,
+        },
+    )
 
 
-async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth):
+async def process_job(
+    job_id: int,
+    path: str,
+    headers: Dict[str, str],
+    json_data: Dict[str, Any],
+    client_ip: str,
+    auth,
+):
     """
     Execute a job and persist success or failure.
 
@@ -2328,7 +2972,9 @@ async def process_job(job_id: int, path: str, headers: Dict[str, str], json_data
     return result
 
 
-async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth) -> Dict[str, Any]:
+async def execute_proxy_job(
+    path: str, headers: Dict[str, str], json_data: Dict[str, Any], client_ip: str, auth
+) -> Dict[str, Any]:
     """
     Execute the proxy workflow using either PROXY MODE or RESOURCE MODE pipeline.
     Force non-streaming for async job execution.
@@ -2350,12 +2996,16 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
     usage_id = None
     request_id = secrets.token_urlsafe(16)
     with DBManager() as db:
-        r, c = db.log_usage(auth.process_id, client_ip, json_data, headers, request_id=request_id)
+        r, c = db.log_usage(
+            auth.process_id, client_ip, json_data, headers, request_id=request_id
+        )
         if c != 200:
             logging.info("Error while logging a request: %s", r)
         else:
             usage_id = int(r["log-id"])
-            db.update_log_entry_metrics(log_id=usage_id, timeout_s=json_data.get("timeout_s"))
+            db.update_log_entry_metrics(
+                log_id=usage_id, timeout_s=json_data.get("timeout_s")
+            )
 
     # Get available models for this profile - profile_id EXPLICITLY passed
     try:
@@ -2363,17 +3013,24 @@ async def execute_proxy_job(path: str, headers: Dict[str, str], json_data: Dict[
         models = await _filter_logosnode_deployments(models)
     except PermissionError as e:
         _record_log_failure(usage_id, request_id, str(e), result_status="error")
-        return {"status_code": 401, "data": {"error": str(e)}}
+        _, err_body = coerce_upstream_error(401, {"error": str(e)})
+        return {"status_code": 401, "data": err_body}
     except ValueError as e:
         _record_log_failure(usage_id, request_id, str(e), result_status="error")
-        return {"status_code": 400, "data": {"error": str(e)}}
+        _, err_body = coerce_upstream_error(400, {"error": str(e)})
+        return {"status_code": 400, "data": err_body}
 
     # Force non-streaming for jobs
     json_data["stream"] = False
 
     # Route and execute request (async job mode) with profile context
     return await route_and_execute(
-        models, json_data, headers, auth.logos_key, path, usage_id,
+        models,
+        json_data,
+        headers,
+        auth.logos_key,
+        path,
+        usage_id,
         is_async_job=True,
         profile_id=auth.profile_id,
         request_id=request_id,
@@ -2391,7 +3048,9 @@ def _is_tls_websocket(websocket: WebSocket) -> bool:
     if websocket.url.scheme in {"wss", "https"}:
         return True
     forwarded = websocket.headers.get("x-forwarded-proto", "")
-    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
+    forwarded_values = [
+        item.strip().lower() for item in forwarded.split(",") if item.strip()
+    ]
     return "https" in forwarded_values or "wss" in forwarded_values
 
 
@@ -2428,7 +3087,9 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
         with DBManager() as db:
             db.sync_logosnode_capabilities(provider_id, [])
     except Exception:
-        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_name)
+        logger.exception(
+            "Failed to create logosnode_provider_keys for provider %s", provider_name
+        )
 
     return {
         "provider_id": provider_id,
@@ -2451,10 +3112,14 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         provider = db.get_logosnode_provider_by_api_key(data.shared_key)
 
     if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found for this API key")
+        raise HTTPException(
+            status_code=404, detail="Provider not found for this API key"
+        )
     provider_type = _normalize_provider_type(provider.get("provider_type"))
     if provider_type != "logosnode":
-        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
+        raise HTTPException(
+            status_code=403, detail="Provider is not configured as logosnode"
+        )
 
     provider_id = provider["id"]
     worker_id = provider.get("name") or f"worker-{provider_id}"
@@ -2513,25 +3178,43 @@ async def logosnode_session(websocket: WebSocket, token: str):
             if msg_type == "hello":
                 await _logosnode_registry.on_hello(
                     provider_id=ticket.provider_id,
-                    worker_id=str(payload.get("worker_id", "")).strip() or ticket.worker_id,
-                    capabilities_models=payload.get("capabilities_models")
-                    if isinstance(payload.get("capabilities_models"), list)
-                    else None,
+                    worker_id=str(payload.get("worker_id", "")).strip()
+                    or ticket.worker_id,
+                    capabilities_models=(
+                        payload.get("capabilities_models")
+                        if isinstance(payload.get("capabilities_models"), list)
+                        else None
+                    ),
+                    max_lanes=(
+                        int(payload.get("max_lanes", 0))
+                        if isinstance(payload.get("max_lanes"), (int, float))
+                        else 0
+                    ),
                 )
             elif msg_type == "status":
-                runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+                runtime = (
+                    payload.get("runtime")
+                    if isinstance(payload.get("runtime"), dict)
+                    else {}
+                )
                 await _logosnode_registry.update_runtime(
                     provider_id=ticket.provider_id,
                     runtime=runtime,
-                    capabilities_models=payload.get("capabilities_models")
-                    if isinstance(payload.get("capabilities_models"), list)
-                    else None,
+                    capabilities_models=(
+                        payload.get("capabilities_models")
+                        if isinstance(payload.get("capabilities_models"), list)
+                        else None
+                    ),
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
-                    event=payload.get("event") if isinstance(payload.get("event"), dict) else {},
+                    event=(
+                        payload.get("event")
+                        if isinstance(payload.get("event"), dict)
+                        else {}
+                    ),
                 )
             elif msg_type == "heartbeat":
                 await _logosnode_registry.mark_heartbeat(ticket.provider_id)
@@ -2585,11 +3268,16 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
 }
 
 
-async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
+async def _dispatch_logosnode_command(
+    provider_id: int, action: str, params: dict[str, Any] | None = None
+):
     try:
         timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
         return await _logosnode_registry.send_command(
-            provider_id, action=action, params=params or {}, timeout_seconds=timeout,
+            provider_id,
+            action=action,
+            params=params or {},
+            timeout_seconds=timeout,
         )
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
@@ -2662,7 +3350,9 @@ async def add_service_proxy(data: AddServiceProxyRequest):
         lk = setup_proxy.add_service(**data.dict())
         if "error" in lk:
             return lk, 500
-        return {"service-key": lk,}, 200
+        return {
+            "service-key": lk,
+        }, 200
     except Exception as e:
         return {"error": f"{str(e)}"}, 500
 
@@ -2673,9 +3363,18 @@ async def set_log(data: SetLogRequest):
         check, code = db.get_process_id(data.dict()["logos_key"])
         if "error" in check:
             return check, code
-        if check["result"] != data.dict()["process_id"] and not db.check_authorization(data.dict()["logos_key"]):
+        if (
+            check["result"] != data.dict()["process_id"]
+            and _fetch_role(data.dict()["logos_key"]) != "logos_admin"
+        ):
             return {"error": "Missing authentication to set log"}
         return db.set_process_log(data.dict()["process_id"], data.dict()["set_log"])
+
+
+def _fetch_role(logos_key: str) -> str | None:
+    with DBManager() as db:
+        user = db.get_user_by_logos_key(logos_key)
+    return user["role"] if user else None
 
 
 @app.post("/logosdb/add_provider", tags=["admin"])
@@ -2819,6 +3518,79 @@ async def add_service(data: AddServiceRequest):
 async def get_process_id(data: GetProcessIdRequest):
     with DBManager() as db:
         return db.get_process_id(data.logos_key)
+
+
+@app.get("/me", tags=["users"])
+async def get_me(request: Request):
+    logos_key, _ = authenticate_logos_key(dict(request.headers))
+    with DBManager() as db:
+        user = db.get_user_by_logos_key(logos_key)
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No user linked to this key. Service keys cannot log into the UI.",
+        )
+    return {
+        "user_id": user["id"],
+        "username": user["username"],
+        "email": user["email"],
+        "role": user["role"],
+        "teams": user["teams"],
+    }
+
+
+@app.patch("/users/{user_id}/role", tags=["users"])
+async def patch_user_role(user_id: int, body: UpdateRoleRequest, request: Request):
+    """Change a user's role (for Logos Admin only)"""
+    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    with DBManager() as db:
+        require_logos_admin_key(logos_key, db)
+        result, status = db.set_user_role(user_id, body.role)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+
+@app.get("/users", tags=["users"])
+async def list_users(request: Request):
+    logos_key = require_app_admin_or_above(request)
+    with DBManager() as db:
+        users = db.list_users()
+    return users
+
+
+@app.post("/users", tags=["users"])
+async def create_user(body: CreateUserRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+    valid_roles = {"app_developer", "app_admin", "logos_admin"}
+    if body.role not in valid_roles:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid role. Must be one of: {sorted(valid_roles)}",
+        )
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+        if caller and caller["role"] == "app_admin" and body.role != "app_developer":
+            raise HTTPException(
+                status_code=403, detail="App admins can only create app_developer users"
+            )
+        user_dict, new_key, status = db.create_user(
+            body.username, body.prename, body.name, body.email, body.role
+        )
+    if status != 200:
+        raise HTTPException(status_code=status, detail=user_dict.get("error"))
+    return {**user_dict, "logos_key": new_key}
+
+
+@app.delete("/users/{user_id}", tags=["users"])
+async def delete_user(user_id: int, request: Request):
+    logos_key = authenticate_logos_key(dict(request.headers))[0]
+    with DBManager() as db:
+        require_logos_admin_key(logos_key, db)
+        result, status = db.delete_user(user_id)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
 
 
 @app.post("/logosdb/get_role", tags=["admin"])
@@ -2966,7 +3738,9 @@ async def scheduler_state(request: Request):
     authenticate_logos_key(headers)
 
     if not _pipeline or not _logosnode_facade:
-        return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
+        return JSONResponse(
+            content={"error": "Scheduler not initialized"}, status_code=503
+        )
 
     payload = {
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
@@ -3007,13 +3781,19 @@ async def get_ollama_vram_stats(request: Request):
     # Tolerate empty/no-body requests for compatibility with older clients.
     try:
         body = await request.json()
-        if isinstance(body, dict) and isinstance(body.get("day"), str) and body.get("day", "").strip():
+        if (
+            isinstance(body, dict)
+            and isinstance(body.get("day"), str)
+            and body.get("day", "").strip()
+        ):
             day = body["day"].strip()
     except json.JSONDecodeError:
         pass
 
     return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0),
+        content=_build_live_local_provider_vram_payload(
+            logos_key, day=day, after_snapshot_id=0
+        ),
         status_code=200,
     )
 
@@ -3027,13 +3807,14 @@ async def get_ollama_vram_stats_options():
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, logos_key",
-        }
+        },
     )
 
 
 # ============================================================================
 # OPENAI-COMPATIBLE MODEL LISTING
 # ============================================================================
+
 
 @app.get("/v1/models", tags=["user-facing"])
 async def list_models(request: Request):
@@ -3047,6 +3828,7 @@ async def list_models(request: Request):
         JSONResponse matching the OpenAI GET /v1/models spec.
     """
     from logos.auth import authenticate_with_profile
+
     auth = authenticate_with_profile(dict(request.headers))
 
     with DBManager() as db:
@@ -3084,6 +3866,7 @@ async def retrieve_model(model_id: str, request: Request):
         HTTPException(404): Model not found or user lacks access.
     """
     from logos.auth import authenticate_with_profile
+
     auth = authenticate_with_profile(dict(request.headers))
 
     with DBManager() as db:
@@ -3095,24 +3878,36 @@ async def retrieve_model(model_id: str, request: Request):
                 [str(entry.get("name") or "").strip() for entry in models],
             )
             if canonical_model_name is not None:
-                model = next((entry for entry in models if entry.get("name") == canonical_model_name), None)
+                model = next(
+                    (
+                        entry
+                        for entry in models
+                        if entry.get("name") == canonical_model_name
+                    ),
+                    None,
+                )
 
     if not model:
         raise HTTPException(status_code=404, detail="Model not found or access denied")
 
-    return JSONResponse(content={
-        "id": model["name"],
-        "object": "model",
-        "created": _SERVER_START_TIME,
-        "owned_by": "logos",
-    })
+    return JSONResponse(
+        content={
+            "id": model["name"],
+            "object": "model",
+            "created": _SERVER_START_TIME,
+            "owned_by": "logos",
+        }
+    )
 
 
 # ============================================================================
 # MAIN API ENDPOINTS
 # ============================================================================
 
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+
+@app.api_route(
+    "/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
+)
 async def logos_service_sync(path: str, request: Request):
     """
     Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
@@ -3121,7 +3916,9 @@ async def logos_service_sync(path: str, request: Request):
     return await handle_sync_request(f"v1/{path}", request)
 
 
-@app.api_route("/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.api_route(
+    "/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"]
+)
 async def logos_service_v2_sync(path: str, request: Request):
     """
     Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
@@ -3129,7 +3926,11 @@ async def logos_service_v2_sync(path: str, request: Request):
     return await handle_sync_request(f"v2/{path}", request)
 
 
-@app.api_route("/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.api_route(
+    "/openai/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["user-facing"],
+)
 async def logos_service_long_sync(request: Request, path: str = None):
     """
     Dynamic proxy for LLM API endpoints (OpenAI-compatible paths).
@@ -3151,6 +3952,7 @@ async def _handle_vllm_native(request: Request):
     path = request.url.path.lstrip("/")
     return await handle_sync_request(path, request)
 
+
 for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
     app.add_api_route(
         _vllm_path,
@@ -3161,7 +3963,11 @@ for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
     )
 
 
-@app.api_route("/jobs/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.api_route(
+    "/jobs/v1/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["user-facing"],
+)
 async def logos_service_async(path: str, request: Request):
     """
     Async job-based proxy for long running/low-priority requests.
@@ -3176,13 +3982,21 @@ async def logos_service_async(path: str, request: Request):
     return await submit_job_request(f"v1/{path}", request)
 
 
-@app.api_route("/jobs/v2/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.api_route(
+    "/jobs/v2/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["user-facing"],
+)
 async def logos_service_v2_async(path: str, request: Request):
     """Async job-based proxy for Cohere-compatible endpoints."""
     return await submit_job_request(f"v2/{path}", request)
 
 
-@app.api_route("/jobs/openai/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["user-facing"])
+@app.api_route(
+    "/jobs/openai/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["user-facing"],
+)
 async def logos_service_long_async(path: str, request: Request):
     """
     Async job-based proxy for OpenAI-compatible, long running/low-priority requests.
@@ -3216,6 +4030,7 @@ async def get_job_status(job_id: int, request: Request):
     """
     # Profile-based auth
     from logos.auth import authenticate_with_profile
+
     auth = authenticate_with_profile(dict(request.headers))
 
     job = JobService.fetch(job_id)
@@ -3234,18 +4049,49 @@ async def get_job_status(job_id: int, request: Request):
     if job_profile_id != auth.profile_id:
         raise HTTPException(
             status_code=403,
-            detail="Job belongs to a different profile. Use the correct use_profile header."
+            detail="Job belongs to a different profile. Use the correct use_profile header.",
         )
 
-    return {
+    return_payload = {
         "job_id": job_id,
         "status": job["status"],
-        "result": job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None,
-        "error": job["error_message"] if job["status"] == JobStatus.FAILED.value else None,
+        "result": (
+            job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None
+        ),
+        "error": (
+            job["error_message"] if job["status"] == JobStatus.FAILED.value else None
+        ),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
         "profile_id": job_profile_id,
     }
+
+    # When a completed job has a non-2xx upstream status code, surface the
+    # error body with the correct HTTP status so OpenAI-spec clients behave
+    # correctly (e.g. don't blind-retry a 400 context-length error).
+    if job["status"] == JobStatus.SUCCESS.value:
+        result_payload = job.get("result_payload") or {}
+        job_status_code = (
+            result_payload.get("status_code")
+            if isinstance(result_payload, dict)
+            else None
+        )
+        if isinstance(job_status_code, int) and job_status_code >= 400:
+            job_data = result_payload.get("data") or {}
+            corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
+            return JSONResponse(
+                content={**return_payload, "result": None, "error": error_body},
+                status_code=corrected_sc,
+            )
+
+    if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
+        # Wrap plain-string failure message in OpenAI error shape
+        _, error_body = coerce_upstream_error(500, {"error": job["error_message"]})
+        return JSONResponse(
+            content={**return_payload, "error": error_body}, status_code=500
+        )
+
+    return return_payload
 
 
 @app.post("/logosdb/latest_requests", tags=["admin"])
@@ -3275,11 +4121,17 @@ async def request_logs(request: Request):
         return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
 
     if not isinstance(body, dict):
-        return JSONResponse(content={"error": "JSON payload must be an object"}, status_code=400)
+        return JSONResponse(
+            content={"error": "JSON payload must be an object"}, status_code=400
+        )
 
     request_ids = body.get("request_ids")
-    if not isinstance(request_ids, list) or any(not isinstance(item, str) for item in request_ids):
-        return JSONResponse(content={"error": "request_ids must be a list of strings"}, status_code=400)
+    if not isinstance(request_ids, list) or any(
+        not isinstance(item, str) for item in request_ids
+    ):
+        return JSONResponse(
+            content={"error": "request_ids must be a list of strings"}, status_code=400
+        )
 
     with DBManager() as db:
         payload, status = db.get_request_logs(logos_key, request_ids)
@@ -3336,10 +4188,14 @@ def _build_vram_signature(providers: list) -> str:
     for p in sorted(providers, key=lambda x: x.get("name", "")):
         data = p.get("data", [])
         last = data[-1] if data else {}
-        models_str = "|".join(
-            f"{m.get('name', '')}:{m.get('size_vram_mb', m.get('size_vram', ''))}"
-            for m in (last.get("loaded_models") or [])
-        ) if isinstance(last.get("loaded_models"), list) else ""
+        models_str = (
+            "|".join(
+                f"{m.get('name', '')}:{m.get('size_vram_mb', m.get('size_vram', ''))}"
+                for m in (last.get("loaded_models") or [])
+            )
+            if isinstance(last.get("loaded_models"), list)
+            else ""
+        )
         parts.append(
             f"{p.get('name', '')}::{p.get('connection_state', '')}::"
             f"{(p.get('runtime_modes') or [])}::{last.get('timestamp', '')}::"
@@ -3414,7 +4270,9 @@ async def ws_stats(websocket: WebSocket):
         nonlocal prev_vram_sig, vram_day
         day = vram_day or _today_utc()
         try:
-            payload = _build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=0)
+            payload = _build_live_local_provider_vram_payload(
+                logos_key, day=day, after_snapshot_id=0
+            )
             if payload.get("providers"):
                 sig = _build_vram_signature(payload["providers"])
                 if sig != prev_vram_sig:
@@ -3479,7 +4337,9 @@ async def ws_stats(websocket: WebSocket):
     finally:
         push_task.cancel()
         _ws_stats_connections.discard(websocket)
-        logger.info("[ws/stats] Client disconnected (%d remaining)", len(_ws_stats_connections))
+        logger.info(
+            "[ws/stats] Client disconnected (%d remaining)", len(_ws_stats_connections)
+        )
 
 
 _ws_stats_v2_connections: Set[WebSocket] = set()
@@ -3515,12 +4375,16 @@ async def ws_stats_v2(websocket: WebSocket):
 
     await websocket.accept()
     _ws_stats_v2_connections.add(websocket)
-    logger.info("[ws/stats/v2] Client connected (%d total)", len(_ws_stats_v2_connections))
+    logger.info(
+        "[ws/stats/v2] Client connected (%d total)", len(_ws_stats_v2_connections)
+    )
 
     vram_day: str = "all"
     vram_cursor: int = 0
 
-    timeline_start_iso, timeline_end_iso, timeline_target_buckets = _default_timeline_window()
+    timeline_start_iso, timeline_end_iso, timeline_target_buckets = (
+        _default_timeline_window()
+    )
     timeline_window_seconds = 30 * 24 * 3600.0
     timeline_bucket_seconds = 60
     timeline_live = True
@@ -3545,7 +4409,9 @@ async def ws_stats_v2(websocket: WebSocket):
                 return False
         return default
 
-    def _set_timeline_state(start_iso: str, end_iso: str, target_buckets: Any) -> Tuple[bool, Optional[str]]:
+    def _set_timeline_state(
+        start_iso: str, end_iso: str, target_buckets: Any
+    ) -> Tuple[bool, Optional[str]]:
         nonlocal timeline_start_iso, timeline_end_iso
         nonlocal timeline_target_buckets, timeline_window_seconds
         nonlocal timeline_live, timeline_cursor_ts, timeline_cursor_request_id
@@ -3589,10 +4455,12 @@ async def ws_stats_v2(websocket: WebSocket):
             await websocket.send_json({"type": "vram_init", "payload": payload})
         except Exception as exc:
             logger.warning("[ws/stats/v2] VRAM init error: %s", exc)
-            await websocket.send_json({
-                "type": "vram_init",
-                "payload": {"error": "Failed to load VRAM data"},
-            })
+            await websocket.send_json(
+                {
+                    "type": "vram_init",
+                    "payload": {"error": "Failed to load VRAM data"},
+                }
+            )
 
     async def _push_vram_delta() -> None:
         nonlocal vram_cursor
@@ -3628,27 +4496,39 @@ async def ws_stats_v2(websocket: WebSocket):
                     limit=200000,
                 )
             if status != 200:
-                await websocket.send_json({
-                    "type": "timeline_init",
-                    "payload": {"error": payload.get("error", "Failed to load timeline data")},
-                })
+                await websocket.send_json(
+                    {
+                        "type": "timeline_init",
+                        "payload": {
+                            "error": payload.get(
+                                "error", "Failed to load timeline data"
+                            )
+                        },
+                    }
+                )
                 return
 
-            timeline_bucket_seconds = int(payload.get("bucketSeconds") or timeline_bucket_seconds)
+            timeline_bucket_seconds = int(
+                payload.get("bucketSeconds") or timeline_bucket_seconds
+            )
             timeline_cursor_ts = timeline_end_iso
             timeline_cursor_request_id = ""
             payload["cursor"] = {
                 "enqueue_ts": timeline_cursor_ts,
                 "request_id": timeline_cursor_request_id,
             }
-            payload["events"] = events_payload.get("events", []) if events_status == 200 else []
+            payload["events"] = (
+                events_payload.get("events", []) if events_status == 200 else []
+            )
             await websocket.send_json({"type": "timeline_init", "payload": payload})
         except Exception as exc:
             logger.warning("[ws/stats/v2] Timeline init error: %s", exc)
-            await websocket.send_json({
-                "type": "timeline_init",
-                "payload": {"error": "Failed to load timeline data"},
-            })
+            await websocket.send_json(
+                {
+                    "type": "timeline_init",
+                    "payload": {"error": "Failed to load timeline data"},
+                }
+            )
 
     async def _push_timeline_delta() -> None:
         nonlocal timeline_start_iso, timeline_end_iso
@@ -3685,21 +4565,23 @@ async def ws_stats_v2(websocket: WebSocket):
             start_dt = now_dt - datetime.timedelta(seconds=timeline_window_seconds)
             timeline_start_iso = start_dt.isoformat()
 
-            await websocket.send_json({
-                "type": "timeline_delta",
-                "payload": {
-                    "events": events,
-                    "cursor": {
-                        "enqueue_ts": timeline_cursor_ts,
-                        "request_id": timeline_cursor_request_id,
+            await websocket.send_json(
+                {
+                    "type": "timeline_delta",
+                    "payload": {
+                        "events": events,
+                        "cursor": {
+                            "enqueue_ts": timeline_cursor_ts,
+                            "request_id": timeline_cursor_request_id,
+                        },
+                        "bucketSeconds": timeline_bucket_seconds,
+                        "range": {
+                            "start": timeline_start_iso,
+                            "end": timeline_end_iso,
+                        },
                     },
-                    "bucketSeconds": timeline_bucket_seconds,
-                    "range": {
-                        "start": timeline_start_iso,
-                        "end": timeline_end_iso,
-                    },
-                },
-            })
+                }
+            )
         except Exception as exc:
             logger.warning("[ws/stats/v2] Timeline delta push error: %s", exc)
 
@@ -3759,7 +4641,9 @@ async def ws_stats_v2(websocket: WebSocket):
                 if isinstance(requested_day, str) and requested_day.strip():
                     vram_day = requested_day
                 vram_cursor = 0
-                timeline_deltas_enabled = _coerce_bool(msg.get("timeline_deltas"), default=True)
+                timeline_deltas_enabled = _coerce_bool(
+                    msg.get("timeline_deltas"), default=True
+                )
 
                 timeline_cfg = msg.get("timeline") or {}
                 start_iso = timeline_cfg.get("start")
@@ -3767,12 +4651,16 @@ async def ws_stats_v2(websocket: WebSocket):
                 target_buckets = timeline_cfg.get("target_buckets", 120)
                 if not start_iso or not end_iso:
                     start_iso, end_iso, target_buckets = _default_timeline_window()
-                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
+                ok, err_msg = _set_timeline_state(
+                    str(start_iso), str(end_iso), target_buckets
+                )
                 if not ok:
-                    await websocket.send_json({
-                        "type": "timeline_init",
-                        "payload": {"error": err_msg or "Invalid timeline range"},
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "timeline_init",
+                            "payload": {"error": err_msg or "Invalid timeline range"},
+                        }
+                    )
                 else:
                     await _send_timeline_init()
 
@@ -3789,12 +4677,16 @@ async def ws_stats_v2(websocket: WebSocket):
                 start_iso = msg.get("start")
                 end_iso = msg.get("end")
                 target_buckets = msg.get("target_buckets", 120)
-                ok, err_msg = _set_timeline_state(str(start_iso), str(end_iso), target_buckets)
+                ok, err_msg = _set_timeline_state(
+                    str(start_iso), str(end_iso), target_buckets
+                )
                 if not ok:
-                    await websocket.send_json({
-                        "type": "timeline_init",
-                        "payload": {"error": err_msg or "Invalid timeline range"},
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "timeline_init",
+                            "payload": {"error": err_msg or "Invalid timeline range"},
+                        }
+                    )
                 else:
                     await _send_timeline_init()
             elif action == "ping":
@@ -3804,10 +4696,14 @@ async def ws_stats_v2(websocket: WebSocket):
     finally:
         push_task.cancel()
         _ws_stats_v2_connections.discard(websocket)
-        logger.info("[ws/stats/v2] Client disconnected (%d remaining)", len(_ws_stats_v2_connections))
+        logger.info(
+            "[ws/stats/v2] Client disconnected (%d remaining)",
+            len(_ws_stats_v2_connections),
+        )
 
 
 def _today_utc() -> str:
     """Return today's date as YYYY-MM-DD in UTC."""
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")

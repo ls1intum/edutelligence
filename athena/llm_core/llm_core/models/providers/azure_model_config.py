@@ -13,7 +13,9 @@ class AzureModelConfig(BaseChatModelConfig):
 
     PROVIDER: ClassVar[str] = "azure"
     ENUM: ClassVar[type] = AzureModel
-    KW_REMAP: ClassVar[dict[str, str]] = {}
+    KW_REMAP: ClassVar[dict[str, str]] = {
+        "max_tokens": "max_completion_tokens",
+    }
 
     provider: Literal["azure"] = "azure"
     model_name: AzureModel = Field(

@@ -86,7 +86,7 @@ def test_logosnode_runtime_parallel_capacity_overrides_static_config(monkeypatch
 
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
-        lambda self: {"parallel_capacity": 1},
+        lambda self: {"parallel_capacity": 20},
     )
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
@@ -99,12 +99,6 @@ def test_logosnode_runtime_parallel_capacity_overrides_static_config(monkeypatch
     debug_state = provider.get_debug_state()
     assert debug_state[101]["max_capacity"] == 4
     assert debug_state[101]["capacity_source"] == "runtime"
-
-    assert provider.try_reserve_capacity(101, "req-1") is True
-    assert provider.try_reserve_capacity(101, "req-2") is True
-    assert provider.try_reserve_capacity(101, "req-3") is True
-    assert provider.try_reserve_capacity(101, "req-4") is True
-    assert provider.try_reserve_capacity(101, "req-5") is False
 
 
 def test_logosnode_capacity_uses_runtime_free_memory_when_nvidia_metrics_present(monkeypatch):
@@ -205,7 +199,7 @@ def test_logosnode_runtime_vllm_lane_uses_lane_config_capacity_hint(monkeypatch)
 
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
-        lambda self: {"parallel_capacity": 1},
+        lambda self: {"parallel_capacity": 20},
     )
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
