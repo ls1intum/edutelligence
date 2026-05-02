@@ -365,6 +365,15 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         ReadinessTier.COLD_RECLAIM,
     })
 
+    # Subset that represents an actual cold-load (no usable lane: never
+    # spawned, stopped, or evicted). Wake-from-sleep is *not* a cold start
+    # — the lane process is alive, only the model weights are paged out,
+    # so the wake is fast and shouldn't be reported to users as "cold".
+    _COLD_LOAD_TIERS = frozenset({
+        ReadinessTier.COLD,
+        ReadinessTier.COLD_RECLAIM,
+    })
+
     def _try_immediate_select(self, scored: list, request_id: str):
         """Try to reserve capacity on the best available candidate.
 
@@ -431,7 +440,17 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(future, model_id, provider_id, priority)
+        # Capture cold-state at queue entry. When the dispatcher later
+        # wakes this future the lane will already be loaded, so the
+        # only chance to know "this request triggered a cold load" is
+        # right now, while we have the candidate's ETTFT tier in hand.
+        # Only true cold tiers count — sleeping lanes are *not* cold:
+        # wake is a process resume, not a fresh load.
+        is_cold_at_queue = ettft.tier in self._COLD_LOAD_TIERS
+        entry_id = self._queue_mgr.enqueue(
+            future, model_id, provider_id, priority,
+            is_cold_at_queue=is_cold_at_queue,
+        )
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
             "Request %s queued for model %s provider %s "

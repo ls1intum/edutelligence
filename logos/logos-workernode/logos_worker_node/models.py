@@ -273,7 +273,7 @@ class LaneConfig(BaseModel):
     vllm: bool = False
     num_parallel: int = Field(default=4, ge=1)
     context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
-    keep_alive: str = "5m"
+    keep_alive: str = "2m"
     kv_cache_type: str = "q8_0"
     flash_attention: bool = True
     gpu_devices: str = ""

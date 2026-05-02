@@ -180,6 +180,7 @@ class BaseScheduler(SchedulerInterface):
                     waiter_priority = entry.current_priority if entry else Priority.NORMAL
                     self._queue_mgr.enqueue(
                         next_task, model_id, provider_id, waiter_priority,
+                        is_cold_at_queue=bool(entry.is_cold_at_queue) if entry else False,
                     )
                 next_task = None
                 has_waiters = False
@@ -208,14 +209,13 @@ class BaseScheduler(SchedulerInterface):
                 priority_int = entry.current_priority.value if entry else Priority.NORMAL.value
 
                 provider_metrics = {}
-                is_cold_start = None
+                # Trust the cold flag captured at queue entry: by the time
+                # we dispatch, the lane is loaded, so a fresh status check
+                # would always say "not cold". The flag is what tells us
+                # the request actually triggered a cold/wake load.
+                is_cold_start = bool(entry.is_cold_at_queue) if entry else None
 
                 if provider_type == 'logosnode':
-                    try:
-                        status = self._logosnode.get_model_status(model_id, provider_id)
-                        is_cold_start = not status.is_loaded
-                    except ValueError:
-                        is_cold_start = None
 
                     try:
                         cap = self._logosnode.get_capacity_info(provider_id)
@@ -346,7 +346,10 @@ class BaseScheduler(SchedulerInterface):
                     queue_depth_at_schedule=queue_depth,
                     queue_depth_at_arrival=queue_depth,
                     priority_when_scheduled=priority_str,
-                    is_cold_start=False,
+                    # Trust the cold flag captured at enqueue time — wakes
+                    # from sleep aren't cold even though a state change
+                    # triggered the dispatcher.
+                    is_cold_start=bool(entry.is_cold_at_queue) if entry else None,
                     provider_metrics=provider_metrics,
                     available_vram_mb=provider_metrics.get('available_vram_mb'),
                     slot_transferred=False,

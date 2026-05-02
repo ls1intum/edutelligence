@@ -71,7 +71,12 @@ class CapacityPlanner:
     DRAIN_COMPETITIVE_RATIO = 3.0  # target must 3× outweigh victim (prevents flip-flop)
 
     # Queue depth contribution to effective demand at decision time.
-    QUEUE_WEIGHT = 0.25  # score += QUEUE_WEIGHT * lane.queue_waiting
+    # Bumped 0.25 → 0.5: a model with several queued-but-unschedulable
+    # requests needs to actually compete with idle awake lanes in the
+    # competitive-ratio check. At 0.25 a 5-request queue only counted
+    # for 1.25 demand units, which couldn't beat decayed-but-still-warm
+    # incumbents at LOAD_COMPETITIVE_RATIO=2.0.
+    QUEUE_WEIGHT = 0.5  # score += QUEUE_WEIGHT * lane.queue_waiting
 
     # Backward-compat aliases used by tests and external callers
     DEMAND_WAKE_THRESHOLD = DEMAND_WAKE_FLOOR
@@ -150,7 +155,7 @@ class CapacityPlanner:
         # one triggers the cold load.
         self._model_prepare_locks: dict[tuple[int, str], asyncio.Lock] = {}
         self._load_cooldown_seconds = float(
-            os.environ.get("LOGOS_LOAD_COOLDOWN_SECONDS", "60")
+            os.environ.get("LOGOS_LOAD_COOLDOWN_SECONDS", "30")
         )
         self._task: Optional[asyncio.Task] = None
         self._cycle_count = 0

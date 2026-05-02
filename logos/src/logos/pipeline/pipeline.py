@@ -147,6 +147,17 @@ class RequestPipeline:
             None,
         )
 
+        # Record demand at classification time — i.e., based on what the
+        # user actually asked for, not what we ended up scheduling. The
+        # success-path `_record_demand` runs after a candidate is reserved,
+        # which is too late for a request hanging in the queue waiting on
+        # a cold-load: the planner needs to see the demand *now* so it
+        # can prioritise waking/loading the model.
+        if self._demand_tracker:
+            top_name = self._resolve_model_name(target_model_id)
+            if top_name:
+                self._demand_tracker.record_request(top_name)
+
         # 2. Scheduling
         scheduling_request = SchedulingRequest(
             request_id=request_id,
@@ -240,15 +251,18 @@ class RequestPipeline:
         return ctx_result
 
     def _record_demand(self, scheduling_result, sorted_candidates: list) -> None:
+        """Record post-scheduling demand signals.
+
+        Demand for the *requested* model is recorded earlier, right after
+        classification, so the planner sees pressure even for requests
+        hung in the queue. Here we only record the latent-demand signal
+        for the case where the scheduler picked a model other than the
+        user's preference (typically because of an ETTFT or rate-limit
+        penalty) — the user still wanted the top choice, even though
+        they got served by a fallback.
+        """
         if not self._demand_tracker:
             return
-        model_name = self._resolve_model_name(scheduling_result.model_id)
-        if model_name:
-            self._demand_tracker.record_request(model_name)
-        # Record latent demand when the scheduler overrides classification's top
-        # choice due to availability (e.g. ETTFT penalties). This lets the
-        # capacity planner see that users want the unloaded model, so it can
-        # drain/wake it before it starves in resource mode.
         if sorted_candidates and scheduling_result.model_id != sorted_candidates[0][0]:
             top_model_name = self._resolve_model_name(sorted_candidates[0][0])
             if top_model_name:
@@ -441,11 +455,28 @@ class RequestPipeline:
         self._monitoring.record_provider_metrics(request_id, provider_metrics)
 
     def _resolve_model_name(self, model_id: int) -> Optional[str]:
-        """Look up model name from scheduler's model registry."""
-        if hasattr(self._scheduler, '_model_registry') and self._scheduler._model_registry:
-            for (mid, pid), name in self._scheduler._model_registry.items():
-                if mid == model_id:
-                    return name
+        """Look up model name for a model_id.
+
+        The scheduler's `_model_registry` is keyed on (model_id, provider_id)
+        but the *value* is the provider_type (e.g. "logosnode") — it was
+        never the model name. The actual name lives in the SDI facade's
+        per-provider `_model_id_to_name` map. Find any (model_id, *) entry
+        in the registry to learn its provider_id, then ask the facade.
+        Falls back to None if nothing knows about this model_id.
+        """
+        registry = getattr(self._scheduler, "_model_registry", None)
+        facade = getattr(self._scheduler, "_logosnode", None)
+        if not registry or facade is None:
+            return None
+        for (mid, pid), _ptype in registry.items():
+            if mid != model_id:
+                continue
+            try:
+                name = facade.get_model_name(model_id, pid)
+            except Exception:
+                name = None
+            if name:
+                return name
         return None
 
 
