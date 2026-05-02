@@ -29,13 +29,16 @@ type WorkerGpuPanelProps = {
   lanesByProvider: Record<string, Record<string, LaneSignalData>>;
 };
 
-function memoryBar(usedMb: number, totalMb: number, color: string) {
-  const pct = totalMb > 0 ? Math.min(100, (usedMb / totalMb) * 100) : 0;
+function ProgressBar({ pct, color }: { pct: number; color: string }) {
+  const w = Math.max(0, Math.min(100, pct));
   return (
-    <View className="h-2.5 w-full overflow-hidden rounded-full bg-background-300">
+    <View
+      className="overflow-hidden rounded-full bg-secondary-200"
+      style={{ height: 6, width: "100%" }}
+    >
       <View
         className="h-full rounded-full"
-        style={{ width: `${pct}%`, backgroundColor: color }}
+        style={{ width: `${w}%`, backgroundColor: color }}
       />
     </View>
   );
@@ -67,66 +70,76 @@ function GpuCard({ device, index }: GpuCardProps) {
   const tempC = device.temperature_celsius;
   const powerW = device.power_draw_watts;
 
-  const label =
-    device.name
-      ? `GPU ${index}: ${device.name}`
-      : `GPU ${device.device_id || index}`;
-
   return (
-    <View className="mb-3 rounded-xl border border-outline-200 bg-background-50 p-3">
-      <HStack className="mb-2 items-center justify-between">
-        <Text className="text-sm font-semibold text-typography-900" numberOfLines={1}>
-          {label}
-        </Text>
-        <HStack className="items-center gap-2">
+    <View
+      className="rounded-xl border border-outline-200 bg-background-0"
+      style={{ marginBottom: 10, paddingHorizontal: 16, paddingVertical: 14 }}
+    >
+      <HStack className="items-start gap-3">
+        <HStack className="min-w-0 flex-1 items-center gap-2">
+          <Text
+            className="text-typography-500"
+            style={{ fontSize: 11, fontWeight: "600" }}
+          >
+            GPU {index}
+          </Text>
+          <Text
+            className="text-sm font-medium text-typography-900"
+            numberOfLines={1}
+            style={{ flexShrink: 1 }}
+          >
+            {device.name || device.device_id}
+          </Text>
+        </HStack>
+        <HStack className="shrink-0 items-center gap-1.5">
           {tempC !== null && (
             <View
-              className="rounded-full px-2 py-0.5"
-              style={{ backgroundColor: `${tempColor(tempC)}22` }}
+              className="rounded-md"
+              style={{ backgroundColor: `${tempColor(tempC)}1f`, paddingHorizontal: 6, height: 20, justifyContent: "center" }}
             >
-              <Text className="text-xs font-medium" style={{ color: tempColor(tempC) }}>
+              <Text
+                style={{ fontSize: 11, fontWeight: "500", color: tempColor(tempC) }}
+              >
                 {Math.round(tempC)}°C
               </Text>
             </View>
           )}
           {powerW !== null && (
-            <View className="rounded-full bg-background-200 px-2 py-0.5">
-              <Text className="text-xs text-typography-600">
-                {Math.round(powerW)}W
+            <View
+              className="rounded-md bg-secondary-100"
+              style={{ paddingHorizontal: 6, height: 20, justifyContent: "center" }}
+            >
+              <Text className="text-typography-500" style={{ fontSize: 11 }}>
+                {Math.round(powerW)} W
               </Text>
             </View>
           )}
         </HStack>
       </HStack>
 
-      {/* Memory bar */}
-      <VStack className="mb-2 gap-1">
-        <HStack className="items-center justify-between">
-          <Text className="text-xs text-typography-500">Memory</Text>
-          <Text className="text-xs text-typography-700">
-            {formatMb(device.memory_used_mb)} / {formatMb(device.memory_total_mb)} ({Math.round(usedPct)}%)
-          </Text>
-        </HStack>
-        {memoryBar(device.memory_used_mb, device.memory_total_mb, "#3B82F6")}
-      </VStack>
-
-      {/* Utilization bar */}
-      {utilizationPct !== null && (
+      <VStack className="mt-3 gap-2">
         <VStack className="gap-1">
           <HStack className="items-center justify-between">
-            <Text className="text-xs text-typography-500">Utilization</Text>
-            <Text className="text-xs text-typography-700">
-              {Math.round(utilizationPct)}%
+            <Text className="text-[11px] text-typography-500">Memory</Text>
+            <Text className="text-[11px] text-typography-900">
+              {formatMb(device.memory_used_mb)} / {formatMb(device.memory_total_mb)} ({Math.round(usedPct)}%)
             </Text>
           </HStack>
-          <View className="h-2.5 w-full overflow-hidden rounded-full bg-background-300">
-            <View
-              className="h-full rounded-full bg-emerald-500"
-              style={{ width: `${Math.min(100, utilizationPct)}%` }}
-            />
-          </View>
+          <ProgressBar pct={usedPct} color="#3B82F6" />
         </VStack>
-      )}
+
+        {utilizationPct !== null && (
+          <VStack className="gap-1">
+            <HStack className="items-center justify-between">
+              <Text className="text-[11px] text-typography-500">Utilization</Text>
+              <Text className="text-[11px] text-typography-900">
+                {Math.round(utilizationPct)}%
+              </Text>
+            </HStack>
+            <ProgressBar pct={utilizationPct} color="#10B981" />
+          </VStack>
+        )}
+      </VStack>
     </View>
   );
 }
@@ -140,21 +153,28 @@ function SyntheticGpuCard({
   totalMb: number;
   freeMb: number;
 }) {
+  const pct = totalMb > 0 ? (usedMb / totalMb) * 100 : 0;
   return (
-    <View className="mb-3 rounded-xl border border-outline-200 bg-background-50 p-3">
-      <Text className="mb-2 text-sm font-semibold text-typography-900">
+    <View
+      className="rounded-xl border border-outline-200 bg-background-0"
+      style={{ marginBottom: 10, paddingHorizontal: 16, paddingVertical: 14 }}
+    >
+      <Text
+        className="text-typography-900"
+        style={{ fontSize: 13, fontWeight: "600", marginBottom: 8 }}
+      >
         GPU Memory (aggregate)
       </Text>
       <VStack className="gap-1">
         <HStack className="items-center justify-between">
-          <Text className="text-xs text-typography-500">Memory</Text>
-          <Text className="text-xs text-typography-700">
+          <Text className="text-[11px] text-typography-500">Memory</Text>
+          <Text className="text-[11px] text-typography-900">
             {formatMb(usedMb)} used / {formatMb(totalMb)} total
           </Text>
         </HStack>
-        {memoryBar(usedMb, totalMb, "#3B82F6")}
+        <ProgressBar pct={pct} color="#3B82F6" />
       </VStack>
-      <Text className="mt-2 text-xs text-typography-400">
+      <Text className="mt-2 text-[11px] text-typography-400">
         {formatMb(freeMb)} free
       </Text>
     </View>
@@ -225,7 +245,7 @@ export default function WorkerGpuPanel({
           selectedValue={activeProvider ?? ""}
           onValueChange={(val) => setSelectedProvider(val || null)}
         >
-          <SelectTrigger className="rounded-full border border-outline-200 bg-background-50 px-3 py-2">
+          <SelectTrigger className="rounded-full border border-outline-200 bg-background-0 px-3 py-2">
             <SelectInput
               placeholder="Select provider"
               value={activeProvider ?? ""}
@@ -234,7 +254,7 @@ export default function WorkerGpuPanel({
           </SelectTrigger>
           <SelectPortal>
             <SelectBackdrop />
-            <SelectContent className="border border-outline-200 bg-background-50">
+            <SelectContent className="border border-outline-200 bg-background-0">
               {providers.map((p) => (
                 <SelectItem key={p} label={p} value={p} />
               ))}

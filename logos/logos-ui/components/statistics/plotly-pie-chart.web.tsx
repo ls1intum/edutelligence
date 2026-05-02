@@ -89,14 +89,13 @@ export default function PlotlyPieChart({
       return [center - half, center + half];
     };
 
-    // When legend is on the right, the pie sits on the left side.
-    // Apply optional scale around domain center to shrink the donut.
+    // For right legend: pie on left half of the canvas, legend on the right.
+    // For bottom legend: pie occupies the full canvas; the legend sits below
+    // it via a wide bottom margin (see layout.margin.b).
     const baseDomain: { x: [number, number]; y: [number, number] } | undefined =
       isRight
         ? { x: [0, 0.55], y: [0, 1] }
-        : clampedPieScale < 0.999
-          ? { x: [0, 1], y: [0, 1] }
-          : undefined;
+        : undefined;
 
     const pieDomain = baseDomain
       ? {
@@ -117,7 +116,7 @@ export default function PlotlyPieChart({
         line: { color: "rgba(255,255,255,0.6)", width: 1.5 },
       },
       hole: holeSize,
-      textinfo: "percent",
+      textinfo: "none",
       textposition: "inside",
       textfont: { color: "#fff", size: 11 },
       hovertemplate:
@@ -178,9 +177,19 @@ export default function PlotlyPieChart({
       }
     }
 
-    // Sizing: use full width for right-legend layout, capped for bottom-legend
-    const chartWidth = isRight ? width : Math.min(width, 280);
-    const chartHeight = isRight ? Math.max(height, 260) : Math.min(height, Math.min(width, 280)) + 40;
+    // Sizing: pie cards in the distribution row should look identical
+    // regardless of card width. We give the chart a fixed size and the
+    // div below also gets that fixed size to defeat Plotly's responsive
+    // auto-fit. Bottom-legend layout reserves the lower half of the
+    // canvas for a vertical legend, so long model names don't overflow.
+    const chartWidth = isRight ? Math.min(width, 360) : 280;
+    // Slice count drives bottom margin: each legend row is ~18 px and the
+    // legend sits in the bottom margin. With too tight a margin Plotly
+    // squishes the donut to make room.
+    const sliceCount = data.length;
+    const legendRows = Math.min(sliceCount, 8);
+    const bottomMarginForLegend = 24 + legendRows * 18;
+    const chartHeight = isRight ? Math.max(height, 240) : 220 + bottomMarginForLegend;
 
     const legend = isRight
       ? {
@@ -194,10 +203,15 @@ export default function PlotlyPieChart({
           itemdoubleclick: false,
         }
       : {
-          orientation: "h" as const,
+          // Vertical legend below the donut. Plotly places the legend in
+          // the bottom margin when y < 0; we size that margin precisely so
+          // the donut keeps its full ~180 px diameter regardless of how
+          // many slices the legend has.
+          orientation: "v" as const,
           x: 0.5,
           xanchor: "center" as const,
           y: -0.05,
+          yanchor: "top" as const,
           font: { size: 11, color: legendColor },
           itemclick: false,
           itemdoubleclick: false,
@@ -206,7 +220,9 @@ export default function PlotlyPieChart({
     const layout = {
       width: chartWidth,
       height: chartHeight,
-      margin: isRight ? { l: 8, r: 8, t: 8, b: 8 } : { l: 8, r: 8, t: 8, b: 40 },
+      margin: isRight
+        ? { l: 8, r: 8, t: 8, b: 8 }
+        : { l: 8, r: 8, t: 8, b: bottomMarginForLegend },
       paper_bgcolor: "rgba(0,0,0,0)",
       showlegend: true,
       legend,
@@ -214,7 +230,10 @@ export default function PlotlyPieChart({
     };
 
     const config = {
-      responsive: true,
+      // Disable responsive auto-fit so our explicit chartWidth/chartHeight
+      // is honoured. Without this, Plotly grows the donut to fill its div
+      // and breaks the per-card consistency we're trying to enforce.
+      responsive: false,
       displaylogo: false,
       displayModeBar: false,
       staticPlot: false,
@@ -257,13 +276,19 @@ export default function PlotlyPieChart({
   if (error || !data.length) return null;
 
   const isRight = legendPosition === "right";
-  const minH = isRight ? Math.max(height, 260) : Math.min(height, Math.min(width, 280));
+  const targetW = isRight ? Math.min(width, 360) : 280;
+  const sliceCount = data.length;
+  const legendRows = Math.min(sliceCount, 8);
+  const bottomMarginForLegend = 24 + legendRows * 18;
+  const targetH = isRight
+    ? Math.max(height, 240)
+    : 220 + bottomMarginForLegend;
 
   return (
     <View style={{ alignItems: "center" }}>
       <div
         ref={plotRef}
-        style={{ minHeight: minH }}
+        style={{ width: targetW, height: targetH }}
       />
     </View>
   );

@@ -5,7 +5,6 @@ import { Text } from "@/components/ui/text";
 import EmptyState from "@/components/statistics/empty-state";
 import { loadPlotly } from "@/components/statistics/plotly-loader.web";
 import SegmentedSwitch from "@/components/statistics/segmented-switch";
-import { getLaneStateColor } from "@/components/statistics/constants";
 import { useDarkMode } from "@/components/statistics/use-dark-mode";
 import type { LaneSignalData } from "@/components/statistics/types";
 
@@ -258,55 +257,24 @@ export default function PlotlyVramChart({
     [providers, providerMetaByName, vramDataByProvider, getProviderColor],
   );
 
-  /* ── Lane entries: per-lane time series for VRAM usage ─────────────── */
+  /* ── Lane entries ──────────────────────────────────────────────────── *
+   * Per-lane time series have been disabled in this chart (laneTraces is
+   * always empty). We previously iterated every sample × every lane on
+   * every render to build full lane series — wasted work that scaled with
+   * a full day of telemetry. Now we only collect the current lane keys
+   * from the latest snapshot to keep the cache-invalidation key stable.
+   */
   const laneEntries = useMemo(() => {
     if (!laneStateByProvider) return [];
-    const entries: Array<{
-      key: string;
-      laneId: string;
-      color: string;
-      modelName: string;
-      runtimeState: string;
-      points: Array<{ ts: number; vramMb: number }>;
-    }> = [];
-
+    const entries: Array<{ key: string; points: Array<{ ts: number; vramMb: number }> }> = [];
     for (const providerName of providers) {
-      const samples = vramDataByProvider[providerName] || [];
-      const currentLanes = laneStateByProvider[providerName] ?? {};
-
-      const laneIds = new Set<string>();
-      for (const sample of samples) {
-        const lanes = (sample?.scheduler_signals?.lanes) as Record<string, LaneSignalData> | undefined;
-        if (lanes) Object.keys(lanes).forEach((id) => laneIds.add(id));
-      }
-
-      for (const laneId of laneIds) {
-        const currentLane = currentLanes[laneId];
-        const pts: Array<{ ts: number; vramMb: number }> = [];
-        for (const sample of samples) {
-          if (!sample?.timestamp) continue;
-          const ts =
-            typeof sample.timestamp === "number"
-              ? sample.timestamp
-              : new Date(sample.timestamp).getTime();
-          if (!Number.isFinite(ts)) continue;
-          const lane = (sample?.scheduler_signals?.lanes as any)?.[laneId] as LaneSignalData | undefined;
-          if (!lane) continue;
-          pts.push({ ts, vramMb: lane.effective_vram_mb ?? 0 });
-        }
-        if (!pts.length) continue;
-        entries.push({
-          key: `${providerName}::${laneId}`,
-          laneId,
-          color: getLaneStateColor(currentLane?.runtime_state ?? "cold"),
-          modelName: currentLane?.model ?? laneId,
-          runtimeState: currentLane?.runtime_state ?? "cold",
-          points: pts,
-        });
+      const lanes = laneStateByProvider[providerName] ?? {};
+      for (const laneId of Object.keys(lanes)) {
+        entries.push({ key: `${providerName}::${laneId}`, points: [] });
       }
     }
     return entries.sort((a, b) => a.key.localeCompare(b.key));
-  }, [laneStateByProvider, providers, vramDataByProvider]);
+  }, [laneStateByProvider, providers]);
 
   const hasAnyPoints = providerSeries.some((p) => p.points.length > 0);
 
@@ -352,7 +320,7 @@ export default function PlotlyVramChart({
   const traces = useMemo(
     () =>
       providerSeries.map((provider) => ({
-        type: "scattergl" as const,
+        type: "scatter" as const,
         mode: "lines" as const,
         name:
           provider.runtimeModes.length === 1
@@ -362,8 +330,14 @@ export default function PlotlyVramChart({
         y: provider.points.map((pt) => pt.freeGb),
         line: {
           color: provider.connected ? provider.color : withAlpha(provider.color, 0.35),
-          width: 2.8,
+          width: 1.8,
+          shape: "spline" as const,
+          smoothing: 0.6,
         },
+        fill: "tozeroy" as const,
+        fillcolor: provider.connected
+          ? `${provider.color}29`
+          : withAlpha(provider.color, 0.08),
         opacity: provider.connected ? 1 : 0.55,
         connectgaps: false,
         customdata: provider.points.map((pt) => [
@@ -381,27 +355,8 @@ export default function PlotlyVramChart({
     [providerSeries],
   );
 
-  /* ── Lane traces (dashed, hidden by default) ───────────────────────── */
-  const laneTraces = useMemo(
-    () =>
-      laneEntries.map((entry) => ({
-        type: "scattergl" as const,
-        mode: "lines" as const,
-        name: `${entry.laneId} (${entry.modelName})`,
-        x: entry.points.map((pt) => new Date(pt.ts)),
-        y: entry.points.map((pt) => pt.vramMb / 1024),
-        line: { color: entry.color, width: 1.6, dash: "dot" as const },
-        connectgaps: false,
-        visible: "legendonly" as const,
-        customdata: entry.points.map((pt) => [entry.runtimeState, entry.modelName, pt.vramMb]),
-        hovertemplate:
-          "Lane: <b>%{fullData.name}</b>" +
-          "<br>State: %{customdata[0]}" +
-          "<br>VRAM: %{customdata[2]:.0f} MB (%{y:.2f} GB)" +
-          "<extra></extra>",
-      })),
-    [laneEntries],
-  );
+  /* ── Lane traces removed: per-lane decomposition clutters the chart. ── */
+  const laneTraces = useMemo(() => [] as any[], []);
 
   /* ── Combined traces ────────────────────────────────────────────────── */
   const allTraces = useMemo(() => [...traces, ...laneTraces], [traces, laneTraces]);
@@ -459,18 +414,17 @@ export default function PlotlyVramChart({
 
       // Dark mode colors
       const textMuted = isDark ? "#94A3B8" : "#64748B";
-      const gridColor = isDark ? "#334155" : "#CBD5E1";
-      const zeroLine = isDark ? "#475569" : "#94A3B8";
-      const plotBg = isDark ? "rgba(30,41,59,0.5)" : "rgba(15,23,42,0.06)";
+      const gridColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.06)";
+      const zeroLine = isDark ? "rgba(255,255,255,0.10)" : "rgba(15,23,42,0.10)";
       const legendColor = isDark ? "#CBD5E1" : "#1E293B";
       const futureGapFill = isDark ? "rgba(148,163,184,0.08)" : "rgba(148,163,184,0.14)";
 
       const layout: Record<string, any> = {
         width,
-        height: 300,
-        margin: { l: 48, r: 16, t: 20, b: 72 },
+        height: 320,
+        margin: { l: 44, r: 16, t: 18, b: 72 },
         paper_bgcolor: "rgba(0,0,0,0)",
-        plot_bgcolor: plotBg,
+        plot_bgcolor: "rgba(0,0,0,0)",
         dragmode: "zoom",
         uirevision: "vram-remaining-v3",
         hovermode: "x unified",
@@ -479,17 +433,12 @@ export default function PlotlyVramChart({
           fixedrange: false,
           showgrid: true,
           gridcolor: gridColor,
-          tickfont: { color: textMuted, size: 11 },
-          title: {
-            text: "Time (UTC)",
-            font: { color: textMuted, size: 11 },
-            standoff: 14,
-          },
+          tickfont: { color: textMuted, size: 10 },
           rangeslider: {
             visible: true,
-            thickness: 0.12,
-            bgcolor: isDark ? "rgba(30,41,59,0.8)" : "rgba(241,245,249,0.9)",
-            bordercolor: isDark ? "#475569" : "#CBD5E1",
+            thickness: 0.10,
+            bgcolor: isDark ? "rgba(20,23,30,0.6)" : "rgba(246,246,246,0.7)",
+            bordercolor: isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.06)",
             borderwidth: 1,
           },
           ...(xRange ? { range: xRange } : {}),
@@ -499,13 +448,10 @@ export default function PlotlyVramChart({
           showgrid: true,
           gridcolor: gridColor,
           zerolinecolor: zeroLine,
-          tickfont: { color: textMuted, size: 11 },
+          tickfont: { color: textMuted, size: 10 },
           rangemode: "tozero",
-          title: {
-            text: "VRAM (GB)",
-            font: { color: textMuted, size: 11 },
-          },
         },
+        showlegend: false,
         legend: { orientation: "h", x: 0, y: 1.16, font: { color: legendColor } },
         hoverlabel: {
           bgcolor: isDark ? "#1E293B" : "#FFFFFF",
@@ -905,7 +851,7 @@ export default function PlotlyVramChart({
   return (
     <View>
       {controls}
-      <div ref={plotRef} style={{ width: "100%", minHeight: 300 }} />
+      <div ref={plotRef} style={{ width: "100%", height: 320 }} />
     </View>
   );
 }

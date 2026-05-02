@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import { View } from "react-native";
+import React, { useEffect, useMemo, useRef } from "react";
+import { Animated, View } from "react-native";
 
 import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
@@ -40,108 +40,133 @@ function LaneRow({ laneId, lane }: LaneRowProps) {
   const kvPct = lane.gpu_cache_usage_percent;
   const ttft = lane.ttft_p95_seconds;
   const isVllm = lane.vllm;
+  const isActive = lane.runtime_state === "running" || lane.runtime_state === "starting";
+
+  // Halo pulse on the status dot for live lanes
+  const halo = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (isActive) {
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(halo, { toValue: 1, duration: 800, useNativeDriver: true }),
+          Animated.timing(halo, { toValue: 0, duration: 800, useNativeDriver: true }),
+        ])
+      );
+      loop.start();
+      return () => loop.stop();
+    }
+    halo.setValue(0);
+  }, [isActive, halo]);
 
   return (
-    <View className="mb-2 rounded-xl border border-outline-200 bg-background-50 p-3">
-      <HStack className="mb-2 items-start justify-between gap-2">
-        <HStack className="min-w-0 flex-1 items-center gap-2">
-          {/* State indicator dot */}
+    <View
+      className="rounded-xl border border-outline-200 bg-background-0"
+      style={{ marginBottom: 8, paddingHorizontal: 14, paddingVertical: 12 }}
+    >
+      <HStack className="items-start gap-2">
+        {/* State indicator dot with optional pulsing halo */}
+        <View style={{ width: 14, height: 14, marginTop: 4, alignItems: "center", justifyContent: "center" }}>
+          {isActive && (
+            <Animated.View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                width: 14,
+                height: 14,
+                borderRadius: 7,
+                backgroundColor: stateColor,
+                opacity: halo.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
+                transform: [
+                  { scale: halo.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] }) },
+                ],
+              }}
+            />
+          )}
           <View
-            className="h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: stateColor }}
+            className="rounded-full"
+            style={{ height: 8, width: 8, backgroundColor: stateColor }}
           />
-          <VStack className="min-w-0 flex-1">
-            <Text
-              className="text-sm font-medium text-typography-900"
-              numberOfLines={1}
-            >
+        </View>
+
+        <VStack className="min-w-0 flex-1 gap-1.5">
+          <HStack className="items-center gap-2">
+            <Text className="text-sm font-medium text-typography-900" numberOfLines={1}>
               {laneId}
             </Text>
-            <Text className="text-xs text-typography-500" numberOfLines={1}>
-              {lane.model}
+            <Text
+              style={{ fontSize: 10, fontWeight: "700", letterSpacing: 0.5, color: stateColor }}
+            >
+              {lane.runtime_state.toUpperCase()}
             </Text>
-          </VStack>
-        </HStack>
-
-        <HStack className="shrink-0 items-center gap-1.5">
-          {/* State badge */}
-          <View
-            className="rounded-full px-2 py-0.5"
-            style={{ backgroundColor: `${stateColor}22` }}
-          >
-            <Text className="text-xs font-medium uppercase" style={{ color: stateColor }}>
-              {lane.runtime_state}
-            </Text>
-          </View>
-          {/* Backend type badge */}
-          <View className={`rounded-full px-2 py-0.5 ${isVllm ? "bg-violet-500/10" : "bg-orange-500/10"}`}>
-            <Text className={`text-xs font-medium ${isVllm ? "text-violet-500" : "text-orange-400"}`}>
-              {isVllm ? "vLLM" : "Ollama"}
-            </Text>
-          </View>
-        </HStack>
-      </HStack>
-
-      {isVllm ? (
-        <VStack className="gap-2">
-          {/* KV Cache bar */}
-          {kvPct !== null ? (
-            <VStack className="gap-1">
-              <HStack className="items-center justify-between">
-                <Text className="text-xs text-typography-500">KV Cache</Text>
-                <Text className="text-xs font-medium" style={{ color: kvBarColor(kvPct) }}>
-                  {kvPct.toFixed(1)}%
+            <View style={{ marginLeft: "auto" }}>
+              <View
+                className={`rounded-md px-1.5 py-0.5 ${isVllm ? "bg-violet-500/10" : "bg-orange-500/10"}`}
+              >
+                <Text
+                  className={`text-[10px] font-semibold uppercase tracking-wider ${isVllm ? "text-violet-500" : "text-orange-500"}`}
+                >
+                  {isVllm ? "vllm" : "ollama"}
                 </Text>
-              </HStack>
-              <View className="h-2 w-full overflow-hidden rounded-full bg-background-300">
-                <View
-                  className="h-full rounded-full"
-                  style={{
-                    width: `${Math.min(100, kvPct)}%`,
-                    backgroundColor: kvBarColor(kvPct),
-                  }}
-                />
               </View>
+            </View>
+          </HStack>
+          <Text className="text-xs text-typography-500" numberOfLines={1}>
+            {lane.model}
+          </Text>
+
+          {isVllm ? (
+            <VStack className="mt-1 gap-2">
+              {kvPct !== null ? (
+                <VStack className="gap-1">
+                  <HStack className="items-center justify-between">
+                    <Text className="text-[11px] text-typography-500">KV cache</Text>
+                    <Text className="text-[11px] font-medium" style={{ color: kvBarColor(kvPct) }}>
+                      {kvPct.toFixed(1)}%
+                    </Text>
+                  </HStack>
+                  <View
+                    className="overflow-hidden rounded-full bg-secondary-200"
+                    style={{ height: 6, width: "100%" }}
+                  >
+                    <View
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.min(100, kvPct)}%`,
+                        backgroundColor: kvBarColor(kvPct),
+                      }}
+                    />
+                  </View>
+                </VStack>
+              ) : null}
+
+              <HStack className="flex-wrap items-center" style={{ columnGap: 12, rowGap: 4 }}>
+                {ttft !== null && (
+                  <Text className="text-[11px] text-typography-500">
+                    TTFT p95{" "}
+                    <Text className="font-medium" style={{ color: ttftColor(ttft) }}>
+                      {ttft < 1 ? `${Math.round(ttft * 1000)}ms` : `${ttft.toFixed(2)}s`}
+                    </Text>
+                  </Text>
+                )}
+                {lane.queue_waiting !== null && lane.queue_waiting !== undefined && (
+                  <Text className="text-[11px] text-typography-500">
+                    Queue <Text className="text-typography-900">{lane.queue_waiting}</Text>
+                  </Text>
+                )}
+                {lane.requests_running !== null && lane.requests_running !== undefined && (
+                  <Text className="text-[11px] text-typography-500">
+                    Running <Text className="text-typography-900">{lane.requests_running}</Text>
+                  </Text>
+                )}
+              </HStack>
             </VStack>
           ) : (
-            <Text className="text-xs text-typography-400">KV Cache: —</Text>
+            <Text className="mt-1 text-[11px] text-typography-500">
+              Active <Text className="text-typography-900">{lane.active_requests}</Text> · KV/TTFT n/a
+            </Text>
           )}
-
-          {/* TTFT + queue info */}
-          <HStack className="flex-wrap gap-3">
-            {ttft !== null && (
-              <HStack className="items-center gap-1">
-                <Text className="text-xs text-typography-500">TTFT p95:</Text>
-                <View
-                  className="rounded-full px-1.5 py-0.5"
-                  style={{ backgroundColor: `${ttftColor(ttft)}22` }}
-                >
-                  <Text className="text-xs font-medium" style={{ color: ttftColor(ttft) }}>
-                    {ttft < 1 ? `${Math.round(ttft * 1000)}ms` : `${ttft.toFixed(2)}s`}
-                  </Text>
-                </View>
-              </HStack>
-            )}
-            {lane.queue_waiting !== null && lane.queue_waiting !== undefined && (
-              <Text className="text-xs text-typography-500">
-                Queue: <Text className="text-typography-700">{lane.queue_waiting}</Text>
-              </Text>
-            )}
-            {lane.requests_running !== null && lane.requests_running !== undefined && (
-              <Text className="text-xs text-typography-500">
-                Running: <Text className="text-typography-700">{lane.requests_running}</Text>
-              </Text>
-            )}
-          </HStack>
         </VStack>
-      ) : (
-        <HStack className="flex-wrap gap-3">
-          <Text className="text-xs text-typography-500">
-            Active: <Text className="text-typography-700">{lane.active_requests}</Text>
-          </Text>
-          <Text className="text-xs text-typography-400">KV/TTFT: N/A (Ollama)</Text>
-        </HStack>
-      )}
+      </HStack>
     </View>
   );
 }
@@ -154,7 +179,7 @@ type LaneMetricsPanelProps = {
 
 export default function LaneMetricsPanel({
   lanesByProvider,
-  providerMeta,
+  providerMeta: _providerMeta,
   selectedProvider,
 }: LaneMetricsPanelProps) {
   const lanes = useMemo(() => {

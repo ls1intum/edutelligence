@@ -5,15 +5,74 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { ActivityIndicator, Animated, Easing, View } from "react-native";
+import { ActivityIndicator, Animated, View } from "react-native";
 
 import { Text } from "@/components/ui/text";
 import { HStack } from "@/components/ui/hstack";
 import { VStack } from "@/components/ui/vstack";
 import { Button, ButtonText } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { RequestItem } from "@/components/statistics/request-stack";
 import type { PaginatedRequestItem, PaginatedRequestResponse } from "@/components/statistics/types";
 import { API_BASE } from "@/components/statistics/constants";
+
+/**
+ * Row-shaped skeleton placeholder shown while the initial paginated
+ * page is in flight. Mirrors the real row layout (colored border,
+ * model/provider on the left, total time + meta on the right) so the
+ * card keeps its size and the user can tell what's coming.
+ */
+function RequestRowSkeleton() {
+  const widths = [
+    { name: 220, age: 56, total: 64, meta: 200 },
+    { name: 250, age: 48, total: 70, meta: 220 },
+    { name: 195, age: 60, total: 58, meta: 180 },
+    { name: 235, age: 52, total: 66, meta: 208 },
+    { name: 210, age: 56, total: 60, meta: 196 },
+  ];
+  return (
+    <View style={{ width: "100%" }}>
+      {widths.map((w, i) => (
+        <View key={i} style={{ marginBottom: 8 }}>
+          <View
+            style={{
+              width: "100%",
+              borderWidth: 2,
+              borderColor: "rgba(15,23,42,0.08)",
+              borderRadius: 12,
+              backgroundColor: "rgba(15,23,42,0.02)",
+              paddingTop: 9,
+              paddingBottom: 9,
+              paddingLeft: 15,
+              paddingRight: 15,
+              flexDirection: "row",
+              alignItems: "center",
+              columnGap: 16,
+            }}
+          >
+            <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 0, rowGap: 6 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", columnGap: 8 }}>
+                <Skeleton variant="rounded" startColor="bg-background-200" style={{ width: w.name, height: 14, borderRadius: 6 }} />
+                <Skeleton variant="rounded" startColor="bg-background-200" style={{ width: w.age, height: 10, borderRadius: 3 }} />
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", columnGap: 8 }}>
+                <Skeleton variant="rounded" startColor="bg-background-200" style={{ width: 92, height: 10, borderRadius: 3 }} />
+                <Skeleton variant="rounded" startColor="bg-background-200" style={{ width: 42, height: 14, borderRadius: 4 }} />
+              </View>
+            </View>
+            <View style={{ alignItems: "flex-end", rowGap: 6 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", columnGap: 6 }}>
+                <Skeleton variant="rounded" startColor="bg-background-200" style={{ width: 36, height: 14, borderRadius: 4 }} />
+                <Skeleton variant="rounded" startColor="bg-background-200" style={{ width: w.total, height: 16, borderRadius: 6 }} />
+              </View>
+              <Skeleton variant="rounded" startColor="bg-background-200" style={{ width: w.meta, height: 10, borderRadius: 3 }} />
+            </View>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
 
 /* ── helpers (mirrored from request-stack.tsx) ── */
 
@@ -60,18 +119,28 @@ function formatElapsed(seconds: number): string {
 
 /* ── individual card ── */
 
-function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
+type CardProps = {
+  item: PaginatedRequestItem;
+  /** Shared ticker from the parent list — avoids one setInterval per card. */
+  now: number;
+};
+
+const PaginatedRequestCard = React.memo(function PaginatedRequestCard({ item, now }: CardProps) {
   const stage = deriveStage(item);
   const borderColor = getBorderColor(stage, item.status);
-  const borderTint = withAlpha(borderColor, "0D");
+  // Live rows: full-strength border. Completed rows: keep them visibly
+  // coloured (~80% alpha) plus a stronger stage-tinted fill so the row
+  // reads as a clearly stage-coloured surface, not "barely a hairline".
+  const restingBorder = stage === "complete" ? withAlpha(borderColor, "cc") : borderColor;
+  const tint = withAlpha(borderColor, "1a");
 
   const borderPulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (stage !== "complete") {
       const loop = Animated.loop(
         Animated.sequence([
-          Animated.timing(borderPulse, { toValue: 1, duration: 1100, useNativeDriver: true }),
-          Animated.timing(borderPulse, { toValue: 0, duration: 1100, useNativeDriver: true }),
+          Animated.timing(borderPulse, { toValue: 1, duration: 1000, useNativeDriver: true }),
+          Animated.timing(borderPulse, { toValue: 0, duration: 1000, useNativeDriver: true }),
         ])
       );
       loop.start();
@@ -79,14 +148,7 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
     } else {
       borderPulse.setValue(0);
     }
-  }, [stage]);
-
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const interval = stage === "complete" ? 10000 : 1000;
-    const id = setInterval(() => setNow(Date.now()), interval);
-    return () => clearInterval(id);
-  }, [stage]);
+  }, [stage, borderPulse]);
 
   const timeAgo = formatTimeAgo(item.enqueue_ts || item.timestamp, now);
   const isCold = item.cold_start === true;
@@ -105,7 +167,9 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
     if (stage === "queued") {
       return (
         <View className="rounded-md bg-purple-500/10 px-2 py-0.5">
-          <Text className="text-xs font-semibold text-purple-500">QUEUED</Text>
+          <Text className="text-[10px] font-semibold uppercase tracking-wider text-purple-500">
+            Queued
+          </Text>
         </View>
       );
     }
@@ -116,9 +180,11 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
       return (
         <HStack className="items-center gap-2">
           <View className="rounded-md bg-blue-500/10 px-2 py-0.5">
-            <Text className="text-xs font-semibold text-blue-500">RUNNING</Text>
+            <Text className="text-[10px] font-semibold uppercase tracking-wider text-blue-500">
+              Running
+            </Text>
           </View>
-          <Text className="text-sm font-medium text-typography-700 ">
+          <Text className="text-sm font-medium text-typography-700">
             {formatElapsed(elapsed)}
           </Text>
         </HStack>
@@ -128,42 +194,61 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
   };
 
   return (
-    <View className="mb-1.5">
-      <Animated.View
-        style={{ borderWidth: 2, borderColor, borderRadius: 10, backgroundColor: borderTint }}
+    <View style={{ marginBottom: 8 }}>
+      <View
+        className="overflow-hidden rounded-xl"
+        style={{ borderWidth: 2, borderColor: restingBorder, backgroundColor: tint }}
       >
         {stage !== "complete" && (
           <Animated.View
             pointerEvents="none"
             style={{
               position: "absolute",
-              inset: 0,
-              borderWidth: 2,
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              borderWidth: 1.5,
               borderColor,
-              borderRadius: 10,
-              opacity: borderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.6] }),
+              borderRadius: 12,
+              opacity: borderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }),
             }}
           />
         )}
-        <HStack className="w-full items-center px-3 py-2.5" space="md">
+        {/* Use plain View (not HStack) — gluestack HStack carries `p-0` in its
+            base styles which, combined with tailwind's `important: 'html'`,
+            beats any inline `padding*` we set here. View has no such reset. */}
+        <View
+          style={{
+            width: "100%",
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            paddingLeft: 15,
+            paddingRight: 15,
+            paddingTop: 9,
+            paddingBottom: 9,
+            columnGap: 16,
+          }}
+        >
           {/* Left */}
           <VStack className="min-w-0 flex-1">
             <HStack className="items-center gap-2">
-              <Text className="text-base font-medium text-typography-900 " numberOfLines={1}>
+              <Text className="text-base font-medium text-typography-900" numberOfLines={1}>
                 {item.model_name}
               </Text>
-              <Text className="text-xs text-typography-400">{timeAgo}</Text>
+              <Text className="text-[11px] text-typography-300">{timeAgo}</Text>
             </HStack>
-            <HStack className="items-center gap-2">
-              <Text className="text-sm text-typography-400" numberOfLines={1}>
+            <HStack className="mt-0.5 items-center gap-2">
+              <Text className="text-xs text-typography-500" numberOfLines={1}>
                 {item.provider_name}
               </Text>
               {/* Cloud / Local badge */}
               <View
-                className={`rounded-full px-1.5 py-0.5 ${item.is_cloud ? "bg-cyan-500/10" : "bg-orange-500/10"}`}
+                className={`rounded-md px-1.5 py-0.5 ${item.is_cloud ? "bg-cyan-500/10" : "bg-orange-500/10"}`}
               >
-                <Text className={`text-xs font-medium ${item.is_cloud ? "text-cyan-500" : "text-orange-400"}`}>
-                  {item.is_cloud ? "CLOUD" : "LOCAL"}
+                <Text className={`text-[10px] font-semibold uppercase tracking-wider ${item.is_cloud ? "text-cyan-600 dark:text-cyan-300" : "text-orange-600 dark:text-orange-300"}`}>
+                  {item.is_cloud ? "Cloud" : "Local"}
                 </Text>
               </View>
             </HStack>
@@ -182,28 +267,28 @@ function PaginatedRequestCard({ item }: { item: PaginatedRequestItem }) {
             {stage === "complete" && (
               <HStack className="items-center gap-1.5">
                 {!item.is_cloud && (
-                  <View className={`rounded-md px-1.5 py-0.5 ${isCold ? "bg-sky-600/15" : "bg-orange-600/15"}`}>
-                    <Text className={`text-xs font-semibold ${isCold ? "text-sky-400" : "text-orange-400"}`}>
-                      {isCold ? "COLD" : "HOT"}
+                  <View className={`rounded-md px-1.5 py-0.5 ${isCold ? "bg-sky-500/15" : "bg-orange-500/15"}`}>
+                    <Text className={`text-[10px] font-semibold uppercase tracking-wider ${isCold ? "text-sky-600 dark:text-sky-300" : "text-orange-600 dark:text-orange-300"}`}>
+                      {isCold ? "Cold" : "Hot"}
                     </Text>
                   </View>
                 )}
-                <Text className="text-base font-semibold text-typography-900 ">
+                <Text className="text-base font-semibold text-typography-900">
                   {totalTimeLabel()}
                 </Text>
               </HStack>
             )}
             {stage === "complete" && item.queue_seconds != null && item.duration != null && (
-              <Text className="text-xs text-typography-400">
-                Queue: {item.queue_seconds.toFixed(1)}s | Exec: {item.duration.toFixed(1)}s
+              <Text className="text-[11px] text-typography-500">
+                queue {item.queue_seconds.toFixed(2)}s · exec {item.duration.toFixed(2)}s
               </Text>
             )}
           </VStack>
-        </HStack>
-      </Animated.View>
+        </View>
+      </View>
     </View>
   );
-}
+});
 
 /* ── helper: merge WS live items with paginated items ── */
 
@@ -212,36 +297,62 @@ function mergeWithLive(
   pageItems: PaginatedRequestItem[],
   perPage: number
 ): PaginatedRequestItem[] {
-  const pageIds = new Set(pageItems.map((r) => r.request_id));
+  // Convert each WS RequestItem into the paginated row shape. The
+  // websocket payload is always at least as fresh as the paginated
+  // fetch (it pushes on every state transition), so when a request
+  // appears in both, the live copy must win — otherwise rows get
+  // stuck on whatever state they were in when pageData was fetched.
+  const toPaginated = (r: RequestItem): PaginatedRequestItem => ({
+    request_id: r.request_id,
+    model_name: r.model_name,
+    provider_name: r.provider_name,
+    // infer is_cloud from provider name (fallback when paginated
+    // endpoint hasn't returned yet — pageData carries the real flag).
+    is_cloud:
+      r.provider_name?.toLowerCase().includes("openai") ||
+      r.provider_name?.toLowerCase().includes("azure") ||
+      r.provider_name?.toLowerCase().includes("cloud"),
+    status: r.status,
+    timestamp: r.timestamp,
+    duration: r.duration,
+    cold_start: r.cold_start,
+    enqueue_ts: r.enqueue_ts,
+    scheduled_ts: r.scheduled_ts,
+    request_complete_ts: r.request_complete_ts,
+    queue_seconds: r.queue_seconds,
+    total_seconds: r.total_seconds,
+    initial_priority: r.initial_priority,
+    priority_when_scheduled: r.priority_when_scheduled,
+    queue_depth_at_enqueue: r.queue_depth_at_enqueue,
+    error_message: r.error_message,
+  });
 
-  // Convert WS RequestItem to PaginatedRequestItem shape
-  const liveConverted: PaginatedRequestItem[] = liveRequests
-    .filter((r) => !pageIds.has(r.request_id))
-    .map((r) => ({
-      request_id: r.request_id,
-      model_name: r.model_name,
-      provider_name: r.provider_name,
-      // infer is_cloud from provider name (fallback when paginated endpoint not reached)
-      is_cloud:
-        r.provider_name?.toLowerCase().includes("openai") ||
-        r.provider_name?.toLowerCase().includes("azure") ||
-        r.provider_name?.toLowerCase().includes("cloud"),
-      status: r.status,
-      timestamp: r.timestamp,
-      duration: r.duration,
-      cold_start: r.cold_start,
-      enqueue_ts: r.enqueue_ts,
-      scheduled_ts: r.scheduled_ts,
-      request_complete_ts: r.request_complete_ts,
-      queue_seconds: r.queue_seconds,
-      total_seconds: r.total_seconds,
-      initial_priority: r.initial_priority,
-      priority_when_scheduled: r.priority_when_scheduled,
-      queue_depth_at_enqueue: r.queue_depth_at_enqueue,
-      error_message: r.error_message,
-    }));
+  const liveById = new Map<string, PaginatedRequestItem>();
+  for (const r of liveRequests) {
+    liveById.set(r.request_id, toPaginated(r));
+  }
 
-  return [...liveConverted, ...pageItems]
+  // Walk pageItems in order; replace each row with its live counterpart
+  // if one exists, then append any live rows we haven't surfaced yet.
+  const merged: PaginatedRequestItem[] = [];
+  const seen = new Set<string>();
+  for (const p of pageItems) {
+    const overlay = liveById.get(p.request_id);
+    if (overlay) {
+      // Preserve the paginated `is_cloud` flag (the WS payload has to
+      // infer it from the provider name); take everything else from
+      // the live row so state transitions render immediately.
+      merged.push({ ...overlay, is_cloud: p.is_cloud ?? overlay.is_cloud });
+    } else {
+      merged.push(p);
+    }
+    seen.add(p.request_id);
+  }
+  for (const [id, r] of liveById) {
+    if (!seen.has(id)) merged.push(r);
+  }
+
+  return merged
     .sort((a, b) => {
       const aTs = a.enqueue_ts ?? a.timestamp ?? "";
       const bTs = b.enqueue_ts ?? b.timestamp ?? "";
@@ -270,7 +381,7 @@ async function fetchPage(
   return resp.json();
 }
 
-const PER_PAGE = 7;
+const PER_PAGE = 5;
 
 type PaginatedRequestListProps = {
   liveRequests: RequestItem[];
@@ -281,7 +392,7 @@ type PaginatedRequestListProps = {
 export default function PaginatedRequestList({
   liveRequests,
   apiKey,
-  nowMs,
+  nowMs: _nowMs,
 }: PaginatedRequestListProps) {
   const [page, setPage] = useState(1);
   const [pageData, setPageData] = useState<PaginatedRequestResponse | null>(null);
@@ -343,21 +454,26 @@ export default function PaginatedRequestList({
     return pageData.requests;
   }, [pageData, page, liveRequests]);
 
+  // Single shared ticker for all card "time-ago" / "elapsed" labels. Cards
+  // used to each spawn their own setInterval, which on a 7-card page meant
+  // 7 timers + 7 component re-renders every second. Hoisting it here cuts
+  // that to one timer + one parent render. The cadence is 1s while any
+  // card is live and 10s when the whole list is complete.
+  const hasLive = useMemo(
+    () => displayItems.some((it) => deriveStage(it) !== "complete"),
+    [displayItems]
+  );
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = hasLive ? 1000 : 10_000;
+    const id = setInterval(() => setNow(Date.now()), interval);
+    return () => clearInterval(id);
+  }, [hasLive]);
+
   const totalPages = pageData?.total_pages ?? 1;
-  const total = pageData?.total ?? 0;
 
   return (
-    <VStack className="w-full py-2">
-      {/* Header */}
-      <HStack className="mb-2 items-center justify-between">
-        <Text className="text-lg font-bold text-typography-900 ">
-          Requests
-        </Text>
-        {total > 0 && (
-          <Text className="text-sm text-typography-400">{total} total</Text>
-        )}
-      </HStack>
-
+    <VStack className="w-full">
       {/* Error */}
       {fetchError && (
         <View className="mb-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
@@ -375,51 +491,54 @@ export default function PaginatedRequestList({
 
       {/* List */}
       {loading && !pageData ? (
-        <View className="items-center justify-center py-8">
-          <ActivityIndicator size="small" color="#006DFF" />
-        </View>
+        <RequestRowSkeleton />
       ) : displayItems.length === 0 ? (
         <View className="items-center py-8">
-          <Text className="text-sm text-typography-400">No requests yet.</Text>
+          <Text className="text-sm text-typography-500">No requests yet.</Text>
         </View>
       ) : (
         <View className="w-full">
           {displayItems.map((req) => (
-            <PaginatedRequestCard key={req.request_id} item={req} />
+            <PaginatedRequestCard key={req.request_id} item={req} now={now} />
           ))}
         </View>
       )}
 
-      {/* Pagination controls */}
+      {/* Pagination controls — compact footer band */}
       {totalPages > 1 && (
-        <HStack className="mt-3 items-center justify-between">
+        <HStack
+          className="items-center justify-between border-t border-outline-200"
+          style={{ marginTop: 8, paddingTop: 8, paddingBottom: 4 }}
+        >
           <Button
-            size="sm"
-            variant="outline"
+            size="xs"
+            variant="link"
             isDisabled={page <= 1 || loading}
             onPress={() => load(page - 1)}
-            className="rounded-lg border-outline-200 "
+            className="px-1"
           >
-            <ButtonText className="text-typography-700 ">← Prev</ButtonText>
+            <ButtonText className="text-typography-500" style={{ fontSize: 12 }}>
+              ← Prev
+            </ButtonText>
           </Button>
 
-          <VStack className="items-center">
-            <Text className="text-sm text-typography-600 ">
+          <HStack className="items-center" style={{ columnGap: 8 }}>
+            <Text className="text-typography-500" style={{ fontSize: 12 }}>
               Page {page} of {totalPages}
             </Text>
-            {loading && (
-              <ActivityIndicator size="small" color="#006DFF" style={{ marginTop: 2 }} />
-            )}
-          </VStack>
+            {loading && <ActivityIndicator size="small" color="#006DFF" />}
+          </HStack>
 
           <Button
-            size="sm"
-            variant="outline"
+            size="xs"
+            variant="link"
             isDisabled={page >= totalPages || loading}
             onPress={() => load(page + 1)}
-            className="rounded-lg border-outline-200 "
+            className="px-1"
           >
-            <ButtonText className="text-typography-700 ">Next →</ButtonText>
+            <ButtonText className="text-typography-500" style={{ fontSize: 12 }}>
+              Next →
+            </ButtonText>
           </Button>
         </HStack>
       )}

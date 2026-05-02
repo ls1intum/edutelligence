@@ -245,6 +245,10 @@ export default function PlotlyRequestVolumeChart({
   }, [modelColors, sortedModelNames]);
 
   // ── Traces ──────────────────────────────────────────────────────────
+  // Stacked bars: each bucket is a discrete count. An area chart would
+  // imply continuity between buckets that the data doesn't have (sparse,
+  // bursty traffic), so we keep bars even though the new design uses
+  // transparent backgrounds.
   const providerTraces = useMemo(() => {
     const barWidthMs = inferBarWidthMs(totalLineData);
     const mkTrace = (name: string, color: string, points: any[]) => ({
@@ -254,7 +258,6 @@ export default function PlotlyRequestVolumeChart({
       y: points.map((p: any) => Number(p.value || 0)),
       width: points.map(() => barWidthMs),
       marker: { color },
-      // Keep Plotly hover events/spikes, but render our own tooltip content.
       hoverinfo: "none",
     });
     return [
@@ -275,7 +278,6 @@ export default function PlotlyRequestVolumeChart({
         y: points.map((p: any) => Number(p.value || 0)),
         width: points.map(() => barWidthMs),
         marker: { color: resolvedModelColors[name] || "#94A3B8" },
-        // Keep Plotly hover events/spikes, but render our own tooltip content.
         hoverinfo: "none",
       };
     });
@@ -305,17 +307,16 @@ export default function PlotlyRequestVolumeChart({
   // ── Build layout ────────────────────────────────────────────────────
   const buildLayout = useCallback(() => {
     const textMuted = isDark ? "#94A3B8" : "#64748B";
-    const gridColor = isDark ? "#334155" : "#CBD5E1";
-    const zeroLine = isDark ? "#475569" : "#94A3B8";
-    const plotBg = isDark ? "rgba(30,41,59,0.5)" : "rgba(15,23,42,0.06)";
+    const gridColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.06)";
+    const zeroLine = isDark ? "rgba(255,255,255,0.10)" : "rgba(15,23,42,0.10)";
     const legendColor = isDark ? "#CBD5E1" : "#1E293B";
 
     return {
       width,
       height: chartHeight,
-      margin: { l: 48, r: 16, t: 20, b: 64 },
+      margin: { l: 40, r: 12, t: 8, b: 40 },
       paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: plotBg,
+      plot_bgcolor: "rgba(0,0,0,0)",
       dragmode: "zoom",
       uirevision: uiRevisionRef.current,
       hovermode: "x unified",
@@ -331,16 +332,14 @@ export default function PlotlyRequestVolumeChart({
         spikesnap: "cursor",
         spikecolor: isDark ? "#94A3B8" : "#64748B",
         spikethickness: 1.25,
-        tickfont: { color: textMuted, size: 11 },
-        title: { text: "Time", font: { color: textMuted, size: 11 }, standoff: 12 },
+        tickfont: { color: textMuted, size: 10 },
       },
       yaxis: {
         fixedrange: true,
         showgrid: true,
         gridcolor: gridColor,
         zerolinecolor: zeroLine,
-        tickfont: { color: textMuted, size: 11 },
-        title: { text: "Requests", font: { color: textMuted, size: 11 } },
+        tickfont: { color: textMuted, size: 10 },
         rangemode: "nonnegative",
         range: [0, undefined as number | undefined],
       },

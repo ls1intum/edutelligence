@@ -628,7 +628,17 @@ def _load_persisted_local_provider_vram_payload(
                 after_snapshot_id=int(after_snapshot_id or 0),
             )
         elif str(day).strip().lower() == "all":
-            payload, status = db.get_ollama_vram_deltas(logos_key, day="all", after_snapshot_id=0)
+            # Initial WS load with no cursor. Cap to a recent window so the
+            # init payload stays small even after weeks of accumulated
+            # snapshots — the UI only renders a 30-min live window anyway,
+            # and live deltas keep flowing afterwards via after_snapshot_id.
+            recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+            payload, status = db.get_ollama_vram_deltas(
+                logos_key,
+                day="all",
+                after_snapshot_id=0,
+                since=recent_since,
+            )
         else:
             payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
     if status != 200 or not isinstance(payload, dict):

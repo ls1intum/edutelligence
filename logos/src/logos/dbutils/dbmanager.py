@@ -2201,6 +2201,7 @@ class DBManager:
         logos_key: str,
         day: str,
         after_snapshot_id: int = 0,
+        since: Optional[datetime.datetime] = None,
     ) -> Tuple[Dict[str, Any], int]:
         """
         Return incremental per-provider VRAM snapshots for a single UTC day.
@@ -2209,6 +2210,10 @@ class DBManager:
             logos_key: Auth key
             day: UTC day (YYYY-MM-DD / ISO date) or "all" for full history
             after_snapshot_id: Only rows with id > this cursor are returned
+            since: Optional lower bound on snapshot_ts. Used to cap the size
+                of "all"-history initial loads to a recent window so the WS
+                init payload doesn't balloon to hundreds of MB on long-lived
+                deployments.
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
@@ -2239,9 +2244,13 @@ class DBManager:
         params = {
             "after_snapshot_id": int(after_snapshot_id or 0),
         }
+        since_clause = ""
+        if since is not None:
+            params["since_ts"] = since
+            since_clause = " AND s.snapshot_ts >= :since_ts"
 
         if full_history:
-            sql = text("""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2260,12 +2269,13 @@ class DBManager:
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
                   AND s.id > :after_snapshot_id
+                  {since_clause}
                 ORDER BY s.id
             """)
         else:
             params["start_ts"] = start_dt
             params["end_ts"] = end_dt
-            sql = text("""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2286,6 +2296,7 @@ class DBManager:
                   AND s.snapshot_ts >= :start_ts
                   AND s.snapshot_ts < :end_ts
                   AND s.id > :after_snapshot_id
+                  {since_clause}
                 ORDER BY s.id
             """)
 
