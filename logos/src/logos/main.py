@@ -1364,14 +1364,18 @@ async def start_pipeline():
     _pipeline._context_resolver = _context_resolver
 
     # Wire capacity-needed callback: when the scheduler queues a request
-    # for a sleeping/unloaded model, immediately trigger the capacity
-    # planner to wake/load it (instead of waiting for the 30s cycle).
+    # for a sleeping/unloaded model, kick the planner cycle immediately
+    # so it acts on the new demand within milliseconds. The cycle's
+    # globally-fair eviction logic is the single source of truth for
+    # what to wake/load — request-time work no longer races for the
+    # provider lock, so a low-demand request can't starve out a
+    # high-demand one waiting on the same provider.
     async def _on_capacity_needed(provider_id: int, model_name: str) -> None:
         try:
-            await _capacity_planner.prepare_lane_for_request(provider_id, model_name)
+            _capacity_planner.hint_capacity_needed(provider_id, model_name)
         except Exception:
             logger.debug(
-                "Background capacity request for %s on provider %s failed",
+                "Capacity hint for %s on provider %s failed",
                 model_name, provider_id, exc_info=True,
             )
 

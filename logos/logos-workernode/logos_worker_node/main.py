@@ -249,10 +249,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if cfg.logos and cfg.logos.capabilities_models:
         lane_manager.validate_capabilities(cfg.logos.capabilities_models)
 
-    # Start the rolling-peak poller so vLLM live gauges (queue/running/kv)
-    # don't snap back to zero between 5 s heartbeats.
-    lane_manager.start_metrics_peak_loop()
-
     if cfg.lanes:
         logger.info("Applying %d lane(s) from config", len(cfg.lanes))
         try:

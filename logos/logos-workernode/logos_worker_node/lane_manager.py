@@ -7,7 +7,7 @@ from itertools import combinations
 import logging
 import socket
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Iterable, Optional
+from typing import Any, Awaitable, Callable, Iterable
 
 from logos_worker_node.models import (
     DeviceSummary,
@@ -258,16 +258,6 @@ class LaneManager:
         self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
-        # Rolling peaks for vLLM live gauges (queue_waiting, requests_running,
-        # gpu_cache_usage_percent). vLLM only exposes the *current-instant*
-        # value at /metrics, which is almost always 0 by the time the 5 s
-        # heartbeat fires (most requests finish in 1-3 s). A background
-        # poller updates these maxes between heartbeats; build_runtime_status
-        # consumes-and-resets them so each snapshot reports the peak the
-        # lane actually saw during the interval.
-        self._lane_metrics_peaks: dict[str, dict[str, float]] = {}
-        self._metrics_peak_task: Optional[asyncio.Task] = None
-        self._metrics_peak_interval = 0.5  # seconds
 
     def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
         """Check which capabilities_models are available locally.
@@ -981,90 +971,8 @@ class LaneManager:
 
     async def close(self) -> None:
         """Release HTTP clients for all handles."""
-        await self.stop_metrics_peak_loop()
         for handle in self._handles.values():
             await handle.close()
-
-    # ------------------------------------------------------------------
-    # vLLM live-gauge peak tracking
-    # ------------------------------------------------------------------
-
-    def start_metrics_peak_loop(self) -> None:
-        """Begin sub-second polling of vLLM /metrics on each loaded lane.
-
-        vLLM exposes queue_waiting / requests_running / gpu_cache_usage as
-        instantaneous values. With a 5 s heartbeat and 1-3 s requests, the
-        snapshot almost always lands at zero. This loop polls every 0.5 s
-        and remembers the peak; build_runtime_status drains the peaks and
-        emits them as the heartbeat-window value.
-        """
-        if self._metrics_peak_task and not self._metrics_peak_task.done():
-            return
-        self._metrics_peak_task = asyncio.create_task(
-            self._metrics_peak_loop(), name="lane-metrics-peak-poller"
-        )
-        logger.info("lane-metrics-peak-poller started (interval=%.2fs)", self._metrics_peak_interval)
-
-    async def stop_metrics_peak_loop(self) -> None:
-        task = self._metrics_peak_task
-        self._metrics_peak_task = None
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-    async def _metrics_peak_loop(self) -> None:
-        while True:
-            try:
-                await self._sample_metrics_peaks_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug("Metrics peak poll cycle failed", exc_info=True)
-            try:
-                await asyncio.sleep(self._metrics_peak_interval)
-            except asyncio.CancelledError:
-                raise
-
-    async def _sample_metrics_peaks_once(self) -> None:
-        """Poll every vLLM-backed handle once and update its rolling peaks."""
-        # Snapshot the handle list to avoid holding the lock while doing IO.
-        handles = list(self._handles.values())
-        coros = []
-        for handle in handles:
-            if not isinstance(handle, VllmProcessHandle):
-                continue
-            coros.append(self._update_peak_for_handle(handle))
-        if coros:
-            await asyncio.gather(*coros, return_exceptions=True)
-
-    async def _update_peak_for_handle(self, handle: VllmProcessHandle) -> None:
-        try:
-            metrics = await handle.get_backend_metrics()
-        except Exception:
-            return
-        peaks = self._lane_metrics_peaks.setdefault(handle.lane_id, {})
-        for key in ("queue_waiting", "requests_running", "gpu_cache_usage_percent"):
-            value = metrics.get(key)
-            if value is None:
-                continue
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                continue
-            current = peaks.get(key)
-            if current is None or value > current:
-                peaks[key] = value
-
-    def _consume_metrics_peaks(self, lane_id: str) -> dict[str, float]:
-        """Pop the rolling-peak metrics for a lane and return them.
-
-        Called from build_runtime_status — each heartbeat reports the peak
-        the lane saw since the last heartbeat, then the buckets reset.
-        """
-        return self._lane_metrics_peaks.pop(lane_id, {})
 
     # ------------------------------------------------------------------
     # Internal
@@ -2075,19 +1983,6 @@ class LaneManager:
                 backend_metrics.update(await handle.get_backend_metrics())
             except Exception:
                 logger.debug("Could not query backend metrics for lane '%s'", handle.lane_id, exc_info=True)
-
-        # Overlay rolling peaks for the live gauges. The fresh scrape above
-        # captures the *current-instant* value (likely 0); peaks reflect the
-        # max observed by the sub-second poller during the heartbeat window.
-        peaks = self._consume_metrics_peaks(handle.lane_id)
-        for key, peak_value in peaks.items():
-            current = backend_metrics.get(key)
-            try:
-                current_f = None if current is None else float(current)
-            except (TypeError, ValueError):
-                current_f = None
-            if current_f is None or peak_value > current_f:
-                backend_metrics[key] = peak_value
 
         if lc is not None and lc.vllm:
             if not sleep_mode_enabled:

@@ -14,7 +14,19 @@ from typing import List, Tuple
 class DemandTracker:
     """Exponential-decay demand histogram per model name."""
 
-    DECAY_FACTOR = 0.95
+    # Half-life ≈ log(0.5)/log(DECAY_FACTOR) cycles × cycle_seconds.
+    # Was 0.95 (half-life ~135 s at 10 s cycle) — too gentle: a
+    # model that just served a burst kept its score warm for minutes,
+    # blocking other models from competing on the wake/load contention
+    # check (eff(target) > eff(victim)*ratio) and forcing 60-90 s wait
+    # for the natural crossover. 0.7 gives a half-life of ~19 s — an
+    # idle incumbent's grip on VRAM fades within ~30 s so legitimate
+    # rotation requests don't starve. Anti-thrash for genuinely
+    # co-active models is preserved by LANE_MIN_TENURE_SECONDS and
+    # the queue-depth contribution to effective demand (which doesn't
+    # decay), so a model still actively serving requests keeps a
+    # high eff even with aggressive base decay.
+    DECAY_FACTOR = 0.7
     STALE_THRESHOLD_SECONDS = 3600  # Clean up metadata after 1 hour of inactivity
 
     # Burst detection parameters

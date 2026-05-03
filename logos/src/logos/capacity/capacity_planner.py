@@ -57,7 +57,7 @@ class CapacityPlanner:
     """
 
     # Idle tier thresholds (seconds of no activity)
-    IDLE_SLEEP_L1 = 300      # vLLM lane idle 5min → sleep level 1
+    IDLE_SLEEP_L1 = 120      # vLLM lane idle 2min → sleep level 1
     IDLE_SLEEP_L2 = 600      # vLLM lane sleeping L1 for 10min → sleep level 2
     # Demand floors: minimum score to act at all (noise filter).
     # Applied only when VRAM is freely available and no eviction is required.
@@ -159,6 +159,16 @@ class CapacityPlanner:
         )
         self._task: Optional[asyncio.Task] = None
         self._cycle_count = 0
+        # Event-driven cycle wake-up. The background loop waits on
+        # _tick_event OR _cycle_seconds, whichever fires first. A request
+        # for an unloaded model can call hint_capacity_needed() to wake
+        # the cycle immediately instead of running its own parallel
+        # capacity-preparation path. asyncio.Event.set() is idempotent,
+        # so a burst of N requests coalesces into one extra cycle.
+        self._tick_event: Optional[asyncio.Event] = None
+        # Optional hint payload — does not gate cycle behaviour, but is
+        # surfaced in logs so we can see which request woke the cycle.
+        self._tick_hints: list[tuple[int, str]] = []
         self._use_additive_loads = os.environ.get(
             "LOGOS_USE_ADDITIVE_LOADS", "true"
         ).strip().lower() not in ("0", "false", "no")
@@ -228,8 +238,36 @@ class CapacityPlanner:
     async def start(self) -> None:
         """Start the planner background loop."""
         if self._enabled:
+            # Event must be created in the running loop, not at __init__ time.
+            self._tick_event = asyncio.Event()
             self._task = asyncio.create_task(self._run_loop(), name="capacity-planner")
             logger.info("Capacity planner started (cycle=%ss)", self._cycle_seconds)
+
+    def hint_capacity_needed(
+        self, provider_id: int, model_name: str
+    ) -> None:
+        """Wake the planner cycle ahead of schedule.
+
+        Called by the scheduler when a request gets queued for a model
+        whose lane isn't ready (cold or sleeping). Bumping demand is
+        already handled at classification time, so this only needs to
+        kick the cycle out of its sleep.
+
+        Idempotent: a burst of N requests coalesces into one extra
+        cycle execution.
+        """
+        if not self._enabled or self._tick_event is None:
+            return
+        if not self._tick_event.is_set():
+            logger.info(
+                "Capacity hint received: provider=%s model=%s (waking cycle)",
+                provider_id, model_name,
+            )
+        self._tick_hints.append((provider_id, model_name))
+        # Trim hint log so it doesn't grow unboundedly under heavy load.
+        if len(self._tick_hints) > 64:
+            del self._tick_hints[: len(self._tick_hints) - 64]
+        self._tick_event.set()
 
     async def stop(self) -> None:
         """Stop the planner."""
@@ -242,7 +280,8 @@ class CapacityPlanner:
             logger.info("Capacity planner stopped")
 
     async def _run_loop(self) -> None:
-        await asyncio.sleep(self._cycle_seconds)  # Initial delay to let system settle
+        # Initial delay to let system settle.
+        await asyncio.sleep(self._cycle_seconds)
         while True:
             try:
                 await self._run_cycle()
@@ -251,7 +290,26 @@ class CapacityPlanner:
                 raise
             except Exception:
                 logger.exception("Capacity planner cycle failed")
-            await asyncio.sleep(self._cycle_seconds)
+
+            # Wait for either the periodic timeout or an external tickle.
+            # The tickle path lets a queued request wake us immediately
+            # rather than wait the full cycle, which previously left a
+            # request stuck for up to _cycle_seconds. asyncio.Event.set()
+            # is idempotent, so multiple tickles between cycles coalesce
+            # into one extra run.
+            if self._tick_event is None:
+                # Defensive: should never happen post-start(), but fall
+                # back to plain sleep if it does.
+                await asyncio.sleep(self._cycle_seconds)
+                continue
+            try:
+                await asyncio.wait_for(
+                    self._tick_event.wait(),
+                    timeout=self._cycle_seconds,
+                )
+            except asyncio.TimeoutError:
+                pass  # Periodic tick — normal path.
+            self._tick_event.clear()
 
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
@@ -510,80 +568,34 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float = 180.0,
     ) -> dict[str, Any] | None:
-        """Prepare a lane for request-time execution.
+        """Signal the planner that a request is queued for this model.
 
-        This path is synchronous to the request. It can:
-        1. Wake a sleeping lane (reclaiming VRAM from idle competitors if needed)
-        2. Cold-load a model that has no lane at all (with VRAM budget validation)
+        Previously this method ran a parallel capacity-preparation pipeline
+        (wake, cold-load, reclaim) racing the periodic cycle for the
+        provider lock. That second path bypassed the cycle's competitive-
+        ratio fairness rule, so a request for a low-demand model could win
+        the lock against a high-demand one waiting in the cycle, causing
+        starvation under load.
+
+        The unified design uses the periodic cycle as the single
+        decision-maker. This method now just tickles the cycle so it
+        acts on the freshly-queued demand within milliseconds, and
+        returns immediately — the queued request future is resolved by
+        `_dispatch_next_queued_request` once the lane comes up.
+
+        timeout_seconds is preserved for signature compatibility but no
+        longer used; the request itself enforces its own timeout via
+        `_queue_and_wait`.
         """
-        # Don't attempt lane preparation until the worker has reported its
-        # current state — otherwise we may cold-load a model that is already
-        # loaded, or issue a declarative apply_lanes that destroys existing lanes.
         if self._registry and not self._registry.has_received_first_status(provider_id):
             logger.info(
-                "Deferring lane preparation for provider=%s model=%s: "
+                "Deferring capacity hint for provider=%s model=%s: "
                 "waiting for first status report after connect",
                 provider_id, model_name,
             )
             return None
-
-        # Don't reload a model that was recently drained — the drain decision
-        # was intentional and reloading immediately causes oscillation.
-        # Exception: if the incumbent model is idle (0 active requests), the
-        # drain rationale no longer applies — allow the load so queued requests
-        # don't starve.
-        drain_key = (provider_id, model_name)
-        drain_time = self._drain_timestamps.get(drain_key)
-        if drain_time is not None:
-            elapsed = time.time() - drain_time
-            cooldown = self._get_effective_tenure(was_cold_loaded=False)
-            if elapsed < cooldown:
-                # Check if the incumbent is still busy
-                incumbent_busy = False
-                all_lanes = self._safe_get_lanes(provider_id)
-                for lane in all_lanes:
-                    if lane.model_name != model_name and lane.runtime_state in ("loaded", "running"):
-                        if lane.active_requests > 0 or lane.queue_waiting > 0:
-                            incumbent_busy = True
-                            break
-                if incumbent_busy:
-                    logger.info(
-                        "Skipping prepare for %s on provider %s: drained %.0fs ago "
-                        "(cooldown %.0fs, incumbent busy)",
-                        model_name, provider_id, elapsed, cooldown,
-                    )
-                    return None
-                else:
-                    logger.info(
-                        "Allowing prepare for %s on provider %s despite drain %.0fs ago: "
-                        "incumbent is idle",
-                        model_name, provider_id, elapsed,
-                    )
-                    self._drain_timestamps.pop(drain_key, None)
-            else:
-                # Cooldown expired — clear the entry
-                self._drain_timestamps.pop(drain_key, None)
-
-        target = self._pick_request_target_lane(provider_id, model_name)
-        if target is not None and target.runtime_state not in {"sleeping", "cold"}:
-            return await self._prepare_existing_lane(
-                provider_id, model_name, target, timeout_seconds,
-            )
-
-        async with self._model_prepare_lock(provider_id, model_name):
-            # Re-check after acquiring lock — another request for the same model
-            # may have completed the cold load while we were waiting.
-            target = self._pick_request_target_lane(provider_id, model_name)
-
-            if target is not None:
-                return await self._prepare_existing_lane(
-                    provider_id, model_name, target, timeout_seconds,
-                )
-
-            # No lane exists — attempt request-time cold load
-            return await self._cold_load_for_request(
-                provider_id, model_name, timeout_seconds,
-            )
+        self.hint_capacity_needed(provider_id, model_name)
+        return None
 
     async def _prepare_existing_lane(
         self,
@@ -1397,10 +1409,34 @@ class CapacityPlanner:
             total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
             if lane.active_requests > 0 or lane.queue_waiting > 0 or total_demand > 0:
                 continue
-            if self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
-                continue
+            # NOTE: load_cooldown is checked *per-action* below, not as a
+            # blanket filter. A freshly-loaded lane is fair game for sleep_l1
+            # (cheap, reversible — no work is wasted by sleeping a vLLM lane
+            # and waking it later) but not for stop (destructive — would
+            # throw away the cold-load cost we just paid).
+            in_cooldown = self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now)
+            # Tenure-based gate for sleep_l1 candidates: a freshly-woken
+            # lane needs a short window to actually serve its initial
+            # request batch before being preempted. Without this, the
+            # scheduler can dispatch a request to a lane the cycle has
+            # already decided to sleep, hitting it with "not routable
+            # (state=sleeping)" errors. Stop uses the longer LOAD_COOLDOWN
+            # since its destructive, sleep_l1 just needs LANE_MIN_TENURE.
+            lane_loaded_at = self._lane_loaded_at.get(self._lane_key(provider_id, lane.lane_id))
+            in_min_tenure = (
+                lane_loaded_at is not None
+                and (now - lane_loaded_at) < self.LANE_MIN_TENURE_SECONDS
+            )
 
             lane_gpus = frozenset(self._parse_gpu_device_ids(lane.gpu_devices))
+            # An empty/"all" gpu_devices string parses to (), but semantically
+            # the lane uses every GPU on the worker. Without this expansion,
+            # the lane gets filtered as "disjoint" against any specific
+            # required_gpus set and the eviction picker silently loses the
+            # candidate — which is the root cause of the Mistral-disappears
+            # starvation pattern. Use required_gpus as a sensible fallback.
+            if not lane_gpus and required_gpus:
+                lane_gpus = required_gpus
             # Determine GPU overlap with required set
             if required_gpus:
                 overlap = lane_gpus & required_gpus
@@ -1415,6 +1451,13 @@ class CapacityPlanner:
 
             # Prefer sleep (less disruptive); fall back to stop
             if lane.is_vllm and lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake":
+                # Sleep_l1 is reversible but the scheduler needs time to
+                # finish dispatching any request it routed in the moment
+                # before the cycle decided to sleep. LANE_MIN_TENURE_SECONDS
+                # (~5s) is enough to absorb dispatch races and let the lane
+                # serve its first batch.
+                if in_min_tenure:
+                    continue
                 action = "sleep_l1"
                 current_mb = float(lane.effective_vram_mb or 0.0)
                 if current_mb <= 0 and profile:
@@ -1422,6 +1465,21 @@ class CapacityPlanner:
                 residual_mb = float(profile.sleeping_residual_mb or 0.0) if profile else 0.0
                 freed_total = max(current_mb - residual_mb, 0.0)
             elif lane.runtime_state in ("sleeping",) and lane.sleep_state == "sleeping":
+                # Stopping a sleeping lane destroys the process; recovery
+                # requires a 30-60s cold-load. Only do it when this model
+                # is genuinely idle — no queued requests, no recent demand.
+                # If demand exists, the planner should keep the lane
+                # sleeping so a fast wake can serve it later.
+                pending_demand = (
+                    self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
+                    or self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
+                )
+                if pending_demand:
+                    continue
+                # Stop is destructive — respect the post-load cooldown so we
+                # don't throw away a cold-load we just paid for.
+                if in_cooldown:
+                    continue
                 action = "stop"
                 residual_mb = float(lane.effective_vram_mb or 0.0)
                 if residual_mb <= 0 and profile:
@@ -1886,7 +1944,13 @@ class CapacityPlanner:
                 target = sleeping_lanes[0]
                 profile = profiles.get(model_name)
 
-                # Per-GPU deficit on the GPUs the sleeping lane occupies
+                # Per-GPU deficit on the GPUs the sleeping lane occupies.
+                # When gpu_devices is "all" or unparseable, _parse_gpu_device_ids
+                # returns () — fall back to all known per_gpu_free keys so
+                # the deficit is keyed by real GPU ids and _find_eviction_set
+                # can match candidates' freed_per_gpu (which is also keyed
+                # by real ids). Without this fallback the deficit landed on
+                # sentinel -1 and no candidate ever satisfied "useful" check.
                 target_gpus = frozenset(self._parse_gpu_device_ids(target.gpu_devices))
                 tp = max(len(target_gpus), 1)
                 loaded_mb = self._estimate_model_loaded_vram(profile) if profile else 4096.0
@@ -1894,19 +1958,28 @@ class CapacityPlanner:
                 wake_cost_per_gpu = max(loaded_mb - residual_mb, 0.0) / tp
 
                 per_gpu_free = self._get_per_gpu_free(provider_id)
+                # If the target's gpu_devices was "all" / empty, fan the
+                # deficit out across every device the worker reports.
+                effective_target_gpus = target_gpus
+                if not effective_target_gpus and per_gpu_free:
+                    effective_target_gpus = frozenset(per_gpu_free.keys())
+                    tp = max(len(effective_target_gpus), 1)
+                    wake_cost_per_gpu = max(loaded_mb - residual_mb, 0.0) / tp
+
                 per_gpu_deficit: dict[int, float] = {}
-                if target_gpus and per_gpu_free:
-                    for g in target_gpus:
+                if effective_target_gpus and per_gpu_free:
+                    for g in effective_target_gpus:
                         free = per_gpu_free.get(g, 0.0)
                         deficit = max(0.0, wake_cost_per_gpu * self.VRAM_SAFETY_MARGIN - free)
                         if deficit > 0:
                             per_gpu_deficit[g] = deficit
                 else:
-                    # No per-GPU info: fall back to aggregate
+                    # No per-GPU info at all: fall back to aggregate sentinel.
                     avail = float(capacity.available_vram_mb) if capacity else 0.0
                     deficit = max(0.0, (loaded_mb - residual_mb) * self.VRAM_SAFETY_MARGIN - avail)
                     if deficit > 0:
                         per_gpu_deficit[-1] = deficit  # sentinel for aggregate
+                target_gpus = effective_target_gpus
 
                 logger.info(
                     "Wake candidate model=%s lane=%s gpus=%s loaded_mb=%.0f residual_mb=%.0f "
@@ -1939,9 +2012,31 @@ class CapacityPlanner:
                         ))
                         planned_models.add(model_name)
                 else:
-                    # Contention — target must outweigh the eviction set
+                    # Contention. Two regimes:
+                    # (a) Target has real queued requests waiting on it
+                    #     → bypass the ratio. _find_eviction_set already
+                    #     restricts victims to currently-idle lanes (no
+                    #     active_requests, no queue, no scheduler-side
+                    #     pending), so reclaiming them can't preempt any
+                    #     real work. The ratio was preventing legitimate
+                    #     rotation under pressure (a 32 GB GPU + 3 models
+                    #     CAN'T coexist; one must yield to a queued model).
+                    # (b) Target has only speculative score, no queue
+                    #     → keep the ratio gate so a model that *might*
+                    #     be popular doesn't preempt a recently-warm one
+                    #     on speculation alone.
+                    has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
                     max_victim_score = max(s for _, _, s in eviction_set)
-                    if eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO:
+                    proceed = (
+                        (has_queued and eff >= self.DEMAND_WAKE_FLOOR)
+                        or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
+                    )
+                    if proceed:
+                        gate_reason = (
+                            f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
+                            if has_queued and eff <= max_victim_score * self.WAKE_COMPETITIVE_RATIO
+                            else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.WAKE_COMPETITIVE_RATIO}"
+                        )
                         for vlane, vaction, _ in eviction_set:
                             if vlane.lane_id in claimed_victims:
                                 continue
@@ -1951,25 +2046,19 @@ class CapacityPlanner:
                                 provider_id=provider_id,
                                 lane_id=vlane.lane_id,
                                 model_name=vlane.model_name,
-                                reason=(
-                                    f"Evicted for {model_name} wake "
-                                    f"(target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.WAKE_COMPETITIVE_RATIO})"
-                                ),
+                                reason=f"Evicted for {model_name} wake ({gate_reason})",
                             ))
                         actions.append(CapacityPlanAction(
                             action="wake",
                             provider_id=provider_id,
                             lane_id=target.lane_id,
                             model_name=model_name,
-                            reason=(
-                                f"Demand eff={eff:.2f} > eviction_max={max_victim_score:.2f}"
-                                f"×{self.WAKE_COMPETITIVE_RATIO} (competitive wake)"
-                            ),
+                            reason=f"Wake {model_name}: {gate_reason}",
                         ))
                         planned_models.add(model_name)
                     else:
                         logger.debug(
-                            "Skipping wake of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f",
+                            "Skipping wake of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",
                             model_name, eff, max_victim_score, self.WAKE_COMPETITIVE_RATIO,
                         )
                 continue  # sleeping lane found; don't also try cold load
@@ -2042,9 +2131,22 @@ class CapacityPlanner:
                 ))
                 planned_models.add(model_name)
             else:
-                # Contention — target must outweigh the eviction set
+                # Contention. Same two-regime logic as the wake path:
+                # real queued requests bypass the ratio (victims are
+                # already idle by construction); speculative score is
+                # gated by LOAD_COMPETITIVE_RATIO to avoid thrashing on
+                # a model that *might* become popular.
                 max_victim_score = max(s for _, _, s in eviction_set)
-                if eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO:
+                proceed = (
+                    (has_queued and eff >= self.DEMAND_LOAD_FLOOR)
+                    or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
+                )
+                if proceed:
+                    gate_reason = (
+                        f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
+                        if has_queued and eff <= max_victim_score * self.LOAD_COMPETITIVE_RATIO
+                        else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
+                    )
                     lane_id = self._planner_lane_id(model_name)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
@@ -2055,10 +2157,7 @@ class CapacityPlanner:
                             provider_id=provider_id,
                             lane_id=vlane.lane_id,
                             model_name=vlane.model_name,
-                            reason=(
-                                f"Evicted for {model_name} load "
-                                f"(target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.LOAD_COMPETITIVE_RATIO})"
-                            ),
+                            reason=f"Evicted for {model_name} load ({gate_reason})",
                         ))
                     if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                         continue
@@ -2068,15 +2167,12 @@ class CapacityPlanner:
                         lane_id=lane_id,
                         model_name=model_name,
                         params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                        reason=(
-                            f"Demand eff={eff:.2f} > eviction_max={max_victim_score:.2f}"
-                            f"×{self.LOAD_COMPETITIVE_RATIO} (competitive load)"
-                        ),
+                        reason=f"Load {model_name}: {gate_reason}",
                     ))
                     planned_models.add(model_name)
                 else:
                     logger.debug(
-                        "Skipping load of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f",
+                        "Skipping load of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",
                         model_name, eff, max_victim_score, self.LOAD_COMPETITIVE_RATIO,
                     )
 
@@ -2325,8 +2421,12 @@ class CapacityPlanner:
                 continue
             if lane.sleep_state != "awake":
                 continue
-            if self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
-                continue
+            # NOTE: no load_cooldown filter here — sleep_l1 is reversible
+            # and cheap (the lane process stays alive, only the model
+            # weights are paged out). Gating preemptive sleep on cooldown
+            # was a hold-over from when this filter was applied uniformly;
+            # cooldown's real purpose is preventing premature `stop`,
+            # which is destructive.
             # Skip lanes that the idle path will already sleep this cycle
             idle_start = self._lane_idle_since.get(self._lane_key(provider_id, lane.lane_id))
             idle_seconds = (now - idle_start) if idle_start is not None else 0.0
@@ -3096,9 +3196,14 @@ class CapacityPlanner:
             # device memory.  Stopping a sleeping lane frees that residual but
             # destroys the fast-wake benefit (~2-3s vs 30-60s cold load).
             # Add as last-resort stop candidates (high penalty) — only chosen
-            # when sleeping awake lanes can't free enough VRAM.
+            # when sleeping awake lanes can't free enough VRAM AND the model
+            # has nothing pending that would benefit from the fast wake.
             if lane.is_vllm and lane.runtime_state == "sleeping":
-                if residual_vram > 0 and not in_cooldown:
+                pending_demand = (
+                    self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
+                    or self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
+                )
+                if residual_vram > 0 and not in_cooldown and not pending_demand:
                     stop_candidates.append((
                         residual_vram,
                         CapacityPlanAction(
@@ -4596,9 +4701,17 @@ class CapacityPlanner:
             # new requests can be routed to the lane between the idle check in
             # _next_request_reclaim_action and the actual sleep — those in-flight
             # streams get killed when the lane is subsequently stopped.
-            _is_reclaim_sleep = bool(
-                action.reason and "Request-time reclaim" in action.reason
-            )
+            #
+            # Originally this guard only fired for "Request-time reclaim"
+            # reasons. That left two other sleep-emitting paths unprotected:
+            # "Evicted for ... wake/load" (cycle's contention path) and
+            # "Preemptive sleep after load" (load-then-sleep optimisation).
+            # Both can race with the scheduler dispatching a freshly-queued
+            # request, killing it with "Lane not routable (state=sleeping)"
+            # errors. Apply drain to *all* sleep_l1/sleep_l2 actions — the
+            # cost is bounded by drain timeout, the alternative is dropped
+            # requests.
+            _is_reclaim_sleep = action.action in ("sleep_l1", "sleep_l2")
             if _is_reclaim_sleep:
                 self._mark_lane_cold(action.provider_id, action.lane_id)
                 drained = await self._drain_lane(
