@@ -583,21 +583,27 @@ export default function PlotlyRequestVolumeChart({
               top: hoverTooltip.top,
               pointerEvents: "none",
               zIndex: 30,
-              maxWidth: 460,
-              border: `1px solid ${isDark ? "#475569" : "#334155"}`,
-              background: isDark ? "rgba(15,23,42,0.96)" : "rgba(255,255,255,0.97)",
-              color: isDark ? "#F8FAFC" : "#1E293B",
-              borderRadius: 0,
-              boxShadow: "none",
-              padding: "8px 10px",
+              maxWidth: 320,
+              border: `1px solid ${isDark ? "rgba(148,163,184,0.25)" : "rgba(15,23,42,0.12)"}`,
+              background: isDark ? "rgba(15,23,42,0.96)" : "rgba(255,255,255,0.98)",
+              color: isDark ? "#F8FAFC" : "#0F172A",
+              borderRadius: 10,
+              boxShadow: isDark
+                ? "0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.04) inset"
+                : "0 8px 24px rgba(15,23,42,0.12)",
+              padding: "8px 12px",
+              fontFamily: "inherit",
             }}
           >
             <div
               style={{
-                fontSize: 13,
-                lineHeight: "18px",
-                fontWeight: 400,
-                marginBottom: 4,
+                fontSize: 11,
+                lineHeight: "16px",
+                fontWeight: 500,
+                marginBottom: 6,
+                letterSpacing: 0.2,
+                color: isDark ? "#94A3B8" : "#475569",
+                textTransform: "uppercase",
               }}
             >
               {hoverTooltip.title}
@@ -608,22 +614,24 @@ export default function PlotlyRequestVolumeChart({
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
+                  gap: 8,
                   fontSize: 13,
-                  lineHeight: "18px",
+                  lineHeight: "20px",
                 }}
               >
                 <div
                   style={{
-                    width: 12,
-                    height: 12,
+                    width: 10,
+                    height: 10,
                     backgroundColor: item.color,
-                    borderRadius: 0,
+                    borderRadius: 3,
                     flexShrink: 0,
                   }}
                 />
                 <div>
-                  {item.name} : {Math.round(item.value)} requests
+                  <span style={{ opacity: 0.78 }}>{item.name}</span>
+                  {"  "}
+                  <span style={{ fontWeight: 600 }}>{Math.round(item.value)}</span>
                 </div>
               </div>
             ))}
