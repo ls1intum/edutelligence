@@ -36,10 +36,10 @@ services:
       - ./tests/integration:/app/tests/integration
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
-      LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
+      TZ: "${TZ:-Europe/Berlin}"
     expose:
       - "8080"
     ports:
@@ -58,7 +58,8 @@ services:
 
       # === Routing: /openai ===
       - "traefik.http.routers.logos-server-openai.rule=PathPrefix(`/openai`)"
-      - "traefik.http.routers.logos-server-openai.entrypoints=websecure,secure8080"
+      - "traefik.http.routers.logos-server-openai.entrypoints=websecure,secure8\
+        080"
       - "traefik.http.routers.logos-server-openai.tls=true"
       - "traefik.http.routers.logos-server-openai.service=logos-server"
       - "traefik.http.routers.logos-server-openai.priority=100"
@@ -72,15 +73,26 @@ services:
 
       # ── Admin routes (port 9443) ──
 
-      # === Routing: /logosdb ===
-      - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
-      - "traefik.http.routers.logos-server-logosdb.entrypoints=admin"
-      - "traefik.http.routers.logos-server-logosdb.tls=true"
-      - "traefik.http.routers.logos-server-logosdb.service=logos-server"
-      - "traefik.http.routers.logos-server-logosdb.priority=100"
+      # === Routing: /api (all UI-internal endpoints) ===
+      # Backend strips the `/api` prefix, so adding a new admin endpoint
+      # requires no change here — just a new FastAPI route under any path.
+      - "traefik.http.routers.logos-server-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.logos-server-api.entrypoints=admin"
+      - "traefik.http.routers.logos-server-api.tls=true"
+      - "traefik.http.routers.logos-server-api.service=logos-server"
+      - "traefik.http.routers.logos-server-api.priority=100"
+
+      # === Routing: /logosdb/providers/logosnode (workernode protocol) ===
+      - "traefik.http.routers.logos-server-logosnode.rule=PathPrefix(`/logosdb/p\
+        roviders/logosnode`)"
+      - "traefik.http.routers.logos-server-logosnode.entrypoints=admin"
+      - "traefik.http.routers.logos-server-logosnode.tls=true"
+      - "traefik.http.routers.logos-server-logosnode.service=logos-server"
+      - "traefik.http.routers.logos-server-logosnode.priority=100"
 
       # === Routing: /docs ===
-      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
+      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) ||
+        PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.logos-server-docs.entrypoints=admin"
       - "traefik.http.routers.logos-server-docs.tls=true"
       - "traefik.http.routers.logos-server-docs.service=logos-server"
@@ -93,13 +105,6 @@ services:
       - "traefik.http.routers.logos-server-metrics.service=logos-server"
       - "traefik.http.routers.logos-server-metrics.priority=100"
 
-      # === Routing: /ws (WebSocket) ===
-      - "traefik.http.routers.logos-server-ws.rule=PathPrefix(`/ws`)"
-      - "traefik.http.routers.logos-server-ws.entrypoints=admin"
-      - "traefik.http.routers.logos-server-ws.tls=true"
-      - "traefik.http.routers.logos-server-ws.service=logos-server"
-      - "traefik.http.routers.logos-server-ws.priority=100"
-
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
     networks:
@@ -111,9 +116,7 @@ services:
     restart: unless-stopped
     user: postgres
     command: >
-      postgres
-      -c shared_preload_libraries=pg_cron
-      -c cron.database_name=logosdb
+      postgres -c shared_preload_libraries=pg_cron -c cron.database_name=logosdb
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
@@ -122,7 +125,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready", "--username=postgres"]
+      test: [ "CMD-SHELL", "pg_isready", "--username=postgres" ]
       interval: 1s
       timeout: 5s
       retries: 10
@@ -144,7 +147,8 @@ services:
       - "traefik.enable=true"
 
       # === UI routing (admin port only) ===
-      - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}`) && PathPrefix(`/`)"
+      - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}\
+        `) && PathPrefix(`/`)"
       - "traefik.http.routers.internal-ui.entrypoints=admin"
       - "traefik.http.routers.internal-ui.tls=true"
       - "traefik.http.routers.internal-ui.service=internal-ui-svc"

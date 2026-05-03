@@ -118,9 +118,7 @@ Use the normal Logos DB endpoints:
 
 ## 9. Scheduling & Capacity Management
 
-Once the worker is connected, Logos automatically uses two subsystems:
-
-**ETTFT Scheduler** — re-ranks candidate models using estimated time-to-first-token. A loaded model with slightly lower classification weight beats a cold model that would take 30-90s to load. Disable with `LOGOS_SCHEDULER_ETTFT_ENABLED=false` on the Logos server.
+Once the worker is connected, Logos automatically uses the Capacity Planner subsystem:
 
 **Capacity Planner** — background loop (30s cycles) that:
 - Sleeps idle vLLM lanes after 5min of inactivity (level 1), then after 10min already in L1 sleep (level 2)

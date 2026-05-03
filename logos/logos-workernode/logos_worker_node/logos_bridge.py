@@ -22,6 +22,7 @@ except Exception:  # noqa: BLE001
         pass
 
 from logos_worker_node.config import save_lanes_state
+from logos_worker_node.lane_manager import _lane_id_from_config
 from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.runtime import build_runtime_status
@@ -268,8 +269,11 @@ class LogosBridgeClient:
 
     async def _send_hello(self, ws) -> None:
         max_lanes = 0
+        static_lane_ids: list[str] = []
         if hasattr(self._app, "state") and hasattr(self._app.state, "config"):
             max_lanes = self._app.state.config.worker.max_lanes
+        if hasattr(self._app, "state") and hasattr(self._app.state, "lane_manager"):
+            static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
         await self._send_json(
             ws,
             {
@@ -277,6 +281,7 @@ class LogosBridgeClient:
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "max_lanes": max_lanes,
+                "static_lane_ids": static_lane_ids,
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -454,7 +459,12 @@ class LogosBridgeClient:
             result = await lane_manager.apply_lanes(lanes)
             if result.success:
                 try:
-                    save_lanes_state(lanes)
+                    # Persist only non-static lanes to lanes.json
+                    dynamic_configs = [
+                        lc for lc in lane_manager.get_current_lane_configs()
+                        if not lane_manager.is_static_lane(_lane_id_from_config(lc))
+                    ]
+                    save_lanes_state(dynamic_configs)
                 except OSError:
                     logger.debug("Could not persist lane state")
             return result.model_dump(mode="json")
@@ -463,7 +473,12 @@ class LogosBridgeClient:
             lane_config = LaneConfig(**params)
             status = await lane_manager.add_lane(lane_config)
             try:
-                save_lanes_state(lane_manager.get_current_lane_configs())
+                # Persist only non-static lanes to lanes.json
+                dynamic_configs = [
+                    lc for lc in lane_manager.get_current_lane_configs()
+                    if not lane_manager.is_static_lane(_lane_id_from_config(lc))
+                ]
+                save_lanes_state(dynamic_configs)
             except OSError:
                 logger.debug("Could not persist lane state after add_lane")
             return status.model_dump(mode="json")
@@ -472,7 +487,12 @@ class LogosBridgeClient:
         if action == "delete_lane":
             await lane_manager.remove_lane(lane_id)
             try:
-                save_lanes_state(lane_manager.get_current_lane_configs())
+                # Persist only non-static lanes to lanes.json
+                dynamic_configs = [
+                    lc for lc in lane_manager.get_current_lane_configs()
+                    if not lane_manager.is_static_lane(_lane_id_from_config(lc))
+                ]
+                save_lanes_state(dynamic_configs)
             except OSError:
                 logger.debug("Could not persist lane state after delete_lane")
             return {"ok": True, "lane_id": lane_id}

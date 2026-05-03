@@ -408,5 +408,5 @@ print(f"Selected model {best_model.model_id}")
 ### Related Documentation
 
 - Priority Queue Subsystem: `src/logos/queue/README.md`
-- Pipeline Schedulers: `src/logos/pipeline/README.md` (includes utilization_scheduler.py, fcfs_scheduler.py)
+- Pipeline Schedulers: `src/logos/pipeline/README.md` (includes simple_scheduler.py)
 - Integration Tests: `tests/scheduling_data/` (comprehensive Queue + SDI + Scheduler tests)
