@@ -17,6 +17,7 @@ from logos.monitoring.recorder import MonitoringRecorder
 from logos.monitoring import prometheus_metrics as prom
 
 from logos.queue.models import Priority
+from logos.terminal_logging import BOLD, RED, model_name_cache, paint
 
 from .scheduler_interface import (
     SchedulerInterface,
@@ -169,7 +170,12 @@ class RequestPipeline:
         try:
             scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
-            logger.warning("Request %s timed out waiting in queue", request_id)
+            logger.warning(
+                "%s Request %s %s",
+                paint("‼ QUEUE TIMEOUT", RED, BOLD),
+                request_id,
+                paint("timed out waiting in queue", RED),
+            )
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
             self.record_completion(
                 request_id=request_id,
@@ -441,12 +447,12 @@ class RequestPipeline:
         self._monitoring.record_provider_metrics(request_id, provider_metrics)
 
     def _resolve_model_name(self, model_id: int) -> Optional[str]:
-        """Look up model name from scheduler's model registry."""
-        if hasattr(self._scheduler, '_model_registry') and self._scheduler._model_registry:
-            for (mid, pid), name in self._scheduler._model_registry.items():
-                if mid == model_id:
-                    return name
-        return None
+        """Look up the human-readable model name for demand/loadavg tracking."""
+        name = model_name_cache.get(model_id)
+        # model_name_cache falls back to str(model_id) on lookup failures;
+        # treat pure-digit fallbacks as "not found" so we don't record demand
+        # under a numeric string.
+        return name if name and not name.isdigit() else None
 
 
 @dataclass

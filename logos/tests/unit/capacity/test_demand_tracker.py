@@ -162,6 +162,102 @@ def test_burst_counts_in_stats():
     assert stats["burst_counts"]["model-a"] == 6
 
 
+## ---------------------------------------------------------------------------
+## Loadavg (1m / 5m / 15m EWMA of req/min)
+## ---------------------------------------------------------------------------
+
+
+def test_loadavg_untracked_model_returns_zero():
+    tracker = DemandTracker()
+    assert tracker.get_loadavg("nonexistent") == (0.0, 0.0, 0.0)
+
+
+def test_loadavg_increases_on_request():
+    tracker = DemandTracker()
+    tracker.record_request("model-a")
+    l1, l5, l15 = tracker.get_loadavg("model-a")
+    # 1 request bumps EWMA[tau] by 60/tau: 1.0 / 0.2 / 0.0667.
+    # Lazy decay between record and read is sub-millisecond, so values are tight.
+    assert 0.99 < l1 <= 1.0
+    assert 0.19 < l5 <= 0.2
+    assert 0.06 < l15 <= 0.07
+
+
+def test_loadavg_steady_state_matches_rate():
+    """Constant rate r req/sec should drive the 1m EWMA toward 60·r req/min."""
+    import math
+    import time
+
+    tracker = DemandTracker()
+    now = time.time()
+    # Simulate 3000s of traffic at 1 req/sec — 10·tau for the 5m EWMA so it
+    # converges within ~0.005% of steady state.
+    with tracker._lock:
+        for i in range(3000):
+            tracker._record_load_locked("steady", 1.0, now + i)
+
+    l1 = tracker._load_avg["steady"]["1m"]
+    l5 = tracker._load_avg["steady"]["5m"]
+    # Steady-state for _record_load_locked at 1Hz with unit u = 60/tau is geometric:
+    # L = u / (1 - exp(-1/tau)).
+    expected_1m = (60.0 / 60.0) / (1.0 - math.exp(-1.0 / 60.0))
+    expected_5m = (60.0 / 300.0) / (1.0 - math.exp(-1.0 / 300.0))
+    assert abs(l1 - expected_1m) / expected_1m < 0.01
+    assert abs(l5 - expected_5m) / expected_5m < 0.01
+
+
+def test_loadavg_decays_when_idle():
+    """Without traffic, loadavg should decay toward zero."""
+    import time
+
+    tracker = DemandTracker()
+    tracker.record_request("model-a")
+    initial_l1, _, _ = tracker.get_loadavg("model-a")
+    assert initial_l1 > 0.5
+
+    # Fast-forward by rewriting the last-update marker to 60s ago (one tau).
+    with tracker._lock:
+        tracker._load_avg_last_update["model-a"] -= 60.0
+
+    decayed_l1, _, _ = tracker.get_loadavg("model-a")
+    # After one tau, EWMA should have fallen by factor 1/e ≈ 0.368.
+    assert 0.30 < decayed_l1 / initial_l1 < 0.40
+
+
+def test_loadavg_ignores_burst_multiplier():
+    """Loadavg reports raw request rate, even during a demand burst."""
+    tracker = DemandTracker()
+    for _ in range(10):  # well past BURST_THRESHOLD
+        tracker.record_request("model-a")
+    # Demand score includes burst multiplier; loadavg does not.
+    assert tracker.get_score("model-a") > 10.0
+    l1, _, _ = tracker.get_loadavg("model-a")
+    # Each request bumps 1m EWMA by exactly 1.0 (60/60), with negligible decay
+    # over the microseconds between calls, so 10 requests → ~10.
+    assert 9.5 < l1 <= 10.0
+
+
+def test_loadavg_cleaned_with_stale_metadata():
+    """Stale-metadata cleanup should also drop loadavg entries."""
+    import time
+
+    tracker = DemandTracker()
+    tracker.record_request("old-model")
+    for _ in range(200):
+        tracker.decay_all()
+    assert tracker.get_score("old-model") == 0.0
+
+    with tracker._lock:
+        tracker._last_request["old-model"] = time.time() - 3700
+
+    tracker.decay_all()
+
+    assert tracker.get_loadavg("old-model") == (0.0, 0.0, 0.0)
+    with tracker._lock:
+        assert "old-model" not in tracker._load_avg
+        assert "old-model" not in tracker._load_avg_last_update
+
+
 def test_is_burst_custom_window_and_threshold():
     """Custom window and threshold parameters should work."""
     tracker = DemandTracker()
