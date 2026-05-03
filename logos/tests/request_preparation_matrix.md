@@ -48,9 +48,8 @@ This matrix tracks the request-path and capacity-planner scenarios covered by te
 | Stopped / error lanes retained in view | Lowest-rank states still appear in the model view | `tests/unit/sdi/test_scheduler_view.py::test_scheduler_view_includes_stopped_error_lanes` |
 | Warmth ordering | Running > loaded > sleeping > starting > cold > stopped > error | `tests/unit/sdi/test_scheduler_view.py::test_warmest_state_ordering` |
 | Sleep warmth ordering | Awake > unknown > sleeping > unsupported | `tests/unit/sdi/test_scheduler_view.py::test_warmest_sleep_ordering` |
-| Correcting scheduler loaded-vs-cold ranking | Loaded or sleeping candidates beat colder candidates when penalties apply | `tests/unit/pipeline/test_correcting_scheduler.py::test_loaded_beats_cold_due_to_penalty`, `tests/unit/pipeline/test_correcting_scheduler.py::test_sleeping_beats_cold` |
-| Cross-provider choice | Azure may beat a cold local candidate | `tests/unit/pipeline/test_correcting_scheduler.py::test_azure_selected_when_local_cold` |
-| Reserve fallthrough | First candidate cannot reserve capacity, scheduler falls through | `tests/unit/pipeline/test_correcting_scheduler.py::test_reserve_failure_falls_through` |
+| SimpleScheduler ready forwarding | Worker with queue_waiting==0 is selected immediately | `tests/unit/pipeline/test_simple_scheduler.py::test_ready_forwarded_immediately` |
+| SimpleScheduler local queuing | All workers queueing → request queued locally | `tests/unit/pipeline/test_simple_scheduler.py::test_all_queueing_goes_to_local_queue` |
 
 ## Feasibility, Placement, And Reclaim
 

@@ -267,8 +267,11 @@ class LogosBridgeClient:
 
     async def _send_hello(self, ws) -> None:
         max_lanes = 0
+        static_lane_ids: list[str] = []
         if hasattr(self._app, "state") and hasattr(self._app.state, "config"):
             max_lanes = self._app.state.config.worker.max_lanes
+        if hasattr(self._app, "state") and hasattr(self._app.state, "lane_manager"):
+            static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
         await self._send_json(
             ws,
             {
@@ -276,6 +279,7 @@ class LogosBridgeClient:
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "max_lanes": max_lanes,
+                "static_lane_ids": static_lane_ids,
                 "actions": [
                     "infer",
                     "infer_stream",

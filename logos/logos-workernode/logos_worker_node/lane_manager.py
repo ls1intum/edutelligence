@@ -182,6 +182,7 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
         or cv.cpu_offload_gb != dv.cpu_offload_gb
         or cv.enable_auto_tool_choice != dv.enable_auto_tool_choice
         or cv.tool_call_parser != dv.tool_call_parser
+        or cv.reasoning_parser != dv.reasoning_parser
         or cv.extra_args != dv.extra_args
         or current.gpu_devices != desired.gpu_devices
     )
@@ -251,13 +252,25 @@ class LaneManager:
         self._status_event = asyncio.Event()
         self._model_profiles = model_profiles
         self._last_profile_state: dict[str, str] = {}
-        # Stuck-inference detection: track generation_tokens_total per lane
+        # Stuck-inference detection: track BOTH prompt_tokens_total and
+        # generation_tokens_total per lane. A real engine hang freezes every
+        # metric; gpt-oss with reasoning_parser='openai_gptoss' on vLLM 0.20
+        # can leave generation_tokens_total at 0 while still serving traffic,
+        # so checking only one counter produces false positives.
         self._last_gen_tokens: dict[str, float] = {}
-        self._stuck_polls: dict[str, int] = {}  # consecutive polls with no progress
-        _STUCK_POLL_THRESHOLD = 6  # ~30s at 5s heartbeat
-        self._stuck_poll_threshold = _STUCK_POLL_THRESHOLD
+        self._last_prompt_tokens: dict[str, float] = {}
+        # Event-loop timestamp at which the no-progress condition was first
+        # observed for a lane.  Wall-clock based (not poll-count based)
+        # because get_all_statuses is invoked by request-driven endpoints
+        # (get_lanes / get_runtime) — a request burst can otherwise rack up
+        # many polls in seconds and trip a count-based threshold during
+        # normal prefill.
+        self._stuck_since: dict[str, float] = {}
+        _STUCK_DURATION_SECONDS = 60.0
+        self._stuck_duration_seconds = _STUCK_DURATION_SECONDS
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
+        self._static_lane_ids: set[str] = set()
 
     def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
         """Check which capabilities_models are available locally.
@@ -285,6 +298,16 @@ class LaneManager:
         if not missing:
             logger.info("All %d capability models verified as available locally", len(capabilities_models))
         return missing
+
+    def register_static_lanes(self, lane_ids: set[str]) -> None:
+        """Register lane IDs as static (pinned, never removed by the planner)."""
+        self._static_lane_ids = set(lane_ids)
+        if self._static_lane_ids:
+            logger.info("Registered %d static lane(s): %s", len(self._static_lane_ids), sorted(self._static_lane_ids))
+
+    def is_static_lane(self, lane_id: str) -> bool:
+        """Return True if the given lane_id is a static lane."""
+        return lane_id in self._static_lane_ids
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [
@@ -322,9 +345,16 @@ class LaneManager:
 
         Returns a result with all actions taken and final lane statuses.
         """
-        if self._max_lanes > 0 and len(desired) > self._max_lanes:
+        # Count static lanes that will be re-injected (running but not in desired)
+        desired_lid_set = {_lane_id_from_config(lc) for lc in desired}
+        static_reinject_count = sum(
+            1 for sid in self._static_lane_ids
+            if sid not in desired_lid_set and sid in self._handles
+        )
+        effective_desired_count = len(desired) + static_reinject_count
+        if self._max_lanes > 0 and effective_desired_count > self._max_lanes:
             raise ValueError(
-                f"Desired lane count ({len(desired)}) exceeds MAX_LANES limit ({self._max_lanes})"
+                f"Desired lane count ({effective_desired_count}) exceeds MAX_LANES limit ({self._max_lanes})"
             )
         self._validate_vllm_runtime_requirements(desired)
         async with self._lock:
@@ -342,6 +372,19 @@ class LaneManager:
                     )
                 desired_map[lid] = lc
 
+            # Re-inject running static lanes that the planner omitted from the
+            # desired set.  This ensures the capacity planner can never remove
+            # static lanes — they are always part of the desired state.
+            for static_lid in self._static_lane_ids:
+                if static_lid not in desired_map and static_lid in self._handles:
+                    handle = self._handles[static_lid]
+                    if handle.lane_config is not None:
+                        desired_map[static_lid] = handle.lane_config
+                        logger.info(
+                            "Static lane '%s' re-injected into desired set (planner omitted it)",
+                            static_lid,
+                        )
+
             current_ids = set(self._handles.keys())
             desired_ids = set(desired_map.keys())
 
@@ -357,7 +400,7 @@ class LaneManager:
 
             try:
                 # Phase 1: Remove stale lanes (free VRAM)
-                to_remove = current_ids - desired_ids
+                to_remove = current_ids - desired_ids - self._static_lane_ids
                 for lid in to_remove:
                     handle = self._handles[lid]
                     port = self._port_alloc.get_port(lid)
@@ -498,22 +541,16 @@ class LaneManager:
                                         exc_info=True,
                                     )
                 finally:
-                    # Always wake staggered lanes — even if an add failed
-                    for slept_lid in slept_lids:
-                        try:
-                            slept_h = self._handles.get(slept_lid)
-                            if slept_h is not None:
-                                await slept_h.wake_up()
-                                logger.info(
-                                    "Staggered startup: woke lane '%s' after adding new lanes",
-                                    slept_lid,
-                                )
-                        except Exception:
-                            logger.warning(
-                                "Staggered startup: failed to wake lane '%s'",
-                                slept_lid,
-                                exc_info=True,
-                            )
+                    # Leave staggered lanes sleeping — the Logos server manages
+                    # wake/sleep transitions based on demand.  Waking all lanes
+                    # unconditionally would OOM on hosts where not all lanes fit
+                    # in VRAM simultaneously (the common case for staggered startup).
+                    if slept_lids:
+                        logger.info(
+                            "Staggered startup complete: lanes %s remain sleeping "
+                            "until the server requests a wake",
+                            slept_lids,
+                        )
 
             except _ApplyAbort:
                 # ---- Rollback: best-effort restore previous state ----
@@ -554,6 +591,8 @@ class LaneManager:
 
     async def remove_lane(self, lane_id: str) -> None:
         """Remove a single lane and free its port."""
+        if lane_id in self._static_lane_ids:
+            raise ValueError(f"Cannot remove static lane '{lane_id}'")
         async with self._lock:
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
@@ -1754,51 +1793,83 @@ class LaneManager:
         *,
         auto_restart: bool = True,
     ) -> None:
-        """Detect vLLM lanes that have stopped generating tokens while requests are active.
+        """Detect vLLM lanes that have stopped making any token-level progress.
 
-        If ``generation_tokens_total`` doesn't increase for several consecutive
-        polls while ``requests_running > 0``, the lane is likely stuck in an
-        NCCL deadlock or similar hang.  Kill and log the event.
+        A lane is considered stuck only when BOTH ``prompt_tokens_total`` AND
+        ``generation_tokens_total`` are unchanged AND ``requests_running > 0``
+        continuously for ``_stuck_duration_seconds``.  The threshold is
+        wall-clock time, not consecutive call count: ``get_all_statuses`` is
+        invoked by request-driven endpoints (``get_lanes`` / ``get_runtime``),
+        so a request burst can otherwise rack up many polls in seconds and
+        trip a count-based threshold during normal prefill.
+
+        Requiring both counters to freeze avoids a known false positive on
+        vLLM 0.20 V1 engine where ``generation_tokens_total`` can stay at 0
+        for gpt-oss reasoning models even while requests complete
+        successfully — a real engine hang freezes every metric, so requiring
+        both is still sufficient to catch genuine NCCL deadlocks and similar
+        hangs.
 
         When *auto_restart* is True (the default), the lane is automatically
         restarted with its previous configuration.  Pass ``False`` when the
         caller already holds ``self._lock`` to avoid a deadlock.
         """
+        now = asyncio.get_running_loop().time()
         for status in statuses:
             lid = status.lane_id
             if not status.vllm:
                 continue
             metrics = status.backend_metrics or {}
             gen_tokens = metrics.get("generation_tokens_total")
+            prompt_tokens = metrics.get("prompt_tokens_total")
             requests_running = metrics.get("requests_running")
 
-            if gen_tokens is None or requests_running is None:
+            if (
+                gen_tokens is None
+                or prompt_tokens is None
+                or requests_running is None
+            ):
                 # Metrics not available — can't detect stuck state
-                self._stuck_polls.pop(lid, None)
+                self._stuck_since.pop(lid, None)
                 continue
 
-            prev_tokens = self._last_gen_tokens.get(lid)
+            prev_gen = self._last_gen_tokens.get(lid)
+            prev_prompt = self._last_prompt_tokens.get(lid)
             self._last_gen_tokens[lid] = gen_tokens
+            self._last_prompt_tokens[lid] = prompt_tokens
 
-            if prev_tokens is None:
-                self._stuck_polls.pop(lid, None)
+            if prev_gen is None or prev_prompt is None:
+                self._stuck_since.pop(lid, None)
                 continue
 
-            if requests_running > 0 and gen_tokens <= prev_tokens:
-                count = self._stuck_polls.get(lid, 0) + 1
-                self._stuck_polls[lid] = count
-                if count >= self._stuck_poll_threshold:
+            no_gen_progress = gen_tokens <= prev_gen
+            no_prompt_progress = prompt_tokens <= prev_prompt
+            if requests_running > 0 and no_gen_progress and no_prompt_progress:
+                stuck_since = self._stuck_since.get(lid)
+                if stuck_since is None:
+                    self._stuck_since[lid] = now
+                    continue
+                elapsed = now - stuck_since
+                if elapsed >= self._stuck_duration_seconds:
                     logger.error(
-                        "Lane '%s' appears stuck: %d consecutive polls with "
-                        "requests_running=%.0f but generation_tokens_total unchanged (%.0f). "
-                        "Killing the lane process.",
-                        lid, count, requests_running, gen_tokens,
+                        "Lane '%s' appears stuck: no token progress for %.1fs "
+                        "with requests_running=%.0f, prompt_tokens_total=%.0f, "
+                        "generation_tokens_total=%.0f. Killing the lane process.",
+                        lid, elapsed, requests_running, prompt_tokens, gen_tokens,
                     )
-                    self._record_event(lid, "stuck_detected",
-                                       model=status.model,
-                                       details=f"gen_tokens={gen_tokens}, running={requests_running}, polls={count}")
-                    self._stuck_polls.pop(lid, None)
+                    self._record_event(
+                        lid, "stuck_detected",
+                        model=status.model,
+                        details=(
+                            f"prompt_tokens={prompt_tokens}, "
+                            f"gen_tokens={gen_tokens}, "
+                            f"running={requests_running}, "
+                            f"elapsed={elapsed:.1f}s"
+                        ),
+                    )
+                    self._stuck_since.pop(lid, None)
                     self._last_gen_tokens.pop(lid, None)
+                    self._last_prompt_tokens.pop(lid, None)
                     # Kill the stuck lane and attempt automatic restart
                     handle = self._handles.get(lid)
                     if handle is not None:
@@ -1813,7 +1884,7 @@ class LaneManager:
                         if auto_restart and lane_config is not None:
                             await self._restart_stuck_lane(lid, lane_config)
             else:
-                self._stuck_polls.pop(lid, None)
+                self._stuck_since.pop(lid, None)
 
     async def _restart_stuck_lane(self, lane_id: str, lane_config: LaneConfig) -> None:
         """Attempt to restart a lane that was killed by stuck detection."""
@@ -2043,6 +2114,7 @@ class LaneManager:
             model=model,
             port=handle.port,
             vllm=is_vllm,
+            is_static=handle.lane_id in self._static_lane_ids,
             process=ps,
             runtime_state=runtime_state,
             routing_url=routing_url,

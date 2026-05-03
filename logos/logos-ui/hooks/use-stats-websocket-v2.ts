@@ -109,18 +109,14 @@ const IS_CLIENT =
   typeof window !== "undefined" && typeof WebSocket !== "undefined";
 
 function buildWsUrl(apiKey: string): string {
-  let base = API_BASE;
   if (Platform.OS === "web") {
     const loc = typeof window !== "undefined" ? window.location : undefined;
-    if (loc) {
-      const proto = loc.protocol === "https:" ? "wss:" : "ws:";
-      base = `${proto}//${loc.host}`;
-    } else {
-      base = API_BASE.replace(/^http/, "ws");
-    }
-  } else {
-    base = API_BASE.replace(/^http/, "ws");
+    const origin = loc
+      ? `${loc.protocol === "https:" ? "wss:" : "ws:"}//${loc.host}`
+      : "";
+    return `${origin}${API_BASE}/ws/stats/v2?key=${encodeURIComponent(apiKey)}`;
   }
+  const base = API_BASE.replace(/^http/, "ws");
   return `${base}/ws/stats/v2?key=${encodeURIComponent(apiKey)}`;
 }
 

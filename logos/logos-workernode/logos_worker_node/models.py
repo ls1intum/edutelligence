@@ -9,7 +9,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
 
@@ -60,7 +59,9 @@ class VllmConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    vllm_binary: str = Field(default="vllm", description="Path to vllm CLI or 'vllm' on PATH")
+    vllm_binary: str = Field(
+        default="vllm", description="Path to vllm CLI or 'vllm' on PATH"
+    )
     tensor_parallel_size: int = Field(default=1, ge=1)
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
@@ -89,9 +90,15 @@ class VllmConfig(BaseModel):
     tool_call_parser: str = Field(
         default="",
         description="Tool call parser for function calling (e.g. 'hermes', 'mistral', 'llama3_json'). "
-        "Passed as --tool-call-parser to vLLM when non-empty. "
-        "Empty (default) = pass --enable-auto-tool-choice without --tool-call-parser, "
-        "letting vLLM auto-detect the parser from the model's tokenizer_config.json.",
+        "Empty (default) = infer from the model name (gemma4→gemma4, llama3→llama3_json, "
+        "qwen→hermes, etc.; falls back to hermes). Set explicitly to override.",
+    )
+    reasoning_parser: str = Field(
+        default="",
+        description="Reasoning parser for structured reasoning output (e.g. 'deepseek_r1', 'qwen3', 'gemma4'). "
+        "Empty (default) = infer from the model name when the model is a known reasoning model; "
+        "no flag is emitted for unknown models. Set explicitly to force a specific parser. "
+        "Set to 'none' to suppress the flag even when inference would match.",
     )
     cuda_graph_sizes: str = Field(
         default="",
@@ -99,13 +106,14 @@ class VllmConfig(BaseModel):
         "Empty = vLLM default. Only effective when enforce_eager is False.",
     )
     cpu_offload_gb: float = Field(
-        default=0.0, ge=0.0,
+        default=0.0,
+        ge=0.0,
         description="CPU RAM for KV cache offloading (GB). Passed as --cpu-offload-gb to vLLM. 0 = disabled.",
     )
     chat_template_kwargs: dict[str, Any] = Field(
         default_factory=dict,
         description="Default chat_template_kwargs passed to vLLM via --default-chat-template-kwargs. "
-        "e.g. {\"enable_thinking\": false} to disable Qwen3/3.5 thinking mode.",
+        'e.g. {"enable_thinking": false} to disable Qwen3/3.5 thinking mode.',
     )
     extra_args: list[str] = Field(default_factory=list)
     env_overrides: dict[str, str] = Field(
@@ -271,7 +279,7 @@ class LaneConfig(BaseModel):
     lane_id: str | None = None
     model: str
     vllm: bool = False
-    num_parallel: int = Field(default=4, ge=1)
+    num_parallel: int = Field(default=20, ge=1)
     context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
     keep_alive: str = "2m"
     kv_cache_type: str = "q8_0"
@@ -311,6 +319,7 @@ class AppConfig(BaseModel):
     logos: LogosConfig = Field(default_factory=LogosConfig)
     engines: EnginesConfig = Field(default_factory=EnginesConfig)
     lanes: list[LaneConfig] = Field(default_factory=list)
+    static_lanes: list[LaneConfig] = Field(default_factory=list)
     model_profile_overrides: dict[str, dict] = Field(
         default_factory=dict,
         description="Per-model VRAM profile overrides for niche models with "
@@ -390,8 +399,11 @@ class LaneStatus(BaseModel):
     model: str
     port: int
     vllm: bool = False
+    is_static: bool = False
     process: ProcessStatus
-    runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
+    runtime_state: Literal[
+        "cold", "starting", "loaded", "running", "sleeping", "stopped", "error"
+    ]
     routing_url: str = ""
     inference_endpoint: str = "/v1/chat/completions"
     num_parallel: int = 0
@@ -448,9 +460,6 @@ class LaneSetRequest(BaseModel):
         return self
 
 
-
-
-
 class LaneAction(BaseModel):
     action: str
     lane_id: str
@@ -475,6 +484,3 @@ class LaneEvent(BaseModel):
     details: str = ""
     port: int | None = None
     old_port: int | None = None
-
-
-

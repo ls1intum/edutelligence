@@ -31,14 +31,19 @@
 #   library always matches the host's driver version.
 #
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
-# vLLM/PyTorch wheels: cu128 (newest wheel index under CUDA 13.1 driver).
+# vLLM/PyTorch: PyPI wheels ship CUDA 13 support since vLLM ≥0.20 / torch ≥2.11.
 # =============================================================================
 
 ARG BASE_IMAGE=python:3.12-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC="vllm>=0.19.0"
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+ARG VLLM_PIP_SPEC="vllm==0.20.0"
+# TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
+# installs, which already includes CUDA support matching its nvidia-* deps.
+# Only set this to override with a specific CUDA wheel index (e.g.
+# https://download.pytorch.org/whl/cu128) for older vLLM versions whose
+# PyPI torch was CPU-only.
+ARG TORCH_INDEX_URL=
 ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
@@ -130,12 +135,14 @@ RUN set -e \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
          # 1. Install vLLM (pins torch to its required version from PyPI)
          pip install --no-cache-dir $VLLM_PIP_SPEC \
-         # Free disk space before reinstalling torch: strip tests, caches, temp files
+         # Free disk space: strip tests, caches, temp files
          && (find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + || true) \
          && (find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
               -path '*/torch/*' -exec rm -rf {} + || true) \
          && rm -rf /tmp/pip-* /root/.cache \
-         # 2. Reinstall torch from CUDA wheel index (same version, GPU-enabled)
+         # 2. Optional: reinstall torch from a specific CUDA wheel index.
+         #    Since vLLM ≥0.20, PyPI torch already includes CUDA support, so
+         #    this is normally a no-op (TORCH_INDEX_URL defaults to empty).
          && if [ -n "$TORCH_INDEX_URL" ]; then \
               torch_ver=$(python3 -c "import importlib.metadata as m; print(m.version('torch'))") \
               && echo "Reinstalling torch==${torch_ver} from ${TORCH_INDEX_URL}" \
@@ -206,7 +213,7 @@ RUN if ! command -v python3.13 >/dev/null 2>&1 \
 RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
         CUDA_VER=$(echo "${CUDA_VERSION}" | cut -d. -f1,2 | tr '.' '-'); \
         apt-get update \
-        && apt-get install -y --no-install-recommends \
+        && apt-get install -y --no-install-recommends --allow-change-held-packages \
             gcc \
             cuda-nvcc-${CUDA_VER} \
             cuda-cudart-${CUDA_VER} \
@@ -225,7 +232,16 @@ WORKDIR /app
 # bin/, lib/, and include/ are all present with correct shebangs.
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:/usr/local/cuda/bin:$PATH"
-RUN ldconfig
+# Register pip-vendored CUDA library directories with the dynamic linker so
+# child processes (vLLM) can find them.  PyTorch cu128 wheels depend on CUDA 12
+# shared libraries (libcudart.so.12, libcublasLt.so.12, …) shipped inside
+# nvidia-* pip packages under <site-packages>/nvidia/*/lib/.  torch/lib
+# contains libc10.so and CUDA stub libraries.  Neither location is in the
+# default ldconfig search path — register them explicitly.
+RUN { find /opt/venv/lib -path '*/nvidia/*/lib' -type d 2>/dev/null; \
+      find /opt/venv/lib -path '*/torch/lib' -type d 2>/dev/null; \
+    } > /etc/ld.so.conf.d/pip-cuda-libs.conf \
+    && ldconfig
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/

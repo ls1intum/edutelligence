@@ -1,9 +1,11 @@
 import { Platform } from "react-native";
 
+// All UI-internal endpoints live under `/api/*` so a single Traefik route
+// (and a single backend prefix-stripper middleware) covers every call.
 export const API_BASE =
   Platform.OS === "web"
-    ? ""
-    : process.env.EXPO_PUBLIC_API_BASE || "http://localhost:8080";
+    ? "/api"
+    : `${process.env.EXPO_PUBLIC_API_BASE || "http://localhost:8080"}/api`;
 
 export const CHART_PALETTE = {
   total: "#1E3A8A", // Dark Blue for cumulative total
@@ -41,3 +43,9 @@ export const LANE_STATE_COLORS: Record<string, string> = {
 
 export const getLaneStateColor = (state: string): string =>
   LANE_STATE_COLORS[state?.toLowerCase()] ?? LANE_STATE_COLORS.cold;
+
+export const ROLES_PALETTE = {
+    logos_admin: "#7FB069",
+    app_admin: "#2A7F7F",
+    app_developer: "#5B7CFA",
+};

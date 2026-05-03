@@ -497,37 +497,12 @@ class DBManager:
         """
         import pathlib
 
-        # List of all migrations in order (matches run_all_migrations.sh)
+        migrations_dir = pathlib.Path(__file__).parent.parent.parent.parent / "db" / "migrations"
+        # Discover migrations from disk so new SQL files are picked up automatically.
+        # Excludes rollback scripts (must be run manually).
         MIGRATION_FILES = [
-            "001_add_jobs_table.sql",
-            "002_add_provider_sdi_columns.sql",
-            "003a_drop_provider_ssh_columns.sql",
-            "003b_create_model_provider_config.sql",
-            "004_add_log_entry_sdi_columns.sql",
-            "005_create_request_events_table.sql",
-            "006_update_model_endpoints_to_local_ollama.sql",
-            "007_rename_openwebui_to_ollama_no_auth.sql",
-            "008_create_ollama_provider_snapshots.sql",
-            "009_add_profile_id_to_jobs.sql",
-            "010_remove_api_id_from_models.sql",
-            "010b_revert_profile_constraint.sql",
-            "011_restructure_model_api_keys_to_model_based.sql",
-            "012_dedup_models_providers.sql",
-            "013_set_ollama_provider_urls_and_auth.sql",
-            "014_add_api_key_to_providers.sql",
-            "015_add_snapshot_retention_cron.sql",
-            "016_move_endpoint_to_model_api_keys.sql",
-            "017_snapshot_provider_id_migration.sql",
-            "018_drop_model_provider_config.sql",
-            "019_add_request_id_to_log_entry.sql",
-            "020_normalize_local_provider_types_to_logosnode.sql",
-            "021_collapse_request_events_into_log_entry.sql",
-            "022_drop_request_events_table.sql",
-            "023_extend_provider_snapshots_for_worker_runtime.sql",
-            "024_store_logosnode_runtime_payload.sql",
-            "025_create_model_profiles_table.sql",
-            "026_create_schema_migrations.sql",
-            "027_logosnode_dynamic_deployments.sql",
+            p.name for p in sorted(migrations_dir.glob("*.sql"))
+            if "rollback" not in p.name
         ]
 
         # Ensure schema_migrations table exists
@@ -3360,6 +3335,139 @@ class DBManager:
                                 WHERE logos_key = :logos_key
                             """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
+
+    def get_user_by_logos_key(self, logos_key: str):
+        """ Return user info for given logos_key. Returns None when the key is a service key (no linked user)"""
+        sql = text("""
+                   SELECT u.id,
+                          u.username,
+                          u.email,
+                          u.role,
+                          COALESCE(
+                                  json_agg(
+                                          json_build_object('id', t.id, 'name', t.name)
+                                  ) FILTER(WHERE t.id IS NOT NULL),
+                                  '[]' ::json
+                          ) AS teams
+                   FROM process p
+                            JOIN users u ON p.user_id = u.id
+                            LEFT JOIN team_members tm ON u.id = tm.user_id
+                            LEFT JOIN teams t ON tm.team_id = t.id
+                   WHERE p.logos_key = :logos_key
+                   GROUP BY u.id, u.username, u.email, u.role
+                   """)
+        row = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
+        if row is None:
+            return None
+
+        data = dict(row._mapping)
+
+        teams = data.get("teams", [])
+        if isinstance(teams, str):
+            import json
+            teams = json.loads(teams)
+        data["teams"] = teams
+
+        return data
+
+    def set_user_role(self, user_id: int, role: str):
+        valid = {"app_developer", "app_admin", "logos_admin"}
+        if role not in valid:
+            return {"error": f"Invalid role '{role}'. Must be one of: {sorted(valid)}"}, 400
+        sql = text("""
+                   UPDATE users
+                   SET role = :role
+                   WHERE id = :user_id RETURNING id
+                   """)
+        row = self.session.execute(sql, {"role": role, "user_id": user_id}).fetchone()
+        if row is None:
+            return {"error": f"User {user_id} not found"}, 404
+        self.session.commit()
+        return {"result": "Role updated"}, 200
+
+    def list_users(self) -> list[dict]:
+        sql = text("""
+                   SELECT u.id,
+                          u.username,
+                          u.prename,
+                          u.name,
+                          u.email,
+                          u.role,
+                          COALESCE(
+                                  json_agg(
+                                          json_build_object('id', t.id, 'name', t.name)
+                                  ) FILTER(WHERE t.id IS NOT NULL),
+                                  '[]' ::json
+                          ) AS teams
+                   FROM users u
+                            LEFT JOIN team_members tm ON u.id = tm.user_id
+                            LEFT JOIN teams t ON tm.team_id = t.id
+                   GROUP BY u.id, u.username, u.prename, u.name, u.email, u.role
+                   ORDER BY u.id DESC
+                   """)
+        rows = self.session.execute(sql).fetchall()
+        result = []
+        for row in rows:
+            data = dict(row._mapping)
+            teams = data.get("teams", [])
+            if isinstance(teams, str):
+                import json as _json
+                teams = _json.loads(teams)
+            data["teams"] = teams
+            result.append(data)
+        return result
+
+    def create_user(self, username: str, prename: str, name: str, email: str, role: str) -> tuple:
+        if self.session.execute(
+                text("SELECT id FROM users WHERE lower(email) = lower(:email)"),
+                {"email": email},
+        ).fetchone():
+            return {"error": "Email already in use"}, None, 409
+
+        if self.session.execute(
+                text("SELECT id FROM users WHERE username = :username"),
+                {"username": username},
+        ).fetchone():
+            return {"error": "Username already in use"}, None, 409
+
+        logos_key = generate_logos_api_key(username)
+
+        user_id = self.insert("users", {
+            "username": username,
+            "prename": prename,
+            "name": name,
+            "email": email,
+            "role": role,
+        })
+        process_id = self.insert("process", {
+            "logos_key": logos_key,
+            "name": username,
+            "user_id": user_id,
+        })
+        self.insert("profiles", {
+            "name": f"{username}-default",
+            "process_id": process_id,
+        })
+
+        return {
+            "id": user_id,
+            "username": username,
+            "prename": prename,
+            "name": name,
+            "email": email,
+            "role": role,
+            "teams": [],
+        }, logos_key, 200
+
+    def delete_user(self, user_id: int) -> tuple[dict, int]:
+        sql = text("""DELETE
+                      FROM users
+                      WHERE id = :user_id RETURNING id""")
+        row = self.session.execute(sql, {"user_id": user_id}).fetchone()
+        if row is None:
+            return {"error": f"User {user_id} not found"}, 404
+        self.session.commit()
+        return {"result": "User deleted"}, 200
 
     def __enter__(self):
         self.engine = _init_engine()
