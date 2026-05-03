@@ -90,22 +90,19 @@ export default function PlotlyPieChart({
     };
 
     // For right legend: pie on left half of the canvas, legend on the right.
-    // For bottom legend: pie occupies the full canvas; the legend sits below
-    // it via a wide bottom margin (see layout.margin.b).
-    const baseDomain: { x: [number, number]; y: [number, number] } | undefined =
+    // For bottom legend: pie occupies the full plot area (no explicit domain
+    // so Plotly inscribes the donut into whatever rectangle margins leave).
+    const pieDomain: { x: [number, number]; y: [number, number] } | undefined =
       isRight
-        ? { x: [0, 0.55], y: [0, 1] }
+        ? {
+            x: scaleDomainAxis([0, 0.55], clampedPieScale),
+            y: scaleDomainAxis([0, 1], clampedPieScale),
+          }
         : undefined;
 
-    const pieDomain = baseDomain
-      ? {
-          x: scaleDomainAxis(baseDomain.x, clampedPieScale),
-          y: scaleDomainAxis(baseDomain.y, clampedPieScale),
-        }
-      : undefined;
-
-    // Annotation positions: center of pie domain
-    const annX = pieDomain ? (pieDomain.x[0] + pieDomain.x[1]) / 2 : isRight ? 0.275 : 0.5;
+    // Annotation positions: center of pie domain (or canvas center for bottom)
+    const annX = pieDomain ? (pieDomain.x[0] + pieDomain.x[1]) / 2 : 0.5;
+    const annY = pieDomain ? (pieDomain.y[0] + pieDomain.y[1]) / 2 : 0.5;
 
     const trace: Record<string, any> = {
       type: "pie",
@@ -121,12 +118,20 @@ export default function PlotlyPieChart({
       textfont: { color: "#fff", size: 11 },
       hovertemplate:
         `<b>%{label}</b><br>%{value:.${hoverValueDecimals}f}${hoverValueSuffix} · %{percent}<extra></extra>`,
+      // Explicit dark tooltip background so the slice color (which can be
+      // light/pastel) doesn't bleed into the hover and make text invisible.
+      // Borders are radius-rounded by Plotly automatically when we set
+      // bordercolor; the colors below match the volume / VRAM custom hovers.
       hoverlabel: {
+        bgcolor: isDark ? "rgba(15,23,42,0.96)" : "rgba(255,255,255,0.98)",
+        bordercolor: isDark ? "rgba(148,163,184,0.25)" : "rgba(15,23,42,0.12)",
         font: {
-          color: "#FFFFFF",
+          family: "system-ui,-apple-system,sans-serif",
+          color: isDark ? "#F8FAFC" : "#0F172A",
           size: 13,
         },
         namelength: -1,
+        align: "left",
       },
       sort: false,
       direction: "clockwise",
@@ -142,7 +147,7 @@ export default function PlotlyPieChart({
           font: { size: 12, color: textMuted },
           showarrow: false,
           x: annX,
-          y: 0.57,
+          y: annY + 0.07,
           xref: "paper",
           yref: "paper",
           xanchor: "center",
@@ -155,7 +160,7 @@ export default function PlotlyPieChart({
           font: { size: 20, color: textStrong },
           showarrow: false,
           x: annX,
-          y: 0.5,
+          y: annY,
           xref: "paper",
           yref: "paper",
           xanchor: "center",
@@ -168,7 +173,7 @@ export default function PlotlyPieChart({
           font: { size: 11, color: textMuted },
           showarrow: false,
           x: annX,
-          y: 0.43,
+          y: annY - 0.07,
           xref: "paper",
           yref: "paper",
           xanchor: "center",
@@ -177,19 +182,25 @@ export default function PlotlyPieChart({
       }
     }
 
-    // Sizing: pie cards in the distribution row should look identical
-    // regardless of card width. We give the chart a fixed size and the
-    // div below also gets that fixed size to defeat Plotly's responsive
-    // auto-fit. Bottom-legend layout reserves the lower half of the
-    // canvas for a vertical legend, so long model names don't overflow.
-    const chartWidth = isRight ? Math.min(width, 360) : 280;
+    // Sizing: clamp to the card's available width so the canvas never
+    // overflows ChartCard's `overflow-hidden` (which was clipping the
+    // pie when the card was narrower than our previous 280 px floor).
+    // `responsive: false` below keeps Plotly from re-fitting on its own.
+    const chartWidth = isRight
+      ? Math.max(220, Math.min(width, 360))
+      : Math.max(220, Math.min(width, 320));
     // Slice count drives bottom margin: each legend row is ~18 px and the
-    // legend sits in the bottom margin. With too tight a margin Plotly
-    // squishes the donut to make room.
+    // legend sits in the bottom margin. We grow with every slice (no cap)
+    // so long legends don't extend past the canvas and clip.
     const sliceCount = data.length;
-    const legendRows = Math.min(sliceCount, 8);
-    const bottomMarginForLegend = 24 + legendRows * 18;
-    const chartHeight = isRight ? Math.max(height, 240) : 220 + bottomMarginForLegend;
+    const bottomMarginForLegend = 24 + sliceCount * 18;
+    // Reserve room above the donut for hover labels with long model names.
+    // Without this Plotly draws the tooltip at y < 0 and ChartCard's
+    // `overflow-hidden` clips it (and the pie behind it can look "cut off").
+    const topMarginForHover = 56;
+    const chartHeight = isRight
+      ? Math.max(height, 240)
+      : 220 + topMarginForHover + bottomMarginForLegend;
 
     const legend = isRight
       ? {
@@ -222,7 +233,7 @@ export default function PlotlyPieChart({
       height: chartHeight,
       margin: isRight
         ? { l: 8, r: 8, t: 8, b: 8 }
-        : { l: 8, r: 8, t: 8, b: bottomMarginForLegend },
+        : { l: 8, r: 8, t: topMarginForHover, b: bottomMarginForLegend },
       paper_bgcolor: "rgba(0,0,0,0)",
       showlegend: true,
       legend,
@@ -276,13 +287,15 @@ export default function PlotlyPieChart({
   if (error || !data.length) return null;
 
   const isRight = legendPosition === "right";
-  const targetW = isRight ? Math.min(width, 360) : 280;
+  const targetW = isRight
+    ? Math.max(220, Math.min(width, 360))
+    : Math.max(220, Math.min(width, 320));
   const sliceCount = data.length;
-  const legendRows = Math.min(sliceCount, 8);
-  const bottomMarginForLegend = 24 + legendRows * 18;
+  const bottomMarginForLegend = 24 + sliceCount * 18;
+  const topMarginForHover = 56;
   const targetH = isRight
     ? Math.max(height, 240)
-    : 220 + bottomMarginForLegend;
+    : 220 + topMarginForHover + bottomMarginForLegend;
 
   return (
     <View style={{ alignItems: "center" }}>

@@ -565,9 +565,21 @@ def _build_live_local_provider_sample(
     if remaining_vram_mb is None and not loaded_models and used_vram_mb <= 0:
         return None
 
-    timestamp = runtime.get("timestamp") or snapshot.get("last_heartbeat")
-    if not isinstance(timestamp, str) or not timestamp.strip():
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Pick the freshest timestamp the worker has given us. With an idle
+    # cluster the cached `runtime.timestamp` can be hours old (the worker
+    # only emits status on lane-state changes), while `last_heartbeat`
+    # advances on every WS heartbeat. Using the older of the two would
+    # collide with the already-persisted DB sample inside
+    # _merge_provider_samples and add no new point — leaving the chart
+    # with a single dot that scatter `mode: "lines"` can't draw.
+    runtime_ts = runtime.get("timestamp") if isinstance(runtime.get("timestamp"), str) else None
+    heartbeat_ts = snapshot.get("last_heartbeat") if isinstance(snapshot, dict) else None
+    if isinstance(heartbeat_ts, datetime.datetime):
+        heartbeat_ts = heartbeat_ts.isoformat()
+    elif not isinstance(heartbeat_ts, str):
+        heartbeat_ts = None
+    candidates = [t for t in (heartbeat_ts, runtime_ts) if isinstance(t, str) and t.strip()]
+    timestamp = max(candidates) if candidates else datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     return {
         "timestamp": timestamp,
