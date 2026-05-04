@@ -129,7 +129,7 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     if not state.allow_lecture_tool:
         return None
     course_id = state.dto.course.id
-    lecture_retriever = LectureRetrieval(state.db.client)
+    lecture_retriever = LectureRetrieval(state.db.client, local=state.local)
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
     lecture_id = state.dto.lecture.id if state.dto.lecture else None
     lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
@@ -153,7 +153,7 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not state.allow_faq_tool:
         return None
     course_id = state.dto.course.id
-    faq_retriever = FaqRetrieval(state.db.client)
+    faq_retriever = FaqRetrieval(state.db.client, local=state.local)
 
     return create_tool_faq_content_retrieval(
         faq_retriever,
