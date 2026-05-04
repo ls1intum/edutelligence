@@ -233,7 +233,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             # Add citations if applicable
             result = self._add_citations(state, result)
-
+            state.result = result
             # Generate title
             session_title = self._generate_session_title(state, result, state.dto)
 
