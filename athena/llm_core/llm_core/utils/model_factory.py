@@ -1,6 +1,7 @@
 from typing import Optional
 
 from llm_core.models.model_config import ModelConfig
+from llm_core.models.providers.logos_model_config import LogosModelConfig
 from llm_core.models.providers.lmstudio_model_config import LMStudioModelConfig
 from llm_core.models.providers.openai_model_config import OpenAIModelConfig
 from llm_core.models.providers.azure_model_config import AzureModelConfig
@@ -13,6 +14,8 @@ def _detect_provider(model_name: str) -> Optional[str]:
         return "openai"
     if n.startswith("azure_openai_"):
         return "azure_openai"
+    if n.startswith("logos_"):
+        return "logos"
     if n.startswith("ollama_"):
         return "ollama"
     if n.startswith("lmstudio_"):
@@ -27,6 +30,8 @@ def create_config_for_model(model_name: str) -> ModelConfig:
         return OpenAIModelConfig(model_name=model_name)
     if provider == "azure_openai":
         return AzureModelConfig(model_name=model_name)
+    if provider == "logos":
+        return LogosModelConfig(model_name=model_name)
     if provider == "ollama":
         return OllamaModelConfig(model_name=model_name)
     if provider == "lmstudio":
