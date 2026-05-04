@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
 
 from logos.dbutils.types import Deployment
+from logos.queue.models import Priority
 
 
 class QueueTimeoutError(Exception):
@@ -72,6 +73,11 @@ class SchedulingRequest:
     # same caller, keeping prefix caches warm. Optional — when None the
     # scheduler falls back to pure load-balancing.
     affinity_key: Optional[str] = None
+    # Optional priority ceiling for the calling process. When set, the
+    # scheduler clamps the request's priority to this level and the queue
+    # disables starvation aging above it. Used to throttle a peer Logos
+    # forwarding traffic from a lower-trust environment.
+    priority_cap: Optional[Priority] = None
 
 
 class SchedulerInterface(ABC):

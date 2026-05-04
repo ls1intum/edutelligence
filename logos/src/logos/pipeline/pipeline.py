@@ -43,6 +43,9 @@ class PipelineRequest:
     policy: Optional[Dict[str, Any]] = None
     profile_id: Optional[int] = None  # NEW: Profile ID for authorization
     request_id: Optional[str] = None
+    # Optional priority cap configured on the calling process. Caps both the
+    # initial enqueue priority and the starvation-aging ceiling. None = uncapped.
+    priority_cap: Optional[str] = None
 
 
 @dataclass
@@ -149,6 +152,9 @@ class RequestPipeline:
         )
 
         # 2. Scheduling
+        priority_cap = (
+            Priority.from_string(request.priority_cap) if request.priority_cap else None
+        )
         scheduling_request = SchedulingRequest(
             request_id=request_id,
             classified_models=classification_result.candidates,
@@ -156,6 +162,7 @@ class RequestPipeline:
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
             affinity_key=request.logos_key,
+            priority_cap=priority_cap,
         )
         
         # Record enqueue

@@ -108,6 +108,7 @@ class SimpleScheduler(BaseScheduler):
                 key=lambda c: (-c[2], self._adjusted_load(c, ready, request.affinity_key)),
             )[0]
             model_id, provider_id, weight, tier, priority_int, _requests_running, _signal = best
+            priority_int = self._apply_priority_cap(priority_int, request.priority_cap)
             provider_name = self._logosnode.get_provider_name(provider_id) or str(provider_id)
             logger.info(
                 "%s accepted -> %s (provider=%s score=%.2f tier=%s)",
@@ -258,6 +259,13 @@ class SimpleScheduler(BaseScheduler):
             return float(requests_running) - _AFFINITY_LOAD_DISCOUNT
         return float(requests_running)
 
+    @staticmethod
+    def _apply_priority_cap(priority_int: int, cap: Optional[Priority]) -> int:
+        """Clamp a classified priority to the caller's configured ceiling."""
+        if cap is None:
+            return priority_int
+        return min(priority_int, int(cap))
+
     def _get_provider_type(self, model_id: int, provider_id: int, deployments: list) -> str:
         for d in deployments:
             if d["model_id"] == model_id and d["provider_id"] == provider_id:
@@ -269,12 +277,15 @@ class SimpleScheduler(BaseScheduler):
     ) -> Optional[SchedulingResult]:
         """Queue on the best-scored candidate and wait for release or reevaluation."""
         model_id, provider_id, weight, tier, priority_int, _requests_running, _signal = best_scored
+        priority_int = self._apply_priority_cap(priority_int, request.priority_cap)
         priority = Priority.from_int(priority_int)
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(future, model_id, priority)
+        entry_id = self._queue_mgr.enqueue(
+            future, model_id, priority, max_priority=request.priority_cap
+        )
         provider_name = self._logosnode.get_provider_name(provider_id) or str(provider_id)
         logger.info(
             "%s %s -> %s (provider=%s weight=%.2f tier=%s depth=%s)",

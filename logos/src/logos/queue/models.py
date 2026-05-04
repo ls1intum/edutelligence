@@ -95,6 +95,9 @@ class QueueEntry:
     last_escalation_time: datetime | None = None
     """When this entry was last escalated (None if never)."""
 
+    max_priority: Priority = Priority.HIGH
+    """Upper bound for starvation aging. Aging cannot escalate beyond this."""
+
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""

@@ -2507,6 +2507,18 @@ class DBManager:
             return {"error": "Key not found"}, 500
         return {"result": exc[0]}, 200
 
+    def get_process_peer_priority(self, logos_key: str) -> Optional[str]:
+        """Return the configured priority cap for a process, or None if uncapped."""
+        sql = text("""
+                    SELECT peer_priority
+                    FROM process
+                    WHERE logos_key = :logos_key
+        """)
+        row = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
+        if row is None:
+            return None
+        return row[0]
+
     def get_auth_info_to_deployment(self, model_id: int, provider_id: int, profile_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Resolve auth + routing info for a model/provider pair, optionally scoped to a profile.

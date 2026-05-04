@@ -2587,6 +2587,14 @@ async def _execute_resource_mode(
     # Extract policy
     policy = _extract_policy(headers, logos_key, body)
 
+    priority_cap: Optional[str] = None
+    if logos_key:
+        try:
+            with DBManager() as db:
+                priority_cap = db.get_process_peer_priority(logos_key)
+        except Exception:
+            priority_cap = None
+
     # Create Pipeline Request
     pipeline_req = PipelineRequest(
         logos_key=logos_key or "anon",
@@ -2597,6 +2605,7 @@ async def _execute_resource_mode(
         allowed_models=allowed_models,
         deployments=deployments,
         profile_id=profile_id,
+        priority_cap=priority_cap,
     )
 
     # Process through classification and scheduling

@@ -59,7 +59,14 @@ class PriorityQueueManager:
 
         logging.info("PriorityQueueManager initialized")
 
-    def enqueue(self, task: any, model_id: int, priority: Priority, **_kwargs) -> str:
+    def enqueue(
+        self,
+        task: any,
+        model_id: int,
+        priority: Priority,
+        max_priority: Optional[Priority] = None,
+        **_kwargs,
+    ) -> str:
         """
         Add a task to the appropriate priority queue.
 
@@ -67,6 +74,7 @@ class PriorityQueueManager:
             task: The Task object to enqueue
             model_id: Which model this task is for
             priority: Priority level (LOW, NORMAL, HIGH)
+            max_priority: Upper bound for starvation aging. None = HIGH (no cap).
 
         Returns:
             Unique entry_id for this queued task
@@ -78,6 +86,8 @@ class PriorityQueueManager:
             self._entry_counter += 1
             entry_id = f"qe-{model_id}-{self._entry_counter}-{uuid.uuid4().hex[:8]}"
 
+            ceiling = max_priority if max_priority is not None else Priority.HIGH
+
             # Create queue entry
             entry = QueueEntry(
                 entry_id=entry_id,
@@ -86,6 +96,7 @@ class PriorityQueueManager:
                 original_priority=priority,
                 current_priority=priority,
                 enqueue_time=datetime.now(),
+                max_priority=ceiling,
             )
 
             # Add to appropriate heap

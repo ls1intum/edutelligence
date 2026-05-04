@@ -58,6 +58,7 @@ class Process(Base):
     service_id = Column(Integer, ForeignKey('services.id', ondelete="SET NULL"))
     log = Column(Enum(LoggingLevel))
     settings = Column(JSON)
+    peer_priority = Column(String(10), nullable=True)
 
     user = relationship("User")
     service = relationship("Service")

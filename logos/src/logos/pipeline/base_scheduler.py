@@ -270,15 +270,19 @@ class BaseScheduler(SchedulerInterface):
         Check for starved requests and bump their priority.
         Rule: If waiting > 10s in LOW, move to NORMAL.
               If waiting > 30s in NORMAL, move to HIGH.
+
+        Entries with a `max_priority` cap (set on enqueue, e.g. for traffic
+        forwarded by a lower-priority peer) are not escalated above that cap.
         """
         now = datetime.now()
 
         low_entries = self._queue_mgr.get_entries_for_priority(model_id, Priority.LOW)
         for entry in low_entries:
-            if (now - entry.enqueue_time).total_seconds() > 10:
+            wait_s = (now - entry.enqueue_time).total_seconds()
+            if wait_s > 10 and entry.max_priority >= Priority.NORMAL:
                 self._queue_mgr.move_priority(entry.entry_id, Priority.NORMAL)
 
-            if (now - entry.enqueue_time).total_seconds() > 30:
+            if wait_s > 30 and entry.max_priority >= Priority.HIGH:
                 self._queue_mgr.move_priority(entry.entry_id, Priority.HIGH)
 
     def get_total_queue_depth(self) -> int:

@@ -82,6 +82,8 @@ def _make_request(model_id=1, provider_id=10, provider_type="logosnode", weight=
     req.classified_models = [(model_id, weight, 5, 4)]  # model_id, weight, priority_int, parallel
     req.deployments = [{"model_id": model_id, "provider_id": provider_id, "type": provider_type}]
     req.timeout_s = timeout_s
+    req.affinity_key = None
+    req.priority_cap = None
     return req
 
 
@@ -224,6 +226,8 @@ async def test_multi_worker_tiebreak_by_requests_running():
         {"model_id": 1, "provider_id": 20, "type": "logosnode"},
     ]
     req.timeout_s = 5.0
+    req.affinity_key = None
+    req.priority_cap = None
 
     result = await scheduler.schedule(req)
 
