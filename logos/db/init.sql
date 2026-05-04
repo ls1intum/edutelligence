@@ -30,13 +30,14 @@ DROP TABLE IF EXISTS schema_migrations CASCADE;
 DROP TABLE IF EXISTS team_members CASCADE;
 DROP TABLE IF EXISTS teams CASCADE;
 
+CREATE TYPE user_role AS ENUM ('app_developer', 'app_admin', 'logos_admin');
+
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     username TEXT NOT NULL,
     prename TEXT,
     name TEXT,
-    role TEXT NOT NULL DEFAULT 'app_developer'
-        CHECK (role IN ('app_developer', 'app_admin', 'logos_admin')),
+    role user_role NOT NULL DEFAULT 'app_developer',
     email TEXT
 );
 

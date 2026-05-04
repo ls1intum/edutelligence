@@ -66,6 +66,7 @@ MIGRATIONS=(
     "029_bump_parallel_capacity_default.sql"
     "030_logos_peer_provider_type.sql"
     "031_add_peer_priority_to_process.sql"
+    "032_users_role_enum.sql"
 )
 
 FAILED=0

@@ -27,12 +27,24 @@ class ResultStatus(enum.Enum):
     TIMEOUT = 'timeout'
 
 
+class UserRole(enum.Enum):
+    APP_DEVELOPER = 'app_developer'
+    APP_ADMIN = 'app_admin'
+    LOGOS_ADMIN = 'logos_admin'
+
+
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
     username = Column(String, nullable=False)
     prename = Column(String)
     name = Column(String)
+    role = Column(
+        Enum(UserRole, name='user_role', values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=UserRole.APP_DEVELOPER,
+    )
+    email = Column(String)
 
 
 class Service(Base):

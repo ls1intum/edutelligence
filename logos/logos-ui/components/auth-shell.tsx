@@ -17,7 +17,10 @@ import { VStack } from "@/components/ui/vstack";
 import { ActivityIndicator, Text } from "react-native";
 import Sidebar from "./sidebar";
 import { API_BASE } from "@/components/statistics/constants";
-import { HOME_ROUTE, isRouteAllowed, UserRole } from "@/components/route-permissions";
+import { ALL_ROLES, HOME_ROUTE, isRouteAllowed, UserRole } from "@/components/route-permissions";
+
+const isUserRole = (value: unknown): value is UserRole =>
+  typeof value === "string" && (ALL_ROLES as string[]).includes(value);
 
 export type Team = { id: number; name: string };
 
@@ -65,7 +68,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
           });
           if (res.ok) {
               const data = await res.json();
-              setRole(data.role as UserRole);
+              // Defensive: an unexpected role value would otherwise leave the
+              // page hung on the loading spinner because HOME_ROUTE[role] is
+              // undefined. Fall back to app_developer so the user lands
+              // somewhere they're permitted to see.
+              const role = isUserRole(data.role) ? data.role : "app_developer";
+              setRole(role);
               setTeams(data.teams ?? []);
           } else {
               await AsyncStorage.removeItem("logos_api_key");
