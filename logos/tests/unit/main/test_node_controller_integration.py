@@ -536,9 +536,21 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
         def __init__(self):
             self.scheduler = _FakeScheduler()
 
+    class _FakePeerFacade:
+        def __init__(self):
+            self.registrations = None
+            self.start_polling_calls = 0
+
+        def replace_registrations(self, registrations):
+            self.registrations = registrations
+
+        def start_polling(self):
+            self.start_polling_calls += 1
+
     monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
     monkeypatch.setattr(main_mod, "_logosnode_facade", _FakeLogosNodeFacade(), raising=False)
     monkeypatch.setattr(main_mod, "_azure_facade", _FakeAzureFacade(), raising=False)
+    monkeypatch.setattr(main_mod, "_peer_facade", _FakePeerFacade(), raising=False)
     monkeypatch.setattr(main_mod, "_pipeline", _FakePipeline(), raising=False)
 
     rebuilt = []

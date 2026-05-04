@@ -174,8 +174,11 @@ class ContextResolver:
         if context.auth_header and context.auth_value:
             headers[context.auth_header] = context.auth_value
 
-        # OpenWebUI requires model name injection
-        if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
+        # OpenWebUI and remote Logos peers require model name injection
+        if (
+            context.provider_type in {"logosnode", "logos_peer"}
+            or "openwebui" in context.provider_name.lower()
+        ):
             payload = {**payload, "model": context.model_name}
 
         return headers, payload

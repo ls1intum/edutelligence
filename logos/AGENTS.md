@@ -4,6 +4,8 @@
 
 **Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (Azure, Ollama, OpenAI). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, and monitoring.
 
+Logos servers can also peer with each other via the `logos_peer` provider type — one Logos forwards requests to another Logos's `/v1/*` surface using a Bearer API key. Health and capacity of each peer are polled via `GET /v1/peer/status`; a circuit breaker keeps the local instance serving traffic if a peer drops out.
+
 ## Tech Stack
 
 - **Language**: Python 3.13
@@ -365,7 +367,7 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 1. **main.py is large** (~1690+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
-4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
+4. **Provider types**: `cloud` (Azure/OpenAI), `logosnode` (local worker nodes — also accepts legacy `ollama`), `logos_peer` (another Logos server used as an upstream)
 5. **Token tracking exists** in the `usage_tokens` and `token_prices` tables.
 6. **The `process` table is the key auth entity** — each process has a unique `logos_key`.
 7. **Profiles control model access** — `profile_model_permissions` links profiles to models.

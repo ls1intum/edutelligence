@@ -85,6 +85,7 @@ class Provider(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     base_url = Column(Text, nullable=False)
+    provider_type = Column(String(20), nullable=True)
     auth_name = Column(String, nullable=False)
     auth_format = Column(String, nullable=False)
     api_key = Column(Text, nullable=True)

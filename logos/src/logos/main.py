@@ -51,6 +51,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.logos_peer_facade import LogosPeerSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.logosnode_registry import (
     LogosNodeCommandError,
@@ -1502,7 +1503,7 @@ async def _filter_logosnode_deployments(
 
 async def start_pipeline():
     """Initialize the new request pipeline components."""
-    global _pipeline, _queue_mgr, _logosnode_facade, _azure_facade, _context_resolver
+    global _pipeline, _queue_mgr, _logosnode_facade, _azure_facade, _peer_facade, _context_resolver
     global _demand_tracker, _capacity_planner
 
     logger.info("Initializing Request Pipeline...")
@@ -1513,8 +1514,10 @@ async def start_pipeline():
         _queue_mgr, None, runtime_registry=_logosnode_registry
     )
     _azure_facade = AzureSchedulingDataFacade(None)
+    _peer_facade = LogosPeerSchedulingDataFacade()
 
-    await _register_models_with_facades(_logosnode_facade, _azure_facade)
+    await _register_models_with_facades(_logosnode_facade, _azure_facade, _peer_facade)
+    _peer_facade.start_polling()
 
     model_registry = _build_model_registry()
 
@@ -1523,6 +1526,7 @@ async def start_pipeline():
         queue_manager=_queue_mgr,
         logosnode_facade=_logosnode_facade,
         azure_facade=_azure_facade,
+        peer_facade=_peer_facade,
         model_registry=model_registry,
     )
     logger.info("Scheduler: SimpleScheduler (trust-vLLM-queue-signals)")
@@ -1576,10 +1580,12 @@ async def start_pipeline():
 async def _register_models_with_facades(
     logosnode_facade: LogosNodeSchedulingDataFacade,
     azure_facade: AzureSchedulingDataFacade,
+    peer_facade: LogosPeerSchedulingDataFacade,
 ):
     """Register all models with their respective SDI facades."""
     logosnode_registrations: list[dict[str, Any]] = []
     azure_registrations: list[dict[str, Any]] = []
+    peer_registrations: list[dict[str, Any]] = []
 
     with DBManager() as db:
         deployments = db.get_all_deployments()
@@ -1657,6 +1663,26 @@ async def _register_models_with_facades(
                         "provider_id": provider_id,
                     }
                 )
+            elif provider_type == "logos_peer":
+                base_url = provider_info.get("base_url") or ""
+                if not base_url:
+                    logger.warning(
+                        "Skipping logos_peer provider %s (%s) for model %s: missing base_url",
+                        provider_id, provider_name, model_id,
+                    )
+                    continue
+                peer_registrations.append(
+                    {
+                        "model_id": model_id,
+                        "provider_name": provider_name,
+                        "base_url": base_url,
+                        "api_key": provider_info.get("api_key") or "",
+                        "model_name": model_name,
+                        "provider_id": provider_id,
+                        "refresh_interval": provider_config.get("refresh_interval")
+                        or 5.0,
+                    }
+                )
             else:
                 logger.debug(
                     "Skipping provider %s (%s) for model %s: unsupported type '%s'",
@@ -1671,6 +1697,7 @@ async def _register_models_with_facades(
     ]
     logosnode_facade.replace_registrations(logosnode_registrations)
     azure_facade.replace_registrations(azure_registrations)
+    peer_facade.replace_registrations(peer_registrations)
 
 
 def _build_model_registry() -> Dict[tuple[int, int], str]:
@@ -1741,11 +1768,12 @@ async def refresh_pipeline_runtime_state(
     This keeps queue state and active request tracking intact while making newly
     added providers/deployments/models available immediately.
     """
-    global _pipeline, _logosnode_facade, _azure_facade
-    if not _pipeline or not _logosnode_facade or not _azure_facade:
+    global _pipeline, _logosnode_facade, _azure_facade, _peer_facade
+    if not _pipeline or not _logosnode_facade or not _azure_facade or not _peer_facade:
         return
 
-    await _register_models_with_facades(_logosnode_facade, _azure_facade)
+    await _register_models_with_facades(_logosnode_facade, _azure_facade, _peer_facade)
+    _peer_facade.start_polling()
     _pipeline.scheduler.update_model_registry(_build_model_registry())
 
     if rebuild_model_classifier:
@@ -3814,6 +3842,99 @@ async def get_ollama_vram_stats_options():
 # ============================================================================
 # OPENAI-COMPATIBLE MODEL LISTING
 # ============================================================================
+
+
+@app.get("/v1/peer/status", tags=["user-facing"])
+async def peer_status(request: Request):
+    """
+    Report this Logos instance's health and capacity for `logos_peer` upstreams.
+
+    The caller (another Logos server using this one as a `logos_peer` provider)
+    polls this endpoint periodically. The response is consumed by
+    `LogosPeerSchedulingDataFacade` to drive its circuit breaker and scheduling.
+
+    Auth: any valid logos_key (via `Authorization: Bearer <key>` or `logos_key`
+    header). Models are scoped to the authenticated profile, so each peer only
+    sees the models its API key is permitted to use.
+    """
+    from logos.auth import authenticate_with_profile
+
+    auth = authenticate_with_profile(dict(request.headers))
+
+    with DBManager() as db:
+        models = db.get_models_for_profile(auth.profile_id)
+        all_deployments = db.get_all_deployments() or []
+
+    deployments_by_model: Dict[int, list[dict]] = {}
+    for deployment in all_deployments:
+        deployments_by_model.setdefault(deployment["model_id"], []).append(deployment)
+
+    model_entries: list[dict] = []
+    free_slots = 0
+    for model in models:
+        model_id = int(model["id"])
+        model_name = model["name"]
+        is_available = False
+        is_loaded = False
+        queue_depth = 0
+
+        if _queue_mgr is not None:
+            try:
+                queue_depth = int(_queue_mgr.get_total_depth_by_model(model_id))
+            except Exception:
+                queue_depth = 0
+
+        for deployment in deployments_by_model.get(model_id, []):
+            provider_id = int(deployment["provider_id"])
+            ptype = normalize_provider_type(deployment.get("type"))
+            if ptype == "logosnode" and _logosnode_facade is not None:
+                try:
+                    view = _logosnode_facade.get_model_scheduler_view(
+                        model_id, provider_id
+                    )
+                except Exception:
+                    view = None
+                if view is None:
+                    continue
+                if view.best_lane_state in ("loaded", "running"):
+                    is_loaded = True
+                    if view.aggregate_queue_waiting == 0:
+                        is_available = True
+                        free_slots += 1
+            elif ptype == "azure" and _azure_facade is not None:
+                try:
+                    cap = _azure_facade.get_model_capacity(model_id, provider_id)
+                except Exception:
+                    cap = None
+                if cap is not None:
+                    is_loaded = True
+                    if cap.has_capacity:
+                        is_available = True
+                        free_slots += 1
+            elif ptype == "logos_peer":
+                # Don't chain peer status through peers — break the loop here.
+                continue
+
+        model_entries.append(
+            {
+                "id": model_name,
+                "available": is_available,
+                "loaded": is_loaded,
+                "queue_depth": queue_depth,
+            }
+        )
+
+    return JSONResponse(
+        content={
+            "status": "healthy",
+            "server_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "models": model_entries,
+            "capacity": {
+                "free_slots": free_slots,
+                "total_models": len(model_entries),
+            },
+        }
+    )
 
 
 @app.get("/v1/models", tags=["user-facing"])

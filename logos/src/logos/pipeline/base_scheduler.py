@@ -11,6 +11,7 @@ from typing import Dict
 from logos.queue.priority_queue import PriorityQueueManager, Priority
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.logos_peer_facade import LogosPeerSchedulingDataFacade
 from logos.terminal_logging import model_name_cache, style_model, style_request_id
 
 from .scheduler_interface import SchedulerInterface, SchedulingResult
@@ -28,11 +29,13 @@ class BaseScheduler(SchedulerInterface):
         queue_manager: PriorityQueueManager,
         logosnode_facade: LogosNodeSchedulingDataFacade,
         azure_facade: AzureSchedulingDataFacade,
+        peer_facade: LogosPeerSchedulingDataFacade | None = None,
         model_registry: Dict[tuple[int, int], str] | None = None,
     ):
         self._queue_mgr = queue_manager
         self._logosnode = logosnode_facade
         self._azure = azure_facade
+        self._peer = peer_facade
         self._model_registry = model_registry or {}
         self._logger = logging.getLogger(__name__)
 
@@ -112,6 +115,15 @@ class BaseScheduler(SchedulerInterface):
                     provider_metrics["azure_rate_remaining_tokens"] = (
                         cap.rate_limit_remaining_tokens
                     )
+            except Exception:
+                pass
+        elif provider_type == "logos_peer" and self._peer is not None:
+            try:
+                cap = self._peer.get_model_capacity(model_id, provider_id)
+                if cap:
+                    provider_metrics["peer_queue_depth"] = cap.queue_depth
+                    provider_metrics["peer_free_slots"] = cap.free_slots
+                    provider_metrics["peer_is_healthy"] = cap.is_healthy
             except Exception:
                 pass
 
@@ -216,6 +228,15 @@ class BaseScheduler(SchedulerInterface):
                             provider_metrics["azure_rate_remaining_tokens"] = (
                                 cap.rate_limit_remaining_tokens
                             )
+                    except Exception:
+                        pass
+                elif provider_type == "logos_peer" and self._peer is not None:
+                    try:
+                        cap = self._peer.get_model_capacity(model_id, provider_id)
+                        if cap:
+                            provider_metrics["peer_queue_depth"] = cap.queue_depth
+                            provider_metrics["peer_free_slots"] = cap.free_slots
+                            provider_metrics["peer_is_healthy"] = cap.is_healthy
                     except Exception:
                         pass
 

@@ -64,6 +64,7 @@ MIGRATIONS=(
     "027_logosnode_dynamic_deployments.sql"
     "028_rbac_roles_and_teams.sql"
     "029_bump_parallel_capacity_default.sql"
+    "030_logos_peer_provider_type.sql"
 )
 
 FAILED=0

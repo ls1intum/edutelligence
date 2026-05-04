@@ -22,7 +22,13 @@ from logos.terminal_logging import (
 
 from .base_scheduler import BaseScheduler
 from .scheduler_interface import SchedulingRequest, SchedulingResult, QueueTimeoutError
-from .ettft_estimator import ReadinessTier, ReadinessSignal, classify_local, classify_azure
+from .ettft_estimator import (
+    ReadinessTier,
+    ReadinessSignal,
+    classify_local,
+    classify_azure,
+    classify_peer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +76,13 @@ class SimpleScheduler(BaseScheduler):
                 weight,
                 paint(tier.value, MAGENTA),
             )
+            actual_type = self._get_provider_type(model_id, provider_id, request.deployments)
             return self._create_result(
                 model_id,
                 provider_id,
-                "logosnode" if tier != ReadinessTier.UNAVAILABLE else self._get_provider_type(model_id, provider_id, request.deployments),
+                actual_type if actual_type == "logos_peer" else (
+                    "logosnode" if tier != ReadinessTier.UNAVAILABLE else actual_type
+                ),
                 priority_int,
                 request.request_id,
                 was_queued=False,
@@ -166,6 +175,19 @@ class SimpleScheduler(BaseScheduler):
             except (ValueError, KeyError):
                 capacity = None
             return classify_azure(capacity), 0.0
+
+        if provider_type == "logos_peer":
+            capacity = None
+            if self._peer is not None:
+                try:
+                    capacity = self._peer.get_model_capacity(model_id, provider_id)
+                except (ValueError, KeyError):
+                    capacity = None
+            # Use the peer's reported queue_depth as the requests_running tiebreak
+            # so the scheduler prefers a less-loaded local deployment when both
+            # local and peer are READY.
+            requests_running = float(capacity.queue_depth) if capacity else 0.0
+            return classify_peer(capacity), requests_running
 
         return ReadinessSignal(
             tier=ReadinessTier.UNAVAILABLE,

@@ -19,6 +19,8 @@ def normalize_provider_type(
         return "logosnode"
     if normalized == "azure":
         return "azure"
+    if normalized in {"logos_peer", "logos-peer", "logospeer"}:
+        return "logos_peer"
     provider_name_norm = (provider_name or "").strip().lower()
     base_url_norm = (base_url or "").strip().lower()
     if normalized == "cloud" and (

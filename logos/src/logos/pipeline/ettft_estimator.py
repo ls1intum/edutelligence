@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Optional
 
 from logos.sdi.models import ModelSchedulerView, AzureCapacity
+from logos.sdi.logos_peer_facade import PeerCapacity
 
 
 class ReadinessTier(Enum):
@@ -94,4 +95,35 @@ def classify_azure(capacity: Optional[AzureCapacity]) -> ReadinessSignal:
     return ReadinessSignal(
         tier=ReadinessTier.READY,
         reasoning=f"Azure: healthy capacity (remaining_requests={remaining})",
+    )
+
+
+def classify_peer(capacity: Optional[PeerCapacity]) -> ReadinessSignal:
+    """Classify readiness for a `logos_peer` upstream from its capacity snapshot.
+
+    - capacity is None / peer unhealthy / model not exposed -> UNAVAILABLE
+    - peer healthy but free_slots == 0 / queue_depth > 0     -> QUEUEING
+    - peer healthy with capacity                             -> READY
+    """
+    if capacity is None or not capacity.is_healthy:
+        return ReadinessSignal(
+            tier=ReadinessTier.UNAVAILABLE,
+            reasoning="logos_peer: unhealthy or unregistered",
+        )
+    if not capacity.has_capacity:
+        return ReadinessSignal(
+            tier=ReadinessTier.QUEUEING,
+            reasoning=(
+                f"logos_peer: healthy but no free slots "
+                f"(free_slots={capacity.free_slots}, queue_depth={capacity.queue_depth})"
+            ),
+        )
+    if capacity.queue_depth > 0:
+        return ReadinessSignal(
+            tier=ReadinessTier.QUEUEING,
+            reasoning=f"logos_peer: healthy with queue_depth={capacity.queue_depth}",
+        )
+    return ReadinessSignal(
+        tier=ReadinessTier.READY,
+        reasoning=f"logos_peer: healthy (free_slots={capacity.free_slots})",
     )
