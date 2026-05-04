@@ -430,8 +430,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
         tokens += LectureUnitPipeline(local=is_local, callback=callback)(
             lecture_unit=lecture_unit_dto
         )
+        ingestion_result = json.dumps(
+            {"slidePageNumberMap": (self.dto.lecture_unit.slide_page_number_map or {})}
+        )
         callback.done(
             "Ingested lecture unit summary into vector database",
+            final_result=ingestion_result,
             tokens=tokens,
         )
 

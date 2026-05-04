@@ -316,12 +316,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
+        slide_page_number_map: dict[int, int] = {}
         for page_num in range(doc.page_count):
             self.callback.in_progress(
                 f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
             )
             page = doc.load_page(page_num)
             page_text = page.get_text()
+            slide_page_number_map[page_num + 1] = self.extract_slide_page_number(page)
             if page.get_images(full=False):
                 logger.info(
                     "%s Page %d/%d: has images, interpreting with LLM",
@@ -354,6 +356,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 )
             )
             old_page_text = page_text
+        if lecture_unit_slide_dto is not None:
+            lecture_unit_slide_dto.slide_page_number_map = slide_page_number_map
         logger.info(
             "%s PDF chunking complete: %d chunks from %d pages",
             prefix,
@@ -361,6 +365,63 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             doc.page_count,
         )
         return data
+
+    def extract_slide_page_number(self, page: fitz.Page) -> int:
+        """Read the visible page/slide number from a PDF page image.
+
+        Returns:
+            int: Detected number, or -1 if no number is visible.
+        """
+        matrix = fitz.Matrix(3, 3)
+        pix = page.get_pixmap(matrix=matrix)
+        img_bytes = pix.tobytes("jpg")
+        img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+
+        prompt = TextMessageContentDTO(
+            text_content=(
+                "Read the slide/page number shown on this presentation slide image. "
+                "Respond with only one integer. "
+                "If no visible slide/page number exists, respond with -1."
+            )
+        )
+        image = ImageMessageContentDTO(base64=img_base64)
+        iris_message = PyrisMessage(
+            sender=IrisMessageRole.USER,
+            contents=[prompt, image],
+        )
+        try:
+            response = self.llm_chat.chat(
+                [iris_message],
+                CompletionArguments(temperature=0),
+                tools=[],
+            )
+            self._append_tokens(
+                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
+            )
+            raw = response.contents[0].text_content if response.contents else ""
+            return self.parse_slide_page_number(raw)
+        except Exception as e:
+            logger.warning("Failed to extract slide page number: %s", e)
+            return -1
+
+    @staticmethod
+    def parse_slide_page_number(raw: str) -> int:
+        """Parse LLM response into a slide page number (-1 fallback)."""
+        text = (raw or "").strip().lower()
+        if not text:
+            return -1
+        if "null" in text or "none" in text or "unknown" in text:
+            return -1
+        if text == "-1":
+            return -1
+        match = re.search(r"-?\d+", text)
+        if not match:
+            return -1
+        try:
+            value = int(match.group(0))
+            return value if value > 0 else -1
+        except (TypeError, ValueError):
+            return -1
 
     def interpret_image(
         self,
