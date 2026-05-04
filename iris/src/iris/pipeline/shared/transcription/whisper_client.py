@@ -92,7 +92,7 @@ class WhisperClient:
                 "timestamp_granularities[]": "segment",
             }
         else:  # OpenAIWhisperModel
-            url = "https://api.openai.com/v1/audio/transcriptions"
+            url = self.llm.base_url
             headers = {"Authorization": f"Bearer {self.llm.api_key}"}
             data = {
                 "model": self.llm.model,
