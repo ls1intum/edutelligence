@@ -57,8 +57,22 @@ class CapacityPlanner:
     """
 
     # Idle tier thresholds (seconds of no activity)
-    IDLE_SLEEP_L1 = 120      # vLLM lane idle 2min → sleep level 1
-    IDLE_SLEEP_L2 = 600      # vLLM lane sleeping L1 for 10min → sleep level 2
+    IDLE_SLEEP_L1 = 120          # vLLM lane idle 2min → sleep level 1
+    # L1→L2 deepening was previously a 10-min timer that fired unconditionally,
+    # dropping the residual cache (~1.5 GB/lane) even when the GPU had ample
+    # headroom. Result: idle lanes silently lost their fast-wake state, were
+    # later evicted as `stop` (since L2 had already discarded the residual),
+    # and the planner spam-retried "Preemptive load-then-sleep" trying to
+    # repopulate the cache it had just thrown away — often failing under
+    # transient VRAM pressure and leaving the lane permanently cold.
+    #
+    # Set to ~24 h so the timer effectively never fires in normal operation.
+    # Demand-driven eviction (capacity_planner._next_eviction_action) still
+    # correctly demotes / stops L1 lanes when another model genuinely needs
+    # the residual reclaimed — that path is the one source of truth for
+    # "absolutely necessary" residual reclaim. The behaviour is now
+    # deterministic: residuals stay cached unless contention demands they go.
+    IDLE_SLEEP_L2 = 86_400       # 24h — effectively disabled; see comment above
     # Demand floors: minimum score to act at all (noise filter).
     # Applied only when VRAM is freely available and no eviction is required.
     DEMAND_WAKE_FLOOR = 0.5    # one partial-demand signal is enough to wake
@@ -2348,7 +2362,7 @@ class CapacityPlanner:
         We therefore emit sleep_l1 actions for every idle awake lane *before* the
         new load — exactly what _next_request_reclaim_action does at request time.
         To avoid duplicating sleep actions already produced by _compute_idle_actions
-        (which fires for lanes idle ≥ IDLE_SLEEP_L1 = 5 min), we only emit a
+        (which fires for lanes idle ≥ IDLE_SLEEP_L1 = 2 min), we only emit a
         pre-sleep here for lanes whose idle timer has not yet reached the threshold.
 
         VRAM accounting

@@ -85,6 +85,12 @@ services:
       - "traefik.http.routers.logos-server-jobs.service=logos-server"
       - "traefik.http.routers.logos-server-jobs.priority=100"
 
+      # === Routing: /api (UI-internal endpoints; backend strips /api prefix) ===
+      - "traefik.http.routers.logos-server-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.logos-server-api.entrypoints=web8080"
+      - "traefik.http.routers.logos-server-api.service=logos-server"
+      - "traefik.http.routers.logos-server-api.priority=100"
+
       # === Routing: /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
       - "traefik.http.routers.logos-server-logosdb.entrypoints=web8080"

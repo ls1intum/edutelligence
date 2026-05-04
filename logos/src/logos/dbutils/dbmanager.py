@@ -497,7 +497,15 @@ class DBManager:
         """
         import pathlib
 
-        migrations_dir = pathlib.Path(__file__).parent.parent.parent.parent / "db" / "migrations"
+        # Locate the migrations directory. Path differs between dev (running from
+        # a repo checkout) and the Docker image (/app/logos/db/migrations).
+        _here = pathlib.Path(__file__).resolve().parent
+        _candidates = [
+            _here.parent.parent.parent / "db" / "migrations",            # dev
+            _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker
+            pathlib.Path("./logos/db/migrations"),                       # CWD fallback
+        ]
+        migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
         # Discover migrations from disk so new SQL files are picked up automatically.
         # Excludes rollback scripts (must be run manually).
         MIGRATION_FILES = [
