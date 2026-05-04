@@ -34,3 +34,4 @@ class OpenAIWhisperModel(WhisperModel):
     """OpenAI Whisper transcription model."""
 
     type: Literal["openai_whisper"]
+    base_url: str = Field(default="https://api.openai.com/v1/audio/transcriptions")

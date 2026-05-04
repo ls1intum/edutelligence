@@ -128,8 +128,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.dto = dto
         self.variant_id = variant_id
-        self._is_local = bool(
-            self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
+        self._is_local = (
+            True  # TODO: restore dynamic selection via artemis_llm_selection
         )
 
     @observe(name="Lecture Ingestion Update Pipeline")
