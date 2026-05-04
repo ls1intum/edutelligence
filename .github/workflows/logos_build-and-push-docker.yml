@@ -96,20 +96,42 @@ jobs:
       docker-context: ./logos/db
       tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-db:latest,ghcr.io/ls1intum/edutelligence/logos-db:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-db:{0}', needs.compute-tag.outputs.result) }}
 
+  # Build the vLLM workernode for amd64 only. vLLM is x86_64/CUDA-only at
+  # runtime (no aarch64 wheels), so an arm64 image has no users; building it
+  # only burns CI minutes and breaks intermittently when upstream PPAs
+  # (deadsnakes python3.13) regress on arm64 — which then fails the matrix
+  # leg, fail-fast cancels the amd64 leg, and no fresh image gets published.
+  # Inlined instead of the shared template because that template hardcodes
+  # the [amd64, arm64] matrix and doesn't expose `platforms` as an input.
   build-and-push-workernode-vllm:
     name: Build Logos Worker Node (vLLM)
     needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm
-      docker-file: ./logos/logos-workernode/Dockerfile
-      docker-context: ./logos/logos-workernode
-      build-args: |
-        BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
-        RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
-        INSTALL_VLLM=1
-        INSTALL_OLLAMA=0
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:latest,ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.result) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-workernode
+          file: ./logos/logos-workernode/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:latest,ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.result) }}
+          build-args: |
+            BASE_IMAGE=nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
+            RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
+            INSTALL_VLLM=1
+            INSTALL_OLLAMA=0
 
   build-and-push-workernode-ollama:
     name: Build Logos Worker Node (Ollama)
