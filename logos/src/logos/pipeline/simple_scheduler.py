@@ -7,8 +7,9 @@ Queue locally only when every viable worker is itself queueing in vLLM.
 """
 
 import asyncio
+import hashlib
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import (
@@ -39,6 +40,41 @@ _TIER_QUEUE_PREFERENCE = [
     ReadinessTier.COLD,
 ]
 
+# Prefix-cache affinity: how much of a load discount the affinity-preferred
+# deployment receives in the load tiebreak. Tuned to be "slight" — keeps a
+# caller pinned to the same provider when load differs by ≤ 1 active request,
+# but still spreads to alternatives once the preferred one gets noticeably
+# busier. Issue #530.
+_AFFINITY_LOAD_DISCOUNT = 1.0
+
+
+def _affinity_score(affinity_key: str, model_id: int, provider_id: int) -> int:
+    """Stable cross-process hash for rendezvous-style affinity scoring.
+
+    Python's built-in `hash()` is salted per process, so we use blake2b for a
+    deterministic value that stays consistent across replicas.
+    """
+    digest = hashlib.blake2b(
+        f"{affinity_key}|{model_id}|{provider_id}".encode("utf-8"),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, "big")
+
+
+def _preferred_provider_id(
+    affinity_key: str,
+    model_id: int,
+    candidates_for_model: List[tuple],
+) -> Optional[int]:
+    """Return the provider_id with the highest affinity score for this caller+model."""
+    if not candidates_for_model:
+        return None
+    best = max(
+        candidates_for_model,
+        key=lambda c: _affinity_score(affinity_key, model_id, c[1]),
+    )
+    return best[1]
+
 
 class SimpleScheduler(BaseScheduler):
     """
@@ -64,8 +100,13 @@ class SimpleScheduler(BaseScheduler):
         # Try to find a READY candidate
         ready = [c for c in scored if c[3] == ReadinessTier.READY]
         if ready:
-            # Best weight, tiebreak on lowest requests_running
-            best = sorted(ready, key=lambda c: (-c[2], c[5]))[0]
+            # Best weight, tiebreak on lowest requests_running, with a slight
+            # prefix-cache affinity discount so repeat callers stick to the
+            # same provider when load is comparable. (Issue #530.)
+            best = sorted(
+                ready,
+                key=lambda c: (-c[2], self._adjusted_load(c, ready, request.affinity_key)),
+            )[0]
             model_id, provider_id, weight, tier, priority_int, _requests_running, _signal = best
             provider_name = self._logosnode.get_provider_name(provider_id) or str(provider_id)
             logger.info(
@@ -193,6 +234,29 @@ class SimpleScheduler(BaseScheduler):
             tier=ReadinessTier.UNAVAILABLE,
             reasoning=f"Unknown provider type: {provider_type}",
         ), 0.0
+
+    def _adjusted_load(
+        self,
+        candidate: tuple,
+        ready: list,
+        affinity_key: Optional[str],
+    ) -> float:
+        """Apply prefix-cache affinity discount to the load tiebreak.
+
+        Picks one preferred provider per (caller, model) via rendezvous
+        hashing and gives it a `_AFFINITY_LOAD_DISCOUNT`-sized head start in
+        the load-based tiebreak.
+        """
+        model_id, provider_id, _, _, _, requests_running, _ = candidate
+        if not affinity_key:
+            return float(requests_running)
+        same_model = [c for c in ready if c[0] == model_id]
+        if len(same_model) <= 1:
+            return float(requests_running)
+        preferred_id = _preferred_provider_id(affinity_key, model_id, same_model)
+        if preferred_id is not None and preferred_id == provider_id:
+            return float(requests_running) - _AFFINITY_LOAD_DISCOUNT
+        return float(requests_running)
 
     def _get_provider_type(self, model_id: int, provider_id: int, deployments: list) -> str:
         for d in deployments:

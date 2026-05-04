@@ -67,6 +67,11 @@ class SchedulingRequest:
     deployments: list[Deployment]
     classified_models: Optional[List[Tuple[int, float, int, int]]] = None  # (model_id, weight, priority, parallel)
     timeout_s: Optional[float] = None
+    # Stable identifier of the calling application (logos_key). Used by the
+    # scheduler to prefer the same provider for repeated requests from the
+    # same caller, keeping prefix caches warm. Optional — when None the
+    # scheduler falls back to pure load-balancing.
+    affinity_key: Optional[str] = None
 
 
 class SchedulerInterface(ABC):

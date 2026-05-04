@@ -155,6 +155,7 @@ class RequestPipeline:
             deployments=request.deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
+            affinity_key=request.logos_key,
         )
         
         # Record enqueue
