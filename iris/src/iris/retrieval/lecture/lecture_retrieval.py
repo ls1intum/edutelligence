@@ -87,7 +87,7 @@ class LectureRetrieval(SubPipeline):
         pipeline_id = "lecture_retrieval_pipeline"
         chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         embedding_model = resolve_model(
-            pipeline_id, "default", "embedding", local=False
+            pipeline_id, "default", "embedding", local=local
         )
         request_handler = LlmRequestHandler(model_id=chat_model)
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
