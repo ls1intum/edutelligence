@@ -122,14 +122,16 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
             build-essential curl ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.12 /usr/bin/python \
-        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
-    fi \
-    && python3 -m pip install --upgrade pip setuptools wheel
+        && ln -sf /usr/bin/python3.12 /usr/bin/python; \
+    fi
 
-# Virtualenv keeps all packages self-contained and avoids system-level conflicts.
+# Virtualenv keeps all packages self-contained and avoids the PEP 668
+# "externally-managed-environment" lockdown on the system Python in noble.
+# `python3 -m venv` bootstraps pip inside the venv via ensurepip — no
+# need (and PEP 668 wouldn't allow) for a system-level pip install.
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 WORKDIR /build
 COPY requirements.txt .
@@ -195,9 +197,12 @@ RUN if ! command -v python3.12 >/dev/null 2>&1 \
             python3.12 python3.12-dev python3.12-venv curl libnuma1 ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.12 /usr/bin/python \
-        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python; \
     fi
+# No system-level pip bootstrap: the venv copied from the builder stage
+# already provides /opt/venv/bin/pip, and PEP 668 forbids installing into
+# system Python on noble. Runtime only needs the python3 interpreter so
+# venv shebangs resolve.
 
 # ── CUDA toolchain for Triton / vLLM JIT compilation ─────────────────────────
 # Installed via versioned apt packages (CUDA_VERSION is set by the base image).
