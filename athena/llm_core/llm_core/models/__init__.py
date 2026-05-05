@@ -1,9 +1,10 @@
 from typing import Annotated, List, Literal, Type, Union
 from pydantic import Field
-from llm_core.loaders.model_loaders import azure_loader, ollama_loader, openai_loader, lmstudio_loader
+from llm_core.loaders.model_loaders import azure_loader, logos_loader, ollama_loader, openai_loader, lmstudio_loader
 
 from .model_config import ModelConfig
 from .providers.base_chat_model_config import BaseChatModelConfig
+from .providers.logos_model_config import LogosModelConfig
 from .providers.lmstudio_model_config import LMStudioModelConfig
 from .providers.openai_model_config import OpenAIModelConfig
 from .providers.azure_model_config import AzureModelConfig
@@ -36,13 +37,15 @@ if ollama_loader.ollama_available_models:
     available_configs.append(OllamaModelConfig)
 if lmstudio_loader.lmstudio_available_models:
     available_configs.append(LMStudioModelConfig)
+if logos_loader.logos_available_models:
+    available_configs.append(LogosModelConfig)
 
 
 if not available_configs:
     available_configs.append(_StubConfig)
 
 ModelConfigType = Annotated[
-    Union[OpenAIModelConfig, AzureModelConfig, OllamaModelConfig, LMStudioModelConfig, _StubConfig],
+    Union[OpenAIModelConfig, AzureModelConfig, OllamaModelConfig, LMStudioModelConfig, LogosModelConfig, _StubConfig],
     Field(discriminator="provider"),
 ]
 
@@ -54,4 +57,5 @@ __all__ = [
     "AzureModelConfig",
     "OllamaModelConfig",
     "LMStudioModelConfig",
+    "LogosModelConfig",
 ]
