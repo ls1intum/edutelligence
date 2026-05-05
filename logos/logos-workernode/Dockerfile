@@ -12,12 +12,12 @@
 # Design notes
 # ────────────
 # • Both nvidia/cuda:*-devel and *-runtime images ship WITHOUT Python.
-#   The builder installs Python 3.13 from the deadsnakes PPA.
+#   The builder installs Python 3.12 from Ubuntu 24.04 (noble) main repo.
 #   python:*-slim images already have Python 3.12, so that block is skipped.
 #
 # • vLLM (via Triton) JIT-compiles CUDA kernels at runtime. This requires:
 #     gcc            — C compiler for Triton's ctypes extension build
-#     python3.13-dev — Python.h (Triton compiles a small C module at startup)
+#     python3.12-dev — Python.h (Triton compiles a small C module at startup)
 #     cuda-nvcc      — NVIDIA compiler for kernel PTX compilation
 #     cuda-nvrtc     — CUDA runtime compilation library
 #     libcublas      — cuBLAS (torch matmul kernels)
@@ -93,8 +93,8 @@ RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
 # Stage 2: Build — install Python deps in a virtualenv
 #
 #   GPU build  (BASE_IMAGE=nvidia/cuda:*-devel-ubuntu24.04):
-#     The devel image ships without Python. Install Python 3.13 from the
-#     deadsnakes PPA, then build a python3.13 virtualenv with all packages.
+#     The devel image ships without Python. Install Python 3.12 from the
+#     stock noble main repo, then build a python3.12 virtualenv with all packages.
 #
 #   CPU build  (BASE_IMAGE=python:3.12-slim):
 #     Python 3.12 is already present. The `if ! command -v python3` block is
@@ -106,20 +106,23 @@ ARG VLLM_PIP_SPEC
 ARG TORCH_INDEX_URL
 ARG NCCL_PIP_SPEC
 
-# Install Python 3.13 only on base images that ship without Python (nvidia/cuda).
+# Install Python 3.12 only on base images that ship without Python (nvidia/cuda).
 # python:*-slim images already provide python3 + pip — this block is skipped.
+#
+# Switched from 3.13 (deadsnakes PPA) to 3.12 (stock noble main) because the
+# GH Actions runners intermittently can't reach ppa.launchpadcontent.net,
+# which made the build flake-fail with "Connection refused" → "Unable to
+# locate package python3.13". 3.12 is the default Ubuntu 24.04 Python, lives
+# in the always-available main repo, and is fully supported by vLLM 0.20.x +
+# Torch ≥ 2.11. No PPA, no Launchpad dependency, no flakiness.
 RUN if ! command -v python3 >/dev/null 2>&1; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            software-properties-common ca-certificates gpg-agent \
-        && add-apt-repository -y ppa:deadsnakes/ppa \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends \
-            python3.13 python3.13-dev python3.13-venv \
-            build-essential curl \
+            python3.12 python3.12-dev python3.12-venv \
+            build-essential curl ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python \
         && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
     fi \
     && python3 -m pip install --upgrade pip setuptools wheel
@@ -181,22 +184,18 @@ ARG INSTALL_VLLM
 ARG INSTALL_OLLAMA
 
 # ── Python ────────────────────────────────────────────────────────────────────
-# Install Python 3.13 when the runtime base has no Python at all (CUDA images),
-# but only if INSTALL_VLLM=1 (the builder produced a python3.13 venv).
-# CPU builds (python:3.12-slim, INSTALL_VLLM=0) already have python3.12 and
-# the builder venv uses python3.12 — no install needed.
-RUN if ! command -v python3.13 >/dev/null 2>&1 \
+# Install Python 3.12 when the runtime base has no Python at all (CUDA images),
+# but only if INSTALL_VLLM=1 (the builder produced a python3.12 venv).
+# CPU builds (python:3.12-slim, INSTALL_VLLM=0) already have python3.12 — skipped.
+# Stock noble main (no PPA), see builder block above for rationale.
+RUN if ! command -v python3.12 >/dev/null 2>&1 \
       && { [ "$INSTALL_VLLM" = "1" ] || ! command -v python3 >/dev/null 2>&1; }; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            software-properties-common ca-certificates gpg-agent \
-        && add-apt-repository -y ppa:deadsnakes/ppa \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends \
-            python3.13 python3.13-dev python3.13-venv curl libnuma1 \
+            python3.12 python3.12-dev python3.12-venv curl libnuma1 ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python \
         && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
     fi
 
