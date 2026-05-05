@@ -1,6 +1,7 @@
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pydantic import ValidationError
 from typing import Iterator
 
 from athena.schemas import AiSelectionDecision
@@ -46,7 +47,7 @@ def get_local_model_config() -> ModelConfig:
 
     try:
         return create_config_for_model(local_model_name)
-    except ValueError as exc:
+    except (ValueError, ValidationError) as exc:
         raise LocalAISelectionConfigurationError(
             get_local_ai_configuration_error_message()
         ) from exc
