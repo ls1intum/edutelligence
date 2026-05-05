@@ -106,12 +106,11 @@ def describe_model_config(model: ModelConfig) -> str:
 
 def describe_llm_request_context(
     *,
-    operation: Optional[str] = None,
     tags: Optional[List[str]] = None,
     pydantic_object: Optional[Type[BaseModel]] = None,
 ) -> str:
     """Return a concise debug label for an LLM request."""
-    context_label = operation or (pydantic_object.__name__ if pydantic_object is not None else "unknown")
+    context_label = pydantic_object.__name__ if pydantic_object is not None else "unknown"
     useful_tags = [
         tag for tag in (tags or [])
         if not tag.startswith(("experiment-", "module-configuration-", "run-"))

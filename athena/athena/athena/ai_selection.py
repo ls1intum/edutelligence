@@ -1,5 +1,4 @@
 import importlib
-import os
 from typing import Any, Optional, Type, TypeVar, cast
 
 from pydantic import BaseModel
@@ -10,29 +9,13 @@ from athena.schemas.ai_selection import AiSelectionDecision
 from llm_core.models.llm_config import LLMConfig
 from llm_core.models.model_config import ModelConfig
 
-_DEFAULT_AI_SELECTION_ENV = "ATHENA_DEFAULT_AI_SELECTION"
 _LOCAL_MODEL_ENV = "LLM_LOCAL_MODEL"
 
 B = TypeVar("B", bound=BaseModel)
 
-
-def get_default_ai_selection() -> AiSelectionDecision:
-    raw_selection = os.getenv(_DEFAULT_AI_SELECTION_ENV, AiSelectionDecision.CLOUD_AI.value)
-    try:
-        return AiSelectionDecision(raw_selection)
-    except ValueError:
-        logger.warning(
-            "Invalid value '%s' configured for %s. Falling back to %s.",
-            raw_selection,
-            _DEFAULT_AI_SELECTION_ENV,
-            AiSelectionDecision.CLOUD_AI.value,
-        )
-        return AiSelectionDecision.CLOUD_AI
-
-
 def resolve_ai_selection(selection: AiSelectionDecision | str | None) -> AiSelectionDecision:
     if selection is None:
-        return get_default_ai_selection()
+        return AiSelectionDecision.CLOUD_AI
 
     if isinstance(selection, AiSelectionDecision):
         return selection
@@ -43,9 +26,9 @@ def resolve_ai_selection(selection: AiSelectionDecision | str | None) -> AiSelec
         logger.warning(
             "Received unsupported AI selection '%s'. Falling back to %s.",
             selection,
-            get_default_ai_selection().value,
+            AiSelectionDecision.CLOUD_AI.value,
         )
-        return get_default_ai_selection()
+        return AiSelectionDecision.CLOUD_AI
 
 
 def module_uses_llm(
