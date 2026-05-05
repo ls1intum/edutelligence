@@ -1,12 +1,10 @@
 from llm_core.models.llm_config import LLMConfig, LLMConfigModel, RawLLMConfig
 from llm_core.utils.model_factory import create_config_for_model
-import os
 import yaml
 from pathlib import Path
 from typing import Dict, Optional
 
 _state: Dict[str, Optional[LLMConfig]] = {"llm_config": None}
-_LOCAL_MODEL_ENV = "LLM_LOCAL_MODEL"
 
 
 def _load_raw_llm_config(path: Optional[str] = None) -> RawLLMConfig:
@@ -33,7 +31,6 @@ def _materialize_llm_config(raw_config: RawLLMConfig) -> LLMConfig:
     base_model = raw_config.models.base_model
     if not base_model:
         raise ValueError("Missing required 'base_model' in models")
-    local_model = os.getenv(_LOCAL_MODEL_ENV)
 
     models_obj = LLMConfigModel(
         base_model_config=create_config_for_model(base_model),
@@ -50,11 +47,6 @@ def _materialize_llm_config(raw_config: RawLLMConfig) -> LLMConfig:
         long_reasoning_model_config=(
             create_config_for_model(raw_config.models.long_reasoning_model)
             if raw_config.models.long_reasoning_model
-            else None
-        ),
-        local_model_config=(
-            create_config_for_model(local_model)
-            if local_model
             else None
         ),
     )

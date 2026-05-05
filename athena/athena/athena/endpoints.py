@@ -1,16 +1,23 @@
 # type: ignore # too much weird behavior of mypy with decorators
+from contextlib import nullcontext
 import inspect
-from fastapi import Depends, BackgroundTasks, Body, HTTPException, status
+from fastapi import Depends, BackgroundTasks, HTTPException, status
 from pydantic import ConfigDict, BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
 from athena.app import app
-from athena.ai_selection import resolve_ai_selection, resolve_module_config_for_selection, module_uses_llm
+from athena.ai_selection import (
+    get_local_ai_configuration_error_message,
+    llm_ai_selection_context,
+    local_ai_selection_available,
+    module_uses_llm,
+    resolve_ai_selection,
+)
 from athena.authenticate import authenticated
 from athena.database import is_database_enabled
 from athena.metadata import with_meta
-from athena.module_config import get_dynamic_module_config_factory
+from athena.module_config import get_dynamic_module_config_factory, is_explicit_module_config
 from athena.logger import logger
 from athena.schemas import Exercise, Submission, Feedback, LearnerProfile, Competency, AiSelectionDecision
 from athena.storage import get_stored_submission_meta, get_stored_exercise_meta, get_stored_feedback_meta, \
@@ -341,24 +348,37 @@ def feedback_provider(func: Union[
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
-    is_graded_type = inspect.signature(func).parameters["is_graded"].annotation if "is_graded" in inspect.signature(func).parameters else None
     learner_profile_type = inspect.signature(func).parameters["learner_profile"].annotation if "learner_profile" in inspect.signature(func).parameters else None
     latest_submission_type = inspect.signature(func).parameters["latest_submission"].annotation if "latest_submission" in inspect.signature(func).parameters else None
     competencies_type = inspect.signature(func).parameters["competencies"].annotation if "competencies" in inspect.signature(func).parameters else None
+    learner_profile_field_type = learner_profile_type or LearnerProfile | None
+    latest_submission_field_type = latest_submission_type or submission_type | None
+    competencies_field_type = competencies_type or List[Competency] | None
     accepts_selection = "selection" in inspect.signature(func).parameters
+
+    class FeedbackProviderRequest(BaseModel):
+        exercise: exercise_type
+        submission: submission_type
+        is_graded: bool = True
+        selection: AiSelectionDecision | None = None
+        learner_profile: learner_profile_field_type = None
+        latest_submission: latest_submission_field_type = None
+        competencies: competencies_field_type = None
+        model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
     @with_meta
     async def wrapper(
-            exercise: exercise_type,
-            submission: submission_type,
-            isGraded: is_graded_type = Body(True, alias="isGraded"),
-            selection: AiSelectionDecision | None = Body(None, alias="selection"),
-            learner_profile: learner_profile_type = Body(None, alias="learnerProfile"),
-            latest_submission: latest_submission_type = Body(None, alias="latestSubmission"),
-            competencies: competencies_type = Body(None, alias="competencies"),
+            request: FeedbackProviderRequest,
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
+        exercise = request.exercise
+        submission = request.submission
+        is_graded = request.is_graded
+        selection = request.selection
+        learner_profile = request.learner_profile
+        latest_submission = request.latest_submission
+        competencies = request.competencies
 
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
@@ -369,8 +389,9 @@ def feedback_provider(func: Union[
 
         resolved_selection = resolve_ai_selection(selection)
         llm_backed_module = module_uses_llm(module_config=module_config, module_config_type=module_config_type)
+        selection_applies = llm_backed_module and not is_explicit_module_config(module_config)
 
-        if llm_backed_module and resolved_selection == AiSelectionDecision.NO_AI:
+        if selection_applies and resolved_selection == AiSelectionDecision.NO_AI:
             logger.info(
                 "%s: Skipping feedback suggestion generation for submission %d of exercise %d because selection is %s.",
                 func.__name__,
@@ -380,8 +401,7 @@ def feedback_provider(func: Union[
             )
             return []
 
-        selected_module_config = resolve_module_config_for_selection(module_config, resolved_selection)
-        if llm_backed_module and module_config is not None and selected_module_config is None:
+        if selection_applies and resolved_selection == AiSelectionDecision.LOCAL_AI and not local_ai_selection_available():
             logger.warning(
                 "%s: Rejecting feedback suggestion generation for submission %d of exercise %d because no compatible model is configured for selection %s.",
                 func.__name__,
@@ -391,19 +411,16 @@ def feedback_provider(func: Union[
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=(
-                    "No LOCAL_AI model is configured in Athena. "
-                    "Set LLM_LOCAL_MODEL to a local model identifier such as logos_*, ollama_*, or lmstudio_*."
-                ),
+                detail=get_local_ai_configuration_error_message(),
             )
 
         # Build kwargs for the function
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:
-            kwargs["module_config"] = selected_module_config
+            kwargs["module_config"] = module_config
 
         if "is_graded" in inspect.signature(func).parameters:
-            kwargs["is_graded"] = isGraded
+            kwargs["is_graded"] = is_graded
 
         if "learner_profile" in inspect.signature(func).parameters:
             kwargs["learner_profile"] = learner_profile
@@ -421,7 +438,7 @@ def feedback_provider(func: Union[
         accepted_params = set(inspect.signature(func).parameters.keys())
         all_possible_kwargs = {
             "module_config": module_config,
-            "is_graded": isGraded,
+            "is_graded": is_graded,
             "learner_profile": learner_profile,
             "latest_submission": latest_submission,
             "competencies": competencies,
@@ -436,10 +453,16 @@ def feedback_provider(func: Union[
                 logger.warning("%s: Received unexpected argument '%s' (value: %s), but this module does not support it. Ignoring.", func.__name__, k, v)
 
         # Call the actual provider
-        if inspect.iscoroutinefunction(func):
-            feedbacks = await func(exercise, submission, **filtered_kwargs)
-        else:
-            feedbacks = func(exercise, submission, **filtered_kwargs)
+        selection_context = (
+            llm_ai_selection_context(resolved_selection)
+            if selection_applies
+            else nullcontext()
+        )
+        with selection_context:
+            if inspect.iscoroutinefunction(func):
+                feedbacks = await func(exercise, submission, **filtered_kwargs)
+            else:
+                feedbacks = func(exercise, submission, **filtered_kwargs)
 
         # Store feedback suggestions and assign internal IDs
         feedbacks = store_feedback_suggestions(feedbacks)
