@@ -192,6 +192,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.course_language = self.get_course_language(
                     doc.load_page(min(5, doc.page_count - 1)).get_text()
                 )
+                # Extract page numbers even when skipping full ingestion
+                self.dto.lecture_unit.slide_page_number_map = (
+                    self.extract_all_slide_page_numbers(doc)
+                )
+                cleanup_temporary_file(pdf_path)
                 self.callback.in_progress("skipping slide removal")
                 self.callback.done()
                 self.callback.in_progress("skipping slide interpretation")
@@ -358,6 +363,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             old_page_text = page_text
         if lecture_unit_slide_dto is not None:
             lecture_unit_slide_dto.slide_page_number_map = slide_page_number_map
+            logger.info(
+                "%s Slide page number map: %s",
+                prefix,
+                slide_page_number_map,
+            )
         logger.info(
             "%s PDF chunking complete: %d chunks from %d pages",
             prefix,
@@ -399,10 +409,38 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
             )
             raw = response.contents[0].text_content if response.contents else ""
-            return self.parse_slide_page_number(raw)
+            parsed = self.parse_slide_page_number(raw)
+            logger.info(
+                "Page %d: LLM raw response='%s' → parsed=%d",
+                page.number + 1,
+                raw,
+                parsed,
+            )
+            return parsed
         except Exception as e:
             logger.warning("Failed to extract slide page number: %s", e)
             return -1
+
+    def extract_all_slide_page_numbers(self, doc: fitz.Document) -> dict[int, int]:
+        """Extract page numbers from all pages in a PDF document.
+
+        Args:
+            doc: The opened PDF document.
+
+        Returns:
+            dict[int, int]: Map from PDF page index (1-based) to detected slide number.
+                            Returns -1 for pages where no number was found.
+        """
+        slide_page_number_map: dict[int, int] = {}
+        for page_num in range(doc.page_count):
+            page = doc.load_page(page_num)
+            slide_page_number_map[page_num + 1] = self.extract_slide_page_number(page)
+        logger.info(
+            "Extracted slide page numbers for %d pages: %s",
+            doc.page_count,
+            slide_page_number_map,
+        )
+        return slide_page_number_map
 
     @staticmethod
     def parse_slide_page_number(raw: str) -> int:

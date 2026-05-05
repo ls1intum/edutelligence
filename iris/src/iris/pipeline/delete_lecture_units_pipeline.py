@@ -66,7 +66,6 @@ class LectureUnitDeletionPipeline(Pipeline):
     def __call__(self) -> None:
         self.callback.in_progress("deleting lecture units...")
         self.delete_entries_for_lecture_units()
-        self.callback.done("lecture unit deletion done")
 
     def delete_entries_for_lecture_units(self):
         try:
