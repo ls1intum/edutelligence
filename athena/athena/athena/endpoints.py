@@ -1,17 +1,18 @@
 # type: ignore # too much weird behavior of mypy with decorators
 import inspect
-from fastapi import Depends, BackgroundTasks, Body
+from fastapi import Depends, BackgroundTasks, Body, HTTPException, status
 from pydantic import ConfigDict, BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
 from athena.app import app
+from athena.ai_selection import resolve_ai_selection, resolve_module_config_for_selection, module_uses_llm
 from athena.authenticate import authenticated
 from athena.database import is_database_enabled
 from athena.metadata import with_meta
 from athena.module_config import get_dynamic_module_config_factory
 from athena.logger import logger
-from athena.schemas import Exercise, Submission, Feedback, LearnerProfile, Competency
+from athena.schemas import Exercise, Submission, Feedback, LearnerProfile, Competency, AiSelectionDecision
 from athena.storage import get_stored_submission_meta, get_stored_exercise_meta, get_stored_feedback_meta, \
     store_exercise, store_feedback, store_feedback_suggestions, store_submissions, get_stored_submissions
 
@@ -27,6 +28,9 @@ module_responses = {
     403: {
         "description": "API secret is invalid - set the environment variable SECRET and the Authorization header "
                        "to the same value",
+    },
+    503: {
+        "description": "The requested AI selection is not available with the current Athena configuration.",
     }
 }
 
@@ -341,6 +345,7 @@ def feedback_provider(func: Union[
     learner_profile_type = inspect.signature(func).parameters["learner_profile"].annotation if "learner_profile" in inspect.signature(func).parameters else None
     latest_submission_type = inspect.signature(func).parameters["latest_submission"].annotation if "latest_submission" in inspect.signature(func).parameters else None
     competencies_type = inspect.signature(func).parameters["competencies"].annotation if "competencies" in inspect.signature(func).parameters else None
+    accepts_selection = "selection" in inspect.signature(func).parameters
 
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
@@ -349,6 +354,7 @@ def feedback_provider(func: Union[
             exercise: exercise_type,
             submission: submission_type,
             isGraded: is_graded_type = Body(True, alias="isGraded"),
+            selection: AiSelectionDecision | None = Body(None, alias="selection"),
             learner_profile: learner_profile_type = Body(None, alias="learnerProfile"),
             latest_submission: latest_submission_type = Body(None, alias="latestSubmission"),
             competencies: competencies_type = Body(None, alias="competencies"),
@@ -361,10 +367,40 @@ def feedback_provider(func: Union[
         store_exercise(exercise)
         store_submissions([submission])
 
+        resolved_selection = resolve_ai_selection(selection)
+        llm_backed_module = module_uses_llm(module_config=module_config, module_config_type=module_config_type)
+
+        if llm_backed_module and resolved_selection == AiSelectionDecision.NO_AI:
+            logger.info(
+                "%s: Skipping feedback suggestion generation for submission %d of exercise %d because selection is %s.",
+                func.__name__,
+                submission.id,
+                exercise.id,
+                resolved_selection.value,
+            )
+            return []
+
+        selected_module_config = resolve_module_config_for_selection(module_config, resolved_selection)
+        if llm_backed_module and module_config is not None and selected_module_config is None:
+            logger.warning(
+                "%s: Rejecting feedback suggestion generation for submission %d of exercise %d because no compatible model is configured for selection %s.",
+                func.__name__,
+                submission.id,
+                exercise.id,
+                resolved_selection.value,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "No LOCAL_AI model is configured in Athena. "
+                    "Set LLM_LOCAL_MODEL to a local model identifier such as logos_*, ollama_*, or lmstudio_*."
+                ),
+            )
+
         # Build kwargs for the function
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:
-            kwargs["module_config"] = module_config
+            kwargs["module_config"] = selected_module_config
 
         if "is_graded" in inspect.signature(func).parameters:
             kwargs["is_graded"] = isGraded
@@ -377,6 +413,9 @@ def feedback_provider(func: Union[
 
         if "competencies" in inspect.signature(func).parameters:
             kwargs["competencies"] = competencies
+
+        if accepts_selection:
+            kwargs["selection"] = resolved_selection
 
         # Filter out unexpected kwargs and log warnings
         accepted_params = set(inspect.signature(func).parameters.keys())

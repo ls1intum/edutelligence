@@ -19,6 +19,7 @@ class LLMConfigModel(BaseModel):
     mini_model_config: Optional[ModelConfigType] = None
     fast_reasoning_model_config: Optional[ModelConfigType] = None
     long_reasoning_model_config: Optional[ModelConfigType] = None
+    local_model_config: Optional[ModelConfigType] = None
 
 
 class LLMConfig(BaseModel):

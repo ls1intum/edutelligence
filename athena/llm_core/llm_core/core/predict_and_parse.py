@@ -1,3 +1,5 @@
+import inspect
+import json
 from typing import Optional, Type, TypeVar, List, Union
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts import ChatPromptTemplate
@@ -6,10 +8,10 @@ from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, ValidationError
 from athena import get_experiment_environment
 from llm_core.utils.append_format_instructions import append_format_instructions
-from llm_core.utils.llm_utils import remove_system_message
+from llm_core.utils.llm_utils import remove_system_message, describe_model_config, describe_llm_request_context
 from llm_core.models.model_config import ModelConfig
 from langchain_core.messages import AIMessage, BaseMessage
-import json
+from athena.logger import logger
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,6 +31,17 @@ async def predict_and_parse(
     if not model.supports_system_messages():
         chat_prompt = remove_system_message(chat_prompt)
 
+    caller_frame = inspect.currentframe().f_back
+    operation = caller_frame.f_code.co_name if caller_frame is not None else None
+    logger.debug(
+        "predict_and_parse: Using model %s for %s",
+        describe_model_config(model),
+        describe_llm_request_context(
+            operation=operation,
+            tags=tags,
+            pydantic_object=pydantic_object,
+        ),
+    )
     llm_model = model.get_model()
 
     # Add tags
@@ -136,4 +149,3 @@ async def predict_and_parse(
         return await chain.ainvoke(prompt_input, config={"tags": tags}, debug=True)
     except ValidationError as e:
         raise ValueError(f"Could not parse output: {e}") from e
-
