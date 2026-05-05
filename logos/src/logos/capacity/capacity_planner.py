@@ -2124,12 +2124,16 @@ class CapacityPlanner:
                 ("yes: " + ", ".join(f"{v.lane_id}({a})" for v, a, _ in eviction_set)) if eviction_set else "no",
             )
 
+            # Bypass floor / competitive ratio when there are actual requests
+            # waiting in the scheduler queue: a queued request IS real demand
+            # even if the DemandTracker score has decayed. Computed before the
+            # if/else split because BOTH branches reference it (the contention
+            # branch would otherwise hit UnboundLocalError on the first cold
+            # load that needs eviction, deadlocking the planner cycle).
+            has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
+
             if not eviction_set:
                 # Resources freely available — act on floor score.
-                # Bypass floor when there are actual requests waiting in the
-                # scheduler queue: a queued request IS real demand even if
-                # the DemandTracker score has decayed.
-                has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
                 if eff < self.DEMAND_LOAD_FLOOR and not has_queued:
                     continue
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
