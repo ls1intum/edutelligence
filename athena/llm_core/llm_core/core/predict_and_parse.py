@@ -32,7 +32,7 @@ async def predict_and_parse(
     if not selected_model.supports_system_messages():
         chat_prompt = remove_system_message(chat_prompt)
 
-    logger.debug(
+    logger.info(
         "predict_and_parse: Using model %s for %s",
         describe_model_config(selected_model),
         describe_llm_request_context(
