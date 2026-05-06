@@ -382,6 +382,20 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         Returns:
             int: Detected number, or -1 if no number is visible.
         """
+        text_candidate = self.extract_slide_page_number_from_text(page)
+        if text_candidate != -1:
+            logger.info(
+                "Page %d: slide page number source=text detected=%d",
+                page.number + 1,
+                text_candidate,
+            )
+            return text_candidate
+
+        logger.info(
+            "Page %d: slide page number source=vision starting fallback after no PDF-text candidate",
+            page.number + 1,
+        )
+
         matrix = fitz.Matrix(3, 3)
         pix = page.get_pixmap(matrix=matrix)
         img_bytes = pix.tobytes("jpg")
@@ -411,14 +425,18 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             raw = response.contents[0].text_content if response.contents else ""
             parsed = self.parse_slide_page_number(raw)
             logger.info(
-                "Page %d: LLM raw response='%s' → parsed=%d",
+                "Page %d: slide page number source=vision raw_response='%s' parsed=%d",
                 page.number + 1,
                 raw,
                 parsed,
             )
             return parsed
         except Exception as e:
-            logger.warning("Failed to extract slide page number: %s", e)
+            logger.warning(
+                "Page %d: slide page number source=vision failed: %s",
+                page.number + 1,
+                e,
+            )
             return -1
 
     def extract_all_slide_page_numbers(self, doc: fitz.Document) -> dict[int, int]:
@@ -443,6 +461,56 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return slide_page_number_map
 
     @staticmethod
+    def extract_slide_page_number_from_text(page: fitz.Page) -> int:
+        """Extract a likely slide number from textual footer/header content.
+
+        This avoids a costly vision-model call for normal PDFs where the visible
+        slide number is already available in the extracted page text.
+        """
+        try:
+            words = page.get_text("words")
+        except Exception as e:
+            logger.debug("Failed to extract words for page %d: %s", page.number + 1, e)
+            return -1
+
+        if not words:
+            return -1
+
+        page_height = page.rect.height
+        top_cutoff = page_height * 0.12
+        bottom_cutoff = page_height * 0.88
+        candidates: list[tuple[int, float, int, int]] = []
+
+        for word in words:
+            y0 = word[1]
+            y1 = word[3]
+            text = word[4]
+            parsed = LectureUnitPageIngestionPipeline.parse_slide_page_number(str(text))
+            if parsed == -1:
+                continue
+
+            is_footer = y1 >= bottom_cutoff
+            is_header = y0 <= top_cutoff
+            if not is_footer and not is_header:
+                continue
+
+            edge_distance = page_height - y1 if is_footer else y0
+            candidates.append(
+                (
+                    0 if is_footer else 1,
+                    edge_distance,
+                    len(str(text)),
+                    parsed,
+                )
+            )
+
+        if not candidates:
+            return -1
+
+        candidates.sort()
+        return candidates[0][3]
+
+    @staticmethod
     def parse_slide_page_number(raw: str) -> int:
         """Parse LLM response into a slide page number (-1 fallback)."""
         text = (raw or "").strip().lower()
@@ -457,7 +525,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             return -1
         try:
             value = int(match.group(0))
-            return value if value > 0 else -1
+            if value <= 0:
+                return -1
+            return value
         except (TypeError, ValueError):
             return -1
 
