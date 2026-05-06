@@ -44,6 +44,115 @@ INDEX_START = 4
 INDEX_END = 5
 INDEX_SEQUENCE_NUMBER = 6
 
+# Hard caps on how many chunks are serialised into the citation prompt and
+# embedded as citable sources in the agent tool output.
+# The retrieval pipeline returns up to 7 reranked results per type, then appends
+# all chunks from matched lecture units (un-reranked). Without a cap the prompt
+# can exceed 8 000+ tokens — mostly low-value tail context.
+# Keeping the top chunks per type is safe: they are already sorted by rerank score.
+MAX_CITATION_PAGE_CHUNKS = 8
+MAX_CITATION_TRANSCRIPTIONS = 5
+
+
+def build_lecture_content_for_agent(
+    lecture_retrieval_dto: LectureRetrievalDTO,
+) -> str:
+    """
+    Format retrieved lecture chunks for the agent tool output, embedding citation
+    IDs so the agent can cite inline while generating its answer.
+
+    Applies the same caps and iteration order as
+    CitationPipeline.create_formatted_lecture_string so that sequence numbers are
+    guaranteed to match when enrich_existing later rebuilds the seq→content map.
+
+    Chunks beyond the cap are included without IDs so the agent retains full
+    context but cannot cite them directly.
+    """
+
+    def _p(v) -> str:
+        return "" if v is None else str(v)
+
+    def _build_id(unit_id, page, start, end, seq) -> str:
+        return f"[cite:L:{_p(unit_id)}:{_p(page)}:{_p(start)}:{_p(end)}!{seq}]"
+
+    seq = 0
+    result = "Lecture slide content:\n"
+    for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks[
+        :MAX_CITATION_PAGE_CHUNKS
+    ]:
+        if not paragraph.page_text_content:
+            continue
+        seq += 1
+        cid = _build_id(
+            paragraph.lecture_unit_id, paragraph.page_number, None, None, seq
+        )
+        result += (
+            f"{cid} Lecture: {paragraph.lecture_name}, "
+            f"Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n"
+            f"---{paragraph.page_text_content}---\n\n"
+        )
+    for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks[
+        MAX_CITATION_PAGE_CHUNKS:
+    ]:
+        if not paragraph.page_text_content:
+            continue
+        result += (
+            f"Lecture: {paragraph.lecture_name}, "
+            f"Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n"
+            f"---{paragraph.page_text_content}---\n\n"
+        )
+
+    result += "Lecture transcription content:\n"
+    for paragraph in lecture_retrieval_dto.lecture_transcriptions[
+        :MAX_CITATION_TRANSCRIPTIONS
+    ]:
+        if not paragraph.segment_text:
+            continue
+        seq += 1
+        start = (
+            int(paragraph.segment_start_time)
+            if paragraph.segment_start_time is not None
+            else None
+        )
+        end = (
+            int(paragraph.segment_end_time)
+            if paragraph.segment_end_time is not None
+            else None
+        )
+        cid = _build_id(
+            paragraph.lecture_unit_id, paragraph.page_number, start, end, seq
+        )
+        result += (
+            f"{cid} Lecture: {paragraph.lecture_name}, "
+            f"Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n"
+            f"---{paragraph.segment_text}---\n\n"
+        )
+    for paragraph in lecture_retrieval_dto.lecture_transcriptions[
+        MAX_CITATION_TRANSCRIPTIONS:
+    ]:
+        if not paragraph.segment_text:
+            continue
+        result += (
+            f"Lecture: {paragraph.lecture_name}, "
+            f"Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n"
+            f"---{paragraph.segment_text}---\n\n"
+        )
+
+    result += "Lecture segment content:\n"
+    for paragraph in lecture_retrieval_dto.lecture_unit_segments:
+        result += (
+            f"Lecture: {paragraph.lecture_name}, "
+            f"Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n"
+            f"---{paragraph.segment_summary}---\n\n"
+        )
+
+    return result
+
 
 class InformationType(str, Enum):
     PARAGRAPHS = "PARAGRAPHS"
@@ -175,7 +284,9 @@ class CitationPipeline(SubPipeline):
         citation_sequence_number = 0
         self._last_citation_content_by_seq = {}
         lecture_page_chunks = []
-        for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
+        for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks[
+            :MAX_CITATION_PAGE_CHUNKS
+        ]:
             if not paragraph.page_text_content:
                 continue
             citation_sequence_number += 1
@@ -196,7 +307,9 @@ class CitationPipeline(SubPipeline):
             )
 
         lecture_transcriptions = []
-        for paragraph in lecture_retrieval_dto.lecture_transcriptions:
+        for paragraph in lecture_retrieval_dto.lecture_transcriptions[
+            :MAX_CITATION_TRANSCRIPTIONS
+        ]:
             if not paragraph.segment_text:
                 continue
             start_time_sec = (
@@ -499,3 +612,54 @@ class CitationPipeline(SubPipeline):
         except Exception as e:
             logger.error("citation pipeline failed %s", e)
             raise e
+
+    @observe(name="Citation Pipeline")
+    def enrich_existing(
+        self,
+        information,
+        answer: str,
+        information_type: InformationType = InformationType.PARAGRAPHS,
+        user_language: str = "en",
+        **_kwargs,
+    ) -> str:
+        """
+        Skip the LLM citation-generation step and go straight to keyword/summary
+        enrichment. Used when the agent has already inserted citation markers inline
+        during its final answer generation, saving the ~11s generation LLM call.
+
+        Rebuilds the seq→content map from the same information DTO (same caps and
+        ordering as create_formatted_lecture_string), then replaces sequence numbers
+        with keyword:summary fields.
+
+        Falls back gracefully: if no citation markers are found, or enrichment fails,
+        the original answer is returned unchanged.
+        """
+        if information_type == InformationType.FAQS:
+            self.create_formatted_faq_string(information)
+        else:
+            self.create_formatted_lecture_string(information)
+
+        self.used_citation_numbers = self.extract_used_citation_numbers(answer)
+        if not self.used_citation_numbers:
+            return answer
+
+        if user_language == "de":
+            language_instruction = "Format all citations and references in German.\n\n"
+        else:
+            language_instruction = "Format all citations and references in English.\n\n"
+
+        try:
+            summaries = self._build_keyword_summary_map(
+                language_instruction=language_instruction,
+                used_numbers=self.used_citation_numbers,
+            )
+            enriched = self._replace_cite_blocks_with_keyword_summary(answer, summaries)
+            if hasattr(self, "tokens") and self.tokens:
+                pass  # tokens are accumulated inside _build_keyword_summary_map
+            return enriched
+        except Exception as enrichment_error:
+            logger.error(
+                "Citation enrichment failed, returning citations without keyword/summary",
+                exc_info=enrichment_error,
+            )
+            return answer
