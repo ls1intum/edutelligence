@@ -296,54 +296,34 @@ def feedback_provider(func: Union[
     Provide feedback to the Assessment Module Manager.
     The feedback provider is usually called whenever the tutor requests feedback for a submission in the LMS.
 
-    This decorator can be used with several types of functions: synchronous or asynchronous, with or without a module config.
+    This decorator can be used with synchronous or asynchronous functions.
+    The decorated function must accept `exercise` and `submission`.
+    It may additionally accept any of these injected parameters:
+    - `module_config`: typed module configuration from the `X-Module-Config` header, or the default config
+    - `is_graded`: whether the request is for graded feedback
+    - `learner_profile`: optional learner profile from the request body
+    - `latest_submission`: optional latest submission from the request body
+    - `competencies`: optional competencies from the request body
+    - `selection`: optional resolved `AiSelectionDecision`
 
     Examples:
-        Below are some examples of possible functions that you can decorate with this decorator:
-
-        Without using module config (both synchronous and asynchronous forms):
         >>> @feedback_provider
         ... def sync_suggest_feedback(exercise: Exercise, submission: Submission):
         ...     # suggest feedback here and return it as a list
 
         >>> @feedback_provider
-        ... async def async_suggest_feedback(exercise: Exercise, submission: Submission):
-        ...     # suggest feedback here and return it as a list
-
-        With using module config (both synchronous and asynchronous forms):
-        >>> @feedback_provider
-        ... def sync_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict]):
-        ...     # suggest feedback here using module_config and return it as a list
-
-        >>> @feedback_provider
-        ... async def async_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict]):
-        ...     # suggest feedback here using module_config and return it as a list
-
-        With learner profile (both synchronous and asynchronous forms):
-        >>> @feedback_provider
-        ... def sync_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
-
-        >>> @feedback_provider
-        ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
-
-        With previous submission (both synchronous and asynchronous forms):
-        >>> @feedback_provider
-        ... def sync_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
-
-        >>> @feedback_provider
-        ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
-
-        With competencies (both synchronous and asynchronous forms):
-        >>> @feedback_provider
-        ... def sync_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission], competencies: Optional[List[Competency]]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
-        >>> @feedback_provider
-        ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission], competencies: Optional[List[Competency]]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
+        ... async def async_suggest_feedback(
+        ...     exercise: Exercise,
+        ...     submission: Submission,
+        ...     module_config: MyConfig,
+        ...     *,
+        ...     is_graded: bool,
+        ...     learner_profile: Optional[LearnerProfile] = None,
+        ...     latest_submission: Optional[Submission] = None,
+        ...     competencies: Optional[List[Competency]] = None,
+        ...     selection: Optional[AiSelectionDecision] = None,
+        ... ):
+        ...     # suggest feedback here using the injected request context
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
