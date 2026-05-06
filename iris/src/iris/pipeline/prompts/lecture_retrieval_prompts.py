@@ -91,7 +91,7 @@ The chat history between the AI tutor and the student is provided to you in the 
 Please provide a response in {course_language}.
 You should create a response that looks like a lecture slide.
 Craft your response to closely reflect the style and content of typical university lecture materials.
-Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
+Do not exceed 75 words. Focus on keywords and phrases that are most relevant to the student intent.
 """
 
 write_hypothetical_lecture_transcriptions_answer_prompt = """
@@ -100,7 +100,7 @@ The chat history between the AI tutor and the student is provided to you in the 
 Please provide a response in {course_language}.
 You should create a response that looks like spoken content from a lecture video transcription.
 Answer just with the spoken text.
-Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
+Do not exceed 75 words. Focus on keywords and phrases that are most relevant to the student intent.
 """
 
 
@@ -114,7 +114,7 @@ The chat history between the AI tutor and the student is provided to you in the 
 Please provide a response in {course_language}.
 You should create a response that looks like a lecture slide.
 Craft your response to closely reflect the style and content of typical university lecture materials.
-Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
+Do not exceed 75 words. Focus on keywords and phrases that are most relevant to the student intent.
 """
 
 write_hypothetical_lecture_transcriptions_answer_with_exercise_context_prompt = """
@@ -127,5 +127,5 @@ The chat history between the AI tutor and the student is provided to you in the 
 Please provide a response in {course_language}.
 You should create a response that look like spoken content from a lecture video transcription.
 Answer just with the spoken text.
-Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
+Do not exceed 75 words. Focus on keywords and phrases that are most relevant to the student intent.
 """

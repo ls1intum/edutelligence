@@ -97,6 +97,16 @@ class LectureRetrieval(SubPipeline):
         self.llm_embedding = LlmRequestHandler(embedding_model)
         self.pipeline = self.llm | StrOutputParser()
 
+        # Separate LLM for HyDE (Hypothetical Document Embeddings) with a hard
+        # token cap so the model cannot generate more than ~75 words regardless
+        # of what the prompt says. Keeps retrieval fast without sacrificing the
+        # keyword diversity that HyDE provides.
+        hyde_completion_args = CompletionArguments(temperature=0, max_tokens=150)
+        self.hyde_llm = IrisLangchainChatModel(
+            request_handler=request_handler, completion_args=hyde_completion_args
+        )
+        self.hyde_pipeline = self.hyde_llm | StrOutputParser()
+
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
             client
@@ -589,10 +599,10 @@ class LectureRetrieval(SubPipeline):
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
+            response = (prompt | self.hyde_pipeline).invoke({})
+            token_usage = self.hyde_llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
+            self.tokens.append(self.hyde_llm.tokens)
             logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
@@ -644,10 +654,10 @@ class LectureRetrieval(SubPipeline):
             ]
         )
         try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
+            response = (prompt | self.hyde_pipeline).invoke({})
+            token_usage = self.hyde_llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
+            self.tokens.append(self.hyde_llm.tokens)
             logger.debug("Query rewrite completed | response_length=%d", len(response))
             return response
         except Exception as e:
