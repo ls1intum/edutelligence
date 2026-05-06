@@ -377,8 +377,7 @@ _run_cycle()
   │      ├── _update_idle_tracking()           — track idle/sleep durations
   │      ├── _compute_idle_actions()           — sleep idle lanes (L1/L2)
   │      ├── _compute_demand_actions()         — wake/load for demand
-  │      ├── _compute_demand_drain_actions()   — drain busy lanes for starving models
-  │      └── _compute_preemptive_sleep_actions() — pre-warm stopped models
+  │      └── _compute_demand_drain_actions()   — drain busy lanes for starving models
   ├── 4. _validate_vram_budget()   — filter actions against VRAM capacity
   ├── 5. Execute validated actions — with per-lane locks
   └── 6. Update Prometheus metrics
@@ -416,16 +415,6 @@ For each model by score descending:
 ### 7.3 Demand Drain Actions (`_compute_demand_drain_actions`)
 
 Targets models with demand score ≥ `DRAIN_COMPETITIVE_RATIO (3.0)` that have no usable (loaded/running, non-sleeping) lane. For each such model, checks all busy lanes via `_should_initiate_drain()` and emits a sleep (preferred) or stop action.
-
-### 7.4 Preemptive Sleep Actions (`_compute_preemptive_sleep_actions`)
-
-Proactively reloads stopped models into sleeping state for fast wake. Only fires when:
-- Model has demand > 0
-- No active lane exists
-- ≥20% total VRAM remains free after the sleeping residual
-- Model has a known `sleeping_residual_mb`
-
-Pre-sleeps idle awake neighbors first to free VRAM for the cold load.
 
 ---
 
@@ -1188,8 +1177,6 @@ This is a telemetry improvement rather than a correctness fix — the current fl
 | `BUSY_DRAIN_POLL_SECONDS` | 5.0 | Poll interval for busy lane drain |
 | `SWITCH_WINDOW_SECONDS` | 300.0 | Window for thrash detection |
 | `SWITCH_THRASH_THRESHOLD` | 6 | Switches before thrash flag |
-| `PREEMPTIVE_SLEEP_MIN_FREE_VRAM_RATIO` | 0.20 | Min free VRAM for pre-warming |
-| `PREEMPTIVE_SLEEP_MAX_MODELS` | 3 | Max models to pre-warm per cycle |
 | `DECAY_FACTOR` (DemandTracker) | 0.95 | Exponential decay per 30s cycle |
 | `BURST_WINDOW_SECONDS` | 10.0 | Burst detection window |
 | `BURST_THRESHOLD` | 5 | Requests in window to trigger burst |
