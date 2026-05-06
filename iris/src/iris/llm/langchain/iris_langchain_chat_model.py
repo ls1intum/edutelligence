@@ -1,13 +1,15 @@
+import queue
+import threading
 from logging import Logger
-from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Type, Union
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import (
     BaseChatModel,
 )
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatResult
-from langchain_core.outputs.chat_generation import ChatGeneration
+from langchain_core.outputs.chat_generation import ChatGeneration, ChatGenerationChunk
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -96,6 +98,85 @@ class IrisLangchainChatModel(BaseChatModel):
             pipeline=PipelineEnum.NOT_SET,
         )
         return ChatResult(generations=[chat_generation])
+
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager=None,
+        **_kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        """Stream tokens from the underlying model using a thread + queue bridge.
+
+        The blocking HTTP call runs in a background thread. Tokens arrive via
+        the on_token callback and are placed into a queue; this generator pulls
+        from the queue and yields LangChain ChatGenerationChunks, which causes
+        LangChain to fire on_llm_new_token callbacks on each chunk.
+
+        For tool-call responses the model emits no content tokens, so no chunks
+        would be yielded from the queue loop. LangChain requires at least one
+        chunk from _stream(), so we yield the full response as a single synthetic
+        chunk in that case.
+        """
+        iris_messages = [convert_langchain_message_to_iris_message(m) for m in messages]
+        self.completion_args.stop = stop
+
+        token_queue: queue.Queue[Optional[str]] = queue.Queue()
+        error_holder: list[Exception] = []
+        result_holder: list = []  # stores the final PyrisMessage for tool-call fallback
+
+        def _run_chat() -> None:
+            try:
+                iris_message = self.request_handler.chat(
+                    iris_messages,
+                    self.completion_args,
+                    self.tools,
+                    on_token=token_queue.put,
+                )
+                result_holder.append(iris_message)
+                self.tokens = TokenUsageDTO(
+                    model=iris_message.token_usage.model_info,
+                    numInputTokens=iris_message.token_usage.num_input_tokens,
+                    costPerMillionInputToken=iris_message.token_usage.cost_per_million_input_token,
+                    numOutputTokens=iris_message.token_usage.num_output_tokens,
+                    costPerMillionOutputToken=iris_message.token_usage.cost_per_million_output_token,
+                    pipeline=PipelineEnum.NOT_SET,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                error_holder.append(exc)
+            finally:
+                token_queue.put(None)  # sentinel: signal completion
+
+        thread = threading.Thread(target=_run_chat, daemon=True)
+        thread.start()
+
+        chunks_yielded = 0
+        while True:
+            token = token_queue.get()
+            if token is None:
+                break
+            chunk = ChatGenerationChunk(message=AIMessageChunk(content=token))
+            if run_manager:
+                run_manager.on_llm_new_token(token, chunk=chunk)
+            yield chunk
+            chunks_yielded += 1
+
+        thread.join()
+
+        if error_holder:
+            raise error_holder[0]
+
+        # Tool-call responses produce no content tokens, so the loop above yields
+        # nothing. LangChain's stream() raises ValueError if _stream() is empty,
+        # so we emit one chunk carrying the full tool-call structure.
+        if chunks_yielded == 0 and result_holder:
+            base_message = convert_iris_message_to_langchain_message(result_holder[0])
+            chunk_msg = AIMessageChunk(
+                content=base_message.content or "",
+                additional_kwargs=base_message.additional_kwargs,
+                tool_calls=getattr(base_message, "tool_calls", []),
+            )
+            yield ChatGenerationChunk(message=chunk_msg)
 
     @property
     def _llm_type(self) -> str:

@@ -97,6 +97,8 @@ def convert_langchain_message_to_iris_message(
     type_to_role = {
         "human": IrisMessageRole.USER,
         "ai": IrisMessageRole.ASSISTANT,
+        # AIMessageChunk is produced when streaming=True; treat it as an assistant message.
+        "AIMessageChunk": IrisMessageRole.ASSISTANT,
         "system": IrisMessageRole.SYSTEM,
         "tool": IrisMessageRole.TOOL,
     }

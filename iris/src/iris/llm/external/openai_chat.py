@@ -228,6 +228,7 @@ class OpenAIChatModel(ChatModel):
         tools: Optional[
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> PyrisMessage:
         # noinspection PyTypeChecker
         retries = 5
@@ -268,6 +269,9 @@ class OpenAIChatModel(ChatModel):
                             convert_to_openai_tool(tool) for tool in tools
                         ]
                         logger.debug("Using tools: %s", [t.name for t in tools])
+
+                    if on_token is not None:
+                        return self._chat_streaming(client, params, on_token)
 
                     response = client.chat.completions.create(**params)
                     choice = response.choices[0]
@@ -314,6 +318,81 @@ class OpenAIChatModel(ChatModel):
                     close()
                 except Exception:
                     logger.debug("Failed to close OpenAI client", exc_info=True)
+
+    def _chat_streaming(
+        self,
+        client,
+        params: dict,
+        on_token: Callable[[str], None],
+    ) -> PyrisMessage:
+        """Streaming path: yields tokens via on_token and returns the full PyrisMessage."""
+        params = {**params, "stream": True, "stream_options": {"include_usage": True}}
+
+        stream = client.chat.completions.create(**params)
+
+        full_content = ""
+        # tool_calls_acc: index → {id, name, arguments}
+        tool_calls_acc: dict[int, dict] = {}
+        usage = None
+        finish_reason = None
+
+        for chunk in stream:
+            if chunk.usage:
+                usage = chunk.usage
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            delta = choice.delta
+
+            if delta.content:
+                full_content += delta.content
+                on_token(delta.content)
+
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                    if tc_delta.id:
+                        tool_calls_acc[idx]["id"] = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            tool_calls_acc[idx]["name"] += tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tool_calls_acc[idx][
+                                "arguments"
+                            ] += tc_delta.function.arguments
+
+        if finish_reason == "content_filter":
+            raise ContentFilterFinishReasonError()
+
+        token_usage = create_token_usage(usage, self.model)
+        current_time = datetime.now()
+
+        if tool_calls_acc:
+            iris_tool_calls = [
+                ToolCallDTO(
+                    id=tc["id"],
+                    type="function",
+                    function={"name": tc["name"], "arguments": tc["arguments"]},
+                )
+                for tc in tool_calls_acc.values()
+            ]
+            return PyrisAIMessage(
+                tool_calls=iris_tool_calls,
+                contents=[TextMessageContentDTO(textContent="")],
+                sendAt=current_time,
+                token_usage=token_usage,
+            )
+
+        return PyrisMessage(
+            sender=map_str_to_role("assistant"),
+            contents=[TextMessageContentDTO(textContent=full_content)],
+            sendAt=current_time,
+            token_usage=token_usage,
+        )
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):

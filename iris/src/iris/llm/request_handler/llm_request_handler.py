@@ -47,9 +47,10 @@ class LlmRequestHandler(RequestHandler):
         tools: Optional[
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
+        **kwargs: Any,
     ) -> PyrisMessage:
         llm = self._select_model(ChatModel)
-        message = llm.chat(messages, arguments, tools)
+        message = llm.chat(messages, arguments, tools, **kwargs)
         message.token_usage.model_info = llm.model
         message.token_usage.cost_per_million_input_token = (
             llm.cost_per_million_input_token
