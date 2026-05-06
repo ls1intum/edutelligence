@@ -17,6 +17,7 @@ from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.shared.streaming_callback import StreamingStatusCallback
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.tracing import (
     TracingContext,
@@ -258,8 +259,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             prompt=state.prompt,
             tool_functions=state.tools,
         )
+        streaming_cb = StreamingStatusCallback(state.callback)
         output = self._run_agent_iterations(
-            state=state, agent_executor=agent_executor, params=params
+            state=state,
+            agent_executor=agent_executor,
+            params=params,
+            streaming_callback=streaming_cb,
         )
         return output or ""
 
@@ -347,6 +352,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state: AgentPipelineExecutionState[DTO, VARIANT],
         agent_executor: AgentExecutor,
         params: dict[str, Any],
+        streaming_callback: Optional[StreamingStatusCallback] = None,
     ) -> Optional[str]:
         """
         Execute the agent in streaming iteration mode and return the last output string.
@@ -357,6 +363,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # Get LangFuse callbacks (None if disabled)
         config = get_langchain_config(state.tracing_context)
         callbacks = config.get("callbacks") if config else None
+
+        if streaming_callback is not None:
+            callbacks = [streaming_callback, *(callbacks or [])]
 
         final_output: Optional[str] = None
         step_count = 0
@@ -581,6 +590,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             state.llm = IrisLangchainChatModel(
                 request_handler=LlmRequestHandler(model_id=selected_version),
                 completion_args=completion_args,
+                streaming=True,
             )
 
             self.prepare_state(state)
