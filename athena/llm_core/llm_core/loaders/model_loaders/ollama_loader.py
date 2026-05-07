@@ -17,7 +17,7 @@ _headers = (
 
 def _discover_ollama_models() -> List[str]:
     try:
-        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", headers=_headers, timeout=15)
+        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", headers=_headers, timeout=5)
         resp.raise_for_status()
         data = resp.json()
         return [m["name"] for m in data.get("models", [])]
