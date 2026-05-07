@@ -143,9 +143,10 @@ jobs:
       DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER }}
       DEPLOYMENT_HOST: ${{ vars.DEPLOYMENT_HOST }}
       DEPLOYMENT_FOLDER: ${{ vars.DEPLOYMENT_FOLDER }}
-      GATEWAY_USER: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
-      GATEWAY_HOST: ${{ format('{0}:{1}', vars.DEPLOYMENT_GATEWAY_HOST, vars.DEPLOYMENT_GATEWAY_PORT) }}
-      GATEWAY_HOST_PUBLIC_KEY: ${{ vars.DEPLOYMENT_GATEWAY_PUBLIC_KEY }}
+      DEPLOYMENT_GATEWAY_USER: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+      DEPLOYMENT_GATEWAY_HOST: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+      DEPLOYMENT_GATEWAY_PORT: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+      DEPLOYMENT_GATEWAY_PUBLIC_KEY: ${{ vars.DEPLOYMENT_GATEWAY_PUBLIC_KEY }}
 
     steps:
       - uses: actions-ecosystem/action-remove-labels@v1
@@ -222,14 +223,14 @@ jobs:
           ssh-agent -a $SSH_AUTH_SOCK > /dev/null
           ssh-add - <<< $GATEWAY_SSH_KEY
           ssh-add - <<< $DEPLOYMENT_SSH_KEY
-          cat - <<< $GATEWAY_HOST_PUBLIC_KEY >> ~/.ssh/known_hosts
+          cat - <<< $DEPLOYMENT_GATEWAY_PUBLIC_KEY >> ~/.ssh/known_hosts
 
       - name: Deploy Athena with Docker
         env:
           SSH_AUTH_SOCK: /tmp/ssh_agent.sock
           TAG: ${{ steps.compute-tag.outputs.result }}
         run: |
-          ./athena-server-cli docker-deploy "$DEPLOYMENT_USER@$DEPLOYMENT_HOST" -g "$GATEWAY_USER@$GATEWAY_HOST" -t $TAG -b $GITHUB_HEAD_REF -d $DEPLOYMENT_FOLDER -y
+          ./athena-server-cli docker-deploy "$DEPLOYMENT_USER@$DEPLOYMENT_HOST" -g "$DEPLOYMENT_GATEWAY_USER@$DEPLOYMENT_GATEWAY_HOST:$DEPLOYMENT_GATEWAY_PORT" -t $TAG -b $GITHUB_HEAD_REF -d $DEPLOYMENT_FOLDER -y
 
       - name: Add "lock:${{ matrix.label-identifier }}" label
         uses: actions/github-script@v7
