@@ -1471,16 +1471,22 @@ class CapacityPlanner:
                 if in_cooldown:
                     continue
                 action = "stop"
+                # Stopping a sleeping vLLM lane frees only the small residual
+                # that CuMemAllocator + sleep_l1 leaves on the GPU — typically
+                # ~750 MB per GPU for a 7-14B AWQ model.  Earlier versions of
+                # this function floored freed_total at base_residency_mb (full
+                # awake VRAM) on the assumption that PyTorch's caching pool
+                # retained model weights invisible to --query-compute-apps.
+                # Verified empirically on vLLM 0.20.0: --query-compute-apps and
+                # --query-gpu=memory.used agree within ~30 MB per GPU after
+                # sleep_l1, so the per-process measurement is trustworthy and
+                # the floor was a 10× over-estimate that made `stop` look
+                # attractive for tiny deficits.  Trust effective_vram_mb (or
+                # the calibrated sleeping_residual_mb when no measurement is
+                # available yet).
                 residual_mb = float(lane.effective_vram_mb or 0.0)
                 if residual_mb <= 0 and profile:
                     residual_mb = float(profile.sleeping_residual_mb or 0.0)
-                # Sleeping vLLM lanes underreport GPU usage via --query-compute-apps:
-                # the CUDA allocator keeps model weights in its pool, invisible to
-                # per-process queries.  Use profile base_residency as a floor.
-                if lane.is_vllm and profile is not None:
-                    base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
-                    if base_residency > residual_mb:
-                        residual_mb = base_residency
                 freed_total = residual_mb
             else:
                 continue  # busy, cold, stopped, or starting — not evictable
