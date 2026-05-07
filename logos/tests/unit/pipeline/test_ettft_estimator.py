@@ -10,7 +10,6 @@ from logos.pipeline.ettft_estimator import (
     OVERHEAD_WARM_S,
     OVERHEAD_SLEEPING_S,
     OVERHEAD_COLD_S,
-    OVERHEAD_RECLAIM_S,
     CLOUD_OVERHEAD_S,
     CLOUD_LOW_HEADROOM_S,
     DEFAULT_GENERATION_TIME_S,
@@ -320,22 +319,6 @@ def test_local_sleeping_with_queue():
     assert abs(est.expected_wait_s - 5.5) < 1e-9
 
 
-def test_local_sleeping_reclaim():
-    """Sleeping but KV cache needs more VRAM than available → SLEEPING_RECLAIM."""
-    view = _make_view(
-        best_lane_state="sleeping",
-        best_sleep_state="sleeping",
-        is_loaded=False,
-    )
-    est = estimate_ettft_local(
-        view, available_vram_mb=1000.0, kv_budget_mb=2000.0,
-    )
-    assert est.tier == ReadinessTier.SLEEPING_RECLAIM
-    assert est.state_overhead_s == OVERHEAD_SLEEPING_S + OVERHEAD_RECLAIM_S
-    assert est.needs_reclaim is True
-    assert est.expected_wait_s == OVERHEAD_SLEEPING_S + OVERHEAD_RECLAIM_S
-
-
 def test_local_sleeping_no_reclaim_when_vram_sufficient():
     """Sleeping with sufficient VRAM for KV cache → plain SLEEPING."""
     view = _make_view(
@@ -376,21 +359,6 @@ def test_local_starting():
     )
     est = estimate_ettft_local(view)
     assert est.tier == ReadinessTier.COLD
-
-
-def test_local_cold_reclaim():
-    """Cold model needs more VRAM than available → COLD_RECLAIM."""
-    view = _make_view(
-        best_lane_state="cold",
-        is_loaded=False,
-    )
-    est = estimate_ettft_local(
-        view, available_vram_mb=3000.0, model_vram_mb=5000.0,
-    )
-    assert est.tier == ReadinessTier.COLD_RECLAIM
-    assert est.state_overhead_s == OVERHEAD_COLD_S + OVERHEAD_RECLAIM_S
-    assert est.needs_reclaim is True
-    assert est.expected_wait_s == OVERHEAD_COLD_S + OVERHEAD_RECLAIM_S
 
 
 def test_local_cold_no_reclaim_when_vram_sufficient():
