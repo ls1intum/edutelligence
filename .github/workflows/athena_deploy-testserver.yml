@@ -225,12 +225,20 @@ jobs:
           ssh-add - <<< $DEPLOYMENT_SSH_KEY
           cat - <<< $DEPLOYMENT_GATEWAY_PUBLIC_KEY >> ~/.ssh/known_hosts
 
-      - name: Deploy Athena with Docker
+
+      - name: Debug 
         env:
           SSH_AUTH_SOCK: /tmp/ssh_agent.sock
           TAG: ${{ steps.compute-tag.outputs.result }}
         run: |
-          ./athena-server-cli docker-deploy "$DEPLOYMENT_USER@$DEPLOYMENT_HOST" -g "$DEPLOYMENT_GATEWAY_USER@$DEPLOYMENT_GATEWAY_HOST:$DEPLOYMENT_GATEWAY_PORT" -t $TAG -b $GITHUB_HEAD_REF -d $DEPLOYMENT_FOLDER -y
+          ssh -vvv -J "$DEPLOYMENT_GATEWAY_USER@$DEPLOYMENT_GATEWAY_HOST:$DEPLOYMENT_GATEWAY_PORT" "$DEPLOYMENT_USER@$DEPLOYMENT_HOST" 'echo ok'
+
+      # - name: Deploy Athena with Docker
+      #   env:
+      #     SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+      #     TAG: ${{ steps.compute-tag.outputs.result }}
+      #   run: |
+      #     ./athena-server-cli docker-deploy "$DEPLOYMENT_USER@$DEPLOYMENT_HOST" -g "$DEPLOYMENT_GATEWAY_USER@$DEPLOYMENT_GATEWAY_HOST:$DEPLOYMENT_GATEWAY_PORT" -t $TAG -b $GITHUB_HEAD_REF -d $DEPLOYMENT_FOLDER -y
 
       - name: Add "lock:${{ matrix.label-identifier }}" label
         uses: actions/github-script@v7
