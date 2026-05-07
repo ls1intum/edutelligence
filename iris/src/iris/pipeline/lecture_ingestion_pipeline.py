@@ -192,10 +192,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.course_language = self.get_course_language(
                     doc.load_page(min(5, doc.page_count - 1)).get_text()
                 )
-                # Extract page numbers even when skipping full ingestion
-                self.dto.lecture_unit.slide_page_number_map = (
-                    self.extract_all_slide_page_numbers(doc)
-                )
                 cleanup_temporary_file(pdf_path)
                 self.callback.in_progress("skipping slide removal")
                 self.callback.done()
@@ -377,88 +373,15 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return data
 
     def extract_slide_page_number(self, page: fitz.Page) -> int:
-        """Read the visible page/slide number from a PDF page image.
+        """Read the visible page/slide number from a PDF page.
 
         Returns:
             int: Detected number, or -1 if no number is visible.
         """
         text_candidate = self.extract_slide_page_number_from_text(page)
-        if text_candidate != -1:
-            logger.info(
-                "Page %d: slide page number source=text detected=%d",
-                page.number + 1,
-                text_candidate,
-            )
-            return text_candidate
-
-        logger.info(
-            "Page %d: slide page number source=vision starting fallback after no PDF-text candidate",
-            page.number + 1,
-        )
-
-        matrix = fitz.Matrix(3, 3)
-        pix = page.get_pixmap(matrix=matrix)
-        img_bytes = pix.tobytes("jpg")
-        img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-
-        prompt = TextMessageContentDTO(
-            text_content=(
-                "Read the slide/page number shown on this presentation slide image. "
-                "Respond with only one integer. "
-                "If no visible slide/page number exists, respond with -1."
-            )
-        )
-        image = ImageMessageContentDTO(base64=img_base64)
-        iris_message = PyrisMessage(
-            sender=IrisMessageRole.USER,
-            contents=[prompt, image],
-        )
-        try:
-            response = self.llm_chat.chat(
-                [iris_message],
-                CompletionArguments(temperature=0),
-                tools=[],
-            )
-            self._append_tokens(
-                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
-            )
-            raw = response.contents[0].text_content if response.contents else ""
-            parsed = self.parse_slide_page_number(raw)
-            logger.info(
-                "Page %d: slide page number source=vision raw_response='%s' parsed=%d",
-                page.number + 1,
-                raw,
-                parsed,
-            )
-            return parsed
-        except Exception as e:
-            logger.warning(
-                "Page %d: slide page number source=vision failed: %s",
-                page.number + 1,
-                e,
-            )
-            return -1
-
-    def extract_all_slide_page_numbers(self, doc: fitz.Document) -> dict[int, int]:
-        """Extract page numbers from all pages in a PDF document.
-
-        Args:
-            doc: The opened PDF document.
-
-        Returns:
-            dict[int, int]: Map from PDF page index (1-based) to detected slide number.
-                            Returns -1 for pages where no number was found.
-        """
-        slide_page_number_map: dict[int, int] = {}
-        for page_num in range(doc.page_count):
-            page = doc.load_page(page_num)
-            slide_page_number_map[page_num + 1] = self.extract_slide_page_number(page)
-        logger.info(
-            "Extracted slide page numbers for %d pages: %s",
-            doc.page_count,
-            slide_page_number_map,
-        )
-        return slide_page_number_map
+        if text_candidate == -1:
+            logger.info("Page %d: slide page number not found", page.number + 1)
+        return text_candidate
 
     @staticmethod
     def extract_slide_page_number_from_text(page: fitz.Page) -> int:

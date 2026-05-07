@@ -383,18 +383,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
-            logger.info(
-                "[Lecture %d] After PDF ingestion, slide_page_number_map: %s",
-                self.dto.lecture_unit.lecture_unit_id,
-                self.dto.lecture_unit.slide_page_number_map,
-            )
         else:
-            # No PDF to process, initialize empty map
-            self.dto.lecture_unit.slide_page_number_map = {}
-            logger.info(
-                "[Lecture %d] No PDF present, initialized empty slide_page_number_map",
-                self.dto.lecture_unit.lecture_unit_id,
-            )
             callback.in_progress("skipping slide removal")
             callback.done()
             callback.in_progress("skipping slide interpretation")
@@ -448,18 +437,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 slide_map.items(), key=lambda item: item[0]
             )
         }
-        logger.info(
-            "[Lecture %d] Slide page number map before sending to Artemis: %s (type: %s)",
-            self.dto.lecture_unit.lecture_unit_id,
-            slide_map,
-            type(slide_map).__name__,
-        )
         ingestion_result = json.dumps({"slidePageNumberMap": normalized_slide_map})
-        logger.info(
-            "[Lecture %d] Sending ingestion result to Artemis: %s",
-            self.dto.lecture_unit.lecture_unit_id,
-            ingestion_result,
-        )
         callback.done(
             "Ingested lecture unit summary into vector database",
             final_result=ingestion_result,
