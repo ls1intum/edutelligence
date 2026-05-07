@@ -143,9 +143,9 @@ jobs:
       DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER }}
       DEPLOYMENT_HOST: ${{ vars.DEPLOYMENT_HOST }}
       DEPLOYMENT_FOLDER: ${{ vars.DEPLOYMENT_FOLDER }}
-      GATEWAY_USER: "jump"
-      GATEWAY_HOST: "gateway.artemis.in.tum.de:2010"
-      GATEWAY_HOST_PUBLIC_KEY: "[gateway.artemis.in.tum.de]:2010 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtTLiKRILjKZ+Qg4ReWKsG7mLDXkzHfeY5nalSQUNQ4"
+      GATEWAY_USER: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+      GATEWAY_HOST: ${{ format('{0}:{1}', vars.DEPLOYMENT_GATEWAY_HOST, vars.DEPLOYMENT_GATEWAY_PORT) }}
+      GATEWAY_HOST_PUBLIC_KEY: ${{ vars.DEPLOYMENT_GATEWAY_PUBLIC_KEY }}
 
     steps:
       - uses: actions-ecosystem/action-remove-labels@v1
