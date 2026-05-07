@@ -162,8 +162,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             The tenant identifier string.
         """
-        if not dto.user:
-            raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
 
     def on_agent_step(
@@ -192,15 +190,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         lecture_id = (
             state.dto.lecture.id if state.dto.lecture and state.dto.lecture.id else None
         )
-        course_id = state.dto.course.id if state.dto.course else None
-        if course_id is None:
-            return
+
         mcq_pre_agent_hook(
             state=state,
             mcq_pipeline=self.mcq_pipeline,
             get_text_of_latest_user_message=self.get_text_of_latest_user_message,
             db=state.db,
-            course_id=course_id,
+            course_id=state.dto.course.id,
             chat_history=state.dto.chat_history,
             lecture_id=lecture_id,
         )
@@ -279,7 +275,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Also detects MCQ intent for COURSE and LECTURE modes.
         """
         dto = state.dto
-        course_id = dto.course.id if dto.course else None
+        course_id = dto.course.id
         state.allow_lecture_tool = should_allow_lecture_tool(state.db, course_id)
         state.allow_faq_tool = should_allow_faq_tool(state.db, course_id)
         state.allow_memiris_tool = bool(
@@ -366,8 +362,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "allow_memiris_tool": state.allow_memiris_tool,
             "metrics_enabled": metrics_enabled,
             "has_chat_history": bool(state.message_history),
-            "has_competencies": bool(dto.course and dto.course.competencies),
-            "has_exercises": bool(dto.course and dto.course.exercises),
+            "has_competencies": bool(dto.course.competencies),
+            "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "exercise_title": exercise.title if exercise else "",
@@ -405,7 +401,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             True if memory creation should be enabled, False otherwise.
         """
         if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
-            return bool(state.dto.user and state.dto.user.memiris_enabled)
+            return bool(state.dto.user.memiris_enabled)
         else:
             return False
 

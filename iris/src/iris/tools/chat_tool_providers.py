@@ -47,14 +47,10 @@ def provide_course_details(state: State) -> Optional[Callable]:
 
 
 def provide_exercise_list(state: State) -> Optional[Callable]:
-    if not state.dto.course:
-        return None
     return create_tool_get_exercise_list(state.dto.course.exercises, state.callback)
 
 
 def provide_exercise_problem_statement(state: State) -> Optional[Callable]:
-    if not state.dto.course:
-        return None
     return create_tool_get_exercise_problem_statement(
         state.dto.course.exercises, state.callback
     )
@@ -65,8 +61,6 @@ def provide_student_exercise_metrics(state: State) -> Optional[Callable]:
 
 
 def provide_competency_list(state: State) -> Optional[Callable]:
-    if not state.dto.course:
-        return None
     return create_tool_get_competency_list(
         state.dto.course.competencies, state.dto.metrics, state.callback
     )
@@ -124,8 +118,6 @@ def provide_file_lookup(state: State) -> Callable[[str], str] | None:
 
 
 def provide_lecture_retrieval(state: State) -> Optional[Callable]:
-    if not state.dto.course:
-        return None
     if not state.allow_lecture_tool:
         return None
     course_id = state.dto.course.id
@@ -148,7 +140,7 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
 
 
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
-    if not (state.dto.course and state.dto.course.name):
+    if not state.dto.course.name:
         return None
     if not state.allow_faq_tool:
         return None
