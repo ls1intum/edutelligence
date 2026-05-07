@@ -1,4 +1,4 @@
-from typing import List, TypeVar
+from typing import List, Optional, Type, TypeVar
 from pydantic import BaseModel
 import tiktoken
 from langchain.prompts import (
@@ -7,6 +7,7 @@ from langchain.prompts import (
     HumanMessagePromptTemplate,
 )
 from athena import emit_meta
+from llm_core.models.model_config import ModelConfig
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -92,3 +93,28 @@ def remove_system_message(chat_prompt: ChatPromptTemplate) -> ChatPromptTemplate
         else:
             new_prompt_templates.append(prompt_msg)
     return ChatPromptTemplate.from_messages(new_prompt_templates)
+
+
+def describe_model_config(model: ModelConfig) -> str:
+    """Return a short provider/model identifier for debug logging."""
+    provider = str(getattr(model, "provider", "unknown"))
+    model_name = getattr(model, "model_name", "unknown")
+    if hasattr(model_name, "value"):
+        model_name = model_name.value
+    return f"{provider}:{model_name}"
+
+
+def describe_llm_request_context(
+    *,
+    tags: Optional[List[str]] = None,
+    pydantic_object: Optional[Type[BaseModel]] = None,
+) -> str:
+    """Return a concise debug label for an LLM request."""
+    context_label = pydantic_object.__name__ if pydantic_object is not None else "unknown"
+    useful_tags = [
+        tag for tag in (tags or [])
+        if not tag.startswith(("experiment-", "module-configuration-", "run-"))
+    ]
+    if useful_tags:
+        return f"{context_label} [{', '.join(useful_tags)}]"
+    return context_label
