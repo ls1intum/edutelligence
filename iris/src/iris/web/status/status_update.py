@@ -341,9 +341,13 @@ class ChatStatusCallback(StatusCallback):
         initial_stages: List[StageDTO] = None,
     ):
         url = f"{base_url}/{self.api_url}/chat/runs/{run_id}/status"
+        if chat_mode not in _CHAT_MODE_STAGES:
+            raise ValueError(f"No stages configured for chat mode: {chat_mode}")
         stages = initial_stages or []
         current_stage_index = len(stages)
-        stages += [stage.model_copy() for stage in _CHAT_MODE_STAGES[chat_mode]]
+        stages += [
+            stage.model_copy(deep=True) for stage in _CHAT_MODE_STAGES[chat_mode]
+        ]
         status = ChatStatusUpdateDTO(stages=stages)
         super().__init__(
             url, run_id, status, stages[current_stage_index], current_stage_index
