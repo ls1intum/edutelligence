@@ -343,11 +343,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
 
-        # Extract user language
-        user_language = "en"
-        if dto.user and dto.user.lang_key:
-            user_language = dto.user.lang_key
-
         metrics_enabled = bool(
             dto.metrics
             and dto.course.competencies
@@ -361,7 +356,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
-            "user_language": user_language,
+            "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
                 dto.custom_instructions or ""
             ),
@@ -429,10 +424,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             The result with citations added.
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
 
         try:
             # Add FAQ citations
@@ -446,7 +437,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
-                    user_language=user_language,
+                    user_language=state.dto.user.lang_key,
                     base_url=base_url,
                 )
 
@@ -461,7 +452,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
-                    user_language=user_language,
+                    user_language=state.dto.user.lang_key,
                     base_url=base_url,
                 )
 
@@ -571,18 +562,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         if self.chat_mode not in {IrisChatMode.COURSE, IrisChatMode.EXERCISE}:
             return
 
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
-
         try:
             if result:
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
                 suggestions = self.suggestion_pipeline(
-                    suggestion_dto, user_language=user_language
+                    suggestion_dto, user_language=state.dto.user.lang_key
                 )
 
                 if self.suggestion_pipeline.tokens is not None:

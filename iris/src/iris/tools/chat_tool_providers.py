@@ -202,10 +202,6 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
     if not hasattr(state, "mcq_result_storage"):
         state.mcq_result_storage = {}
 
-    user_language = "en"
-    if state.dto.user and state.dto.user.lang_key:
-        user_language = state.dto.user.lang_key
-
     lecture_id = (
         state.dto.lecture.id if state.dto.lecture and state.dto.lecture.id else None
     )
@@ -218,7 +214,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
         state.dto.chat_history,
         state.callback,
         state.mcq_result_storage,
-        user_language,
+        state.dto.user.lang_key,
         lecture_content=lecture_content,
     )
 
