@@ -21,8 +21,6 @@ except Exception:  # noqa: BLE001
     class ConnectionClosed(Exception):
         pass
 
-from logos_worker_node.config import save_lanes_state
-from logos_worker_node.lane_manager import _lane_id_from_config
 from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.runtime import build_runtime_status
@@ -457,44 +455,16 @@ class LogosBridgeClient:
         if action == "apply_lanes":
             lanes = [LaneConfig(**item) for item in (params.get("lanes") or [])]
             result = await lane_manager.apply_lanes(lanes)
-            if result.success:
-                try:
-                    # Persist only non-static lanes to lanes.json
-                    dynamic_configs = [
-                        lc for lc in lane_manager.get_current_lane_configs()
-                        if not lane_manager.is_static_lane(_lane_id_from_config(lc))
-                    ]
-                    save_lanes_state(dynamic_configs)
-                except OSError:
-                    logger.debug("Could not persist lane state")
             return result.model_dump(mode="json")
 
         if action == "add_lane":
             lane_config = LaneConfig(**params)
             status = await lane_manager.add_lane(lane_config)
-            try:
-                # Persist only non-static lanes to lanes.json
-                dynamic_configs = [
-                    lc for lc in lane_manager.get_current_lane_configs()
-                    if not lane_manager.is_static_lane(_lane_id_from_config(lc))
-                ]
-                save_lanes_state(dynamic_configs)
-            except OSError:
-                logger.debug("Could not persist lane state after add_lane")
             return status.model_dump(mode="json")
 
         lane_id = str(params.get("lane_id", "")).strip()
         if action == "delete_lane":
             await lane_manager.remove_lane(lane_id)
-            try:
-                # Persist only non-static lanes to lanes.json
-                dynamic_configs = [
-                    lc for lc in lane_manager.get_current_lane_configs()
-                    if not lane_manager.is_static_lane(_lane_id_from_config(lc))
-                ]
-                save_lanes_state(dynamic_configs)
-            except OSError:
-                logger.debug("Could not persist lane state after delete_lane")
             return {"ok": True, "lane_id": lane_id}
         if action == "sleep_lane":
             status = await lane_manager.sleep_lane(
