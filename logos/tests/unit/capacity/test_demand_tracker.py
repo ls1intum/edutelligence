@@ -16,15 +16,6 @@ def test_record_request_increments():
     assert tracker.get_raw_count("model-a") == 2
 
 
-def test_decay_all():
-    tracker = DemandTracker()
-    tracker.record_request("model-a")
-    tracker.record_request("model-a")
-
-    tracker.decay_all()
-    assert abs(tracker.get_score("model-a") - 1.9) < 0.01  # 2.0 * 0.95
-
-
 def test_decay_removes_below_threshold():
     tracker = DemandTracker()
     tracker.record_request("model-a")

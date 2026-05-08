@@ -500,7 +500,15 @@ class DBManager:
         """
         import pathlib
 
-        migrations_dir = pathlib.Path(__file__).parent.parent.parent.parent / "db" / "migrations"
+        # Locate the migrations directory. Path differs between dev (running from
+        # a repo checkout) and the Docker image (/app/logos/db/migrations).
+        _here = pathlib.Path(__file__).resolve().parent
+        _candidates = [
+            _here.parent.parent.parent / "db" / "migrations",            # dev
+            _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker
+            pathlib.Path("./logos/db/migrations"),                       # CWD fallback
+        ]
+        migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
         # Discover migrations from disk so new SQL files are picked up automatically.
         # Excludes rollback scripts (must be run manually).
         MIGRATION_FILES = [
@@ -538,6 +546,24 @@ class DBManager:
 
         if not pending:
             logging.info("All migrations already applied")
+            return
+
+        # Get migrations directory. The path differs between dev (running from a
+        # repo checkout) and the Docker image: the Dockerfile copies logos/src
+        # flat to /app/src but preserves the logos/ prefix for logos/db, so the
+        # files land at /app/logos/db/migrations rather than /app/db/migrations.
+        _here = pathlib.Path(__file__).resolve().parent
+        _candidates = [
+            _here.parent.parent.parent / "db" / "migrations",            # dev: <repo>/logos/db/migrations
+            _here.parent.parent.parent / "logos" / "db" / "migrations",  # docker: /app/logos/db/migrations
+            pathlib.Path("./logos/db/migrations"),                       # CWD fallback
+        ]
+        migrations_dir = next((p for p in _candidates if p.exists()), _candidates[0])
+        if not migrations_dir.exists():
+            logging.error(
+                "Migrations directory not found. Tried: %s",
+                ", ".join(str(p) for p in _candidates),
+            )
             return
 
         if is_fresh_install:
@@ -1284,6 +1310,105 @@ class DBManager:
             })
 
         return {"requests": results}, 200
+
+    def get_paginated_requests(
+        self,
+        logos_key: str,
+        page: int = 1,
+        per_page: int = 20,
+    ):
+        """
+        Fetch paginated request logs with provider type for Cloud/Local classification.
+        """
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+
+        page = max(1, int(page))
+        per_page = max(1, min(100, int(per_page)))
+        offset = (page - 1) * per_page
+
+        count_sql = text("""
+            SELECT COUNT(*) AS total
+            FROM log_entry le
+            WHERE le.request_id IS NOT NULL
+              AND le.process_id = (
+                  SELECT id FROM process WHERE logos_key = :logos_key LIMIT 1
+              )
+        """)
+        total_row = self.session.execute(count_sql, {"logos_key": logos_key}).fetchone()
+        total = int(total_row[0]) if total_row else 0
+        total_pages = max(1, (total + per_page - 1) // per_page)
+
+        sql = text("""
+            SELECT
+                le.request_id,
+                COALESCE(m.name, CONCAT('Model ', le.model_id::text)) AS model_name,
+                COALESCE(p.name, CONCAT('Provider ', le.provider_id::text)) AS provider_name,
+                p.provider_type,
+                le.result_status,
+                le.timestamp_request     AS enqueue_ts,
+                le.timestamp_forwarding  AS scheduled_ts,
+                le.timestamp_response    AS request_complete_ts,
+                CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+                     ELSE NULL END AS run_seconds,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                     ELSE NULL END AS queue_seconds,
+                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
+                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
+                     ELSE NULL END AS total_seconds,
+                le.was_cold_start  AS cold_start,
+                le.initial_priority,
+                le.priority_when_scheduled,
+                le.queue_depth_at_enqueue,
+                le.error_message
+            FROM log_entry le
+            LEFT JOIN models    m ON m.id = le.model_id
+            LEFT JOIN providers p ON p.id = le.provider_id
+            WHERE le.request_id IS NOT NULL
+              AND le.process_id = (
+                  SELECT id FROM process WHERE logos_key = :logos_key LIMIT 1
+              )
+            ORDER BY le.timestamp_request DESC NULLS LAST
+            LIMIT :per_page OFFSET :offset
+        """)
+
+        rows = self.session.execute(
+            sql, {"logos_key": logos_key, "per_page": per_page, "offset": offset}
+        ).mappings().all()
+
+        results = []
+        for row in rows:
+            pt = str(row["provider_type"] or "").lower()
+            is_cloud = pt not in ("logosnode", "ollama", "")
+            results.append({
+                "request_id": row["request_id"],
+                "model_name": row["model_name"],
+                "provider_name": row["provider_name"],
+                "is_cloud": is_cloud,
+                "status": row["result_status"] if row["result_status"] else "pending",
+                "timestamp": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "duration": float(row["run_seconds"]) if row["run_seconds"] is not None else None,
+                "cold_start": row["cold_start"],
+                "enqueue_ts": row["enqueue_ts"].isoformat() if row["enqueue_ts"] else None,
+                "scheduled_ts": row["scheduled_ts"].isoformat() if row["scheduled_ts"] else None,
+                "request_complete_ts": row["request_complete_ts"].isoformat() if row["request_complete_ts"] else None,
+                "queue_seconds": float(row["queue_seconds"]) if row["queue_seconds"] is not None else None,
+                "total_seconds": float(row["total_seconds"]) if row["total_seconds"] is not None else None,
+                "initial_priority": row["initial_priority"],
+                "priority_when_scheduled": row["priority_when_scheduled"],
+                "queue_depth_at_enqueue": row["queue_depth_at_enqueue"],
+                "error_message": row["error_message"],
+            })
+
+        return {
+            "requests": results,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages,
+        }, 200
 
     def get_request_logs(self, logos_key: str, request_ids: list[str]):
         """
@@ -2062,6 +2187,7 @@ class DBManager:
         logos_key: str,
         day: str,
         after_snapshot_id: int = 0,
+        since: Optional[datetime.datetime] = None,
     ) -> Tuple[Dict[str, Any], int]:
         """
         Return incremental per-provider VRAM snapshots for a single UTC day.
@@ -2070,6 +2196,10 @@ class DBManager:
             logos_key: Auth key
             day: UTC day (YYYY-MM-DD / ISO date) or "all" for full history
             after_snapshot_id: Only rows with id > this cursor are returned
+            since: Optional lower bound on snapshot_ts. Used to cap the size
+                of "all"-history initial loads to a recent window so the WS
+                init payload doesn't balloon to hundreds of MB on long-lived
+                deployments.
         """
         if not self.user_authorization(logos_key):
             return {"error": "Unknown user."}, 500
@@ -2100,9 +2230,13 @@ class DBManager:
         params = {
             "after_snapshot_id": int(after_snapshot_id or 0),
         }
+        since_clause = ""
+        if since is not None:
+            params["since_ts"] = since
+            since_clause = " AND s.snapshot_ts >= :since_ts"
 
         if full_history:
-            sql = text("""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2121,12 +2255,13 @@ class DBManager:
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
                   AND s.id > :after_snapshot_id
+                  {since_clause}
                 ORDER BY s.id
             """)
         else:
             params["start_ts"] = start_dt
             params["end_ts"] = end_dt
-            sql = text("""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2147,6 +2282,7 @@ class DBManager:
                   AND s.snapshot_ts >= :start_ts
                   AND s.snapshot_ts < :end_ts
                   AND s.id > :after_snapshot_id
+                  {since_clause}
                 ORDER BY s.id
             """)
 

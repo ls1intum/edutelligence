@@ -1,0 +1,5 @@
+node_modules/
+landing-build/
+.expo/
+.git/
+*.md

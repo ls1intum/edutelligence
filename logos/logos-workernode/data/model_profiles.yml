@@ -1,34 +1,94 @@
 model_profiles:
+  Alibaba-NLP/gte-Qwen2-1.5B-instruct:
+    base_residency_mb: 3924.0
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 2048.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1776014410.1409748
+    loaded_vram_mb: 3898.226543730413
+    max_context_length: null
+    measurement_count: 47
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
+    residency_source: calibrated
+    sleeping_residual_mb: 676.0
+    tensor_parallel_size: 2
   Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
-    base_residency_mb: 15675.053585716178
+    base_residency_mb: 21484.0
     disk_size_bytes: null
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775271138.3142645
-    loaded_vram_mb: 19771.05358571618
+    last_measured_epoch: 1776014410.256216
+    loaded_vram_mb: 19768.509699686816
     max_context_length: null
-    measurement_count: 27
-    min_gpu_memory_utilization_to_load: null
-    observed_gpu_memory_utilization: null
-    residency_source: measured
-    sleeping_residual_mb: 1427.9593873224535
+    measurement_count: 33
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
+    residency_source: calibrated
+    sleeping_residual_mb: 1392.0
     tensor_parallel_size: 2
   Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
-    base_residency_mb: 6431.202151241959
+    base_residency_mb: 16752.0
     disk_size_bytes: null
     engine: vllm
     kv_budget_mb: 4096.0
     kv_per_token_bytes: null
-    last_measured_epoch: 1775271138.361804
-    loaded_vram_mb: 10527.202151241958
+    last_measured_epoch: 1776014410.0119305
+    loaded_vram_mb: 15269.841607801714
     max_context_length: null
-    measurement_count: 12
+    measurement_count: 45
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
+    residency_source: calibrated
+    sleeping_residual_mb: 1487.9867068277717
+    tensor_parallel_size: 2
+  casperhansen/deepseek-r1-distill-llama-8b-awq:
+    base_residency_mb: 16552.0
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 4096.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1776014410.0814703
+    loaded_vram_mb: 15119.686803175828
+    max_context_length: null
+    measurement_count: 53
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
+    residency_source: calibrated
+    sleeping_residual_mb: 1384.0
+    tensor_parallel_size: 2
+  cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit:
+    base_residency_mb: 27232.0
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 2048.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1776000248.9140139
+    loaded_vram_mb: 27154.359999999993
+    max_context_length: null
+    measurement_count: 11
+    min_gpu_memory_utilization_to_load: 0.85
+    observed_gpu_memory_utilization: 0.85
+    residency_source: calibrated
+    sleeping_residual_mb: 752.0
+    tensor_parallel_size: 2
+  openai/gpt-oss-20b:
+    base_residency_mb: null
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 4096.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 0.0
+    loaded_vram_mb: null
+    max_context_length: null
+    measurement_count: 0
     min_gpu_memory_utilization_to_load: null
     observed_gpu_memory_utilization: null
-    residency_source: measured
-    sleeping_residual_mb: 771.0915582029512
-    tensor_parallel_size: 1
+    residency_source: cached
+    sleeping_residual_mb: null
+    tensor_parallel_size: 2
   qwen3-embedding:8b:
     base_residency_mb: null
     disk_size_bytes: null
@@ -44,3 +104,18 @@ model_profiles:
     residency_source: cached
     sleeping_residual_mb: null
     tensor_parallel_size: null
+  solidrust/Mistral-7B-Instruct-v0.3-AWQ:
+    base_residency_mb: 14196.0
+    disk_size_bytes: null
+    engine: vllm
+    kv_budget_mb: 4096.0
+    kv_per_token_bytes: null
+    last_measured_epoch: 1776014410.1965282
+    loaded_vram_mb: 13580.381725594885
+    max_context_length: null
+    measurement_count: 29
+    min_gpu_memory_utilization_to_load: 0.1
+    observed_gpu_memory_utilization: 0.1
+    residency_source: calibrated
+    sleeping_residual_mb: 1368.0
+    tensor_parallel_size: 2

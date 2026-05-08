@@ -78,7 +78,6 @@ This matrix tracks the request-path and capacity-planner scenarios covered by te
 | Ollama skip | Non-vLLM lanes do not get sleep actions | `tests/unit/capacity/test_capacity_planner.py::test_no_sleep_for_ollama_lanes` |
 | Demand wake / load / no-op | High demand wakes sleeping lane or loads missing model; low demand does nothing | `tests/unit/capacity/test_capacity_planner.py::test_demand_wake_sleeping_lane`, `tests/unit/capacity/test_capacity_planner.py::test_demand_load_new_model`, `tests/unit/capacity/test_capacity_planner.py::test_demand_below_threshold_no_action` |
 | Offline-provider and capability gating | Skip offline providers and models outside worker capabilities | `tests/unit/capacity/test_capacity_planner.py::test_demand_actions_skip_offline_provider`, `tests/unit/capacity/test_capacity_planner.py::test_demand_actions_respect_worker_capabilities` |
-| Preemptive load-then-sleep | Previously served vLLM models may be loaded and parked | `tests/unit/capacity/test_capacity_planner.py::test_preemptive_sleep_loads_previously_served_model` |
 | Capability seeding | Zero-lane worker can pre-load demanded capability models | `tests/unit/capacity/test_capacity_planner.py::test_capability_seeding_zero_lane_worker` |
 
 ## Confirmation And Control-Plane Semantics

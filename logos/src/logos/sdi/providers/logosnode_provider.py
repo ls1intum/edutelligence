@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -10,11 +11,12 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_metric_float
+from logos.logosnode_registry import LogosNodeRuntimeRegistry, _lane_ttft_p95_seconds, _lane_e2e_latency_p50_seconds, _lane_metric_float
 
 from ..models import (
     ModelStatus,
     OllamaCapacity,
+    QueueStatePerPriority,
     LaneSchedulerSignals,
     ModelSchedulerView,
     ModelProfile,
@@ -31,7 +33,7 @@ logger = logging.getLogger(__name__)
 class LogosNodeDataProvider:
     """Unified local-provider SDI source for direct Ollama and worker-backed lanes."""
 
-    DEFAULT_PARALLEL_CAPACITY = 20
+    DEFAULT_PARALLEL_CAPACITY = 1
 
     def __init__(
         self,
@@ -56,6 +58,7 @@ class LogosNodeDataProvider:
         self._model_id_to_name: Dict[int, str] = {}
         self._loaded_models: Dict[str, Dict[str, Any]] = {}
         self._last_refresh = 0.0
+        self._model_active: Dict[int, int] = {}
         self._active_request_ids: Dict[str, int] = {}
         self._db_parallel_ceiling: Dict[int, int] = {}
         self._lock = threading.RLock()
@@ -82,6 +85,7 @@ class LogosNodeDataProvider:
     def register_model(self, model_id: int, model_name: str) -> None:
         with self._lock:
             self._model_id_to_name[model_id] = model_name
+            self._model_active.setdefault(model_id, 0)
 
     def update_registration(self, *, name: str, base_url: Optional[str], total_vram_mb: int) -> None:
         with self._lock:
@@ -93,7 +97,12 @@ class LogosNodeDataProvider:
     def set_registered_models(self, models: Dict[int, str]) -> None:
         with self._lock:
             desired = {int(model_id): model_name for model_id, model_name in models.items()}
+            removed_ids = set(self._model_id_to_name) - set(desired)
             self._model_id_to_name = desired
+            for model_id in removed_ids:
+                self._model_active.pop(model_id, None)
+            for model_id in desired:
+                self._model_active.setdefault(model_id, 0)
             stale_request_ids = [
                 request_id
                 for request_id, model_id in self._active_request_ids.items()
@@ -343,18 +352,25 @@ class LogosNodeDataProvider:
                 continue
 
             matched_lanes += 1
+            is_vllm = bool(lane.get("vllm"))
             capacity_hint = lane.get("num_parallel")
-            if bool(lane.get("vllm")) and not capacity_hint:
-                lane_config = lane.get("lane_config")
-                if isinstance(lane_config, dict):
-                    # vLLM runtime status reports num_parallel=0 because concurrency is continuous,
-                    # but the saved lane config still provides the scheduling capacity hint.
-                    capacity_hint = lane_config.get("num_parallel")
+            if is_vllm and not capacity_hint:
+                # vLLM uses continuous batching — num_parallel=0 means unlimited.
+                # Default to 256 so the scheduler doesn't artificially
+                # serialize requests.  The DB parallel column is the real
+                # ceiling if one is needed.
+                capacity_hint = 256
 
             try:
                 capacity = int(capacity_hint) if capacity_hint is not None else 0
             except (TypeError, ValueError):
                 capacity = 0
+
+            # Apply oversubscription for vLLM lanes: the reported
+            # num_parallel is based on worst-case full-context requests,
+            # but real requests typically use a fraction of context.
+            if is_vllm and capacity > 0 and capacity < 256:
+                capacity = capacity * self.VLLM_CONCURRENCY_OVERSUBSCRIPTION
 
             if capacity > 0:
                 total_capacity += capacity
@@ -395,10 +411,8 @@ class LogosNodeDataProvider:
 
         with self._lock:
             loaded_info = self._loaded_models.get(model_name)
-            queue_state = self.queue_manager.get_state(model_id)
-            active_requests = len(
-                [rid for rid, mid in self._active_request_ids.items() if mid == model_id]
-            )
+            queue_state = self.queue_manager.get_state(model_id, self.provider_id)
+            active_requests = self._model_active.get(model_id, 0)
             is_loaded = bool(loaded_info)
             vram_mb = int((loaded_info or {}).get("size_vram", 0) // (1024 * 1024))
             expires_at = (loaded_info or {}).get("expires_at")
@@ -466,6 +480,7 @@ class LogosNodeDataProvider:
                 else None
             ),
             ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
+            e2e_latency_p50_seconds=_lane_e2e_latency_p50_seconds(backend_metrics),
             effective_vram_mb=float(lane.get("effective_vram_mb", 0.0) or 0.0),
             num_parallel=int(lane.get("num_parallel", 0) or 0),
             gpu_memory_utilization=(
@@ -544,6 +559,14 @@ class LogosNodeDataProvider:
         ]
         warmest_ttft = min(loaded_ttfts) if loaded_ttfts else 0.0
 
+        # Best-case e2e latency p50 among loaded/running lanes (non-zero)
+        loaded_e2e = [
+            s.e2e_latency_p50_seconds
+            for s in matching_signals
+            if s.runtime_state in ("loaded", "running") and s.e2e_latency_p50_seconds > 0
+        ]
+        warmest_e2e = min(loaded_e2e) if loaded_e2e else 0.0
+
         # Max GPU cache pressure across lanes (vLLM only)
         cache_values = [
             s.gpu_cache_usage_percent
@@ -562,6 +585,7 @@ class LogosNodeDataProvider:
             aggregate_active_requests=aggregate_active,
             aggregate_queue_waiting=aggregate_queue,
             warmest_ttft_p95_seconds=warmest_ttft,
+            warmest_e2e_latency_p50_seconds=warmest_e2e,
             gpu_cache_pressure_max=gpu_cache_max,
             lanes=matching_signals,
         )
@@ -679,53 +703,136 @@ class LogosNodeDataProvider:
         caps = snap.get("capabilities_models")
         return list(caps) if caps else []
 
-    def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:  # noqa: ARG002
-        """Remove request from active tracking. Counter is now derived from _active_request_ids."""
+    def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
+        with self._lock:
+            if request_id:
+                if request_id in self._active_request_ids:
+                    return
+                self._active_request_ids[request_id] = model_id
+            self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
+
+    def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:
         if request_id:
             with self._lock:
-                self._active_request_ids.pop(request_id, None)
-
-    def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:  # noqa: ARG002
-        """Record request_id -> model_id mapping for monitoring lookups."""
+                mapped_model = self._active_request_ids.pop(request_id, None)
+                if mapped_model is not None:
+                    model_id = mapped_model
+        if reuse_slot:
+            return
         with self._lock:
-            if request_id not in self._active_request_ids:
-                self._active_request_ids[request_id] = model_id
+            current_active = self._model_active.get(model_id, 0)
+            self._model_active[model_id] = max(0, current_active - 1)
 
-    def get_active_count(self, model_id: int) -> int:
-        """Return number of active requests from the runtime snapshot (sum of requests_running)."""
+    # Maximum backend queue_waiting before we refuse new reservations.
+    # Prevents piling requests on an already-backlogged vLLM process.
+    # Raised from 2→8: with oversubscription enabled, vLLM's internal
+    # scheduler (PagedAttention) handles queuing efficiently; we only
+    # need to back off when the engine is genuinely saturated.
+    BACKEND_QUEUE_PRESSURE_THRESHOLD = 8
+
+    # vLLM reports "Maximum concurrency for N tokens per request" assuming
+    # every request fills the entire context window.  In practice, requests
+    # use a fraction of context (e.g. 200/4096 = 5%), so the KV cache can
+    # safely hold many more concurrent sequences.  This multiplier is
+    # applied to the vLLM-reported num_parallel to allow higher throughput
+    # while still letting vLLM's own scheduler handle fine-grained KV
+    # admission via PagedAttention preemption.
+    VLLM_CONCURRENCY_OVERSUBSCRIPTION = 3
+
+    def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
+        with self._lock:
+            # Reject if no lane is ready (loaded/running) — requests for sleeping
+            # or unloaded models should go to the scheduler queue instead.
+            if not self._is_model_lane_ready(model_id):
+                logger.debug(
+                    "Refusing reservation for model %d: no ready lane (sleeping/not loaded)",
+                    model_id,
+                )
+                return False
+            current_active = self._model_active.get(model_id, 0)
+            max_capacity, _source = self.get_parallel_capacity(model_id)
+            if current_active < max_capacity:
+                # Check backend queue pressure before accepting
+                if self._backend_queue_exceeds_threshold(model_id):
+                    logger.debug(
+                        "Refusing reservation for model %d: backend queue pressure exceeds threshold",
+                        model_id,
+                    )
+                    return False
+                if request_id in self._active_request_ids:
+                    return True
+                self._active_request_ids[request_id] = model_id
+                self._model_active[model_id] = current_active + 1
+                return True
+            return False
+
+    def _is_model_lane_ready(self, model_id: int) -> bool:
+        """Check if at least one lane for this model is in a ready state (loaded/running)."""
         if self._runtime_registry is None:
-            return 0
+            return True  # No runtime info, assume ready (backwards compat)
         model_name = self._model_id_to_name.get(model_id)
         if not model_name:
-            return 0
+            return False
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
-            return 0
+            return True  # No snapshot yet, assume ready
         lanes = ((snap.get("runtime") or {}).get("lanes") or [])
-        total = 0
         for lane in lanes:
             if not isinstance(lane, dict):
                 continue
             if lane.get("model") != model_name:
                 continue
-            backend = lane.get("backend_metrics") or {}
-            try:
-                total += int(float(backend.get("requests_running") or 0))
-            except (TypeError, ValueError):
-                pass
-        return total
+            if lane.get("runtime_state") in ("loaded", "running"):
+                return True
+        return False
+
+    def _backend_queue_exceeds_threshold(self, model_id: int) -> bool:
+        """Check if the backend (vLLM) queue_waiting exceeds the threshold."""
+        if self._runtime_registry is None:
+            return False
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return False
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return False
+        lanes = ((snap.get("runtime") or {}).get("lanes") or [])
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if lane.get("model") != model_name:
+                continue
+            if lane.get("runtime_state") in {"stopped", "error"}:
+                continue
+            backend = lane.get("backend_metrics")
+            if isinstance(backend, dict):
+                queue_waiting = float(backend.get("queue_waiting") or 0)
+                if queue_waiting > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
+                    return True
+        return False
+
+    def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
+        with self._lock:
+            if request_id in self._active_request_ids:
+                return
+            self._active_request_ids[request_id] = model_id
+            if increment_active:
+                self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
+
+    def get_active_count(self, model_id: int) -> int:
+        with self._lock:
+            return self._model_active.get(model_id, 0)
 
     def get_debug_state(self) -> Dict[int, Dict[str, Any]]:
         with self._lock:
             models = {}
             for model_id, model_name in self._model_id_to_name.items():
                 max_capacity, capacity_source = self.get_parallel_capacity(model_id)
-                queue_state = self.queue_manager.get_state(model_id)
+                queue_state = self.queue_manager.get_state(model_id, self.provider_id)
                 recent_signals = self._get_recent_model_scheduler_signals(model_id)
-                active = len([rid for rid, mid in self._active_request_ids.items() if mid == model_id])
                 models[model_id] = {
                     "model_name": model_name,
-                    "active": active,
+                    "active": self._model_active.get(model_id, 0),
                     "max_capacity": max_capacity,
                     "capacity_source": capacity_source,
                     "queue_depth": queue_state.total,
