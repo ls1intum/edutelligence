@@ -162,6 +162,28 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             self._log_decision(request.request_id, scored, request.classified_models or [], None, False)
             return None  # All cloud, none accepted → caller returns 503
 
+        # Tie diagnostic: when several logosnode candidates share the top
+        # corrected score, the stable sort funnels every queued request
+        # onto the first one — leaving other equally-scored capable
+        # workers idle.  Surfacing this explicitly so the symptom
+        # "request queued on worker A even though worker B is also cold
+        # with the same score" doesn't require staring at the scored
+        # array to spot.
+        top_score = logosnode_candidate[3]
+        tied = [s for s in scored if s[2] == "logosnode" and abs(s[3] - top_score) < 1e-9]
+        if len(tied) > 1:
+            tied_desc = ", ".join(
+                f"model={m} worker={self._logosnode.get_provider_name(p) or p} tier={e.tier.value}"
+                for m, p, _, _, _, e in tied
+            )
+            chosen_pid = logosnode_candidate[1]
+            logger.info(
+                "Tied logosnode candidates for request %s (top score=%.2f, count=%d): %s "
+                "→ funnelling to worker=%s (deterministic first-tied)",
+                request.request_id, top_score, len(tied), tied_desc,
+                self._logosnode.get_provider_name(chosen_pid) or chosen_pid,
+            )
+
         self._log_decision(request.request_id, scored, request.classified_models or [], logosnode_candidate, True)
         return await self._queue_and_wait(logosnode_candidate, request)
 
@@ -207,8 +229,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
                     logger.debug(
-                        "Model %s provider %s unavailable: %s",
-                        model_id, provider_id, ettft.reasoning,
+                        "Model=%s worker=%s unavailable: %s",
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                        ettft.reasoning,
                     )
                     # Only logosnode gets fallback queueing — model may be
                     # transitioning (sleep→wake) and will become available.
@@ -254,8 +278,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             logger.info(
                 "ETTFT ranking: %s",
                 ", ".join(
-                    f"model={m} provider={p} score={s:.2f} "
-                    f"tier={e.tier.value} wait={e.expected_wait_s:.1f}s"
+                    f"model={self._logosnode.get_model_name(m, p) or m} "
+                    f"worker={self._logosnode.get_provider_name(p) or p} "
+                    f"score={s:.2f} tier={e.tier.value} wait={e.expected_wait_s:.1f}s"
                     for m, p, _, s, _, e in scored[:5]
                 ),
             )
@@ -271,8 +296,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 view = None
             except Exception:
                 logger.warning(
-                    "Unexpected error getting scheduler view for model %s provider %s",
-                    model_id, provider_id, exc_info=True,
+                    "Unexpected error getting scheduler view for model=%s worker=%s",
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                    self._logosnode.get_provider_name(provider_id) or provider_id,
+                    exc_info=True,
                 )
                 view = None
 
@@ -399,10 +426,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     and idx == 0
                 ):
                     logger.info(
-                        "Queue-for-best: top candidate model %s provider %s "
+                        "Queue-for-best: top candidate model=%s worker=%s "
                         "is %s (score=%.2f, wait=%.1fs) — deferring to queue path "
                         "instead of downgrading to a lower-scored warm model",
-                        model_id, provider_id, ettft.tier.value,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                        ettft.tier.value,
                         score, ettft.expected_wait_s,
                     )
                     return None
@@ -410,22 +439,31 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 try:
                     reserved = self._logosnode.try_reserve_capacity(model_id, provider_id, request_id)
                 except (KeyError, Exception):
-                    logger.debug("Provider %s unavailable for model %s, skipping", provider_id, model_id)
+                    logger.debug(
+                        "Worker=%s unavailable for model=%s, skipping",
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                    )
                     continue
                 if reserved:
                     logger.info(
-                        "Reserved logosnode model %s provider %s "
+                        "Reserved logosnode model=%s worker=%s "
                         "(score=%.2f, tier=%s, wait=%.1fs)",
-                        model_id, provider_id, score,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id, score,
                         ettft.tier.value, ettft.expected_wait_s,
                     )
                     return (model_id, provider_id, provider_type, score, priority_int, ettft)
-                logger.debug("Failed to reserve logosnode model %s, trying next", model_id)
+                logger.debug(
+                    "Failed to reserve logosnode model=%s, trying next",
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                )
             elif provider_type == "azure":
                 logger.info(
-                    "Selected Azure model %s provider %s "
+                    "Selected Azure model=%s provider_id=%s "
                     "(score=%.2f, tier=%s, wait=%.1fs)",
-                    model_id, provider_id, score,
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                    provider_id, score,
                     ettft.tier.value, ettft.expected_wait_s,
                 )
                 return (model_id, provider_id, provider_type, score, priority_int, ettft)
@@ -453,9 +491,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         )
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
-            "Request %s queued for model %s provider %s "
+            "Request %s queued for model=%s worker=%s "
             "(corrected_score=%.2f, tier=%s, depth=%s)",
-            request.request_id, model_id, provider_id,
+            request.request_id,
+            self._logosnode.get_model_name(model_id, provider_id) or model_id,
+            self._logosnode.get_provider_name(provider_id) or provider_id,
             score, ettft.tier.value, queue_depth,
         )
 

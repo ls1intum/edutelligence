@@ -27,6 +27,7 @@ from logos.terminal_logging import (
     RED,
     YELLOW,
     format_state,
+    format_vram,
     lane_metric_float,
     lane_ttft_p95_seconds,
     paint,
@@ -266,8 +267,8 @@ class CapacityPlanner:
             return
         if not self._tick_event.is_set():
             logger.info(
-                "Capacity hint received: provider=%s model=%s (waking cycle)",
-                provider_id, model_name,
+                "Capacity hint received: worker=%s model=%s (waking cycle)",
+                self._facade.get_provider_name(provider_id) or provider_id, model_name,
             )
         self._tick_hints.append((provider_id, model_name))
         # Trim hint log so it doesn't grow unboundedly under heavy load.
@@ -346,8 +347,8 @@ class CapacityPlanner:
             # stale/empty state can destroy existing lanes.
             if self._registry and not self._registry.has_received_first_status(provider_id):
                 logger.debug(
-                    "Skipping provider %s: waiting for first status report after connect",
-                    provider_id,
+                    "Skipping worker=%s: waiting for first status report after connect",
+                    self._facade.get_provider_name(provider_id) or provider_id,
                 )
                 continue
 
@@ -416,14 +417,13 @@ class CapacityPlanner:
                 if isinstance(lane, dict):
                     rs = str(lane.get("runtime_state") or "unknown")
                     state_counts[rs] = state_counts.get(rs, 0) + 1
-            used_pct = ((total_vram - free_vram) / total_vram * 100) if total_vram > 0 else 0
             heartbeat_age_s = self._heartbeat_age_seconds(snap.get("last_heartbeat"))
             worker_color = GREEN if heartbeat_age_s <= 15 else YELLOW if heartbeat_age_s <= 30 else RED
 
             lines.append(
                 f"{paint('●', worker_color)} provider={paint(str(worker_id), BOLD)} "
                 f"status={paint('active', worker_color)} hb={heartbeat_age_s:.0f}s "
-                f"vram={paint(f'{total_vram - free_vram:.0f}/{total_vram:.0f}MB', BOLD)} ({used_pct:.0f}%)"
+                f"vram={paint(format_vram(total_vram - free_vram, total_vram), BOLD)}"
             )
             capabilities_text = ", ".join(caps) if caps else "none"
             lines.extend(wrap_plain(f"capabilities: {capabilities_text}", indent="    "))
@@ -594,9 +594,9 @@ class CapacityPlanner:
         """
         if self._registry and not self._registry.has_received_first_status(provider_id):
             logger.info(
-                "Deferring capacity hint for provider=%s model=%s: "
+                "Deferring capacity hint for worker=%s model=%s: "
                 "waiting for first status report after connect",
-                provider_id, model_name,
+                self._facade.get_provider_name(provider_id) or provider_id, model_name,
             )
             return None
         self.hint_capacity_needed(provider_id, model_name)
@@ -616,9 +616,9 @@ class CapacityPlanner:
             and self._lane_is_in_wake_failure_cooldown(provider_id, target.lane_id)
         ):
             logger.info(
-                "Skipping wake retry for lane %s on provider %s: recent wake failure cooldown active",
+                "Skipping wake retry for lane %s on worker=%s: recent wake failure cooldown active",
                 target.lane_id,
-                provider_id,
+                self._facade.get_provider_name(provider_id) or provider_id,
             )
             return None
         if target.runtime_state in {"sleeping", "cold"}:
@@ -664,8 +664,8 @@ class CapacityPlanner:
             return await self._registry.select_lane_for_model(provider_id, model_name)
         except Exception:
             logger.debug(
-                "Failed to re-select prepared lane for provider=%s model=%s",
-                provider_id,
+                "Failed to re-select prepared lane for worker=%s model=%s",
+                self._facade.get_provider_name(provider_id) or provider_id,
                 model_name,
                 exc_info=True,
             )
@@ -718,7 +718,10 @@ class CapacityPlanner:
         profile = self._safe_get_profiles(provider_id).get(model_name)
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
-            logger.debug("No capacity info for provider %s, cannot cold-load %s", self._facade.get_provider_name(provider_id) or provider_id, model_name)
+            logger.debug(
+                "No capacity info for worker=%s, cannot cold-load %s",
+                self._facade.get_provider_name(provider_id) or provider_id, model_name,
+            )
             return None
 
         # No early feasibility bail-out here — the reclaim loop below will
@@ -742,10 +745,12 @@ class CapacityPlanner:
 
         residency_src = getattr(profile, "residency_source", None) if profile else None
         logger.info(
-            "Cold-load VRAM check for %s on provider %s: "
+            "Cold-load VRAM check for %s on worker=%s: "
             "estimated=%.0f MB, available=%.0f MB, "
             "base_residency=%s MB (%s), engine=%s, total_vram=%s",
-            model_name, provider_id, estimated, available,
+            model_name,
+            self._facade.get_provider_name(provider_id) or provider_id,
+            estimated, available,
             getattr(profile, "base_residency_mb", None) if profile else None,
             residency_src or "no-profile",
             getattr(profile, "engine", None),
@@ -784,7 +789,10 @@ class CapacityPlanner:
             self._pending_capacity[model_name] = (provider_id, time.time())
             return None
 
-        logger.info("Cold-loading %s on provider %s (lane=%s)", model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id)
+        logger.info(
+            "Cold-loading %s on worker=%s (lane=%s)",
+            model_name, self._facade.get_provider_name(provider_id) or provider_id, lane_id,
+        )
         async with self._lane_lock(provider_id, lane_id):
             loaded = await self._execute_action_with_confirmation(
                 load_action, timeout_seconds=max(timeout_seconds, 300.0),
@@ -796,8 +804,9 @@ class CapacityPlanner:
             return await self._registry.select_lane_for_model(provider_id, model_name)
         except Exception:
             logger.debug(
-                "Failed to select cold-loaded lane for provider=%s model=%s",
-                provider_id, model_name, exc_info=True,
+                "Failed to select cold-loaded lane for worker=%s model=%s",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                model_name, exc_info=True,
             )
             return None
 
@@ -829,9 +838,9 @@ class CapacityPlanner:
             current_time + self.WAKE_FAILURE_COOLDOWN_SECONDS
         )
         logger.warning(
-            "Marked lane %s on provider %s as wake-failed for %.0fs%s",
+            "Marked lane %s on worker=%s as wake-failed for %.0fs%s",
             lane_id,
-            provider_id,
+            self._facade.get_provider_name(provider_id) or provider_id,
             self.WAKE_FAILURE_COOLDOWN_SECONDS,
             f": {details}" if details else "",
         )
@@ -1280,6 +1289,22 @@ class CapacityPlanner:
         )
         return lane_total + scheduler_queue
 
+    def _get_queue_depth_across_deployments(self, model_name: str) -> int:
+        """Sum scheduler queue depth across every provider serving this model.
+
+        Logging-only diagnostic: lets us see at a glance whether queued
+        demand for a model is concentrated on one deployment versus spread
+        across all of them.  Compare with the per-provider `queue_here`
+        in the Demand eval line.
+        """
+        total = 0
+        for pid in self._facade.provider_ids():
+            try:
+                total += int(self._facade.get_scheduler_queue_depth_by_model_name(model_name, pid))
+            except Exception:
+                continue
+        return total
+
     def _retry_pending_capacity(self, provider_id: int) -> None:
         """Re-attempt capacity preparation for models whose earlier trigger failed.
 
@@ -1315,7 +1340,10 @@ class CapacityPlanner:
 
         for m in to_retry:
             self._pending_capacity.pop(m, None)
-            logger.info("Retrying pending capacity for %s on provider %d", m, provider_id)
+            logger.info(
+                "Retrying pending capacity for %s on worker=%s",
+                m, self._facade.get_provider_name(provider_id) or provider_id,
+            )
             asyncio.create_task(
                 self.prepare_lane_for_request(provider_id, m, timeout_seconds=30.0)
             )
@@ -1511,8 +1539,8 @@ class CapacityPlanner:
         candidates.sort(key=lambda c: (_action_cost.get(c.action, 2), c.eff_demand))
 
         logger.info(
-            "Eviction candidates for provider=%s gpus=%s deficit=%s: [%s]",
-            provider_id,
+            "Eviction candidates for worker=%s gpus=%s deficit=%s: [%s]",
+            self._facade.get_provider_name(provider_id) or provider_id,
             sorted(required_gpus) if required_gpus else "any",
             {g: f"{d:.0f}MB" for g, d in per_gpu_deficit.items()},
             ", ".join(
@@ -1544,8 +1572,9 @@ class CapacityPlanner:
         if all(v <= 0 for v in remaining.values()):
             return chosen
         logger.info(
-            "Eviction set INSUFFICIENT for provider=%s: remaining deficit=%s after %d candidates",
-            provider_id, {g: f"{d:.0f}MB" for g, d in remaining.items() if d > 0}, len(chosen),
+            "Eviction set INSUFFICIENT for worker=%s: remaining deficit=%s after %d candidates",
+            self._facade.get_provider_name(provider_id) or provider_id,
+            {g: f"{d:.0f}MB" for g, d in remaining.items() if d > 0}, len(chosen),
         )
         return None  # couldn't cover the deficit
 
@@ -1853,9 +1882,9 @@ class CapacityPlanner:
         the load/wake consumes it.
         """
         if self._registry.peek_runtime_snapshot(provider_id) is None:
-            logger.debug(
-                "Skipping demand actions for provider=%s: no active logosnode runtime snapshot",
-                provider_id,
+            logger.info(
+                "Skipping demand actions for worker=%s: no active logosnode runtime snapshot",
+                self._facade.get_provider_name(provider_id) or provider_id,
             )
             return []
 
@@ -1878,9 +1907,10 @@ class CapacityPlanner:
         capacity_locked = self._provider_capacity_lock(provider_id).locked()
         if committed > 0 or capacity_locked:
             logger.info(
-                "Skipping demand planning for provider=%s: "
+                "Skipping demand planning for worker=%s: "
                 "in-flight VRAM reservation (committed=%.0fMB locked=%s)",
-                provider_id, committed, capacity_locked,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                committed, capacity_locked,
             )
             return []
 
@@ -1923,11 +1953,16 @@ class CapacityPlanner:
                 continue
             model_lanes = lanes_by_model.get(model_name, [])
             eff = self._effective_demand(model_name, provider_id, lanes)
+            here_queue = self._get_queue_depth_for_model(provider_id, model_name, lanes)
+            cross_queue = self._get_queue_depth_across_deployments(model_name)
             logger.info(
-                "Demand eval model=%s score=%.2f eff=%.2f caps=%s lanes=%d",
+                "Demand eval worker=%s model=%s score=%.2f eff=%.2f caps=%s lanes=%d "
+                "queue_here=%d queue_cross_deployment=%d",
+                self._facade.get_provider_name(provider_id) or provider_id,
                 model_name, score, eff,
                 "yes" if (not capabilities or model_name in capabilities) else "NO-cap",
                 len(model_lanes),
+                here_queue, cross_queue,
             )
 
             # ── WAKE: sleeping lane exists ────────────────────────────────────
@@ -1993,7 +2028,10 @@ class CapacityPlanner:
                 )
 
                 if eviction_set is None:
-                    logger.debug("Skipping wake of %s: cannot free enough GPU memory", model_name)
+                    logger.info(
+                        "Skipping wake of %s on worker=%s: cannot free enough GPU memory",
+                        model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                    )
                 elif not eviction_set:
                     # Plenty of VRAM — act on floor score.
                     # Bypass floor when there are actual requests in scheduler queue.
@@ -2053,9 +2091,10 @@ class CapacityPlanner:
                         ))
                         planned_models.add(model_name)
                     else:
-                        logger.debug(
-                            "Skipping wake of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",
-                            model_name, eff, max_victim_score, self.WAKE_COMPETITIVE_RATIO,
+                        logger.info(
+                            "Skipping wake of %s on worker=%s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",
+                            model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                            eff, max_victim_score, self.WAKE_COMPETITIVE_RATIO,
                         )
                 continue  # sleeping lane found; don't also try cold load
 
@@ -2069,9 +2108,10 @@ class CapacityPlanner:
                 continue  # has a usable (non-sleeping, non-stopped) lane
 
             if self._would_evict_cooled_lane(provider_id, model_name, profiles, capacity):
-                logger.debug(
-                    "Skipping planner load of %s: would evict a recently loaded lane (cooldown=%.0fs)",
-                    model_name, self._load_cooldown_seconds,
+                logger.info(
+                    "Skipping planner load of %s on worker=%s: would evict a recently loaded lane (cooldown=%.0fs)",
+                    model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                    self._load_cooldown_seconds,
                 )
                 continue
 
@@ -2095,7 +2135,10 @@ class CapacityPlanner:
             )
 
             if placement is None:
-                logger.debug("Skipping load of %s: cannot find feasible GPU placement", model_name)
+                logger.info(
+                    "Skipping load of %s on worker=%s: cannot find feasible GPU placement",
+                    model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                )
                 continue
 
             _, eviction_set = placement
@@ -2171,9 +2214,10 @@ class CapacityPlanner:
                     ))
                     planned_models.add(model_name)
                 else:
-                    logger.debug(
-                        "Skipping load of %s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",
-                        model_name, eff, max_victim_score, self.LOAD_COMPETITIVE_RATIO,
+                    logger.info(
+                        "Skipping load of %s on worker=%s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",
+                        model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                        eff, max_victim_score, self.LOAD_COMPETITIVE_RATIO,
                     )
 
         # ── CAPABILITY SEEDING: empty worker ─────────────────────────────────
@@ -2351,23 +2395,25 @@ class CapacityPlanner:
             remaining = deadline - time.time()
             if remaining <= self.PROVIDER_RECONNECT_POLL_SECONDS:
                 logger.info(
-                    "ensure_capacity provider=%s: provider offline, "
+                    "ensure_capacity worker=%s: worker offline, "
                     "%.1fs remaining — giving up",
-                    provider_id, remaining,
+                    self._facade.get_provider_name(provider_id) or provider_id, remaining,
                 )
                 return None
             logger.info(
-                "ensure_capacity provider=%s: provider offline (transient disconnect?) "
+                "ensure_capacity worker=%s: worker offline (transient disconnect?) "
                 "— waiting %.1fs then retrying (%.0fs budget remaining)",
-                provider_id, self.PROVIDER_RECONNECT_POLL_SECONDS, remaining,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                self.PROVIDER_RECONNECT_POLL_SECONDS, remaining,
             )
             await asyncio.sleep(self.PROVIDER_RECONNECT_POLL_SECONDS)
             capacity = self._safe_get_capacity(provider_id)
             if capacity is not None:
                 logger.info(
-                    "ensure_capacity provider=%s: provider back online "
+                    "ensure_capacity worker=%s: worker back online "
                     "(available=%.0fMB)",
-                    provider_id, float(capacity.available_vram_mb),
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    float(capacity.available_vram_mb),
                 )
                 return capacity
 
@@ -2455,9 +2501,10 @@ class CapacityPlanner:
             await asyncio.wait_for(lock.acquire(), timeout=remaining_for_lock)
         except asyncio.TimeoutError:
             logger.info(
-                "ensure_capacity provider=%s model=%s: timed out waiting for "
-                "provider capacity lock (%.1fs)",
-                provider_id, target.model_name, remaining_for_lock,
+                "ensure_capacity worker=%s model=%s: timed out waiting for "
+                "worker capacity lock (%.1fs)",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                target.model_name, remaining_for_lock,
             )
             return False
 
@@ -2471,8 +2518,9 @@ class CapacityPlanner:
             remaining = deadline - now
             if remaining <= 0:
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: deadline exceeded, giving up",
-                    provider_id, target.model_name,
+                    "ensure_capacity worker=%s model=%s: deadline exceeded, giving up",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    target.model_name,
                 )
                 return False
 
@@ -2493,9 +2541,10 @@ class CapacityPlanner:
             shortfall = max(needed - available, 0.0)
 
             logger.info(
-                "ensure_capacity provider=%s model=%s action=%s: "
+                "ensure_capacity worker=%s model=%s action=%s: "
                 "needed=%.0fMB available=%.0fMB(raw=%.0fMB) provider_ready=%s shortfall=%.0fMB",
-                provider_id, target.model_name, target_action.action,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                target.model_name, target_action.action,
                 needed, available, raw_available, provider_ready, shortfall,
             )
 
@@ -2547,9 +2596,10 @@ class CapacityPlanner:
                 ]
                 per_gpu_ready = all(free_mb >= per_gpu_needed for free_mb in gpu_effective)
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: known-GPU path "
+                    "ensure_capacity worker=%s model=%s: known-GPU path "
                     "target_gpus=%s per_gpu_needed=%.0fMB gpu_effective=%s per_gpu_ready=%s",
-                    provider_id, target.model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    target.model_name,
                     list(target_gpu_ids),
                     per_gpu_needed,
                     [f"{v:.0f}MB" for v in gpu_effective],
@@ -2565,9 +2615,10 @@ class CapacityPlanner:
                 # already allocated on the correct devices.
                 if provider_ready and target_action.action == "wake":
                     logger.info(
-                        "ensure_capacity provider=%s model=%s: per-GPU shortfall but "
+                        "ensure_capacity worker=%s model=%s: per-GPU shortfall but "
                         "provider_ready=True for wake (weights already on GPUs) → proceed",
-                        provider_id, target.model_name,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name,
                     )
                     return True
                 gpu_shortfall = max(
@@ -2576,8 +2627,9 @@ class CapacityPlanner:
                 ) * len(target_gpu_ids)
                 shortfall = max(shortfall, gpu_shortfall)
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: GPU shortfall=%.0fMB → reclaim needed",
-                    provider_id, target.model_name, shortfall,
+                    "ensure_capacity worker=%s model=%s: GPU shortfall=%.0fMB → reclaim needed",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    target.model_name, shortfall,
                 )
             elif per_gpu_free and not target_gpu_ids:
                 # GPU placement unknown — infer TP from profile so TP>1 models
@@ -2618,9 +2670,10 @@ class CapacityPlanner:
                 )
                 nth_gpu_free = sorted_free[tp - 1] if len(sorted_free) >= tp else 0.0
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: unknown-GPU path "
+                    "ensure_capacity worker=%s model=%s: unknown-GPU path "
                     "tp=%d per_gpu_needed=%.0fMB sorted_free=%s nth_gpu_free=%.0fMB fits=%s",
-                    provider_id, target.model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    target.model_name,
                     tp, per_gpu_needed,
                     [f"{v:.0f}MB" for v in sorted_free],
                     nth_gpu_free,
@@ -2630,8 +2683,9 @@ class CapacityPlanner:
                     return True
                 shortfall = max(shortfall, (per_gpu_needed - nth_gpu_free) * tp)
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: per-GPU shortfall → total shortfall=%.0fMB",
-                    provider_id, target.model_name, shortfall,
+                    "ensure_capacity worker=%s model=%s: per-GPU shortfall → total shortfall=%.0fMB",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    target.model_name, shortfall,
                 )
                 # Per-GPU check failed but provider-level VRAM is sufficient.
                 # For wake: trust provider-level — weights already on GPUs,
@@ -2639,15 +2693,17 @@ class CapacityPlanner:
                 # existing memory.  For load: per-GPU matters — new allocation.
                 if provider_ready and target_action.action == "wake":
                     logger.info(
-                        "ensure_capacity provider=%s model=%s: per-GPU shortfall but "
+                        "ensure_capacity worker=%s model=%s: per-GPU shortfall but "
                         "provider_ready=True for wake (weights already on GPUs) → proceed",
-                        provider_id, target.model_name,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name,
                     )
                     return True
             elif provider_ready:
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: no per-GPU data, provider_ready → proceed",
-                    provider_id, target.model_name,
+                    "ensure_capacity worker=%s model=%s: no per-GPU data, provider_ready → proceed",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    target.model_name,
                 )
                 return True
 
@@ -2677,10 +2733,11 @@ class CapacityPlanner:
                     if _phantom_wait_started is None:
                         _phantom_wait_started = time.monotonic()
                         logger.info(
-                            "ensure_capacity provider=%s model=%s: "
+                            "ensure_capacity worker=%s model=%s: "
                             "phantom VRAM detected (%.0f MB occupied, 0 lanes) — "
                             "waiting up to 60 s for CUDA driver to release contexts",
-                            provider_id, target.model_name, phantom_mb,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            target.model_name, phantom_mb,
                         )
                     elapsed = time.monotonic() - _phantom_wait_started
                     if elapsed < 60.0:
@@ -2690,9 +2747,10 @@ class CapacityPlanner:
                             return False
                         continue
                     logger.info(
-                        "ensure_capacity provider=%s model=%s: "
+                        "ensure_capacity worker=%s model=%s: "
                         "phantom VRAM still present after %.0f s — giving up",
-                        provider_id, target.model_name, elapsed,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name, elapsed,
                     )
                     return False
 
@@ -2712,18 +2770,20 @@ class CapacityPlanner:
                     wait_total = cooldown_wait + self.COOLDOWN_WAIT_BUFFER_SECONDS
                     if wait_total < remaining:
                         logger.info(
-                            "ensure_capacity provider=%s model=%s: no action now but "
+                            "ensure_capacity worker=%s model=%s: no action now but "
                             "cooldown expires in %.1fs — waiting %.1fs then retrying "
                             "(%.0fs budget remaining)",
-                            provider_id, target.model_name,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            target.model_name,
                             cooldown_wait, wait_total, remaining,
                         )
                         await asyncio.sleep(wait_total)
                         continue
                     logger.info(
-                        "ensure_capacity provider=%s model=%s: cooldown-blocked candidate "
+                        "ensure_capacity worker=%s model=%s: cooldown-blocked candidate "
                         "exists but wait=%.1fs exceeds remaining budget=%.1fs — giving up",
-                        provider_id, target.model_name, wait_total, remaining,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name, wait_total, remaining,
                     )
                     return False
 
@@ -2740,18 +2800,20 @@ class CapacityPlanner:
                     wait_total = tenure_wait + self.COOLDOWN_WAIT_BUFFER_SECONDS
                     if wait_total < remaining:
                         logger.info(
-                            "ensure_capacity provider=%s model=%s: no action now but "
+                            "ensure_capacity worker=%s model=%s: no action now but "
                             "idle lane tenure expires in %.1fs — waiting %.1fs then retrying "
                             "(%.0fs budget remaining)",
-                            provider_id, target.model_name,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            target.model_name,
                             tenure_wait, wait_total, remaining,
                         )
                         await asyncio.sleep(wait_total)
                         continue
                     logger.info(
-                        "ensure_capacity provider=%s model=%s: tenure-blocked idle lane "
+                        "ensure_capacity worker=%s model=%s: tenure-blocked idle lane "
                         "exists but wait=%.1fs exceeds remaining budget=%.1fs — giving up",
-                        provider_id, target.model_name, wait_total, remaining,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name, wait_total, remaining,
                     )
                     return False
 
@@ -2781,27 +2843,29 @@ class CapacityPlanner:
                         wait = self.BUSY_DRAIN_POLL_SECONDS
                     if wait < remaining:
                         logger.info(
-                            "ensure_capacity provider=%s model=%s: busy lane holds "
+                            "ensure_capacity worker=%s model=%s: busy lane holds "
                             "needed memory — waiting %.1fs (%s) then retrying "
                             "(%.0fs budget remaining)",
-                            provider_id, target.model_name, wait,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            target.model_name, wait,
                             "drain cooldown" if drain_cd_wait is not None else "poll",
                             remaining,
                         )
                         await asyncio.sleep(wait)
                         continue
                     logger.info(
-                        "ensure_capacity provider=%s model=%s: busy lane blocks reclaim "
+                        "ensure_capacity worker=%s model=%s: busy lane blocks reclaim "
                         "but wait=%.1fs exceeds remaining budget=%.1fs — giving up",
-                        provider_id, target.model_name, wait, remaining,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name, wait, remaining,
                     )
                     return False
 
                 committed = self.get_pending_vram_mb(provider_id)
                 logger.info(
-                    "No idle reclaim action available for provider=%s model=%s "
+                    "No idle reclaim action available for worker=%s model=%s "
                     "(need=%.0fMB available=%.0fMB committed=%.0fMB)",
-                    provider_id,
+                    self._facade.get_provider_name(provider_id) or provider_id,
                     target.model_name,
                     needed,
                     available,
@@ -2814,10 +2878,11 @@ class CapacityPlanner:
                 if committed > 0 and remaining > 5:
                     wait = min(5.0, remaining - 1)
                     logger.info(
-                        "ensure_capacity provider=%s model=%s: in-flight reservation "
+                        "ensure_capacity worker=%s model=%s: in-flight reservation "
                         "(committed=%.0fMB) — waiting %.1fs for it to clear "
                         "(%.0fs budget remaining)",
-                        provider_id, target.model_name, committed, wait, remaining,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name, committed, wait, remaining,
                     )
                     await asyncio.sleep(wait)
                     continue
@@ -2861,9 +2926,10 @@ class CapacityPlanner:
                 # decide whether another attempt is viable.  The deadline at the
                 # top of each iteration prevents infinite retries.
                 logger.info(
-                    "ensure_capacity provider=%s model=%s: reclaim action failed "
+                    "ensure_capacity worker=%s model=%s: reclaim action failed "
                     "(lane=%s action=%s) — re-checking with %.0fs remaining",
-                    provider_id, target.model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    target.model_name,
                     reclaim.lane_id, reclaim.action, remaining,
                 )
                 # Back off briefly to prevent a tight spin loop when the same
@@ -3726,7 +3792,10 @@ class CapacityPlanner:
                     - self.get_pending_vram_mb(provider_id)
                 )
             except Exception:
-                logger.debug("Cannot check VRAM for provider %s, rejecting %s", self._facade.get_provider_name(provider_id) or provider_id, action.action)
+                logger.debug(
+                    "Cannot check VRAM for worker=%s, rejecting %s",
+                    self._facade.get_provider_name(provider_id) or provider_id, action.action,
+                )
                 continue
 
             try:
@@ -3747,8 +3816,9 @@ class CapacityPlanner:
                 continue
             else:
                 logger.info(
-                    "VRAM budget OK for %s on provider=%s: available=%.0fMB estimated=%.0fMB (margin=%.0fMB) cumulative=%.0fMB",
-                    action.model_name, provider_id,
+                    "VRAM budget OK for %s on worker=%s: available=%.0fMB estimated=%.0fMB (margin=%.0fMB) cumulative=%.0fMB",
+                    action.model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
                     available, estimated_vram, estimated_vram * self.VRAM_SAFETY_MARGIN,
                     cumulative_vram.get(provider_id, 0.0),
                 )
@@ -4061,8 +4131,8 @@ class CapacityPlanner:
             )
             await asyncio.sleep(poll_interval)
         logger.warning(
-            "Drain timeout for lane %s on provider %s after %.0fs",
-            lane_id, provider_id, timeout_seconds,
+            "Drain timeout for lane %s on worker=%s after %.0fs",
+            lane_id, self._facade.get_provider_name(provider_id) or provider_id, timeout_seconds,
         )
         return False
 
@@ -4168,8 +4238,8 @@ class CapacityPlanner:
         self._marked_cold_lanes.add((provider_id, lane_id))
         self._registry.mark_lane_cold(provider_id, lane_id)
         logger.info(
-            "Marked lane %s on provider %s as cold (scheduler will exclude)",
-            lane_id, provider_id,
+            "Marked lane %s on worker=%s as cold (scheduler will exclude)",
+            lane_id, self._facade.get_provider_name(provider_id) or provider_id,
         )
 
     def _unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
@@ -4177,8 +4247,8 @@ class CapacityPlanner:
         self._marked_cold_lanes.discard((provider_id, lane_id))
         self._registry.unmark_lane_cold(provider_id, lane_id)
         logger.info(
-            "Unmarked lane %s on provider %s as cold (scheduler routing restored)",
-            lane_id, provider_id,
+            "Unmarked lane %s on worker=%s as cold (scheduler routing restored)",
+            lane_id, self._facade.get_provider_name(provider_id) or provider_id,
         )
 
     def is_lane_marked_cold(self, provider_id: int, lane_id: str) -> bool:
@@ -4405,9 +4475,10 @@ class CapacityPlanner:
         Returns True if confirmed, False if timeout.
         """
         logger.info(
-            "Executing capacity action: %s on lane %s (model=%s, provider=%s) — %s",
+            "Executing capacity action: %s on lane %s (model=%s, worker=%s) — %s",
             action.action, action.lane_id, action.model_name,
-            action.provider_id, action.reason,
+            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            action.reason,
         )
 
         # KV cache reconfiguration: mark cold (stop routing), sleep, reconfigure, unmark
@@ -4672,8 +4743,9 @@ class CapacityPlanner:
                     rolled_back = isinstance(result, dict) and result.get("rolled_back")
                     if rolled_back:
                         logger.warning(
-                            "apply_lanes rolled back for load of %s on provider %s",
-                            action.model_name, action.provider_id,
+                            "apply_lanes rolled back for load of %s on worker=%s",
+                            action.model_name,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
                         )
                         self._clear_inflight_add(action.provider_id, action.lane_id)
                         return False
@@ -4691,8 +4763,10 @@ class CapacityPlanner:
             # Phase 1c: Reject stop if lane is within load cooldown
             if self._lane_is_in_load_cooldown(action.provider_id, action.lane_id):
                 logger.info(
-                    "Skipping stop of lane %s on provider %s: within %.0fs load cooldown",
-                    action.lane_id, action.provider_id, self._load_cooldown_seconds,
+                    "Skipping stop of lane %s on worker=%s: within %.0fs load cooldown",
+                    action.lane_id,
+                    self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                    self._load_cooldown_seconds,
                 )
                 return False
 
@@ -4754,8 +4828,9 @@ class CapacityPlanner:
                     rolled_back = isinstance(result, dict) and result.get("rolled_back")
                     if rolled_back:
                         logger.warning(
-                            "apply_lanes rolled back for stop of %s on provider %s",
-                            action.lane_id, action.provider_id,
+                            "apply_lanes rolled back for stop of %s on worker=%s",
+                            action.lane_id,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
                         )
                         self._clear_inflight_removal(action.provider_id, action.lane_id)
                         self._unmark_lane_cold(action.provider_id, action.lane_id)

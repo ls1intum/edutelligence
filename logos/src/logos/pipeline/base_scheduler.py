@@ -81,9 +81,9 @@ class BaseScheduler(SchedulerInterface):
                 tracking_started = True
             except (KeyError, ValueError) as exc:
                 logger.warning(
-                    "Skipping logosnode request tracking for model=%s provider=%s request=%s: %s",
-                    model_id,
-                    provider_id,
+                    "Skipping logosnode request tracking for model=%s worker=%s request=%s: %s",
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                    self._logosnode.get_provider_name(provider_id) or provider_id,
                     request_id,
                     exc,
                 )
@@ -170,9 +170,10 @@ class BaseScheduler(SchedulerInterface):
                 lane_ready = True  # optimistic if check fails
             if not lane_ready:
                 logger.info(
-                    "Request %s released model %s but lane not ready — "
+                    "Request %s released model=%s but lane not ready — "
                     "re-enqueuing waiter instead of slot transfer",
-                    request_id, model_id,
+                    request_id,
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
                 )
                 reuse_slot = False
                 # Put the waiter back in the queue
@@ -195,9 +196,9 @@ class BaseScheduler(SchedulerInterface):
                     provider_id=provider_id,
                 )
                 logger.info(
-                    "Request %s released model %s. Reusing slot? %s",
+                    "Request %s released model=%s. Reusing slot? %s",
                     request_id,
-                    model_id,
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
                     reuse_slot,
                 )
             except KeyError:
@@ -247,7 +248,10 @@ class BaseScheduler(SchedulerInterface):
                     azure_rate_remaining_tokens=provider_metrics.get('azure_rate_remaining_tokens'),
                 )
 
-                logger.info("Waking up queued request for model %s", model_id)
+                logger.info(
+                    "Waking up queued request for model=%s",
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                )
                 next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
 
     def _check_starvation(self, model_id: int, provider_id: int) -> None:
@@ -283,7 +287,11 @@ class BaseScheduler(SchedulerInterface):
             try:
                 self._azure.update_model_rate_limits(model_id, provider_id, headers)
             except Exception:
-                logger.debug("Failed to update Azure rate limits for model %s", model_id, exc_info=False)
+                logger.debug(
+                    "Failed to update Azure rate limits for model=%s",
+                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                    exc_info=False,
+                )
 
     def reevaluate_model_queues(self, model_name: str) -> None:
         """Reevaluate queued requests for a model after state change (load/wake).
@@ -356,17 +364,20 @@ class BaseScheduler(SchedulerInterface):
                 )
 
                 logger.info(
-                    "Reevaluation: resolving queued request for model %s "
-                    "(provider=%s, dispatched=%d/%d) after state change",
-                    model_name, provider_id, dispatched + 1, available_slots,
+                    "Reevaluation: resolving queued request for model=%s "
+                    "(worker=%s, dispatched=%d/%d) after state change",
+                    model_name,
+                    self._logosnode.get_provider_name(provider_id) or provider_id,
+                    dispatched + 1, available_slots,
                 )
                 task.get_loop().call_soon_threadsafe(task.set_result, result)
                 dispatched += 1
 
             if dispatched > 0:
                 logger.info(
-                    "Reevaluation complete: dispatched %d queued requests for model %s (provider=%s)",
-                    dispatched, model_name, provider_id,
+                    "Reevaluation complete: dispatched %d queued requests for model=%s (worker=%s)",
+                    dispatched, model_name,
+                    self._logosnode.get_provider_name(provider_id) or provider_id,
                 )
 
     def update_model_registry(self, model_registry: Dict[tuple[int, int], str]) -> None:
