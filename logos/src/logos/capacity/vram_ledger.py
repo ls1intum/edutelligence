@@ -187,16 +187,17 @@ class VRAMLedger:
             )
             return None
 
-        # Per-GPU check when device placement is known (single-GPU only).
-        # For TP>1 (multiple GPUs), vLLM manages its own cross-GPU memory
-        # allocation internally — rank 0 gets more VRAM than other ranks,
-        # and CUDA allocator pools can make per-GPU free appear lower than
-        # reality.  The provider-level check above is authoritative for TP
-        # workloads; adding a per-GPU gate causes false denials on tight fits
-        # that vLLM handles fine in practice.
+        # Per-GPU check when device placement is known.  Callers pass the
+        # *aggregate* vram_mb (full footprint across all TP ranks); we divide
+        # by len(parsed_gpus) to get the per-rank cost.  This matches the
+        # per-GPU accounting in `reserve()` above, where each reservation is
+        # split evenly across its target GPUs.  The aggregate provider check
+        # is not sufficient on its own — a TP>1 wake can fit aggregate-wise
+        # while being individually unfit on one rank, causing runtime CUDA
+        # OOM at vLLM wake time.
         parsed_gpus = _parse_gpu_devices(gpu_devices)
-        if parsed_gpus and per_gpu_free is not None and len(parsed_gpus) == 1:
-            per_gpu_needed = vram_mb * safety_margin
+        if parsed_gpus and per_gpu_free is not None:
+            per_gpu_needed = (vram_mb / len(parsed_gpus)) * safety_margin
             for dev in parsed_gpus:
                 gpu_avail = per_gpu_free.get(dev, 0.0)
                 gpu_committed = self._gpu_committed.get((provider_id, dev), 0.0)
@@ -204,10 +205,10 @@ class VRAMLedger:
                 if gpu_effective < per_gpu_needed:
                     logger.debug(
                         "VRAM reserve DENIED (GPU %d): provider=%d lane=%s op=%s "
-                        "need=%.0fMB/GPU effective=%.0fMB "
+                        "need=%.0fMB/GPU effective=%.0fMB tp=%d "
                         "(raw=%.0fMB committed=%.0fMB)",
                         dev, provider_id, lane_id, operation,
-                        per_gpu_needed, gpu_effective,
+                        per_gpu_needed, gpu_effective, len(parsed_gpus),
                         gpu_avail, gpu_committed,
                     )
                     return None
