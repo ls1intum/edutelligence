@@ -16,7 +16,7 @@ from httpx import Client as HTTPXClient
 from httpx import HTTPTransport, Timeout
 from langchain_core.tools import BaseTool
 from langchain_experimental.llms.ollama_functions import convert_to_ollama_tool
-from ollama import Client, Image, Message
+from ollama import Client, Message
 from pydantic import BaseModel, Field
 from requests.auth import HTTPBasicAuth
 
@@ -37,13 +37,13 @@ from ...llm.external.model import ChatModel, CompletionModel, EmbeddingModel
 logger = get_logger(__name__)
 
 
-def convert_to_ollama_images(base64_images: list[str]) -> list[Image] | None:
+def convert_to_ollama_images(base64_images: list[str]) -> list[bytes] | None:
     """
-    Convert a list of base64 images to a list of Ollama Image objects
+    Convert a list of base64 images to a list of bytes
     """
     if not base64_images:
         return None
-    return [Image(value=base64.b64decode(img)) for img in base64_images]
+    return [base64.b64decode(base64_image) for base64_image in base64_images]
 
 
 def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
