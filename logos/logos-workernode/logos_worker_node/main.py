@@ -151,6 +151,49 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _log_storage_layout(cfg) -> None:
+    """Log the resolved storage paths for HF + the four compilation/JIT caches.
+
+    Surfaces (a) where the cache root resolves from — env var vs. config field
+    vs. ollama-path fallback — and (b) the absolute path each cache will use,
+    so a single grep at boot is enough to debug "is X being persisted?"
+    questions.
+    """
+    from logos_worker_node.vllm_process import VllmProcessHandle
+
+    cache_root = VllmProcessHandle._resolve_persistent_cache_root(cfg.engines.ollama)
+    if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
+        source = "LOGOS_WORKER_CACHE_ROOT env var"
+    elif cfg.worker.cache_path:
+        source = "config.yml worker.cache_path"
+    else:
+        source = "fallback: engines.ollama.models_path"
+
+    hf_home = (
+        os.environ.get("HF_HOME", "").strip()
+        or os.path.join(cache_root, ".hf_cache")
+    )
+    cache_dir = os.path.join(cache_root, ".cache")
+    vllm_cache = os.environ.get("VLLM_CACHE_ROOT", "").strip() or os.path.join(cache_dir, "vllm")
+    inductor_cache = (
+        os.environ.get("TORCHINDUCTOR_CACHE_DIR", "").strip()
+        or os.path.join(cache_dir, "torch_inductor")
+    )
+    flashinfer_base = (
+        os.environ.get("FLASHINFER_WORKSPACE_BASE", "").strip() or cache_root
+    )
+
+    logger.info(
+        "\033[1m\033[36m══ STORAGE LAYOUT ══\033[0m\n"
+        "  cache root: %s  (%s)\n"
+        "    HF_HOME                  → %s\n"
+        "    VLLM_CACHE_ROOT          → %s\n"
+        "    TORCHINDUCTOR_CACHE_DIR  → %s\n"
+        "    FLASHINFER_WORKSPACE_BASE→ %s  (kernels at <base>/.cache/flashinfer/<version>/<sm>/cached_ops/)",
+        cache_root, source, hf_home, vllm_cache, inductor_cache, flashinfer_base,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -158,6 +201,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.exception("Failed to load configuration")
         sys.exit(1)
+
+    _log_storage_layout(cfg)
 
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
