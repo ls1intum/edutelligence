@@ -207,6 +207,17 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    cache_path: str = Field(
+        default="",
+        description=(
+            "Persistent root directory for HF model weights, vLLM compilation "
+            "cache, torch inductor cache, and FlashInfer JIT kernels. Empty "
+            "(default) → fall back to engines.ollama.models_path so existing "
+            "ollama-aware deployments keep working unchanged. The env var "
+            "LOGOS_WORKER_CACHE_ROOT, when set, takes precedence over this "
+            "field."
+        ),
+    )
     auto_reboot_on_stuck_gpu: bool = Field(
         default=True,
         description=(

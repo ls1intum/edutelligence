@@ -295,9 +295,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if cfg.lanes and cfg.worker.max_lanes > 0 and len(cfg.lanes) > effective_max_dynamic:
         logger.warning(
-            "Restored %d dynamic lane(s) from lanes.json but MAX_LANES=%d "
+            "config.yml declares %d dynamic lane(s) but MAX_LANES=%d "
             "(%d static lane(s) already active); "
-            "dropping all restored lanes and starting in zero-lane mode",
+            "dropping all dynamic lanes and starting in zero-lane mode",
             len(cfg.lanes), cfg.worker.max_lanes, len(static_lane_ids),
         )
         cfg.lanes = []

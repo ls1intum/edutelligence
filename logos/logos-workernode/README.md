@@ -24,9 +24,11 @@ The worker uses **one persistent volume** for everything that benefits from
 surviving container restarts: model weights and four compilation/JIT caches.
 All five hang off a single root, resolved at boot:
 
-1. `LOGOS_WORKER_CACHE_ROOT` env var if set (recommended for non-ollama
-   deployments).
-2. otherwise `cfg.engines.ollama.models_path` (default in `config.yml`:
+1. `LOGOS_WORKER_CACHE_ROOT` env var if set (operator/CI override, e.g. via
+   `.env`).
+2. otherwise `worker.cache_path` from `config.yml` (recommended config-file
+   knob — see `config.example.yml`).
+3. otherwise `engines.ollama.models_path` (default in `config.yml`:
    `/usr/share/ollama/.ollama/models`) — used because the standard
    `docker-compose.yml` already mounts that path as a named volume
    (`ollama-models`).
@@ -41,14 +43,19 @@ Layout under `<root>/`:
 | `.cache/flashinfer/<version>/<sm>/cached_ops/*.so` | FlashInfer JIT kernels (per-`(head_dim, dtype)`) | `FLASHINFER_WORKSPACE_BASE` (parent of `.cache/flashinfer`) | first compile takes 30–60 s; reused thereafter |
 | (ollama's own GGUF blobs, if Ollama is configured) | Ollama models | `OLLAMA_MODELS` | when Ollama lanes are in use |
 
-**Default deployment** — leave `LOGOS_WORKER_CACHE_ROOT` unset; everything
-defaults to `cfg.engines.ollama.models_path` and is preserved by the
-`ollama-models` named volume in `docker-compose.yml`. This is the
-expected setup for ASE/Ansible deployments.
+**Default deployment** — leave both `LOGOS_WORKER_CACHE_ROOT` and
+`worker.cache_path` unset; everything defaults to
+`engines.ollama.models_path` and is preserved by the `ollama-models`
+named volume in `docker-compose.yml`. This is the expected setup for
+ASE/Ansible deployments.
 
-**Non-ollama deployment** — set `LOGOS_WORKER_CACHE_ROOT=/var/cache/logos-worker`
-(or any persistent path) in `.env` and mount that path as a Docker volume.
-All four caches relocate together, ollama remains optional.
+**Non-ollama deployment** — set `worker.cache_path: /var/cache/logos-worker`
+(or any persistent path) in `config.yml` and mount that path as a Docker
+volume. All four caches relocate together, ollama remains optional.
+
+**Operator override** — set `LOGOS_WORKER_CACHE_ROOT=/some/path` in `.env`
+to override `config.yml` for a particular host without editing the
+config file.
 
 **Per-cache override** — any of `HF_HOME`, `VLLM_CACHE_ROOT`,
 `TORCHINDUCTOR_CACHE_DIR`, `FLASHINFER_WORKSPACE_BASE` can be set
