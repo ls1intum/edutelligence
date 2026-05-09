@@ -194,6 +194,13 @@ class CapacityPlanner:
         self._cross_provider_dedup = os.environ.get(
             "LOGOS_PLANNER_CROSS_PROVIDER_DEDUP", "true"
         ).strip().lower() not in ("0", "false", "no")
+        # Phase 3: split Gate 1 (drop scheduler queue from pre-filter), tighten
+        # branch A of the proceed check, and gate the per-lane VRAM ledger.
+        # Default off until staging confirms the deimama symptom unblocks
+        # without surprising eviction patterns.
+        self._eviction_gate_v2 = os.environ.get(
+            "LOGOS_EVICTION_GATE_V2", "false"
+        ).strip().lower() in ("1", "true", "yes")
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
@@ -1444,6 +1451,7 @@ class CapacityPlanner:
         per_gpu_deficit: dict[int, float],
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
+        target_model_name: Optional[str] = None,
     ) -> Optional[list[tuple[LaneSchedulerSignals, str, float]]]:
         """Find the minimum-score set of lanes to evict to cover per_gpu_deficit.
 
@@ -1480,15 +1488,29 @@ class CapacityPlanner:
         # empty. Each entry is (lane_id, model_name, reason).
         skipped: list[tuple[str, str, str]] = []
         for lane in lanes:
-            # Skip if lane has active traffic or scheduler queue demand
             total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
-            if lane.active_requests > 0 or lane.queue_waiting > 0 or total_demand > 0:
-                skipped.append((
-                    lane.lane_id, lane.model_name,
-                    f"busy/queued(active={lane.active_requests},"
-                    f"vllm_q={int(lane.queue_waiting)},sched_q={total_demand})",
-                ))
-                continue
+            # Phase 3.1: under LOGOS_EVICTION_GATE_V2, hard-block only on
+            # vLLM-internal busyness (active_requests / queue_waiting). The
+            # Logos-external scheduler queue is no longer a hard pre-filter
+            # — it contributes to victim eff at the competitive-ratio site
+            # below. Drain (lines 2330+) handles vLLM-busy lanes; eviction
+            # handles vLLM-idle lanes whose model has external demand.
+            if self._eviction_gate_v2:
+                if lane.active_requests > 0 or lane.queue_waiting > 0:
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"busy(active={lane.active_requests},"
+                        f"vllm_q={int(lane.queue_waiting)})",
+                    ))
+                    continue
+            else:
+                if lane.active_requests > 0 or lane.queue_waiting > 0 or total_demand > 0:
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"busy/queued(active={lane.active_requests},"
+                        f"vllm_q={int(lane.queue_waiting)},sched_q={total_demand})",
+                    ))
+                    continue
             # NOTE: load_cooldown is checked *per-action* below, not as a
             # blanket filter. A freshly-loaded lane is fair game for sleep_l1
             # (cheap, reversible — no work is wasted by sleeping a vLLM lane
@@ -1569,7 +1591,17 @@ class CapacityPlanner:
                 has_speculative_demand = (
                     self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
                 )
-                if self._stop_dedup_siblings:
+                # Phase 3.3: self-eviction (this sleeping lane is the same
+                # model as the wake/load target) is degenerate — stopping it
+                # to make room for itself is always safe.
+                is_self_eviction = (
+                    self._eviction_gate_v2
+                    and target_model_name is not None
+                    and lane.model_name == target_model_name
+                )
+                if is_self_eviction:
+                    pass  # bypass demand checks below
+                elif self._stop_dedup_siblings:
                     chosen = self._pick_request_target_lane(provider_id, lane.model_name)
                     is_chosen_sibling = chosen is not None and chosen.lane_id == lane.lane_id
                     if has_real_queue and is_chosen_sibling:
@@ -1696,6 +1728,7 @@ class CapacityPlanner:
         tp: int,
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
+        target_model_name: Optional[str] = None,
     ) -> Optional[tuple[frozenset[int], list[tuple[LaneSchedulerSignals, str, float]]]]:
         """Find the best GPU set for a cold load and its required eviction set.
 
@@ -1718,6 +1751,7 @@ class CapacityPlanner:
                 return frozenset(), []
             eviction_set = self._find_eviction_set(
                 provider_id, frozenset(), {}, lanes, profiles,
+                target_model_name=target_model_name,
             )
             # Can't do proper per-GPU accounting; return aggregate result
             if eviction_set is None:
@@ -1741,6 +1775,7 @@ class CapacityPlanner:
 
             eviction_set = self._find_eviction_set(
                 provider_id, gpu_set, per_gpu_deficit, lanes, profiles,
+                target_model_name=target_model_name,
             )
             if eviction_set is None:
                 continue  # Can't cover this GPU combo
@@ -2013,19 +2048,27 @@ class CapacityPlanner:
         # We check both the ledger (covers the load/wake phase after the capacity
         # lock is released) and the lock itself (covers the reclaim phase before
         # the reservation is created).
-        # TODO: per-lane awareness instead of full-provider skip — the current
-        #       check blocks planning for ALL models on the provider even when only
-        #       one lane is being loaded.  A finer-grained approach would track
-        #       which model/lane the in-flight operation targets and only skip
-        #       planning decisions that conflict with it.
+        # Phase 3.4: under LOGOS_EVICTION_GATE_V2 the ledger check moves into
+        # the per-model loop so disjoint-GPU planning isn't blocked by an
+        # unrelated in-flight reservation. The capacity-lock check stays at
+        # function-level — that lock serializes reclaim+commit on the provider
+        # and dropping it would race the ledger update.
         committed = self._vram_ledger.get_committed_mb(provider_id)
         capacity_locked = self._provider_capacity_lock(provider_id).locked()
-        if committed > 0 or capacity_locked:
+        if capacity_locked:
+            logger.info(
+                "Skipping demand planning for worker=%s: provider capacity lock"
+                " held (committed=%.0fMB)",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                committed,
+            )
+            return []
+        if committed > 0 and not self._eviction_gate_v2:
             logger.info(
                 "Skipping demand planning for worker=%s: "
-                "in-flight VRAM reservation (committed=%.0fMB locked=%s)",
+                "in-flight VRAM reservation (committed=%.0fMB)",
                 self._facade.get_provider_name(provider_id) or provider_id,
-                committed, capacity_locked,
+                committed,
             )
             return []
 
@@ -2082,6 +2125,21 @@ class CapacityPlanner:
                 )
                 continue
             model_lanes = lanes_by_model.get(model_name, [])
+            # Phase 3.4: per-lane VRAM ledger gate — under v2, only skip this
+            # model if an in-flight reservation overlaps the GPUs its target
+            # lane(s) would use. Models targeting disjoint GPUs proceed.
+            if self._eviction_gate_v2 and committed > 0:
+                target_gpus: frozenset[int] = frozenset()
+                for l in model_lanes:
+                    target_gpus = target_gpus | frozenset(self._parse_gpu_device_ids(l.gpu_devices))
+                if self._vram_ledger.has_overlapping_reservation(provider_id, target_gpus):
+                    logger.info(
+                        "Skipping demand action for worker=%s model=%s: in-flight"
+                        " VRAM reservation overlaps target GPUs %s",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        model_name, sorted(target_gpus) if target_gpus else "any",
+                    )
+                    continue
             eff = self._effective_demand(model_name, provider_id, lanes)
             here_queue = self._get_queue_depth_for_model(provider_id, model_name, lanes)
             cross_queue = self._get_queue_depth_across_deployments(model_name)
@@ -2155,6 +2213,7 @@ class CapacityPlanner:
                 available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
                 eviction_set = self._find_eviction_set(
                     provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
+                    target_model_name=model_name,
                 )
 
                 if eviction_set is None:
@@ -2189,18 +2248,50 @@ class CapacityPlanner:
                     #     → keep the ratio gate so a model that *might*
                     #     be popular doesn't preempt a recently-warm one
                     #     on speculation alone.
+                    #
+                    # Phase 3.2: under v2, branch (a) only fires when the
+                    # victim is genuinely idle (eff < floor). Otherwise
+                    # both target and victim have queue and we must use
+                    # the ratio comparison — which, after base demand
+                    # decays, reduces to fair queue-size ranking.
+                    # Phase 3.3: self-eviction (target_model == victim_model)
+                    # is degenerate — sleeping a loaded copy of the model
+                    # to wake another lane for the same model is always
+                    # safe; bypass the ratio in that case.
                     has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
+                    non_self_victims = [s for vlane, _, s in eviction_set if vlane.model_name != model_name]
+                    self_only = not non_self_victims
                     max_victim_score = max(s for _, _, s in eviction_set)
-                    proceed = (
-                        (has_queued and eff >= self.DEMAND_WAKE_FLOOR)
-                        or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
-                    )
-                    if proceed:
+                    if self._eviction_gate_v2:
+                        max_non_self = max(non_self_victims) if non_self_victims else 0.0
+                        victim_below_floor = max_non_self < self.DEMAND_WAKE_FLOOR
+                        proceed = (
+                            self_only
+                            or (has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR)
+                            or eff > max_non_self * self.WAKE_COMPETITIVE_RATIO
+                        )
+                        if self_only:
+                            gate_reason = "self-eviction (same model as target)"
+                        elif has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR:
+                            gate_reason = (
+                                f"queued_demand & victims_idle → bypass ratio "
+                                f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
+                            )
+                        else:
+                            gate_reason = (
+                                f"target_eff={eff:.2f} > victim={max_non_self:.2f}×{self.WAKE_COMPETITIVE_RATIO}"
+                            )
+                    else:
+                        proceed = (
+                            (has_queued and eff >= self.DEMAND_WAKE_FLOOR)
+                            or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
+                        )
                         gate_reason = (
                             f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                             if has_queued and eff <= max_victim_score * self.WAKE_COMPETITIVE_RATIO
                             else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.WAKE_COMPETITIVE_RATIO}"
                         )
+                    if proceed:
                         for vlane, vaction, _ in eviction_set:
                             if vlane.lane_id in claimed_victims:
                                 continue
@@ -2262,6 +2353,7 @@ class CapacityPlanner:
             available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
             placement = self._pick_cold_load_placement(
                 provider_id, load_cost, tp, available_lanes, profiles,
+                target_model_name=model_name,
             )
 
             if placement is None:
@@ -2309,17 +2401,41 @@ class CapacityPlanner:
                 # already idle by construction); speculative score is
                 # gated by LOAD_COMPETITIVE_RATIO to avoid thrashing on
                 # a model that *might* become popular.
+                # Phase 3.2/3.3: under v2, branch (a) requires victim_below_floor
+                # and self-eviction is degenerate.
+                non_self_victims = [s for vlane, _, s in eviction_set if vlane.model_name != model_name]
+                self_only = not non_self_victims
                 max_victim_score = max(s for _, _, s in eviction_set)
-                proceed = (
-                    (has_queued and eff >= self.DEMAND_LOAD_FLOOR)
-                    or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
-                )
-                if proceed:
+                if self._eviction_gate_v2:
+                    max_non_self = max(non_self_victims) if non_self_victims else 0.0
+                    victim_below_floor = max_non_self < self.DEMAND_LOAD_FLOOR
+                    proceed = (
+                        self_only
+                        or (has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR)
+                        or eff > max_non_self * self.LOAD_COMPETITIVE_RATIO
+                    )
+                    if self_only:
+                        gate_reason = "self-eviction (same model as target)"
+                    elif has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR:
+                        gate_reason = (
+                            f"queued_demand & victims_idle → bypass ratio "
+                            f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
+                        )
+                    else:
+                        gate_reason = (
+                            f"target_eff={eff:.2f} > victim={max_non_self:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
+                        )
+                else:
+                    proceed = (
+                        (has_queued and eff >= self.DEMAND_LOAD_FLOOR)
+                        or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
+                    )
                     gate_reason = (
                         f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                         if has_queued and eff <= max_victim_score * self.LOAD_COMPETITIVE_RATIO
                         else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
                     )
+                if proceed:
                     lane_id = self._planner_lane_id(model_name)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
