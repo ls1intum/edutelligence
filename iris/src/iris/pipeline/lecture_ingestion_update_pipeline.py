@@ -430,14 +430,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         tokens += LectureUnitPipeline(local=is_local, callback=callback)(
             lecture_unit=lecture_unit_dto
         )
-        slide_map = self.dto.lecture_unit.slide_page_number_map or {}
-        normalized_slide_map = {
-            str(pdf_page): int(slide_page)
-            for pdf_page, slide_page in sorted(
-                slide_map.items(), key=lambda item: item[0]
-            )
-        }
-        ingestion_result = json.dumps({"slidePageNumberMap": normalized_slide_map})
+        slide_page_numbers = self.dto.lecture_unit.slide_page_numbers or []
+        ingestion_result = json.dumps({"slidePageNumbers": slide_page_numbers})
         callback.done(
             "Ingested lecture unit summary into vector database",
             final_result=ingestion_result,

@@ -19,6 +19,7 @@ def test_parse_slide_page_number_without_number_returns_minus_one():
     assert LectureUnitPageIngestionPipeline.parse_slide_page_number("null") == -1
     assert LectureUnitPageIngestionPipeline.parse_slide_page_number("") == -1
     assert LectureUnitPageIngestionPipeline.parse_slide_page_number("-1") == -1
+    assert LectureUnitPageIngestionPipeline.parse_slide_page_number(None) == -1
 
 
 def test_parse_slide_page_number_keeps_large_values():

@@ -41,6 +41,12 @@ logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
 
+# Thresholds for detecting header/footer regions in PDF pages
+# These values define the relative position (as fraction of page height)
+# where we look for slide numbers
+HEADER_THRESHOLD = 0.12  # Top 12% of page
+FOOTER_THRESHOLD = 0.88  # Bottom 12% of page (from 88% onwards)
+
 
 _UNICODE_BULLETS = (
     "\u0095"  # BULLET (legacy Windows-1252)
@@ -211,14 +217,16 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-            chunks.extend(
-                self.chunk_data(
-                    lecture_pdf=pdf_path,
-                    lecture_unit_slide_dto=self.dto.lecture_unit,
-                    base_url=self.dto.settings.artemis_base_url,
+            try:
+                chunks.extend(
+                    self.chunk_data(
+                        lecture_pdf=pdf_path,
+                        lecture_unit_slide_dto=self.dto.lecture_unit,
+                        base_url=self.dto.settings.artemis_base_url,
+                    )
                 )
-            )
-            cleanup_temporary_file(pdf_path)
+            finally:
+                cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
             logger.info(
@@ -314,17 +322,21 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
         )
-        prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
+        prefix = (
+            f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
+            if lecture_unit_slide_dto
+            else "[Unknown Lecture]"
+        )
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
-        slide_page_number_map: dict[int, int] = {}
+        slide_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
             self.callback.in_progress(
                 f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
             )
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            slide_page_number_map[page_num + 1] = self.extract_slide_page_number(page)
+            slide_page_numbers.append(self.extract_slide_page_number(page))
             if page.get_images(full=False):
                 logger.info(
                     "%s Page %d/%d: has images, interpreting with LLM",
@@ -358,11 +370,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             old_page_text = page_text
         if lecture_unit_slide_dto is not None:
-            lecture_unit_slide_dto.slide_page_number_map = slide_page_number_map
+            lecture_unit_slide_dto.slide_page_numbers = slide_page_numbers
             logger.info(
-                "%s Slide page number map: %s",
+                "%s Slide page numbers: %s",
                 prefix,
-                slide_page_number_map,
+                slide_page_numbers,
             )
         logger.info(
             "%s PDF chunking complete: %d chunks from %d pages",
@@ -375,24 +387,42 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     def extract_slide_page_number(self, page: fitz.Page) -> int:
         """Read the visible page/slide number from a PDF page.
 
+        Uses text-based extraction to find slide numbers in header/footer regions,
+        avoiding costly vision-model calls when possible.
+
         Returns:
-            int: Detected number, or -1 if no number is visible.
+            int: Detected slide number (positive integer), or -1 if no number found.
         """
         text_candidate = self.extract_slide_page_number_from_text(page)
         if text_candidate == -1:
-            logger.info("Page %d: slide page number not found", page.number + 1)
+            logger.debug("Page %d: slide page number not found", page.number + 1)
         return text_candidate
 
     @staticmethod
     def extract_slide_page_number_from_text(page: fitz.Page) -> int:
         """Extract a likely slide number from textual footer/header content.
 
-        This avoids a costly vision-model call for normal PDFs where the visible
+        Detection heuristic:
+        1. Searches for numbers in header (top 12%) or footer (bottom 12%) regions
+        2. Prioritizes footer candidates over header candidates
+        3. Among same-region candidates, prefers those closest to page edge
+        4. For equal positions, prefers shorter text (likely just the number)
+
+        This avoids costly vision-model calls for normal PDFs where the visible
         slide number is already available in the extracted page text.
+
+        Args:
+            page: The PDF page to extract from.
+
+        Returns:
+            int: Detected slide number, or -1 if none found or extraction fails.
         """
         try:
             words = page.get_text("words")
-        except Exception as e:
+        except (RuntimeError, ValueError, AttributeError) as e:
+            # RuntimeError: PDF parsing errors
+            # ValueError: Invalid page state
+            # AttributeError: Malformed page object
             logger.debug("Failed to extract words for page %d: %s", page.number + 1, e)
             return -1
 
@@ -400,15 +430,20 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             return -1
 
         page_height = page.rect.height
-        top_cutoff = page_height * 0.12
-        bottom_cutoff = page_height * 0.88
+        top_cutoff = page_height * HEADER_THRESHOLD
+        bottom_cutoff = page_height * FOOTER_THRESHOLD
+        # Candidates: (region_priority, edge_distance, text_length, slide_number)
+        # Sorted to prefer: footer > header, closer to edge, shorter text
         candidates: list[tuple[int, float, int, int]] = []
 
         for word in words:
+            # Word format: (x0, y0, x1, y1, text, block_no, line_no, word_no)
+            if len(word) < 5:
+                continue
             y0 = word[1]
             y1 = word[3]
             text = word[4]
-            parsed = LectureUnitPageIngestionPipeline.parse_slide_page_number(str(text))
+            parsed = LectureUnitPageIngestionPipeline.parse_slide_page_number(text)
             if parsed == -1:
                 continue
 
@@ -434,14 +469,15 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return candidates[0][3]
 
     @staticmethod
-    def parse_slide_page_number(raw: str) -> int:
-        """Parse LLM response into a slide page number (-1 fallback)."""
+    def parse_slide_page_number(raw: Optional[str]) -> int:
+        """Parse text into a slide page number (-1 fallback for invalid input)."""
         text = (raw or "").strip().lower()
         if not text:
             return -1
-        if "null" in text or "none" in text or "unknown" in text:
-            return -1
-        if text == "-1":
+
+        # Check for known invalid values
+        invalid_values = {"null", "none", "unknown", "-1"}
+        if text in invalid_values or any(val in text for val in invalid_values):
             return -1
         match = re.search(r"-?\d+", text)
         if not match:
