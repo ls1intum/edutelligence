@@ -1789,10 +1789,14 @@ class CapacityPlanner:
         per_gpu_free = self._get_per_gpu_free(provider_id)
 
         if not per_gpu_free:
-            # No per-GPU info — fall back to aggregate check with no GPU constraint
+            # No per-GPU info — fall back to aggregate check with no GPU constraint.
+            # Add per-GPU cold-start headroom (×tp) so the aggregate path is as
+            # conservative as the per-GPU path; otherwise tight aggregate fits
+            # silently bypass the runtime overhead allowance.
             capacity = self._safe_get_capacity(provider_id)
             available = float(capacity.available_vram_mb) if capacity else 0.0
-            deficit = max(0.0, load_cost_mb * self.VRAM_SAFETY_MARGIN - available)
+            needed = load_cost_mb + tp * self.PER_GPU_COLD_START_MB
+            deficit = max(0.0, needed - available)
             if deficit <= 0:
                 return frozenset(), []
             eviction_set = self._find_eviction_set(
@@ -2245,13 +2249,22 @@ class CapacityPlanner:
                 if effective_target_gpus and per_gpu_free:
                     for g in effective_target_gpus:
                         free = per_gpu_free.get(g, 0.0)
-                        deficit = max(0.0, wake_cost_per_gpu * self.VRAM_SAFETY_MARGIN - free)
+                        # Add fixed cold-start headroom (CUDA context, NCCL,
+                        # allocator pools) per GPU so the wake check matches
+                        # _passes_minimum_load_feasibility / _check_per_gpu_feasibility.
+                        # Without this, an awake-on-GPU0 sibling can leave just
+                        # enough raw free for the model footprint but not the
+                        # ~500 MB runtime overhead → OOM at wake time.
+                        per_gpu_needed = wake_cost_per_gpu + self.PER_GPU_COLD_START_MB
+                        deficit = max(0.0, per_gpu_needed - free)
                         if deficit > 0:
                             per_gpu_deficit[g] = deficit
                 else:
                     # No per-GPU info at all: fall back to aggregate sentinel.
+                    # Same +cold-start headroom applied per GPU we'd touch (tp).
                     avail = float(capacity.available_vram_mb) if capacity else 0.0
-                    deficit = max(0.0, (loaded_mb - residual_mb) * self.VRAM_SAFETY_MARGIN - avail)
+                    needed = (loaded_mb - residual_mb) + tp * self.PER_GPU_COLD_START_MB
+                    deficit = max(0.0, needed - avail)
                     if deficit > 0:
                         per_gpu_deficit[-1] = deficit  # sentinel for aggregate
                 target_gpus = effective_target_gpus
