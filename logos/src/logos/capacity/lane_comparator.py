@@ -23,6 +23,25 @@ _STATE_RANK: dict[str, int] = {
 
 
 def lane_sort_key(lane: LaneSchedulerSignals) -> tuple:
+    """Return the canonical sort key for ``lane`` (lower is better).
+
+    Tuple ordering — every dimension breaks ties for the next:
+
+      1. ``state_rank``        — running < loaded < sleeping < cold < starting
+                                 (unknown states fall to the end via 99).
+      2. ``queue_waiting``      — fewer queued requests preferred.
+      3. ``requests_running``   — fewer in-flight preferred.
+      4. ``active_requests``    — fewer admitted preferred.
+      5. ``ttft_p95_seconds``   — faster first-token preferred.
+      6. ``-effective_vram_mb`` — more resident VRAM preferred (negated so
+                                  the natural-sort min picks the larger).
+                                  ``None``/``0`` is treated as 0 MB.
+      7. ``lane_id``            — alphabetical, stable final tiebreak.
+
+    The returned tuple is intended for ``sorted(..., key=lane_sort_key)`` or
+    ``min(..., key=lane_sort_key)``. Does not raise; relies on each named
+    attribute being present on ``LaneSchedulerSignals``.
+    """
     return (
         _STATE_RANK.get(lane.runtime_state, 99),
         lane.queue_waiting,
@@ -35,6 +54,15 @@ def lane_sort_key(lane: LaneSchedulerSignals) -> tuple:
 
 
 def best_lane(lanes: list[LaneSchedulerSignals]) -> LaneSchedulerSignals | None:
+    """Return the lane that ranks first under :func:`lane_sort_key`.
+
+    Args:
+        lanes: candidate lanes, all assumed to serve the same model.
+
+    Returns:
+        The single best lane, or ``None`` when ``lanes`` is empty. Never
+        raises.
+    """
     if not lanes:
         return None
     return min(lanes, key=lane_sort_key)

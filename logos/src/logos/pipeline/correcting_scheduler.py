@@ -516,12 +516,20 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             result.ettft_tier = ettft.tier.value
 
             if provider_type == "logosnode":
+                # Phase 2 (model-only queue): the provider we enqueued against
+                # may not be the one that ultimately dispatched the request —
+                # any provider serving this model can pop from the shared
+                # queue. Attribute SDI accounting to the *dispatched* provider
+                # (result.provider_id) rather than the candidate, otherwise
+                # active-request counts drift away from what's actually
+                # running on each worker.
+                dispatched_pid = result.provider_id
                 try:
                     if result.was_queued:
                         self._logosnode.on_request_start(
                             request.request_id,
                             model_id=result.model_id,
-                            provider_id=provider_id,
+                            provider_id=dispatched_pid,
                             priority=priority.name.lower(),
                         )
                     # slot_transferred=True means a completing request kept its
@@ -531,7 +539,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
                         increment_active=not result.slot_transferred,
-                        provider_id=provider_id,
+                        provider_id=dispatched_pid,
                     )
                 except KeyError:
                     pass

@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from threading import RLock
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 
 from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
 
@@ -223,19 +223,25 @@ class PriorityQueueManager:
             )
 
     def get_entries_for_priority(
-        self, model_id: int, provider_id_or_priority=None, priority: Optional[Priority] = None,
+        self,
+        model_id: int,
+        provider_id: Optional[Union[int, Priority]] = None,
+        priority: Optional[Priority] = None,
     ) -> List[QueueEntry]:
         """Get all queue entries for a specific model and priority.
 
-        Back-compat shim: callers that pass ``(model_id, provider_id, priority)``
-        still work — the second positional argument is treated as ``provider_id``
-        (and ignored) when ``priority`` is supplied; otherwise the second
-        positional argument is treated as ``priority``.
+        Back-compat: callers that pass ``(model_id, provider_id, priority)``
+        positionally — or supply ``provider_id=...`` as a keyword — keep
+        working; the provider id is ignored under model-only queueing.
+        Two-arg model-only callers ``(model_id, priority)`` also work: when
+        the third argument is omitted, the second positional value is
+        re-interpreted as the priority.
         """
         if priority is None:
-            # Old-style call: (model_id, priority)
-            priority = provider_id_or_priority
-        # else: new-style call with both positional → middle is provider_id (ignored)
+            # Two-positional-arg model-only style: (model_id, priority).
+            priority = provider_id
+        # else: legacy three-arg style or provider_id= kwarg — middle value is
+        # the (now-ignored) provider id; trust the explicit `priority` kwarg.
         if not isinstance(priority, Priority):
             raise TypeError("get_entries_for_priority requires a Priority value")
 

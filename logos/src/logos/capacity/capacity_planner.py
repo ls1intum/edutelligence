@@ -36,7 +36,7 @@ from logos.terminal_logging import (
 )
 
 from .demand_tracker import DemandTracker
-from .lane_comparator import best_lane, lane_sort_key
+from .lane_comparator import best_lane
 from .vram_ledger import VRAMLedger
 from logos.monitoring import prometheus_metrics as prom
 
@@ -1124,7 +1124,9 @@ class CapacityPlanner:
             if loaded_at is None:
                 continue  # no timestamp — not blocked
             was_cold = self._lane_was_cold_loaded.get(key, True)
-            min_tenure = self._get_effective_tenure(was_cold)
+            min_tenure = self._get_effective_tenure(
+                was_cold, provider_id=provider_id, model_name=lane.model_name,
+            )
             remaining_tenure = min_tenure - (now - loaded_at)
             if remaining_tenure <= 0:
                 continue  # not actually blocked
@@ -1260,7 +1262,9 @@ class CapacityPlanner:
             if loaded_at is None:
                 continue  # unknown load time — not blocked by cooldown
             was_cold = self._lane_was_cold_loaded.get(key, True)
-            min_seconds = self._get_effective_tenure(was_cold)
+            min_seconds = self._get_effective_tenure(
+                was_cold, provider_id=provider_id, model_name=lane.model_name,
+            )
             drain_remaining = min_seconds - (now - loaded_at)
             if drain_remaining <= 0:
                 continue  # cooldown already expired — not what we're looking for
@@ -1341,8 +1345,30 @@ class CapacityPlanner:
     # Anti-thrashing helpers
     # ------------------------------------------------------------------
 
-    def _get_effective_tenure(self, was_cold_loaded: bool = False) -> float:
-        """Return minimum lane tenure (uniform — sleep is cheap)."""
+    def _get_effective_tenure(
+        self,
+        was_cold_loaded: bool = False,
+        *,
+        provider_id: Optional[int] = None,
+        model_name: Optional[str] = None,
+    ) -> float:
+        """Return minimum lane tenure for reclaim / drain decisions.
+
+        Defaults to ``LANE_MIN_TENURE_SECONDS`` (5 s).  When ``provider_id`` and
+        ``model_name`` are supplied AND the model has a queued waiter that was
+        flagged cold-at-queue, returns the extended
+        ``LANE_COLD_WAITER_TENURE_SECONDS`` (15 s) so a freshly woken lane is
+        not reclaimed before its triggering request gets to dispatch.  Mirrors
+        the gate inside ``_find_eviction_set``; threading the same helper here
+        means every tenure decision (idle reclaim, drain, request-time sleep)
+        honors cold-waiter protection consistently.
+        """
+        if (
+            provider_id is not None
+            and model_name
+            and self._model_has_cold_queued_waiter(provider_id, model_name)
+        ):
+            return self.LANE_COLD_WAITER_TENURE_SECONDS
         return self.LANE_MIN_TENURE_SECONDS
 
     def _get_queue_depth_for_model(
@@ -1544,10 +1570,8 @@ class CapacityPlanner:
             # (state=sleeping)" errors. Stop uses the longer LOAD_COOLDOWN
             # since its destructive, sleep_l1 just needs LANE_MIN_TENURE.
             lane_loaded_at = self._lane_loaded_at.get(self._lane_key(provider_id, lane.lane_id))
-            tenure_seconds = (
-                self.LANE_COLD_WAITER_TENURE_SECONDS
-                if self._model_has_cold_queued_waiter(provider_id, lane.model_name)
-                else self.LANE_MIN_TENURE_SECONDS
+            tenure_seconds = self._get_effective_tenure(
+                provider_id=provider_id, model_name=lane.model_name,
             )
             in_min_tenure = (
                 lane_loaded_at is not None
@@ -2148,18 +2172,28 @@ class CapacityPlanner:
                 continue
             model_lanes = lanes_by_model.get(model_name, [])
             # Phase 3.4: per-lane VRAM ledger gate — under v2, only skip this
-            # model if an in-flight reservation overlaps the GPUs its target
+            # model when an in-flight reservation overlaps the GPUs its target
             # lane(s) would use. Models targeting disjoint GPUs proceed.
-            if self._eviction_gate_v2 and committed > 0:
+            #
+            # For COLD models with no existing lane the GPU set is unknown
+            # here (model_lanes is empty), and the empty frozenset would be
+            # treated by has_overlapping_reservation as "match anything" —
+            # which would incorrectly block every cold seed/load whenever
+            # any unrelated reservation is in flight. Defer that check to
+            # the cold-load branch below where we have a concrete placement
+            # GPU set from _pick_cold_load_placement.
+            if self._eviction_gate_v2 and committed > 0 and model_lanes:
                 target_gpus: frozenset[int] = frozenset()
                 for l in model_lanes:
                     target_gpus = target_gpus | frozenset(self._parse_gpu_device_ids(l.gpu_devices))
-                if self._vram_ledger.has_overlapping_reservation(provider_id, target_gpus):
+                if target_gpus and self._vram_ledger.has_overlapping_reservation(
+                    provider_id, target_gpus,
+                ):
                     logger.info(
                         "Skipping demand action for worker=%s model=%s: in-flight"
                         " VRAM reservation overlaps target GPUs %s",
                         self._facade.get_provider_name(provider_id) or provider_id,
-                        model_name, sorted(target_gpus) if target_gpus else "any",
+                        model_name, sorted(target_gpus),
                     )
                     continue
             eff = self._effective_demand(model_name, provider_id, lanes)
@@ -2385,7 +2419,27 @@ class CapacityPlanner:
                 )
                 continue
 
-            _, eviction_set = placement
+            placement_gpus, eviction_set = placement
+            # Phase 3.4 (post-placement): now that we have a concrete GPU set
+            # for this cold model, enforce the per-lane VRAM-ledger gate that
+            # was deferred above (model_lanes was empty for cold candidates).
+            # An in-flight reservation overlapping these specific GPUs would
+            # collide with this load.
+            if (
+                self._eviction_gate_v2
+                and committed > 0
+                and placement_gpus
+                and self._vram_ledger.has_overlapping_reservation(
+                    provider_id, placement_gpus,
+                )
+            ):
+                logger.info(
+                    "Skipping load of %s on worker=%s: in-flight VRAM "
+                    "reservation overlaps planned GPUs %s",
+                    model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                    sorted(placement_gpus),
+                )
+                continue
             logger.info(
                 "Load candidate model=%s tp=%d load_cost=%.0fMB placement=%s eviction_needed=%s",
                 model_name, tp, load_cost,
@@ -2510,6 +2564,9 @@ class CapacityPlanner:
                     params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                     reason=f"Capability seeding: worker declares {model_name}, eff={eff:.2f}",
                 ))
+                # Phase 1.3: capability-seed must also feed cycle dedup so a
+                # second provider doesn't seed the same model in the same cycle.
+                planned_models.add(model_name)
 
         # Phase 1.3: lift this provider's planned models into the cycle-wide
         # set so subsequent providers in the iteration order skip them.
@@ -3140,7 +3197,9 @@ class CapacityPlanner:
             if reclaim.action == "sleep_l1":
                 lane_key = (reclaim.provider_id, reclaim.lane_id)
                 loaded_at = self._lane_loaded_at.get(lane_key)
-                min_tenure = self._get_effective_tenure()
+                min_tenure = self._get_effective_tenure(
+                    provider_id=reclaim.provider_id, model_name=reclaim.model_name,
+                )
                 if min_tenure > 0:
                     if self._vram_ledger.has_active_reservation(
                         reclaim.provider_id, reclaim.lane_id,
@@ -3346,7 +3405,9 @@ class CapacityPlanner:
                 # wake and sleep without serving anything.
                 lane_key = (provider_id, lane.lane_id)
                 loaded_at = self._lane_loaded_at.get(lane_key)
-                min_tenure = self._get_effective_tenure()
+                min_tenure = self._get_effective_tenure(
+                    provider_id=provider_id, model_name=lane.model_name,
+                )
                 if min_tenure > 0:
                     # Block 1: in-flight VRAM reservation means a concurrent
                     # ensure_capacity is loading/waking this lane right now.
@@ -4557,7 +4618,9 @@ class CapacityPlanner:
         loaded_at = self._lane_loaded_at.get(lane_key)
         if loaded_at is not None:
             tenure_elapsed = time.time() - loaded_at
-            min_tenure = self._get_effective_tenure()
+            min_tenure = self._get_effective_tenure(
+                provider_id=provider_id, model_name=busy_lane.model_name,
+            )
             if tenure_elapsed < min_tenure:
                 logger.info(
                     "Drain skip lane=%s: tenure %.1f/%.1fs",
