@@ -1121,7 +1121,7 @@ def test_build_env_sets_persistent_caches(monkeypatch):
     monkeypatch.delenv("VLLM_CACHE_ROOT", raising=False)
     monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
     monkeypatch.delenv("TORCHINDUCTOR_FX_GRAPH_CACHE", raising=False)
-    monkeypatch.delenv("FLASHINFER_JIT_DIR", raising=False)
+    monkeypatch.delenv("FLASHINFER_WORKSPACE_BASE", raising=False)
     monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
     gc = OllamaConfig(models_path="/data/models")
     handle = VllmProcessHandle("lane-test", 19000, gc)
@@ -1131,7 +1131,10 @@ def test_build_env_sets_persistent_caches(monkeypatch):
     assert env["VLLM_CACHE_ROOT"] == "/data/models/.cache/vllm"
     assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.cache/torch_inductor"
     assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
-    assert env["FLASHINFER_JIT_DIR"] == "/data/models/.cache/flashinfer"
+    # flashinfer 0.6.x: FLASHINFER_WORKSPACE_BASE is the env var that actually
+    # relocates the JIT cache; it points to models_path (the parent of
+    # .cache/flashinfer), not to .cache/flashinfer itself.
+    assert env["FLASHINFER_WORKSPACE_BASE"] == "/data/models"
     assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"
 
 

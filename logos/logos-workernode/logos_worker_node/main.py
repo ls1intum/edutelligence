@@ -165,11 +165,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
     # subsequent vLLM launches — including TP>1 — find cached .so files and
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
+    # workspace_base is the parent of .cache/flashinfer; flashinfer 0.6.x reads
+    # FLASHINFER_WORKSPACE_BASE (not FLASHINFER_JIT_DIR) to relocate its cache.
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
-        cache_dir = os.path.join(cfg.engines.ollama.models_path, ".cache", "flashinfer")
+        workspace_base = cfg.engines.ollama.models_path
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
-        warmup_ok = flashinfer_warmup(cache_dir, model_names=capability_models)
+        warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
             forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
             if not forced_backend:

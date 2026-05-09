@@ -1058,9 +1058,17 @@ class VllmProcessHandle:
         if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
             env["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
 
-        # FlashInfer JIT kernel cache (critical — first compile can take 60s+)
-        if "FLASHINFER_JIT_DIR" not in os.environ:
-            env["FLASHINFER_JIT_DIR"] = os.path.join(cache_root, "flashinfer")
+        # FlashInfer JIT kernel cache (critical — first compile can take 60s+).
+        # flashinfer 0.6.x reads FLASHINFER_WORKSPACE_BASE (see
+        # flashinfer/jit/env.py) and writes its cache to
+        # <base>/.cache/flashinfer/<version>/<arch>/cached_ops/.  Pointing the
+        # base at the persistent volume keeps compiled .so files across
+        # container rebuilds so the worker boot warmup + first lane spawn pay
+        # JIT cost only once per (head_dim, dtype).  FLASHINFER_JIT_DIR is a
+        # Python attribute on flashinfer.jit.env, NOT an env var read at
+        # runtime — setting it has no effect.
+        if "FLASHINFER_WORKSPACE_BASE" not in os.environ:
+            env["FLASHINFER_WORKSPACE_BASE"] = gc.models_path
 
         # Auto-detect CUDA arch for faster compilation
         if "TORCH_CUDA_ARCH_LIST" not in os.environ:
