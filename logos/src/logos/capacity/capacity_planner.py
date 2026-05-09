@@ -266,26 +266,34 @@ class CapacityPlanner:
             logger.info("Capacity planner started (cycle=%ss)", self._cycle_seconds)
 
     def hint_capacity_needed(
-        self, provider_id: int, model_name: str
+        self, model_name: str, provider_id: Optional[int] = None,
     ) -> None:
-        """Wake the planner cycle ahead of schedule.
+        """Wake the planner cycle ahead of schedule for ``model_name``.
 
-        Called by the scheduler when a request gets queued for a model
-        whose lane isn't ready (cold or sleeping). Bumping demand is
-        already handled at classification time, so this only needs to
-        kick the cycle out of its sleep.
+        Called by the scheduler when a request gets queued for a model whose
+        lane isn't ready on any provider (cold or sleeping). The planner
+        decides which provider to wake using the unified comparator.
 
-        Idempotent: a burst of N requests coalesces into one extra
-        cycle execution.
+        ``provider_id`` is accepted for backward compatibility but treated
+        only as a logging breadcrumb — the planner picks the actual provider.
+
+        Idempotent: a burst of N hints coalesces into one extra cycle.
         """
         if not self._enabled or self._tick_event is None:
             return
         if not self._tick_event.is_set():
-            logger.info(
-                "Capacity hint received: worker=%s model=%s (waking cycle)",
-                self._facade.get_provider_name(provider_id) or provider_id, model_name,
-            )
-        self._tick_hints.append((provider_id, model_name))
+            if provider_id is not None:
+                logger.info(
+                    "Capacity hint received: model=%s (originating worker=%s; waking cycle)",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                )
+            else:
+                logger.info(
+                    "Capacity hint received: model=%s (waking cycle)", model_name,
+                )
+        # Provider id retained as a breadcrumb (-1 sentinel when unspecified).
+        self._tick_hints.append((provider_id if provider_id is not None else -1, model_name))
         # Trim hint log so it doesn't grow unboundedly under heavy load.
         if len(self._tick_hints) > 64:
             del self._tick_hints[: len(self._tick_hints) - 64]
@@ -633,7 +641,7 @@ class CapacityPlanner:
                 self._facade.get_provider_name(provider_id) or provider_id, model_name,
             )
             return None
-        self.hint_capacity_needed(provider_id, model_name)
+        self.hint_capacity_needed(model_name, provider_id=provider_id)
         return None
 
     async def _prepare_existing_lane(

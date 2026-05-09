@@ -162,13 +162,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             self._log_decision(request.request_id, scored, request.classified_models or [], None, False)
             return None  # All cloud, none accepted → caller returns 503
 
-        # Tie diagnostic: when several logosnode candidates share the top
-        # corrected score, the stable sort funnels every queued request
-        # onto the first one — leaving other equally-scored capable
-        # workers idle.  Surfacing this explicitly so the symptom
-        # "request queued on worker A even though worker B is also cold
-        # with the same score" doesn't require staring at the scored
-        # array to spot.
+        # Diagnostic only: the candidate's provider_id is no longer a binding
+        # under model-only queue — any provider serving the model can pull
+        # this request when its lane releases. The picked candidate is just
+        # the representative used to record ETTFT tier and originating
+        # provider in metadata.
         top_score = logosnode_candidate[3]
         tied = [s for s in scored if s[2] == "logosnode" and abs(s[3] - top_score) < 1e-9]
         if len(tied) > 1:
@@ -176,12 +174,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 f"model={m} worker={self._logosnode.get_provider_name(p) or p} tier={e.tier.value}"
                 for m, p, _, _, _, e in tied
             )
-            chosen_pid = logosnode_candidate[1]
             logger.info(
-                "Tied logosnode candidates for request %s (top score=%.2f, count=%d): %s "
-                "→ funnelling to worker=%s (deterministic first-tied)",
+                "Tied logosnode candidates for request %s (top score=%.2f, count=%d): %s"
+                " — model-only queue: any of these workers may dispatch.",
                 request.request_id, top_score, len(tied), tied_desc,
-                self._logosnode.get_provider_name(chosen_pid) or chosen_pid,
             )
 
         self._log_decision(request.request_id, scored, request.classified_models or [], logosnode_candidate, True)
@@ -500,13 +496,15 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         )
 
         # Fire-and-forget: signal capacity planner to wake/load the model
-        # so queued requests don't wait for the 30s background cycle.
+        # on whichever provider it deems best. With model-only queue we no
+        # longer pin the capacity decision to one provider — the planner
+        # picks via lane_comparator across the cluster.
         if self._on_capacity_needed and provider_type == "logosnode":
             model_name = self._logosnode.get_model_name(model_id, provider_id)
             if model_name:
                 asyncio.create_task(
-                    self._on_capacity_needed(provider_id, model_name),
-                    name=f"capacity-needed-{model_name}-{provider_id}",
+                    self._on_capacity_needed(model_name, provider_id),
+                    name=f"capacity-needed-{model_name}",
                 )
 
         try:

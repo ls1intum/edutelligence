@@ -38,15 +38,18 @@ def test_has_cold_queued_entries_true_when_any_entry_flagged():
     assert mgr.has_cold_queued_entries(5, 1) is True
 
 
-def test_has_cold_queued_entries_scoped_to_provider():
+def test_has_cold_queued_entries_provider_id_ignored():
+    """Model-only queue: provider_id arg is accepted but ignored. Any cold-
+    flagged entry on the model is visible regardless of which provider_id the
+    caller passes (queue is shared across providers)."""
     mgr = PriorityQueueManager()
     mgr.enqueue(
         DummyTask(1), model_id=5, provider_id=1, priority=Priority.NORMAL,
         is_cold_at_queue=True,
     )
     assert mgr.has_cold_queued_entries(5, 1) is True
-    # Different provider: no cold-queued entries.
-    assert mgr.has_cold_queued_entries(5, 2) is False
+    # provider_id=2 still sees the same cold-queued entry.
+    assert mgr.has_cold_queued_entries(5, 2) is True
 
 
 def test_has_cold_queued_entries_scoped_to_model():

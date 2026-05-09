@@ -1634,12 +1634,12 @@ async def start_pipeline():
     # what to wake/load — request-time work no longer races for the
     # provider lock, so a low-demand request can't starve out a
     # high-demand one waiting on the same provider.
-    async def _on_capacity_needed(provider_id: int, model_name: str) -> None:
+    async def _on_capacity_needed(model_name: str, provider_id: int | None = None) -> None:
         try:
-            _capacity_planner.hint_capacity_needed(provider_id, model_name)
+            _capacity_planner.hint_capacity_needed(model_name, provider_id=provider_id)
         except Exception:
             logger.debug(
-                "Capacity hint for %s on provider %s failed",
+                "Capacity hint for %s (originating provider=%s) failed",
                 model_name, provider_id, exc_info=True,
             )
 
