@@ -776,12 +776,15 @@ class VllmProcessHandle:
         # CPU RAM offloading for KV cache
         if vc.cpu_offload_gb > 0:
             cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
-        # Persist vLLM compilation artifacts on the shared models volume so
+        # Persist vLLM compilation artifacts on the resolved cache root so
         # restarts can reuse them instead of recompiling from scratch.
         if not self._has_compilation_config_override(vc.extra_args):
             import json as _json
 
-            cache_root = os.path.join(self._global_config.models_path, ".cache", "vllm")
+            cache_root = os.path.join(
+                self._resolve_persistent_cache_root(self._global_config),
+                ".cache", "vllm",
+            )
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
         # Default chat-template-kwargs: start from inferred defaults for the
         # model family, then overlay explicit user-supplied keys (user wins
@@ -1018,12 +1021,19 @@ class VllmProcessHandle:
         if hf_token:
             env["HF_TOKEN"] = hf_token
 
-        # HuggingFace cache — use same location as Ollama models for consistency
-        # (though vLLM uses HF format, not GGUF)
+        # All four worker caches (HF_HOME, VLLM_CACHE_ROOT, TORCHINDUCTOR_CACHE_DIR,
+        # FLASHINFER_WORKSPACE_BASE) hang off this single root.  Default is the
+        # ollama models_path because the standard docker-compose mounts that as
+        # a persistent named volume; deployments without ollama (or with a
+        # different storage layout) can override globally via
+        # LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
+        cache_root_dir = self._resolve_persistent_cache_root(gc)
+
+        # HuggingFace cache — write into the persistent root.
         if self.hf_home_override:
             env["HF_HOME"] = self.hf_home_override
         elif "HF_HOME" not in os.environ:
-            env["HF_HOME"] = self._resolve_hf_home(gc.models_path)
+            env["HF_HOME"] = self._resolve_hf_home(cache_root_dir)
 
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
@@ -1043,9 +1053,9 @@ class VllmProcessHandle:
                 self._vllm_engine_config.flashinfer_logdest.strip()
             )
 
-        # Persistent compilation caches: point to models_path (mounted volume)
-        # so JIT artifacts survive container rebuilds.
-        cache_root = os.path.join(gc.models_path, ".cache")
+        # Persistent compilation caches: point to the resolved cache root so
+        # JIT artifacts survive container rebuilds.
+        cache_root = os.path.join(cache_root_dir, ".cache")
 
         # vLLM cache root — controls where vLLM stores torch.compile cache,
         # CUDA graph cache, and other artifacts (~/.cache/vllm by default).
@@ -1068,7 +1078,7 @@ class VllmProcessHandle:
         # Python attribute on flashinfer.jit.env, NOT an env var read at
         # runtime — setting it has no effect.
         if "FLASHINFER_WORKSPACE_BASE" not in os.environ:
-            env["FLASHINFER_WORKSPACE_BASE"] = gc.models_path
+            env["FLASHINFER_WORKSPACE_BASE"] = cache_root_dir
 
         # Auto-detect CUDA arch for faster compilation
         if "TORCH_CUDA_ARCH_LIST" not in os.environ:
@@ -1170,15 +1180,38 @@ class VllmProcessHandle:
             )
         return process_env
 
-    def _resolve_hf_home(self, models_path: str) -> str:
+    @staticmethod
+    def _resolve_persistent_cache_root(gc) -> str:
+        """Single root directory for all worker-side persistent caches.
+
+        Resolution order:
+          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty.
+          2. ``gc.models_path`` (the ollama models_path) — used because the
+             standard docker-compose mounts that as a persistent named volume,
+             so it's the one path the worker can rely on surviving container
+             rebuilds in the default deployment.
+
+        ``HF_HOME``, ``VLLM_CACHE_ROOT``, ``TORCHINDUCTOR_CACHE_DIR`` and
+        ``FLASHINFER_WORKSPACE_BASE`` all derive from this root; deployments
+        without ollama (or with a different storage layout) only need to set
+        ``LOGOS_WORKER_CACHE_ROOT`` to point at any persistent path they have
+        — no need to override each cache env var individually.
+        """
+        override = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
+        if override:
+            return override
+        return getattr(gc, "models_path", "") or ""
+
+    def _resolve_hf_home(self, cache_root_dir: str) -> str:
         """Pick a writable HuggingFace cache path for vLLM downloads.
 
-        Preferred path is ``<models_path>/.hf_cache`` to keep model artifacts
-        close to the Ollama storage. If that path is not writable for the
-        current user, fall back to ``~/.cache/huggingface``.
+        Preferred path is ``<cache_root_dir>/.hf_cache`` (where
+        ``cache_root_dir`` is the resolved persistent cache root). If that
+        path is not writable for the current user, fall back to
+        ``~/.cache/huggingface``.
         """
         preferred = (
-            Path(models_path).expanduser() / ".hf_cache" if models_path else None
+            Path(cache_root_dir).expanduser() / ".hf_cache" if cache_root_dir else None
         )
         fallback = Path.home() / ".cache" / "huggingface"
         candidates = [p for p in (preferred, fallback) if p is not None]

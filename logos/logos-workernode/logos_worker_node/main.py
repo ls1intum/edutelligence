@@ -167,9 +167,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
     # workspace_base is the parent of .cache/flashinfer; flashinfer 0.6.x reads
     # FLASHINFER_WORKSPACE_BASE (not FLASHINFER_JIT_DIR) to relocate its cache.
+    # Honor LOGOS_WORKER_CACHE_ROOT first so deployments without ollama can
+    # point all worker caches at any persistent path; default to the ollama
+    # models_path which is the persistent volume in the standard compose.
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
-        workspace_base = cfg.engines.ollama.models_path
+        workspace_base = (
+            os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
+            or cfg.engines.ollama.models_path
+        )
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
