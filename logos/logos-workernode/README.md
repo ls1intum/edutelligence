@@ -18,6 +18,57 @@ It does four things:
 
 No overlap. Credentials never go in `config.yml`. Hardware config never goes in `.env`.
 
+## Storage layout
+
+The worker uses **one persistent volume** for everything that benefits from
+surviving container restarts: model weights and four compilation/JIT caches.
+All five hang off a single root, resolved at boot:
+
+1. `LOGOS_WORKER_CACHE_ROOT` env var if set (recommended for non-ollama
+   deployments).
+2. otherwise `cfg.engines.ollama.models_path` (default in `config.yml`:
+   `/usr/share/ollama/.ollama/models`) — used because the standard
+   `docker-compose.yml` already mounts that path as a named volume
+   (`ollama-models`).
+
+Layout under `<root>/`:
+
+| Subpath | What | Set via | Why persistent |
+|---|---|---|---|
+| `.hf_cache/hub/models--*/blobs/` | HuggingFace model weights | `HF_HOME` | downloads happen once per model |
+| `.cache/vllm/` | vLLM compilation artifacts | `VLLM_CACHE_ROOT` + `--compilation-config cache_dir` | torch.compile bytecode reuse |
+| `.cache/torch_inductor/` | Torch inductor / FX graph cache | `TORCHINDUCTOR_CACHE_DIR` (+ `TORCHINDUCTOR_FX_GRAPH_CACHE=1`) | inductor lowering cache |
+| `.cache/flashinfer/<version>/<sm>/cached_ops/*.so` | FlashInfer JIT kernels (per-`(head_dim, dtype)`) | `FLASHINFER_WORKSPACE_BASE` (parent of `.cache/flashinfer`) | first compile takes 30–60 s; reused thereafter |
+| (ollama's own GGUF blobs, if Ollama is configured) | Ollama models | `OLLAMA_MODELS` | when Ollama lanes are in use |
+
+**Default deployment** — leave `LOGOS_WORKER_CACHE_ROOT` unset; everything
+defaults to `cfg.engines.ollama.models_path` and is preserved by the
+`ollama-models` named volume in `docker-compose.yml`. This is the
+expected setup for ASE/Ansible deployments.
+
+**Non-ollama deployment** — set `LOGOS_WORKER_CACHE_ROOT=/var/cache/logos-worker`
+(or any persistent path) in `.env` and mount that path as a Docker volume.
+All four caches relocate together, ollama remains optional.
+
+**Per-cache override** — any of `HF_HOME`, `VLLM_CACHE_ROOT`,
+`TORCHINDUCTOR_CACHE_DIR`, `FLASHINFER_WORKSPACE_BASE` can be set
+individually to override just one cache (precedence is per-env-var > root).
+
+### FlashInfer pre-warmup
+
+Worker boot runs `flashinfer_warmup.py` once before any vLLM lane spawns.
+It compiles the kernels vLLM uses at runtime (`single_prefill_with_kv_cache`
+and `batch_prefill_with_kv_cache`) for each capability model's head shape
+and writes them to `<root>/.cache/flashinfer/<version>/<sm>/cached_ops/`.
+The boot log line confirms reuse:
+
+```
+FlashInfer warmup completed in 0.3s (single_prefill=3/3, batch_prefill=1/1, 2 kernels resident on disk, +0 new this boot)
+```
+
+`+0 new this boot` means every kernel was already on disk and reused.
+A non-zero value indicates either a fresh worker or a new model head shape.
+
 ## Local dev
 1. Copy `.env.example` to `.env` and fill in connection credentials.
 2. Edit `config.yml` for capabilities and engine settings.
