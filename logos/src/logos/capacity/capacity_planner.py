@@ -1729,6 +1729,7 @@ class CapacityPlanner:
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
         target_model_name: Optional[str] = None,
+        per_gpu_margin: Optional[float] = None,
     ) -> Optional[tuple[frozenset[int], list[tuple[LaneSchedulerSignals, str, float]]]]:
         """Find the best GPU set for a cold load and its required eviction set.
 
@@ -1737,8 +1738,17 @@ class CapacityPlanner:
         whose eviction set has the lowest maximum effective-demand score (i.e. the
         one that sacrifices the least-valuable models).
 
+        ``per_gpu_margin`` (default ``VRAM_SAFETY_MARGIN``) is applied to the
+        per-GPU deficit so this function sees the same headroom requirement as
+        ``_passes_minimum_load_feasibility`` / ``_check_per_gpu_feasibility``.
+        Without that alignment the placement search reports
+        ``placement=feasible, eviction_needed=no`` for combinations that the
+        downstream feasibility gate then rejects, leaving the request waiting
+        until something else frees VRAM by accident (idle-sleep, etc).
+
         Returns (gpu_set, eviction_set) or None if no feasible placement exists.
         """
+        margin = per_gpu_margin if per_gpu_margin is not None else self.VRAM_SAFETY_MARGIN
         per_gpu_needed = load_cost_mb / max(tp, 1)
         per_gpu_free = self._get_per_gpu_free(provider_id)
 
@@ -1769,7 +1779,7 @@ class CapacityPlanner:
             per_gpu_deficit: dict[int, float] = {}
             for g in gpu_set:
                 free = per_gpu_free.get(g, 0.0)
-                deficit = max(0.0, per_gpu_needed * self.VRAM_SAFETY_MARGIN - free)
+                deficit = max(0.0, per_gpu_needed * margin - free)
                 if deficit > 0:
                     per_gpu_deficit[g] = deficit
 
@@ -2351,9 +2361,18 @@ class CapacityPlanner:
                 load_cost *= (1.0 + self.TP_OVERHEAD_RATIO)
 
             available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
+            # Match the per-GPU margin _passes_minimum_load_feasibility uses:
+            # 1.05 for calibrated profiles (cold-start CUDA/NCCL/allocator
+            # overhead), else the default 1.0. Without this, placement says
+            # "feasible, no eviction needed" while feasibility rejects the
+            # load, and requests wait minutes for an accidental sleep_l1.
+            placement_per_gpu_margin = (
+                self.CALIBRATED_PER_GPU_SAFETY_MARGIN if is_calibrated else None
+            )
             placement = self._pick_cold_load_placement(
                 provider_id, load_cost, tp, available_lanes, profiles,
                 target_model_name=model_name,
+                per_gpu_margin=placement_per_gpu_margin,
             )
 
             if placement is None:
