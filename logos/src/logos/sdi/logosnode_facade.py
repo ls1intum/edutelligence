@@ -175,6 +175,19 @@ class LogosNodeSchedulingDataFacade:
                 return self.queue_manager.get_total_depth_by_deployment(model_id, provider_id)
         return 0
 
+    def has_cold_queued_entries_by_model_name(self, model_name: str, provider_id: int) -> bool:
+        """Return True iff any queued entry for this (model, provider) was flagged
+        is_cold_at_queue at enqueue time. Used by the planner to extend lane
+        tenure when a freshly-woken lane is serving a cold-flagged waiter.
+        """
+        provider = self._providers.get(int(provider_id))
+        if not provider:
+            return False
+        for model_id, name in provider._model_id_to_name.items():
+            if name == model_name:
+                return self.queue_manager.has_cold_queued_entries(model_id, provider_id)
+        return False
+
     # ------------------------------------------------------------------
     # Scheduler-view and lane-signal facade methods (Phase 1.3)
     # ------------------------------------------------------------------

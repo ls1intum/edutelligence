@@ -418,6 +418,23 @@ class PriorityQueueManager:
         state = self.get_state(model_id, provider_id)
         return state.total
 
+    def has_cold_queued_entries(self, model_id: int, provider_id: int) -> bool:
+        """Return True if any queued entry was marked is_cold_at_queue at enqueue.
+
+        Used by the capacity planner to extend lane tenure when a freshly-woken
+        lane has a queued waiter that triggered the cold wake — sleeping it
+        back within the normal 5s tenure would bounce that request.
+        """
+        with self._lock:
+            model_queues = self._queues.get((model_id, provider_id))
+            if not model_queues:
+                return False
+            for queue in model_queues.values():
+                for _neg_pri, _ts, _eid, entry in queue:
+                    if entry.is_cold_at_queue:
+                        return True
+            return False
+
     def get_total_depth_by_provider(self, provider_id: int) -> int:
         """
         Get total queue depth for a provider (all models and priorities combined).

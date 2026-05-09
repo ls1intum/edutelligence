@@ -36,6 +36,7 @@ from logos.terminal_logging import (
 )
 
 from .demand_tracker import DemandTracker
+from .lane_comparator import best_lane, lane_sort_key
 from .vram_ledger import VRAMLedger
 from logos.monitoring import prometheus_metrics as prom
 
@@ -105,6 +106,11 @@ class CapacityPlanner:
     # it an easy drain target — causing thrashing cascades where models
     # wake and immediately sleep without serving anything.
     LANE_MIN_TENURE_SECONDS = 5.0
+    # Extended tenure when a freshly-loaded lane has a queued waiter that
+    # was flagged is_cold_at_queue (the request that triggered the wake is
+    # still inside the queue; sleeping the lane within the standard 5s
+    # window would bounce it).
+    LANE_COLD_WAITER_TENURE_SECONDS = 15.0
     # Backward-compat aliases (tests / external callers)
     DRAIN_MIN_COLD_LOADED_SECONDS = 0.0
     DRAIN_MIN_WOKEN_SECONDS = 0.0
@@ -178,6 +184,15 @@ class CapacityPlanner:
         self._tick_hints: list[tuple[int, str]] = []
         self._use_additive_loads = os.environ.get(
             "LOGOS_USE_ADDITIVE_LOADS", "true"
+        ).strip().lower() not in ("0", "false", "no")
+        # Phase 1.2: allow stopping non-chosen sleeping siblings of a model that
+        # has real queued demand. Default off until staging confirms.
+        self._stop_dedup_siblings = os.environ.get(
+            "LOGOS_STOP_DEDUP_SIBLINGS", "false"
+        ).strip().lower() in ("1", "true", "yes")
+        # Phase 1.3: cycle-scoped dedup of planned cold-loads across providers.
+        self._cross_provider_dedup = os.environ.get(
+            "LOGOS_PLANNER_CROSS_PROVIDER_DEDUP", "true"
         ).strip().lower() not in ("0", "false", "no")
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
@@ -337,8 +352,23 @@ class CapacityPlanner:
             )
 
         all_actions: List[CapacityPlanAction] = []
+        # Phase 1.3: cycle-scoped tracking of planned cold-loads/wakes across
+        # providers, so two providers don't independently agree to load the
+        # same model in the same cycle.
+        cycle_planned_models: set[str] = set()
 
-        provider_ids = self._facade.provider_ids()
+        provider_ids = list(self._facade.provider_ids())
+        # Sort providers by current queue pressure so the worker most under
+        # load gets first crack at the cycle's planning budget. Without this
+        # the iteration order is whatever provider_ids() returns (typically
+        # registration order), which is arbitrary under contention.
+        if self._cross_provider_dedup:
+            def _provider_pressure(pid: int) -> int:
+                try:
+                    return self._facade.queue_manager.get_total_depth_by_provider(pid)
+                except Exception:
+                    return 0
+            provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
 
         for provider_id in provider_ids:
@@ -360,7 +390,11 @@ class CapacityPlanner:
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
-            all_actions.extend(self._compute_demand_actions(provider_id, lanes))
+            all_actions.extend(
+                self._compute_demand_actions(
+                    provider_id, lanes, cycle_planned_models=cycle_planned_models,
+                )
+            )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
             # TODO: KV fleet rebalancing disabled — was computing budgets from total
             # worker VRAM instead of per-lane GPU VRAM, causing OOM on reconfigure.
@@ -923,6 +957,17 @@ class CapacityPlanner:
         check_time = time.time() if now is None else now
         return (check_time - loaded_at) < self._load_cooldown_seconds
 
+    def _model_has_cold_queued_waiter(self, provider_id: int, model_name: str) -> bool:
+        """Return True if any queued entry for this model on this provider was
+        flagged is_cold_at_queue at enqueue. Drives extended lane tenure so a
+        freshly-woken lane isn't put back to sleep before serving the request
+        that triggered its wake.
+        """
+        try:
+            return self._facade.has_cold_queued_entries_by_model_name(model_name, provider_id)
+        except Exception:
+            return False
+
     def _time_until_cooldown_unblocked_stop(
         self,
         *,
@@ -1422,10 +1467,19 @@ class CapacityPlanner:
                 self.freed_per_gpu: dict[int, float] = freed_per_gpu
 
         candidates: list[_Cand] = []
+        # Phase 1.5: track per-candidate skip reasons so the existing
+        # "Eviction candidates ... [none]" log line explains *why* the set is
+        # empty. Each entry is (lane_id, model_name, reason).
+        skipped: list[tuple[str, str, str]] = []
         for lane in lanes:
             # Skip if lane has active traffic or scheduler queue demand
             total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
             if lane.active_requests > 0 or lane.queue_waiting > 0 or total_demand > 0:
+                skipped.append((
+                    lane.lane_id, lane.model_name,
+                    f"busy/queued(active={lane.active_requests},"
+                    f"vllm_q={int(lane.queue_waiting)},sched_q={total_demand})",
+                ))
                 continue
             # NOTE: load_cooldown is checked *per-action* below, not as a
             # blanket filter. A freshly-loaded lane is fair game for sleep_l1
@@ -1441,9 +1495,14 @@ class CapacityPlanner:
             # (state=sleeping)" errors. Stop uses the longer LOAD_COOLDOWN
             # since its destructive, sleep_l1 just needs LANE_MIN_TENURE.
             lane_loaded_at = self._lane_loaded_at.get(self._lane_key(provider_id, lane.lane_id))
+            tenure_seconds = (
+                self.LANE_COLD_WAITER_TENURE_SECONDS
+                if self._model_has_cold_queued_waiter(provider_id, lane.model_name)
+                else self.LANE_MIN_TENURE_SECONDS
+            )
             in_min_tenure = (
                 lane_loaded_at is not None
-                and (now - lane_loaded_at) < self.LANE_MIN_TENURE_SECONDS
+                and (now - lane_loaded_at) < tenure_seconds
             )
 
             lane_gpus = frozenset(self._parse_gpu_device_ids(lane.gpu_devices))
@@ -1462,6 +1521,7 @@ class CapacityPlanner:
                 overlap = lane_gpus  # no constraint → all GPUs count
 
             if not overlap and required_gpus:
+                skipped.append((lane.lane_id, lane.model_name, "gpu_disjoint"))
                 continue  # This lane is on disjoint GPUs — useless
 
             profile = profiles.get(lane.model_name)
@@ -1475,6 +1535,11 @@ class CapacityPlanner:
                 # (~5s) is enough to absorb dispatch races and let the lane
                 # serve its first batch.
                 if in_min_tenure:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"tenure({age:.1f}s/{tenure_seconds:.1f}s)",
+                    ))
                     continue
                 action = "sleep_l1"
                 current_mb = float(lane.effective_vram_mb or 0.0)
@@ -1484,19 +1549,46 @@ class CapacityPlanner:
                 freed_total = max(current_mb - residual_mb, 0.0)
             elif lane.runtime_state in ("sleeping",) and lane.sleep_state == "sleeping":
                 # Stopping a sleeping lane destroys the process; recovery
-                # requires a 30-60s cold-load. Only do it when this model
-                # is genuinely idle — no queued requests, no recent demand.
-                # If demand exists, the planner should keep the lane
-                # sleeping so a fast wake can serve it later.
-                pending_demand = (
+                # requires a 30-60s cold-load. Default behaviour: protect any
+                # sleeping lane whose model has queued demand or score above
+                # the load floor. With LOGOS_STOP_DEDUP_SIBLINGS enabled we
+                # only protect the *chosen* lane (per lane_comparator) for
+                # the model — extra sleeping siblings can be stopped to
+                # reclaim residual without losing the wake target.
+                has_real_queue = (
                     self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
-                    or self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
                 )
-                if pending_demand:
-                    continue
+                has_speculative_demand = (
+                    self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
+                )
+                if self._stop_dedup_siblings:
+                    chosen = self._pick_request_target_lane(provider_id, lane.model_name)
+                    is_chosen_sibling = chosen is not None and chosen.lane_id == lane.lane_id
+                    if has_real_queue and is_chosen_sibling:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            "chosen-sibling-with-queue",
+                        ))
+                        continue
+                    # has_speculative_demand alone no longer blocks stop:
+                    # if the model is needed we'd rather cold-load fresh
+                    # than hoard residuals on every provider.
+                else:
+                    if has_real_queue or has_speculative_demand:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            f"model-demanded(real_q={has_real_queue},"
+                            f"score>={self.DEMAND_LOAD_FLOOR}={has_speculative_demand})",
+                        ))
+                        continue
                 # Stop is destructive — respect the post-load cooldown so we
                 # don't throw away a cold-load we just paid for.
                 if in_cooldown:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"load_cooldown({age:.1f}s/{self._load_cooldown_seconds:.0f}s)",
+                    ))
                     continue
                 action = "stop"
                 # Stopping a sleeping vLLM lane frees only the small residual
@@ -1517,9 +1609,14 @@ class CapacityPlanner:
                     residual_mb = float(profile.sleeping_residual_mb or 0.0)
                 freed_total = residual_mb
             else:
+                skipped.append((
+                    lane.lane_id, lane.model_name,
+                    f"wrong-state(runtime={lane.runtime_state},sleep={lane.sleep_state})",
+                ))
                 continue  # busy, cold, stopped, or starting — not evictable
 
             if freed_total <= 0:
+                skipped.append((lane.lane_id, lane.model_name, "no-freed-vram"))
                 continue
 
             # Distribute freed VRAM across the GPUs this lane occupies
@@ -1538,8 +1635,13 @@ class CapacityPlanner:
         _action_cost = {"sleep_l1": 0, "sleep_l2": 0, "stop": 1}
         candidates.sort(key=lambda c: (_action_cost.get(c.action, 2), c.eff_demand))
 
+        skipped_str = (
+            "; ".join(f"{lid}[{mn}]:{reason}" for lid, mn, reason in skipped)
+            if skipped else "none"
+        )
         logger.info(
-            "Eviction candidates for worker=%s gpus=%s deficit=%s: [%s]",
+            "Eviction candidates for worker=%s gpus=%s deficit=%s: [%s]"
+            " | skipped: [%s]",
             self._facade.get_provider_name(provider_id) or provider_id,
             sorted(required_gpus) if required_gpus else "any",
             {g: f"{d:.0f}MB" for g, d in per_gpu_deficit.items()},
@@ -1548,6 +1650,7 @@ class CapacityPlanner:
                 f"free={sum(c.freed_per_gpu.values()):.0f}MB)"
                 for c in candidates
             ) if candidates else "none",
+            skipped_str,
         )
 
         # Greedy covering: pick candidates until all per-GPU deficits are met
@@ -1862,7 +1965,11 @@ class CapacityPlanner:
     # ------------------------------------------------------------------
 
     def _compute_demand_actions(
-        self, provider_id: int, lanes: List[LaneSchedulerSignals]
+        self,
+        provider_id: int,
+        lanes: List[LaneSchedulerSignals],
+        *,
+        cycle_planned_models: Optional[set[str]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -1951,6 +2058,21 @@ class CapacityPlanner:
         for model_name, score in candidates:
             if capabilities and model_name not in capabilities:
                 continue
+            # Phase 1.3: skip a model that another provider already planned a
+            # wake/load for in this same cycle. Prevents two providers from
+            # racing to cold-load the same model when both have capability.
+            if (
+                self._cross_provider_dedup
+                and cycle_planned_models is not None
+                and model_name in cycle_planned_models
+            ):
+                logger.info(
+                    "Skipping demand action for worker=%s model=%s: already planned"
+                    " for another worker this cycle",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    model_name,
+                )
+                continue
             model_lanes = lanes_by_model.get(model_name, [])
             eff = self._effective_demand(model_name, provider_id, lanes)
             here_queue = self._get_queue_depth_for_model(provider_id, model_name, lanes)
@@ -1972,7 +2094,7 @@ class CapacityPlanner:
                 and not self._lane_is_in_wake_failure_cooldown(provider_id, l.lane_id)
             ]
             if sleeping_lanes:
-                target = sleeping_lanes[0]
+                target = best_lane(sleeping_lanes)
                 profile = profiles.get(model_name)
 
                 # Per-GPU deficit on the GPUs the sleeping lane occupies.
@@ -2243,6 +2365,11 @@ class CapacityPlanner:
                     reason=f"Capability seeding: worker declares {model_name}, eff={eff:.2f}",
                 ))
 
+        # Phase 1.3: lift this provider's planned models into the cycle-wide
+        # set so subsequent providers in the iteration order skip them.
+        if cycle_planned_models is not None:
+            cycle_planned_models |= planned_models
+
         return actions
 
     def _compute_demand_drain_actions(
@@ -2433,28 +2560,7 @@ class CapacityPlanner:
             for lane in self._safe_get_lanes(provider_id)
             if lane.model_name == model_name and lane.runtime_state not in {"stopped", "error"}
         ]
-        if not lanes:
-            return None
-
-        state_rank = {
-            "running": 0,
-            "loaded": 1,
-            "sleeping": 2,
-            "cold": 3,
-            "starting": 4,
-        }
-        lanes.sort(
-            key=lambda lane: (
-                state_rank.get(lane.runtime_state, 99),
-                lane.queue_waiting,
-                lane.requests_running,
-                lane.active_requests,
-                lane.ttft_p95_seconds,
-                -float(lane.effective_vram_mb or 0.0),
-                lane.lane_id,
-            )
-        )
-        return lanes[0]
+        return best_lane(lanes)
 
     PROVIDER_RECONNECT_POLL_SECONDS = 2.0
 
