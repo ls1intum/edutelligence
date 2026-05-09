@@ -122,8 +122,33 @@ class CapacityPlanner:
     GPU_CACHE_HIGH = 85.0
     GPU_CACHE_LOW = 40.0
 
-    # VRAM safety margin
-    VRAM_SAFETY_MARGIN = 1.0  # no margin — calibrated profiles include KV, measurements are exact
+    # ─── VRAM headroom model ────────────────────────────────────────────────
+    # Two independent concerns kept separate, each with one knob:
+    #
+    #   PER_GPU_COLD_START_MB — additive per-GPU headroom for cold-start runtime
+    #     overhead (CUDA context, NCCL ring buffers, vLLM allocator warm-up).
+    #     Constant per GPU, independent of model size. Same number is used
+    #     wherever per-GPU feasibility is checked — there is exactly one
+    #     correct answer for "how much room must I leave on a GPU at boot."
+    #
+    #   ESTIMATION_SLACK_RATIO — multiplicative slack on disk-size → memory
+    #     estimates for non-calibrated profiles. Applied at the *size estimation*
+    #     site, not the gate. Calibrated/measured profiles skip it because their
+    #     base_residency was observed empirically.
+    #
+    #   VRAM_SAFETY_MARGIN — aggregate (whole-provider) multiplier; left at 1.0
+    #     because calibrated profiles already include KV+TP and per-GPU headroom
+    #     is enforced by the additive constant above. Kept as a knob in case a
+    #     future operator wants global aggregate padding.
+    #
+    # The previous code had three multiplicative margins (1.0 / 1.05 / 1.15) and
+    # picked between them based on (calibrated, action_kind). Different call
+    # sites picked different ones, producing silent stalls (placement said
+    # "feasible, no eviction needed" while feasibility rejected). One physical
+    # quantity → one constant.
+    VRAM_SAFETY_MARGIN = 1.0
+    PER_GPU_COLD_START_MB = 500.0
+    ESTIMATION_SLACK_RATIO = 1.10
     # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
     TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
 
@@ -132,12 +157,6 @@ class CapacityPlanner:
     WAKE_FAILURE_COOLDOWN_SECONDS = 15.0
     COOLDOWN_WAIT_BUFFER_SECONDS = 2.0   # extra margin added after load cooldown expires
     BUSY_DRAIN_POLL_SECONDS = 5.0        # poll interval while waiting for a busy lane to drain
-    WAKE_PER_GPU_SAFETY_MARGIN = 1.15    # 15% per-GPU margin for wake ops — CUDA allocator pools
-                                         # and KV-cache growth can consume memory between the check
-                                         # and the actual wake, causing OOM on tight fits
-    CALIBRATED_PER_GPU_SAFETY_MARGIN = 1.05  # 5% margin for calibrated models — base_residency is
-                                         # measured but vLLM needs small headroom for startup
-                                         # (CUDA context, NCCL init, allocator pools)
     TP_RANK0_VRAM_FRACTION = 0.62        # rank 0 hosts API server, tokenizer, sampling, embedding
                                          # layers — empirically ~60% of total VRAM for TP=2;
                                          # use 0.62 for safety margin
@@ -1729,27 +1748,20 @@ class CapacityPlanner:
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
         target_model_name: Optional[str] = None,
-        per_gpu_margin: Optional[float] = None,
     ) -> Optional[tuple[frozenset[int], list[tuple[LaneSchedulerSignals, str, float]]]]:
         """Find the best GPU set for a cold load and its required eviction set.
 
-        Tries every combination of `tp` GPUs.  For each combination, computes
-        the per-GPU deficit and calls _find_eviction_set.  Returns the placement
-        whose eviction set has the lowest maximum effective-demand score (i.e. the
-        one that sacrifices the least-valuable models).
-
-        ``per_gpu_margin`` (default ``VRAM_SAFETY_MARGIN``) is applied to the
-        per-GPU deficit so this function sees the same headroom requirement as
-        ``_passes_minimum_load_feasibility`` / ``_check_per_gpu_feasibility``.
-        Without that alignment the placement search reports
-        ``placement=feasible, eviction_needed=no`` for combinations that the
-        downstream feasibility gate then rejects, leaving the request waiting
-        until something else frees VRAM by accident (idle-sleep, etc).
+        Tries every combination of `tp` GPUs. For each combination, computes
+        the per-GPU deficit using the same headroom rule as
+        ``_passes_minimum_load_feasibility`` / ``_check_per_gpu_feasibility``
+        (even split of ``load_cost_mb`` + fixed ``PER_GPU_COLD_START_MB``) and
+        calls ``_find_eviction_set``. Returns the placement whose eviction set
+        has the lowest maximum effective-demand score (sacrifice least-valued
+        models first).
 
         Returns (gpu_set, eviction_set) or None if no feasible placement exists.
         """
-        margin = per_gpu_margin if per_gpu_margin is not None else self.VRAM_SAFETY_MARGIN
-        per_gpu_needed = load_cost_mb / max(tp, 1)
+        per_gpu_needed = (load_cost_mb / max(tp, 1)) + self.PER_GPU_COLD_START_MB
         per_gpu_free = self._get_per_gpu_free(provider_id)
 
         if not per_gpu_free:
@@ -1779,7 +1791,7 @@ class CapacityPlanner:
             per_gpu_deficit: dict[int, float] = {}
             for g in gpu_set:
                 free = per_gpu_free.get(g, 0.0)
-                deficit = max(0.0, per_gpu_needed * margin - free)
+                deficit = max(0.0, per_gpu_needed - free)
                 if deficit > 0:
                     per_gpu_deficit[g] = deficit
 
@@ -2361,18 +2373,9 @@ class CapacityPlanner:
                 load_cost *= (1.0 + self.TP_OVERHEAD_RATIO)
 
             available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
-            # Match the per-GPU margin _passes_minimum_load_feasibility uses:
-            # 1.05 for calibrated profiles (cold-start CUDA/NCCL/allocator
-            # overhead), else the default 1.0. Without this, placement says
-            # "feasible, no eviction needed" while feasibility rejects the
-            # load, and requests wait minutes for an accidental sleep_l1.
-            placement_per_gpu_margin = (
-                self.CALIBRATED_PER_GPU_SAFETY_MARGIN if is_calibrated else None
-            )
             placement = self._pick_cold_load_placement(
                 provider_id, load_cost, tp, available_lanes, profiles,
                 target_model_name=model_name,
-                per_gpu_margin=placement_per_gpu_margin,
             )
 
             if placement is None:
@@ -2824,17 +2827,13 @@ class CapacityPlanner:
                         per_gpu_needed = needed * self.TP_RANK0_VRAM_FRACTION
                 else:
                     per_gpu_needed = needed
-                # Wake operations are concurrent with loaded models on the same
-                # GPUs — CUDA allocator pools and KV-cache growth can consume
-                # memory between this check and the actual wake.  Apply extra
-                # safety margin so tight fits fall through to the reclaim path
-                # rather than risking a CUDA OOM.
-                # Calibrated models use a smaller margin (5%) since base_residency
-                # is measured; uncalibrated models use the full 15% wake margin.
-                if is_calibrated:
-                    per_gpu_needed *= self.CALIBRATED_PER_GPU_SAFETY_MARGIN
-                elif target_action.action == "wake":
-                    per_gpu_needed *= self.WAKE_PER_GPU_SAFETY_MARGIN
+                # Cold-start runtime overhead (CUDA context, NCCL ring buffers,
+                # vLLM allocator warm-up) is constant per GPU regardless of
+                # profile calibration or action kind. Estimation slack for
+                # non-calibrated profiles was already applied upstream by
+                # _estimate_action_vram, so `needed` here is the model's
+                # actual footprint estimate.
+                per_gpu_needed += self.PER_GPU_COLD_START_MB
                 gpu_effective = [
                     self._vram_ledger.get_gpu_effective_available_mb(
                         provider_id,
@@ -2904,10 +2903,8 @@ class CapacityPlanner:
                         per_gpu_needed = needed * self.TP_RANK0_VRAM_FRACTION
                 else:
                     per_gpu_needed = needed
-                if is_calibrated_tp:
-                    per_gpu_needed *= self.CALIBRATED_PER_GPU_SAFETY_MARGIN
-                elif target_action.action == "wake":
-                    per_gpu_needed *= self.WAKE_PER_GPU_SAFETY_MARGIN
+                # Same fixed per-GPU cold-start headroom as the known-GPU path.
+                per_gpu_needed += self.PER_GPU_COLD_START_MB
                 sorted_free = sorted(
                     (
                         self._vram_ledger.get_gpu_effective_available_mb(
@@ -3881,7 +3878,9 @@ class CapacityPlanner:
             else:
                 kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
 
-            minimum_needed = base_mb + kv_mb
+            # Apply estimation slack to the disk → memory size estimate so
+            # the gate matches what _estimate_model_loaded_vram returns.
+            minimum_needed = (base_mb + kv_mb) * self.ESTIMATION_SLACK_RATIO
 
             # Determine TP size for this model
             tp = 1
@@ -3907,14 +3906,14 @@ class CapacityPlanner:
             )
             return False
 
-        # Per-GPU feasibility check for TP models
-        # Use calibrated safety margin for cold-start overhead (CUDA context,
-        # NCCL init, allocator pools) — must match _ensure_request_capacity.
+        # Per-GPU feasibility check for TP models. Cold-start overhead is a
+        # fixed PER_GPU_COLD_START_MB additive headroom (CUDA context, NCCL
+        # init, allocator pools) regardless of whether the profile is
+        # calibrated — must match _ensure_request_capacity and
+        # _pick_cold_load_placement.
         if tp > 1 and provider_id is not None:
-            gpu_margin = self.CALIBRATED_PER_GPU_SAFETY_MARGIN if is_calibrated else None
             per_gpu_ok = self._check_per_gpu_feasibility(
                 provider_id, minimum_needed, tp, model_name,
-                per_gpu_margin=gpu_margin,
             )
             if not per_gpu_ok:
                 return False
@@ -3927,7 +3926,6 @@ class CapacityPlanner:
         total_needed_mb: float,
         tp: int,
         model_name: str,
-        per_gpu_margin: Optional[float] = None,
     ) -> bool:
         """Check if a TP model fits on tp individual GPUs given per-GPU free VRAM.
 
@@ -3976,10 +3974,10 @@ class CapacityPlanner:
         if len(per_gpu_free) < tp:
             return True  # can't determine per-GPU, allow
 
-        # Sort by most free first; check if the tp-th GPU has enough
+        # Sort by most free first; check if the tp-th GPU has enough.
+        # Per-GPU need = even split of the total + fixed cold-start headroom.
         per_gpu_free.sort(key=lambda x: x[1], reverse=True)
-        margin = per_gpu_margin if per_gpu_margin is not None else self.VRAM_SAFETY_MARGIN
-        per_gpu_needed = (total_needed_mb / tp) * margin
+        per_gpu_needed = (total_needed_mb / tp) + self.PER_GPU_COLD_START_MB
         best_tp_gpus = per_gpu_free[:tp]
         weakest_gpu = best_tp_gpus[-1]
 
@@ -4246,16 +4244,17 @@ class CapacityPlanner:
         the KV cache — return it directly.
 
         For uncalibrated vLLM profiles: base_residency is weights only, so add
-        the estimated KV pool on top.
+        the estimated KV pool and apply ESTIMATION_SLACK_RATIO to account for
+        the disk-size → memory estimate spread.
 
         For other engines: use the directly measured loaded_vram_mb from the profile.
         """
         if profile.engine == "vllm":
             base = float(profile.estimate_base_residency_mb() or 0.0)
             if profile.residency_source in ("calibrated", "measured"):
-                return base  # KV already baked in
+                return base  # KV already baked in; estimate is exact, no slack
             kv = self._estimate_kv_mb(profile)
-            return base + kv
+            return (base + kv) * self.ESTIMATION_SLACK_RATIO
         return profile.estimate_vram_mb()
 
     def _estimate_action_vram(
@@ -4282,14 +4281,15 @@ class CapacityPlanner:
                 # TP overhead is also baked in from the actual measured run.
                 loaded_vram = base_residency
             else:
-                # Uncalibrated: base_residency is weights only — add KV estimate.
+                # Uncalibrated: base_residency is weights only — add KV estimate
+                # and apply ESTIMATION_SLACK_RATIO for disk → memory spread.
                 params = action.params or {}
                 vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
                 kv_str = vllm_config.get("kv_cache_memory_bytes", "")
                 kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
                 if kv_mb <= 0:
                     kv_mb = self._estimate_kv_mb(profile)
-                loaded_vram = base_residency + kv_mb
+                loaded_vram = (base_residency + kv_mb) * self.ESTIMATION_SLACK_RATIO
 
                 tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
                 if tp <= 0 and profile.tensor_parallel_size:
