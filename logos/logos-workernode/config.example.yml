@@ -37,8 +37,13 @@ worker:
   # Identifier shown in Logos UI and logs.
   name: logos-workernode
 
-  # Maximum number of concurrent lanes this worker may run. 0 = unlimited
-  # (limited only by port range and VRAM). Set via config or MAX_LANES env var.
+  # max_lanes is deprecated — leave at 0 (unlimited). The MAX_LANES env var
+  # is no longer forwarded to the container by docker-compose.yml. Lane
+  # count is bounded naturally by VRAM (capacity planner) and by the lane
+  # port range (worker.lane_port_start/end). A non-zero value here will
+  # still be honoured if read from this file, but is discouraged because
+  # it can block eviction-driven cold-loads when the planner needs to
+  # swap models in/out.
   max_lanes: 0
 
   # When true (default), initiate a host OS reboot when all lanes exhaust their
