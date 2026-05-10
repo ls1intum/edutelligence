@@ -477,7 +477,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
         # Check for known invalid values
         invalid_values = {"null", "none", "unknown", "-1"}
-        if text in invalid_values or any(val in text for val in invalid_values):
+        if text in invalid_values:
             return -1
         match = re.search(r"-?\d+", text)
         if not match:
