@@ -12,12 +12,12 @@
 # Design notes
 # ────────────
 # • Both nvidia/cuda:*-devel and *-runtime images ship WITHOUT Python.
-#   The builder installs Python 3.13 from the deadsnakes PPA.
+#   The builder installs Python 3.12 from Ubuntu 24.04 (noble) main repo.
 #   python:*-slim images already have Python 3.12, so that block is skipped.
 #
 # • vLLM (via Triton) JIT-compiles CUDA kernels at runtime. This requires:
 #     gcc            — C compiler for Triton's ctypes extension build
-#     python3.13-dev — Python.h (Triton compiles a small C module at startup)
+#     python3.12-dev — Python.h (Triton compiles a small C module at startup)
 #     cuda-nvcc      — NVIDIA compiler for kernel PTX compilation
 #     cuda-nvrtc     — CUDA runtime compilation library
 #     libcublas      — cuBLAS (torch matmul kernels)
@@ -31,14 +31,19 @@
 #   library always matches the host's driver version.
 #
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
-# vLLM/PyTorch wheels: cu128 (newest wheel index under CUDA 13.1 driver).
+# vLLM/PyTorch: PyPI wheels ship CUDA 13 support since vLLM ≥0.20 / torch ≥2.11.
 # =============================================================================
 
 ARG BASE_IMAGE=python:3.12-slim
 ARG RUNTIME_IMAGE=${BASE_IMAGE}
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC="vllm>=0.19.0"
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+ARG VLLM_PIP_SPEC="vllm==0.20.0"
+# TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
+# installs, which already includes CUDA support matching its nvidia-* deps.
+# Only set this to override with a specific CUDA wheel index (e.g.
+# https://download.pytorch.org/whl/cu128) for older vLLM versions whose
+# PyPI torch was CPU-only.
+ARG TORCH_INDEX_URL=
 ARG NCCL_PIP_SPEC=
 ARG INSTALL_OLLAMA=1
 
@@ -88,8 +93,8 @@ RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
 # Stage 2: Build — install Python deps in a virtualenv
 #
 #   GPU build  (BASE_IMAGE=nvidia/cuda:*-devel-ubuntu24.04):
-#     The devel image ships without Python. Install Python 3.13 from the
-#     deadsnakes PPA, then build a python3.13 virtualenv with all packages.
+#     The devel image ships without Python. Install Python 3.12 from the
+#     stock noble main repo, then build a python3.12 virtualenv with all packages.
 #
 #   CPU build  (BASE_IMAGE=python:3.12-slim):
 #     Python 3.12 is already present. The `if ! command -v python3` block is
@@ -101,27 +106,32 @@ ARG VLLM_PIP_SPEC
 ARG TORCH_INDEX_URL
 ARG NCCL_PIP_SPEC
 
-# Install Python 3.13 only on base images that ship without Python (nvidia/cuda).
+# Install Python 3.12 only on base images that ship without Python (nvidia/cuda).
 # python:*-slim images already provide python3 + pip — this block is skipped.
+#
+# Switched from 3.13 (deadsnakes PPA) to 3.12 (stock noble main) because the
+# GH Actions runners intermittently can't reach ppa.launchpadcontent.net,
+# which made the build flake-fail with "Connection refused" → "Unable to
+# locate package python3.13". 3.12 is the default Ubuntu 24.04 Python, lives
+# in the always-available main repo, and is fully supported by vLLM 0.20.x +
+# Torch ≥ 2.11. No PPA, no Launchpad dependency, no flakiness.
 RUN if ! command -v python3 >/dev/null 2>&1; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            software-properties-common ca-certificates gpg-agent \
-        && add-apt-repository -y ppa:deadsnakes/ppa \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends \
-            python3.13 python3.13-dev python3.13-venv \
-            build-essential curl \
+            python3.12 python3.12-dev python3.12-venv \
+            build-essential curl ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python \
-        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
-    fi \
-    && python3 -m pip install --upgrade pip setuptools wheel
+        && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python; \
+    fi
 
-# Virtualenv keeps all packages self-contained and avoids system-level conflicts.
+# Virtualenv keeps all packages self-contained and avoids the PEP 668
+# "externally-managed-environment" lockdown on the system Python in noble.
+# `python3 -m venv` bootstraps pip inside the venv via ensurepip — no
+# need (and PEP 668 wouldn't allow) for a system-level pip install.
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 WORKDIR /build
 COPY requirements.txt .
@@ -130,12 +140,14 @@ RUN set -e \
     && if [ "$INSTALL_VLLM" = "1" ]; then \
          # 1. Install vLLM (pins torch to its required version from PyPI)
          pip install --no-cache-dir $VLLM_PIP_SPEC \
-         # Free disk space before reinstalling torch: strip tests, caches, temp files
+         # Free disk space: strip tests, caches, temp files
          && (find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + || true) \
          && (find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
               -path '*/torch/*' -exec rm -rf {} + || true) \
          && rm -rf /tmp/pip-* /root/.cache \
-         # 2. Reinstall torch from CUDA wheel index (same version, GPU-enabled)
+         # 2. Optional: reinstall torch from a specific CUDA wheel index.
+         #    Since vLLM ≥0.20, PyPI torch already includes CUDA support, so
+         #    this is normally a no-op (TORCH_INDEX_URL defaults to empty).
          && if [ -n "$TORCH_INDEX_URL" ]; then \
               torch_ver=$(python3 -c "import importlib.metadata as m; print(m.version('torch'))") \
               && echo "Reinstalling torch==${torch_ver} from ${TORCH_INDEX_URL}" \
@@ -174,24 +186,23 @@ ARG INSTALL_VLLM
 ARG INSTALL_OLLAMA
 
 # ── Python ────────────────────────────────────────────────────────────────────
-# Install Python 3.13 when the runtime base has no Python at all (CUDA images),
-# but only if INSTALL_VLLM=1 (the builder produced a python3.13 venv).
-# CPU builds (python:3.12-slim, INSTALL_VLLM=0) already have python3.12 and
-# the builder venv uses python3.12 — no install needed.
-RUN if ! command -v python3.13 >/dev/null 2>&1 \
+# Install Python 3.12 when the runtime base has no Python at all (CUDA images),
+# but only if INSTALL_VLLM=1 (the builder produced a python3.12 venv).
+# CPU builds (python:3.12-slim, INSTALL_VLLM=0) already have python3.12 — skipped.
+# Stock noble main (no PPA), see builder block above for rationale.
+RUN if ! command -v python3.12 >/dev/null 2>&1 \
       && { [ "$INSTALL_VLLM" = "1" ] || ! command -v python3 >/dev/null 2>&1; }; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            software-properties-common ca-certificates gpg-agent \
-        && add-apt-repository -y ppa:deadsnakes/ppa \
-        && apt-get update \
-        && apt-get install -y --no-install-recommends \
-            python3.13 python3.13-dev python3.13-venv curl libnuma1 \
+            python3.12 python3.12-dev python3.12-venv curl libnuma1 ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.13 /usr/bin/python \
-        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3; \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+        && ln -sf /usr/bin/python3.12 /usr/bin/python; \
     fi
+# No system-level pip bootstrap: the venv copied from the builder stage
+# already provides /opt/venv/bin/pip, and PEP 668 forbids installing into
+# system Python on noble. Runtime only needs the python3 interpreter so
+# venv shebangs resolve.
 
 # ── CUDA toolchain for Triton / vLLM JIT compilation ─────────────────────────
 # Installed via versioned apt packages (CUDA_VERSION is set by the base image).
@@ -206,7 +217,7 @@ RUN if ! command -v python3.13 >/dev/null 2>&1 \
 RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
         CUDA_VER=$(echo "${CUDA_VERSION}" | cut -d. -f1,2 | tr '.' '-'); \
         apt-get update \
-        && apt-get install -y --no-install-recommends \
+        && apt-get install -y --no-install-recommends --allow-change-held-packages \
             gcc \
             cuda-nvcc-${CUDA_VER} \
             cuda-cudart-${CUDA_VER} \
@@ -225,7 +236,16 @@ WORKDIR /app
 # bin/, lib/, and include/ are all present with correct shebangs.
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:/usr/local/cuda/bin:$PATH"
-RUN ldconfig
+# Register pip-vendored CUDA library directories with the dynamic linker so
+# child processes (vLLM) can find them.  PyTorch cu128 wheels depend on CUDA 12
+# shared libraries (libcudart.so.12, libcublasLt.so.12, …) shipped inside
+# nvidia-* pip packages under <site-packages>/nvidia/*/lib/.  torch/lib
+# contains libc10.so and CUDA stub libraries.  Neither location is in the
+# default ldconfig search path — register them explicitly.
+RUN { find /opt/venv/lib -path '*/nvidia/*/lib' -type d 2>/dev/null; \
+      find /opt/venv/lib -path '*/torch/lib' -type d 2>/dev/null; \
+    } > /etc/ld.so.conf.d/pip-cuda-libs.conf \
+    && ldconfig
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/

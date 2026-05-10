@@ -5,6 +5,7 @@ Context resolution - prepares execution inputs from database lookups.
 Separates the "what to execute" (context resolution) from "how to execute" (executor).
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple
 import logging
@@ -118,6 +119,23 @@ class ContextResolver:
                 lane = prepared_lane
                 if lane is None:
                     lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                # Retry loop: lane may be transitioning (loading/waking) after
+                # reevaluate_model_queues dispatched us.
+                if lane is None:
+                    # Retry up to ~120s — must survive worst-case multi-lane
+                    # drain (busy vLLM lanes with continuous batching can have
+                    # 10-20 active requests that must finish before sleep) plus
+                    # sleep/wake cycle (~5s).  First 10 retries are 1s apart
+                    # (fast path); remaining retries back off to 2s.
+                    for attempt in range(65):
+                        await asyncio.sleep(1.0 if attempt < 10 else 2.0)
+                        lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                        if lane is not None:
+                            logger.info(
+                                "Lane became available after %ds for provider=%s model=%s",
+                                attempt + 1, provider_name, model_name,
+                            )
+                            break
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:
@@ -126,8 +144,8 @@ class ContextResolver:
                         logger.error("logosnode lane missing lane_id for provider=%s", provider_name)
                         return None
                 else:
-                    logger.info(
-                        "No logosnode lane available yet for provider=%s model=%s; waiting instead of falling back to HTTP",
+                    logger.warning(
+                        "No logosnode lane available for provider=%s model=%s after retries",
                         provider_name,
                         model_name,
                     )
@@ -135,7 +153,7 @@ class ContextResolver:
             else:
                 logger.error(
                     "logosnode registry unavailable for provider=%s model=%s; cannot resolve execution without a lane",
-                    provider_id,
+                    provider_name,
                     model_name,
                 )
                 return None

@@ -239,13 +239,12 @@ class OllamaSchedulingDataFacade:
         """
         Attempt to reserve execution capacity for a model.
         Atomic check-and-increment.
-        
+
         Returns:
             True if reserved, False if full (queue needed).
         """
         try:
             ollama_data_provider = self._providers[int(provider_id)]
-
             return ollama_data_provider.try_reserve_capacity(model_id, request_id)
         except ValueError:
             return False

@@ -1,4 +1,8 @@
-const PLOTLY_CDN_URL = "https://cdn.plot.ly/plotly-2.35.2.min.js";
+// `plotly-basic` is ~1.5 MB vs ~3.5 MB for the full bundle. It includes
+// scatter / bar / pie traces, which is everything we use on the stats
+// page. Switching to basic roughly halves cold-load time on a fresh
+// page reload (the full bundle was the biggest single asset).
+const PLOTLY_CDN_URL = "https://cdn.plot.ly/plotly-basic-2.35.2.min.js";
 
 type PlotlyLike = {
   newPlot: (...args: any[]) => Promise<any>;

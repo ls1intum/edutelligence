@@ -86,16 +86,6 @@ jobs:
       docker-context: ./logos/logos-ui
       tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-ui:latest,ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.result) }}
 
-  build-and-push-landing:
-    name: Build Logos Landing
-    needs: [compute-tag]
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-    with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-landing
-      docker-file: ./logos/logos-landing/Dockerfile
-      docker-context: ./logos/logos-landing
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-landing:latest,ghcr.io/ls1intum/edutelligence/logos-landing:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-landing:{0}', needs.compute-tag.outputs.result) }}
-
   build-and-push-db:
     name: Build Logos DB
     needs: [compute-tag]

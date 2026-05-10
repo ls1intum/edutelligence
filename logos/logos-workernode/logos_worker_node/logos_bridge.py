@@ -7,7 +7,7 @@ import base64
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 import httpx
@@ -21,7 +21,6 @@ except Exception:  # noqa: BLE001
     class ConnectionClosed(Exception):
         pass
 
-from logos_worker_node.config import save_lanes_state
 from logos_worker_node.models import LaneConfig, LogosConfig, WorkerTransportStatus
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.runtime import build_runtime_status
@@ -268,8 +267,11 @@ class LogosBridgeClient:
 
     async def _send_hello(self, ws) -> None:
         max_lanes = 0
+        static_lane_ids: list[str] = []
         if hasattr(self._app, "state") and hasattr(self._app.state, "config"):
             max_lanes = self._app.state.config.worker.max_lanes
+        if hasattr(self._app, "state") and hasattr(self._app.state, "lane_manager"):
+            static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
         await self._send_json(
             ws,
             {
@@ -277,6 +279,7 @@ class LogosBridgeClient:
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "max_lanes": max_lanes,
+                "static_lane_ids": static_lane_ids,
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -452,29 +455,16 @@ class LogosBridgeClient:
         if action == "apply_lanes":
             lanes = [LaneConfig(**item) for item in (params.get("lanes") or [])]
             result = await lane_manager.apply_lanes(lanes)
-            if result.success:
-                try:
-                    save_lanes_state(lanes)
-                except OSError:
-                    logger.debug("Could not persist lane state")
             return result.model_dump(mode="json")
 
         if action == "add_lane":
             lane_config = LaneConfig(**params)
             status = await lane_manager.add_lane(lane_config)
-            try:
-                save_lanes_state(lane_manager.get_current_lane_configs())
-            except OSError:
-                logger.debug("Could not persist lane state after add_lane")
             return status.model_dump(mode="json")
 
         lane_id = str(params.get("lane_id", "")).strip()
         if action == "delete_lane":
             await lane_manager.remove_lane(lane_id)
-            try:
-                save_lanes_state(lane_manager.get_current_lane_configs())
-            except OSError:
-                logger.debug("Could not persist lane state after delete_lane")
             return {"ok": True, "lane_id": lane_id}
         if action == "sleep_lane":
             status = await lane_manager.sleep_lane(
@@ -493,6 +483,19 @@ class LogosBridgeClient:
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
+    # vLLM endpoints that must never be reachable through proxied inference
+    # requests.  These are internal management endpoints (sleep/wake, cache
+    # reset, weight updates, etc.) that should only be triggered by the
+    # lane manager or capacity planner, not by external API clients.
+    _BLOCKED_REQUEST_PATHS: ClassVar[frozenset[str]] = frozenset({
+        "sleep", "wake_up", "is_sleeping",
+        "pause", "resume", "is_paused",
+        "reset_prefix_cache", "reset_mm_cache", "reset_encoder_cache",
+        "update_weights", "init_weight_transfer_engine",
+        "scale_elastic_ep", "is_scaling_elastic_ep",
+        "collective_rpc",
+    })
+
     @staticmethod
     def _lane_target_url(
         lane_status: dict[str, Any],
@@ -503,6 +506,10 @@ class LogosBridgeClient:
         # "v2/embed", "tokenize"), use it directly so vLLM decides what it supports.
         if request_path:
             endpoint = request_path.strip("/")
+            # Block internal vLLM management endpoints from being reached
+            # through proxied inference requests.
+            if endpoint in LogosBridgeClient._BLOCKED_REQUEST_PATHS:
+                raise ValueError(f"Request path '/{endpoint}' is not allowed through the inference proxy")
         else:
             endpoint = str(lane_status.get("inference_endpoint") or "/v1/chat/completions").lstrip("/")
         return f"http://127.0.0.1:{lane_status['port']}/{endpoint}"

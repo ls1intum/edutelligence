@@ -434,7 +434,7 @@ class OllamaDataProvider:
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         """
         Atomically check availability and reserve capacity.
-        
+
         Returns:
             True if capacity was available and reserved.
             False if busy (should queue).
@@ -442,7 +442,7 @@ class OllamaDataProvider:
         with self._lock:
             current_active = self._model_active.get(model_id, 0)
             max_capacity = self.get_config_value(model_id, "parallel_capacity", self.DEFAULT_PARALLEL_CAPACITY)
-            
+
             if current_active < max_capacity:
                 if request_id in self._active_request_ids:
                     return True

@@ -27,12 +27,32 @@ DROP TABLE IF EXISTS ollama_provider_snapshots CASCADE;
 DROP TABLE IF EXISTS model_profiles CASCADE;
 DROP TABLE IF EXISTS logosnode_provider_keys CASCADE;
 DROP TABLE IF EXISTS schema_migrations CASCADE;
+DROP TABLE IF EXISTS team_members CASCADE;
+DROP TABLE IF EXISTS teams CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     username TEXT NOT NULL,
     prename TEXT,
-    name TEXT
+    name TEXT,
+    role TEXT NOT NULL DEFAULT 'app_developer'
+        CHECK (role IN ('app_developer', 'app_admin', 'logos_admin')),
+    email TEXT
+);
+
+CREATE UNIQUE INDEX idx_users_email
+ON users (lower(email))
+WHERE email IS NOT NULL;
+
+CREATE TABLE teams (
+    id   SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE team_members (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, team_id)
 );
 
 CREATE TABLE services (
@@ -75,7 +95,7 @@ CREATE TABLE providers (
 
 
     -- SDI: Configuration defaults for this provider
-    parallel_capacity INTEGER DEFAULT 1,
+    parallel_capacity INTEGER DEFAULT 20,
     keep_alive_seconds INTEGER DEFAULT 300,
     max_loaded_models INTEGER DEFAULT 3,
 

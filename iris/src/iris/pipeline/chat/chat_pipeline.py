@@ -162,8 +162,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             The tenant identifier string.
         """
-        if not dto.user:
-            raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
 
     def on_agent_step(
@@ -192,15 +190,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         lecture_id = (
             state.dto.lecture.id if state.dto.lecture and state.dto.lecture.id else None
         )
-        course_id = state.dto.course.id if state.dto.course else None
-        if course_id is None:
-            return
+
         mcq_pre_agent_hook(
             state=state,
             mcq_pipeline=self.mcq_pipeline,
             get_text_of_latest_user_message=self.get_text_of_latest_user_message,
             db=state.db,
-            course_id=course_id,
+            course_id=state.dto.course.id,
             chat_history=state.dto.chat_history,
             lecture_id=lecture_id,
         )
@@ -233,7 +229,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
             # Add citations if applicable
             result = self._add_citations(state, result)
-
+            state.result = result
             # Generate title
             session_title = self._generate_session_title(state, result, state.dto)
 
@@ -279,7 +275,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Also detects MCQ intent for COURSE and LECTURE modes.
         """
         dto = state.dto
-        course_id = dto.course.id if dto.course else None
+        course_id = dto.course.id
         state.allow_lecture_tool = should_allow_lecture_tool(state.db, course_id)
         state.allow_faq_tool = should_allow_faq_tool(state.db, course_id)
         state.allow_memiris_tool = bool(
@@ -343,11 +339,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
 
-        # Extract user language
-        user_language = "en"
-        if dto.user and dto.user.lang_key:
-            user_language = dto.user.lang_key
-
         metrics_enabled = bool(
             dto.metrics
             and dto.course.competencies
@@ -361,7 +352,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
-            "user_language": user_language,
+            "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
                 dto.custom_instructions or ""
             ),
@@ -371,8 +362,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "allow_memiris_tool": state.allow_memiris_tool,
             "metrics_enabled": metrics_enabled,
             "has_chat_history": bool(state.message_history),
-            "has_competencies": bool(dto.course and dto.course.competencies),
-            "has_exercises": bool(dto.course and dto.course.exercises),
+            "has_competencies": bool(dto.course.competencies),
+            "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "exercise_title": exercise.title if exercise else "",
@@ -410,7 +401,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             True if memory creation should be enabled, False otherwise.
         """
         if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
-            return bool(state.dto.user and state.dto.user.memiris_enabled)
+            return bool(state.dto.user.memiris_enabled)
         else:
             return False
 
@@ -429,10 +420,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             The result with citations added.
         """
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
 
         try:
             # Add FAQ citations
@@ -446,7 +433,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
-                    user_language=user_language,
+                    user_language=state.dto.user.lang_key,
                     base_url=base_url,
                 )
 
@@ -461,7 +448,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
-                    user_language=user_language,
+                    user_language=state.dto.user.lang_key,
                     base_url=base_url,
                 )
 
@@ -571,18 +558,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         if self.chat_mode not in {IrisChatMode.COURSE, IrisChatMode.EXERCISE}:
             return
 
-        # Extract user language
-        user_language = "en"
-        if state.dto.user and state.dto.user.lang_key:
-            user_language = state.dto.user.lang_key
-
         try:
             if result:
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
                 suggestions = self.suggestion_pipeline(
-                    suggestion_dto, user_language=user_language
+                    suggestion_dto, user_language=state.dto.user.lang_key
                 )
 
                 if self.suggestion_pipeline.tokens is not None:

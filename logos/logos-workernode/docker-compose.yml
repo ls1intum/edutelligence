@@ -24,7 +24,12 @@ services:
       LOGOS_API_KEY: ${LOGOS_API_KEY:-}
       LOGOS_ALLOW_INSECURE_HTTP: ${LOGOS_ALLOW_INSECURE_HTTP:-}
       HF_TOKEN: ${HF_TOKEN:-}
-      MAX_LANES: ${MAX_LANES:-}
+      # MAX_LANES is deprecated — the worker no longer needs an artificial
+      # cap. Lane count is bounded naturally by VRAM (the capacity planner
+      # decides what can fit) and by the lane port range
+      # (worker.lane_port_start/end in config.yml). Any value left in .env
+      # is intentionally NOT forwarded to the container so it can never
+      # block eviction-driven lane creation.
       # ── tmpfs RAM cache ────────────────────────────────────────────────
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       # ── Auto-calibration ───────────────────────────────────────────────
@@ -101,7 +106,6 @@ services:
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
-      VLLM_SERVER_DEV_MODE: "1"
     gpus: all
     pid: host
     ipc: host

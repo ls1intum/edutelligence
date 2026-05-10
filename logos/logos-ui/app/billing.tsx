@@ -8,17 +8,15 @@ import { VStack } from "@/components/ui/vstack";
 export default function Billing() {
   useAuth();
   return (
-    <VStack className="w-full flex-1">
+    <VStack className="w-full" space="lg">
       <Text
         size="2xl"
-        className="mb-6 text-center font-bold text-black dark:text-white"
+        className="text-center font-bold text-black dark:text-white"
       >
         Billing Management
       </Text>
-      <Box className="mt-5 self-center rounded-3xl border border-gray-400 p-5">
-        <Text className="text-black dark:text-white">
-          Hier erscheinen bald Kosten...
-        </Text>
+      <Box className="self-center rounded-2xl border border-outline-200 p-5 dark:border-outline-800 dark:bg-[#111]">
+        <Text className="text-gray-500 self-center dark:text-gray-400">Coming soon</Text>
       </Box>
     </VStack>
   );

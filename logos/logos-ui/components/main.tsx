@@ -42,9 +42,14 @@ export default function Main({
   const hasNavigatedRef = useRef(false);
 
   const [hue, setHue] = useState(0);
+  const [mounted, setMounted] = useState(false);
 
   const sanitizeKey = (raw: string) =>
     (raw || "").replace(/[\r\n]+/g, "").trim();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -93,20 +98,11 @@ export default function Main({
     const safeKey = sanitizeKey(key);
     try {
       const response = await fetch(
-        `${API_BASE}/logosdb/get_role`,
+        `${API_BASE}/me`,
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            logos_key: safeKey,
-          },
-          body: JSON.stringify({
-            logos_key: safeKey,
-          }),
-        }
-      );
-      let [, code] = JSON.parse(await response.text());
-      return code === 200;
+            headers: { "logos-key": safeKey },
+        });
+      return response.status === 200;
     } catch (error) {
       console.error("API-Fehler:", error);
       return false;
@@ -152,7 +148,7 @@ export default function Main({
           <ExpoImage
             source={require("../assets/images/logos_full.png")}
             style={
-              { width: 200, height: 90, filter: `hue-rotate(${hue}deg)` } as any
+              { width: 200, height: 90, filter: `hue-rotate(${mounted ? hue : 0}deg)` } as any
             }
             contentFit="contain"
           />

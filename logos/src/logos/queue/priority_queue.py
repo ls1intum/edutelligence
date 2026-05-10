@@ -56,7 +56,14 @@ class PriorityQueueManager:
 
         logging.info("PriorityQueueManager initialized")
 
-    def enqueue(self, task: any, model_id: int, provider_id: int, priority: Priority) -> str:
+    def enqueue(
+        self,
+        task: any,
+        model_id: int,
+        provider_id: int,
+        priority: Priority,
+        is_cold_at_queue: bool = False,
+    ) -> str:
         """
         Add a task to the appropriate priority queue.
 
@@ -65,6 +72,9 @@ class PriorityQueueManager:
             model_id: Which model this task is for
             provider_id: Which provider this task is for
             priority: Priority level (LOW, NORMAL, HIGH)
+            is_cold_at_queue: True if the lane was sleeping/cold/starting
+                at the moment of queueing. Captured at enqueue time
+                because by dispatch the lane is already loaded.
 
         Returns:
             Unique entry_id for this queued task
@@ -84,6 +94,7 @@ class PriorityQueueManager:
                 original_priority=priority,
                 current_priority=priority,
                 enqueue_time=datetime.now(),
+                is_cold_at_queue=is_cold_at_queue,
             )
 
             # Add to appropriate heap
