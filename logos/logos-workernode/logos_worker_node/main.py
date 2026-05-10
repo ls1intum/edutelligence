@@ -15,7 +15,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from logos_worker_node.config import load_config, get_state_dir, save_lanes_state
+from logos_worker_node.config import load_config, get_state_dir
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
@@ -62,13 +62,24 @@ async def _auto_calibrate_if_needed(
         elif (
             profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
-            and abs(profile.base_residency_mb - profile.loaded_vram_mb) > 1.0
+            and profile.kv_budget_mb is not None
+            and profile.loaded_vram_mb - profile.base_residency_mb > 0.5 * profile.kv_budget_mb
         ):
             # Old-format calibrated profile: base_residency was stored as
-            # weights-only. New format stores full loaded VRAM. Force recalibration.
-            # Note: "measured" profiles intentionally differ (base=weights-only,
+            # weights-only, so loaded_vram (= weights + KV) sits roughly one
+            # full kv_budget *above* base. New format stores full loaded VRAM,
+            # so base ≈ loaded at calibration time and runtime EMA only nudges
+            # loaded a few percent below base after real traffic (the KV pool
+            # is reserved at calibration peak but rarely fully used in practice).
+            #
+            # Only flag as stale when `loaded - base > 0.5 × kv_budget` — that
+            # captures genuine weights-only convention without firing on the
+            # routine "loaded EMA-drifted below base" case, which is what every
+            # restart after real traffic produces.
+            #
+            # "measured" profiles intentionally differ (base=weights-only,
             # loaded=weights+KV) and must NOT be flagged as stale.
-            reason = f"stale format (base={profile.base_residency_mb:.0f} != loaded={profile.loaded_vram_mb:.0f})"
+            reason = f"stale format (base={profile.base_residency_mb:.0f} << loaded={profile.loaded_vram_mb:.0f}, kv_budget={profile.kv_budget_mb:.0f})"
         if reason:
             logger.info("  %s needs calibration: %s", model_name, reason)
             uncalibrated.append(model_name)
@@ -282,7 +293,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             len(cfg.lanes), cfg.worker.max_lanes, len(static_lane_ids),
         )
         cfg.lanes = []
-        save_lanes_state([])
 
     if cfg.lanes:
         logger.info("Applying %d lane(s) from config", len(cfg.lanes))

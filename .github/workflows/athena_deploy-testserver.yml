@@ -87,11 +87,9 @@ jobs:
         include:
           - environment: Athena - Test 1
             label-identifier: athena-test1
-            url: https://athena-test1.ase.cit.tum.de
 
           - environment: Athena - Test 2
             label-identifier: athena-test2
-            url: https://athena-test2.ase.cit.tum.de
     outputs:
       TS1: ${{ steps.filter.outputs.athena-test1 || '' }}
       TS2: ${{ steps.filter.outputs.athena-test2 || '' }}
@@ -139,7 +137,7 @@ jobs:
 
     environment:
       name: ${{ matrix.environment }}
-      url: ${{ matrix.url }}
+      url: ${{ format('https://{0}', vars.DEPLOYMENT_HOST) }}
 
     env:
       DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER }}
