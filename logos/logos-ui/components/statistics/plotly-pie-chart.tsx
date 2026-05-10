@@ -16,6 +16,7 @@ type PlotlyPieChartProps = {
   data: PieSlice[];
   width: number;
   height?: number;
+  pieScale?: number;
   centerText?: {
     top?: string;
     middle?: string;
@@ -23,6 +24,8 @@ type PlotlyPieChartProps = {
   };
   holeSize?: number;
   legendPosition?: "bottom" | "right";
+  hoverValueSuffix?: string;
+  hoverValueDecimals?: number;
 };
 
 export default function PlotlyPieChart(_props: PlotlyPieChartProps) {

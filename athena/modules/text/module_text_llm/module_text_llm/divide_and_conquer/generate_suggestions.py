@@ -33,7 +33,6 @@ async def generate_suggestions(
     """
     # Prepare text and model
     submission_text = double_curly_braces(submission.text)
-    model = config.model.get_model()  # type: ignore[attr-defined]
     prompt_input = {"submission": add_sentence_numbers(submission_text)}
 
     feedbacks: list[Feedback] = []
@@ -53,7 +52,6 @@ async def generate_suggestions(
         chat_prompt = get_chat_prompt(system_prompt, get_human_message())
 
         processing_inputs = {
-            "model": model,
             "chat_prompt": chat_prompt,
             "prompt_input": prompt_input,
             "pydantic_object": FeedbackModel if usage_count == 1 else AssessmentModel,

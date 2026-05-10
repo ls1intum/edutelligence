@@ -1,3 +1,4 @@
+import json
 from typing import Optional, Type, TypeVar, List, Union
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts import ChatPromptTemplate
@@ -6,10 +7,11 @@ from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, ValidationError
 from athena import get_experiment_environment
 from llm_core.utils.append_format_instructions import append_format_instructions
-from llm_core.utils.llm_utils import remove_system_message
+from llm_core.utils.llm_utils import remove_system_message, describe_model_config, describe_llm_request_context
+from llm_core.utils.model_selection import get_selected_model
 from llm_core.models.model_config import ModelConfig
 from langchain_core.messages import AIMessage, BaseMessage
-import json
+from athena.logger import logger
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -24,12 +26,21 @@ async def predict_and_parse(
     """
     Predicts an LLM completion using the model and parses the output using the provided Pydantic model
     """
+    selected_model = get_selected_model(model)
 
     # Remove system messages if the model does not support them
-    if not model.supports_system_messages():
+    if not selected_model.supports_system_messages():
         chat_prompt = remove_system_message(chat_prompt)
 
-    llm_model = model.get_model()
+    logger.info(
+        "predict_and_parse: Using model %s for %s",
+        describe_model_config(selected_model),
+        describe_llm_request_context(
+            tags=tags,
+            pydantic_object=pydantic_object,
+        ),
+    )
+    llm_model = selected_model.get_model()
 
     # Add tags
     experiment = get_experiment_environment()
@@ -45,15 +56,15 @@ async def predict_and_parse(
     chat_prompt = append_format_instructions(chat_prompt, pydantic_object)
 
     # Run the model and parse the output
-    if model.supports_structured_output():
+    if selected_model.supports_structured_output():
         structured_output_llm = llm_model.with_structured_output(pydantic_object, method="json_mode")
-    elif model.supports_function_calling():
+    elif selected_model.supports_function_calling():
         structured_output_llm = llm_model.with_structured_output(pydantic_object)
     else:
         # For providers that don't support structured outputs or tool calling,
         # default to plain parsing. Apply LM Studio–specific cleaning only for
         # LM Studio to avoid impacting other providers (ollama, azure, openai, etc.).
-        provider = getattr(model, "provider", None)
+        provider = getattr(selected_model, "provider", None)
 
         if provider == "lmstudio":
             # LM Studio responses may prepend control tokens or wrap JSON.
@@ -136,4 +147,3 @@ async def predict_and_parse(
         return await chain.ainvoke(prompt_input, config={"tags": tags}, debug=True)
     except ValidationError as e:
         raise ValueError(f"Could not parse output: {e}") from e
-
