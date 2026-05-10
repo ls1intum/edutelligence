@@ -41,13 +41,6 @@ logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
 
-# Thresholds for detecting header/footer regions in PDF pages
-# These values define the relative position (as fraction of page height)
-# where we look for slide numbers
-HEADER_THRESHOLD = 0.12  # Top 12% of page
-FOOTER_THRESHOLD = 0.88  # Bottom 12% of page (from 88% onwards)
-
-
 _UNICODE_BULLETS = (
     "\u0095"  # BULLET (legacy Windows-1252)
     "\u2022"  # BULLET
@@ -336,28 +329,24 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            slide_page_numbers.append(self.extract_slide_page_number(page))
-            if page.get_images(full=False):
-                logger.info(
-                    "%s Page %d/%d: has images, interpreting with LLM",
-                    prefix,
-                    page_num + 1,
-                    doc.page_count,
-                )
-                # more pixels thus more details and better quality
-                matrix = fitz.Matrix(5, 5)
-                pix = page.get_pixmap(matrix=matrix)
-                img_bytes = pix.tobytes("jpg")
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                image_interpretation = self.interpret_image(
-                    img_base64,
-                    old_page_text,
-                    lecture_unit_slide_dto.lecture_name,
-                    self.course_language,
-                )
+            has_images = bool(page.get_images(full=False))
+
+            # Extract slide number (and interpretation if page has images) via vision
+            slide_num, interpretation = self.extract_slide_info_with_vision(
+                page=page,
+                has_images=has_images,
+                old_page_text=old_page_text,
+                lecture_name=lecture_unit_slide_dto.lecture_name,
+                course_language=self.course_language,
+            )
+            slide_page_numbers.append(slide_num)
+
+            # Merge interpretation with text if available
+            if interpretation:
                 page_text = self.merge_page_content_and_image_interpretation(
-                    page_text, image_interpretation
+                    page_text, interpretation
                 )
+
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
@@ -384,111 +373,80 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         return data
 
-    def extract_slide_page_number(self, page: fitz.Page) -> int:
-        """Read the visible page/slide number from a PDF page.
-
-        Uses text-based extraction to find slide numbers in header/footer regions,
-        avoiding costly vision-model calls when possible.
-
-        Returns:
-            int: Detected slide number (positive integer), or -1 if no number found.
-        """
-        text_candidate = self.extract_slide_page_number_from_text(page)
-        if text_candidate == -1:
-            logger.debug("Page %d: slide page number not found", page.number + 1)
-        return text_candidate
-
-    @staticmethod
-    def extract_slide_page_number_from_text(page: fitz.Page) -> int:
-        """Extract a likely slide number from textual footer/header content.
-
-        Detection heuristic:
-        1. Searches for numbers in header (top 12%) or footer (bottom 12%) regions
-        2. Prioritizes footer candidates over header candidates
-        3. Among same-region candidates, prefers those closest to page edge
-        4. For equal positions, prefers shorter text (likely just the number)
-
-        This avoids costly vision-model calls for normal PDFs where the visible
-        slide number is already available in the extracted page text.
+    def extract_slide_info_with_vision(
+        self,
+        page: fitz.Page,
+        has_images: bool,
+        old_page_text: str,
+        lecture_name: str,
+        course_language: str,
+    ) -> tuple[int, Optional[str]]:
+        """Extract slide number via vision, optionally with interpretation.
 
         Args:
-            page: The PDF page to extract from.
+            page: PDF page to process
+            has_images: Whether to include academic interpretation
+            old_page_text: Previous page content for context
+            lecture_name: Lecture name
+            course_language: Language for interpretation
 
         Returns:
-            int: Detected slide number, or -1 if none found or extraction fails.
+            (slide_number, interpretation) - interpretation is None if has_images=False
         """
-        try:
-            words = page.get_text("words")
-        except (RuntimeError, ValueError, AttributeError) as e:
-            # RuntimeError: PDF parsing errors
-            # ValueError: Invalid page state
-            # AttributeError: Malformed page object
-            logger.debug("Failed to extract words for page %d: %s", page.number + 1, e)
-            return -1
+        # Render page as image
+        matrix = fitz.Matrix(5, 5) if has_images else fitz.Matrix(2, 2)
+        pix = page.get_pixmap(matrix=matrix)
+        img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
 
-        if not words:
-            return -1
-
-        page_height = page.rect.height
-        top_cutoff = page_height * HEADER_THRESHOLD
-        bottom_cutoff = page_height * FOOTER_THRESHOLD
-        # Candidates: (region_priority, edge_distance, text_length, slide_number)
-        # Sorted to prefer: footer > header, closer to edge, shorter text
-        candidates: list[tuple[int, float, int, int]] = []
-
-        for word in words:
-            # Word format: (x0, y0, x1, y1, text, block_no, line_no, word_no)
-            if len(word) < 5:
-                continue
-            y0 = word[1]
-            y1 = word[3]
-            text = word[4]
-            parsed = LectureUnitPageIngestionPipeline.parse_slide_page_number(text)
-            if parsed == -1:
-                continue
-
-            is_footer = y1 >= bottom_cutoff
-            is_header = y0 <= top_cutoff
-            if not is_footer and not is_header:
-                continue
-
-            edge_distance = page_height - y1 if is_footer else y0
-            candidates.append(
-                (
-                    0 if is_footer else 1,
-                    edge_distance,
-                    len(str(text)),
-                    parsed,
-                )
+        # Build prompt
+        if has_images:
+            prompt = (
+                f"**First line: Write the visible slide number as 'Slide: X' (or 'Slide: unknown' if not visible)**\n\n"
+                f"Then interpret this slide from '{lecture_name}' academically in {course_language}. "
+                f"Previous slide context:\n{old_page_text}\n\n"
+                f"Max 350 words."
+            )
+        else:
+            prompt = (
+                "You are an AI that reads slide numbers from presentation slides. "
+                "Respond only with the slide number as an integer, or 'null' if not visible."
             )
 
-        if not candidates:
-            return -1
+        # Vision call
+        message = PyrisMessage(
+            sender=IrisMessageRole.USER,
+            contents=[
+                TextMessageContentDTO(text_content=prompt),
+                ImageMessageContentDTO(base64=img_base64),
+            ],
+        )
 
-        candidates.sort()
-        return candidates[0][3]
-
-    @staticmethod
-    def parse_slide_page_number(raw: Optional[str]) -> int:
-        """Parse text into a slide page number (-1 fallback for invalid input)."""
-        text = (raw or "").strip().lower()
-        if not text:
-            return -1
-
-        # Check for known invalid values
-        invalid_values = {"null", "none", "unknown", "-1"}
-        if text in invalid_values:
-            return -1
-        match = re.search(r"-?\d+", text)
-        if not match:
-            return -1
         try:
-            value = int(match.group(0))
-            if value <= 0:
-                return -1
-            return value
-        except (TypeError, ValueError):
-            return -1
+            response = self.llm_chat.chat(
+                [message],
+                CompletionArguments(temperature=0),
+                tools=[],
+            )
+            self._append_tokens(
+                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
+            )
+        except Exception as e:
+            logger.error("Vision call failed for page %d: %s", page.number + 1, e)
+            return -1, None
+
+        response_text = response.contents[0].text_content or ""
+
+        # Parse slide number
+        text_lower = response_text.lower()
+        if "null" in text_lower or "unknown" in text_lower:
+            slide_num = -1
+        else:
+            match = re.search(r"\d+", response_text)
+            slide_num = int(match.group(0)) if match else -1
+
+        # Return interpretation if requested
+        interpretation = response_text if has_images else None
+        return slide_num, interpretation
 
     def interpret_image(
         self,
