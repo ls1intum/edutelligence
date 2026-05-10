@@ -109,8 +109,8 @@ export default function Providers() {
   };
 
   return (
-    <VStack className="w-full space-y-6">
-      <VStack className="space-y-1">
+    <VStack className="w-full" space="lg">
+      <VStack className="items-center space-y-1">
         <Text
           size="2xl"
           className="text-center font-bold text-black dark:text-white"

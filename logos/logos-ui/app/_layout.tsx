@@ -38,7 +38,7 @@ export default function _layout() {
       <GluestackUIProvider mode={colorMode}>
         <SafeAreaView style={[styles.safeArea]}>
           <View style={styles.container}>
-            <Box className="min-h-screen flex-1 bg-white dark:bg-[#1e1e1e]">
+            <Box suppressHydrationWarning className="min-h-screen flex-1 bg-white dark:bg-[#1e1e1e]">
               <Header
                 colorMode={colorMode}
                 onToggleColorMode={() =>

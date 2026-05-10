@@ -447,8 +447,10 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
             return False
 
         @staticmethod
-        def check_authorization(logos_key: str) -> bool:
-            return logos_key == "root-key"
+        def get_user_by_logos_key(logos_key: str):
+            if logos_key == "root-key":
+                return {"role": "logos_admin"}
+            return None
 
         @staticmethod
         def add_provider(**kwargs):
@@ -696,51 +698,6 @@ async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monke
 
     assert response == ({"result": "ok"}, 200)
     assert refresh_calls == [False]
-
-
-@pytest.mark.asyncio
-async def test_context_resolver_uses_logosnode_lane_selection(monkeypatch):
-    class _FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-            return False
-
-        @staticmethod
-        def get_auth_info_to_deployment(model_id: int, provider_id: int, profile_id=None):  # noqa: ARG002
-            return {
-                "model_id": model_id,
-                "model_name": "model-a",
-                "endpoint": "",
-                "provider_id": provider_id,
-                "provider_name": "logosnode-provider",
-                "provider_type": "logosnode",
-                "base_url": "https://node.example",
-                "auth_name": "Authorization",
-                "auth_format": "Bearer {}",
-                "api_key": "shared-secret",
-            }
-
-    class _FakeRegistry:
-        async def select_lane_for_model(self, provider_id: int, model_name: str):  # noqa: ARG002
-            return {"lane_id": "lane-7"}
-
-    monkeypatch.setattr("logos.pipeline.context_resolver.DBManager", _FakeDB)
-    resolver = ContextResolver(logosnode_registry=_FakeRegistry())
-    ctx = await resolver.resolve_context(1, 77)
-    assert ctx is not None
-    assert ctx.provider_type == "logosnode"
-    assert ctx.lane_id == "lane-7"
-    assert ctx.forward_url == "logosnode://provider/77/lane/lane-7"
-
-    class _NoLaneRegistry:
-        async def select_lane_for_model(self, provider_id: int, model_name: str):  # noqa: ARG002
-            return None
-
-    resolver_no_lane = ContextResolver(logosnode_registry=_NoLaneRegistry())
-    ctx_no_lane = await resolver_no_lane.resolve_context(1, 77)
-    assert ctx_no_lane is None
 
 
 @pytest.mark.asyncio

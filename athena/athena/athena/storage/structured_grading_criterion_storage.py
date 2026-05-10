@@ -1,11 +1,14 @@
 from typing import Optional
 from athena.contextvars import get_lms_url
-from athena.database import get_db
+from athena.database import get_db, is_database_enabled
 
 from athena.models import DBStructuredGradingCriterion
 from athena.schemas import StructuredGradingCriterion
 
 def get_structured_grading_criterion(exercise_id: int, current_hash: Optional[str] = None) -> Optional[StructuredGradingCriterion]:
+    if not is_database_enabled():
+        return None
+
     lms_url = get_lms_url()
     with get_db() as db:
         cache_entry = db.query(DBStructuredGradingCriterion).filter(
@@ -19,6 +22,9 @@ def get_structured_grading_criterion(exercise_id: int, current_hash: Optional[st
 def store_structured_grading_criterion(
     exercise_id: int, hash: str, structured_instructions: StructuredGradingCriterion
 ):
+    if not is_database_enabled():
+        return
+
     with get_db() as db:
         db.merge(
             DBStructuredGradingCriterion(

@@ -11,8 +11,8 @@ Key differences from Ollama:
 - No ``num_parallel`` — continuous batching handles all concurrency.
 - ``num_ctx`` equivalent is ``--max-model-len``.
 - GPU pinning via ``CUDA_VISIBLE_DEVICES`` or ``--tensor-parallel-size``.
-- Optional stability controls are exposed via lane config:
-  ``disable_custom_all_reduce`` and ``disable_nccl_p2p``.
+- Optional stability controls: ``disable_custom_all_reduce`` (per-lane)
+  and ``nccl_p2p_available`` (global engine config, default False).
 """
 
 from __future__ import annotations
@@ -21,14 +21,16 @@ import asyncio
 from collections import deque
 from datetime import datetime
 import logging
+import math
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, ClassVar
 
 import httpx
 
@@ -38,6 +40,7 @@ from logos_worker_node.models import (
     ProcessState,
     ProcessStatus,
     VllmEngineConfig,
+    _DEFAULT_LANE_CONTEXT_LENGTH,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -55,6 +58,192 @@ _SCRUBBED_ENV_VARS = (
     "MASTER_ADDR",
     "MASTER_PORT",
 )
+
+# Cache for _discover_pip_cuda_lib_dirs() — computed once per process.
+_pip_cuda_lib_dirs: list[str] | None = None
+
+
+def _discover_pip_cuda_lib_dirs() -> list[str]:
+    """Find pip-package lib directories containing CUDA shared libraries.
+
+    PyTorch cu128 wheels depend on CUDA 12 libraries (libcudart.so.12,
+    libcublasLt.so.12) shipped by nvidia-* pip packages.  These live under
+    ``<site-packages>/nvidia/*/lib/`` and may not be in ``LD_LIBRARY_PATH``
+    or registered with ``ldconfig``.  ``torch/lib`` provides ``libc10.so``
+    and CUDA stub libraries.
+
+    Results are cached for the lifetime of the process.
+    """
+    global _pip_cuda_lib_dirs  # noqa: PLW0603
+    if _pip_cuda_lib_dirs is not None:
+        return _pip_cuda_lib_dirs
+
+    import sysconfig
+
+    dirs: list[str] = []
+    sp = sysconfig.get_path("purelib")
+    if sp:
+        nvidia_root = Path(sp) / "nvidia"
+        if nvidia_root.is_dir():
+            for child in sorted(nvidia_root.iterdir()):
+                lib_dir = child / "lib"
+                if lib_dir.is_dir():
+                    dirs.append(str(lib_dir))
+        torch_lib = Path(sp) / "torch" / "lib"
+        if torch_lib.is_dir():
+            dirs.append(str(torch_lib))
+
+    _pip_cuda_lib_dirs = dirs
+    return dirs
+
+
+# Model-name → vLLM --tool-call-parser mapping.  Checked in order;
+# first match wins.  Patterns are lowercased substrings of the HF model id.
+# Full list of parsers: https://docs.vllm.ai/en/latest/features/tool_calling.html
+_TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
+    # --- Patterns that share substrings with other families -----------------
+    # Google FunctionGemma (before gemma — "functiongemma" contains "gemma")
+    ("functiongemma", "functiongemma"),  # google/functiongemma-270m-it
+    # Google Gemma 4
+    ("gemma-4", "gemma4"),
+    ("gemma4", "gemma4"),
+    # Salesforce xLAM (before llama/qwen — xLAM models may contain those)
+    ("xlam", "xlam"),
+    # NousResearch Hermes (before llama — Hermes-Llama models exist)
+    ("hermes", "hermes"),
+    # Meta Llama (4 before 3)
+    ("llama-4", "llama4_pythonic"),
+    ("llama4", "llama4_pythonic"),
+    ("llama-3", "llama3_json"),
+    ("llama3", "llama3_json"),
+    # Mistral / Mixtral
+    ("mistral", "mistral"),
+    ("mixtral", "mistral"),
+    # DeepSeek (specific versions before general; R1 also uses deepseek_v3)
+    ("deepseek-v3.2", "deepseek_v32"),
+    ("deepseek-v3.1", "deepseek_v31"),
+    ("deepseek", "deepseek_v3"),
+    # IBM Granite (specific before general)
+    ("granite-20b-functioncalling", "granite-20b-fc"),
+    ("granite-20b-fc", "granite-20b-fc"),
+    ("granite-4", "granite4"),
+    ("granite4", "granite4"),
+    ("granite", "granite"),
+    # Zhipu GLM (4.7 before 4 — "glm-4" is a prefix of "glm-4.7")
+    ("glm-4.7", "glm47"),
+    ("glm47", "glm47"),
+    ("glm-4", "glm45"),  # also covers GLM-4.5 and GLM-4.6
+    ("glm4", "glm45"),
+    # Shanghai AI Lab InternLM
+    ("internlm", "internlm"),
+    # AI21 Labs Jamba
+    ("jamba", "jamba"),
+    # Alibaba Qwen (coder→qwen3_xml per docs, then general qwen3→hermes)
+    ("qwen3-coder", "qwen3_xml"),
+    ("qwen3_coder", "qwen3_xml"),
+    ("qwen3-", "hermes"),
+    ("qwen3_", "hermes"),
+    ("qwen", "hermes"),
+    # MiniMax (m2 before general)
+    ("minimax-m2", "minimax_m2"),
+    ("minimax_m2", "minimax_m2"),
+    ("minimax", "minimax"),
+    # Microsoft Phi
+    ("phi-4-mini", "phi4_mini_json"),
+    ("phi4mini", "phi4_mini_json"),
+    # Allen AI OLMo
+    ("olmo-3", "olmo3"),
+    ("olmo3", "olmo3"),
+    # Tencent Hunyuan
+    ("hunyuan-a13b", "hunyuan_a13b"),
+    ("hunyuan_a13b", "hunyuan_a13b"),
+    ("hunyuan", "hunyuan_a13b"),
+    # Baidu ERNIE
+    ("ernie-4.5", "ernie45"),
+    ("ernie45", "ernie45"),
+    ("ernie", "ernie45"),
+    # Moonshot Kimi
+    ("kimi-k2", "kimi_k2"),
+    ("kimi_k2", "kimi_k2"),
+    ("kimi", "kimi_k2"),
+    # ByteDance Seed
+    ("seed-oss", "seed_oss"),
+    ("seed_oss", "seed_oss"),
+    # StepFun (3.5 before 3 — "step-3" is a prefix of "step-3.5")
+    ("step-3.5", "step3p5"),
+    ("step3p5", "step3p5"),
+    ("step-3", "step3"),
+    ("step3", "step3"),
+    # Sber GigaChat
+    ("gigachat", "gigachat3"),
+    # Meituan LongCat
+    ("longcat", "longcat"),
+    # Xiaomi MIMO
+    ("mimo", "mimo"),
+    # OpenAI OSS (gpt-oss-20b, gpt-oss-120b)
+    ("gpt-oss", "openai"),
+)
+
+# Model-name → vLLM --reasoning-parser mapping.  Checked in order; first match
+# wins.  Patterns are lowercased substrings of the HF model id.
+# Registered parser names sourced directly from vllm/reasoning/__init__.py
+# (_REASONING_PARSERS_TO_REGISTER dict) — these are the only valid values.
+_REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
+    ("gemma-4", "gemma4"),
+    ("gpt-oss", "openai_gptoss"),
+)
+
+# Model-name → default --default-chat-template-kwargs mapping.  Applied as a
+# base layer; explicit vllm_config.chat_template_kwargs keys win on a per-key
+# basis (merge, not replace).
+_DEFAULT_CHAT_TEMPLATE_KWARGS_RULES: tuple[tuple[str, dict[str, Any]], ...] = (
+    # Google Gemma 4 — thinking is opt-in via chat template
+    ("gemma-4", {"enable_thinking": True}),
+)
+
+
+def _infer_reasoning_parser(model: str) -> str | None:
+    """Infer the vLLM --reasoning-parser value from the model name.
+
+    Returns the parser name when the model is a known reasoning model, or
+    ``None`` when no rule matches (no flag should be emitted).
+    """
+    model_lower = model.lower()
+    for pattern, parser in _REASONING_PARSER_RULES:
+        if pattern in model_lower:
+            return parser
+    return None
+
+
+def _infer_default_chat_template_kwargs(model: str) -> dict[str, Any]:
+    """Infer the default chat-template-kwargs dict from the model name.
+
+    Returns the first matching dict, or ``{}`` when nothing matches.
+    The caller should merge (overlay) any explicit user-supplied kwargs on top.
+    """
+    model_lower = model.lower()
+    for pattern, kwargs in _DEFAULT_CHAT_TEMPLATE_KWARGS_RULES:
+        if pattern in model_lower:
+            return dict(kwargs)  # shallow copy so callers can mutate safely
+    return {}
+
+
+def _infer_tool_call_parser(model: str) -> str:
+    """Infer the vLLM tool-call-parser from the model name.
+
+    vLLM requires an explicit ``--tool-call-parser`` value when
+    ``--enable-auto-tool-choice`` is set (no built-in auto-detect yet).
+    Falls back to ``hermes`` which is broadly compatible.
+
+    TODO: vLLM draft PR adds ``--tool-call-parser=auto`` which would make
+    this function obsolete. Check if merged and remove this workaround:
+    https://github.com/vllm-project/vllm/pull/34809
+    """
+    model_lower = model.lower()
+    for pattern, parser in _TOOL_PARSER_RULES:
+        if pattern in model_lower:
+            return parser
+    return "hermes"
 
 
 class VllmProcessHandle:
@@ -79,6 +268,7 @@ class VllmProcessHandle:
         self._stuck_vram: bool = False
         self._known_child_pids: set[int] = set()
         self._process_group_id: int | None = None
+        self._max_concurrency: int | None = None
         self.hf_home_override: str | None = None
 
     async def init(self) -> None:
@@ -98,7 +288,11 @@ class VllmProcessHandle:
     async def spawn(self, lane_config: LaneConfig) -> ProcessStatus:
         """Spawn the vLLM process for this lane."""
         if self._process is not None and self._process.returncode is None:
-            logger.info("[%s] Stopping existing process (pid=%d) before spawn", self.lane_id, self._process.pid)
+            logger.info(
+                "[%s] Stopping existing process (pid=%d) before spawn",
+                self.lane_id,
+                self._process.pid,
+            )
             await self._kill_process()
 
         self._recent_logs.clear()
@@ -110,7 +304,9 @@ class VllmProcessHandle:
 
         logger.info(
             "[%s] Spawning vLLM (port=%d, model=%s)",
-            self.lane_id, self.port, lane_config.model,
+            self.lane_id,
+            self.port,
+            lane_config.model,
         )
 
         process_env = self._build_process_env(lane_config, env, cmd)
@@ -131,7 +327,9 @@ class VllmProcessHandle:
             self._stream_logs(), name=f"logs-vllm-{self.lane_id}"
         )
 
-        logger.info("[%s] vLLM process spawned (pid=%d)", self.lane_id, self._process.pid)
+        logger.info(
+            "[%s] vLLM process spawned (pid=%d)", self.lane_id, self._process.pid
+        )
 
         ready = await self._wait_for_ready(timeout=_READY_TIMEOUT)
         if not ready:
@@ -146,7 +344,9 @@ class VllmProcessHandle:
         if self._known_child_pids:
             logger.info(
                 "[%s] Discovered %d child PIDs for TP workers: %s",
-                self.lane_id, len(self._known_child_pids), self._known_child_pids,
+                self.lane_id,
+                len(self._known_child_pids),
+                self._known_child_pids,
             )
 
         return self.status()
@@ -160,7 +360,8 @@ class VllmProcessHandle:
         if not vram_clean:
             logger.error(
                 "[%s] VRAM still held after stopping pid=%d — GPU memory may be leaked",
-                self.lane_id, pid,
+                self.lane_id,
+                pid,
             )
             self._stuck_vram = True
             self._persist_failure_logs("stuck_vram")
@@ -172,6 +373,24 @@ class VllmProcessHandle:
     def has_stuck_vram(self) -> bool:
         """True if the last stop detected residual GPU memory."""
         return getattr(self, "_stuck_vram", False)
+
+    @property
+    def has_fatal_cuda_errors(self) -> bool:
+        """True if recent logs contain fatal CUDA error patterns.
+
+        These patterns indicate the GPU is in an unrecoverable state that
+        cannot be resolved without a host OS reboot.
+        """
+        if not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs).lower()
+        fatal_patterns = (
+            "cuda-capable device(s) is/are busy or unavailable",
+            "all cuda-capable devices are busy or unavailable",
+            "nccl warn cuda failure",
+            "cuda error: out of memory",
+        )
+        return any(p in log_blob for p in fatal_patterns)
 
     async def reconfigure(self, lane_config: LaneConfig) -> ProcessStatus:
         """Reconfigure = full restart for vLLM (model/config change)."""
@@ -218,16 +437,22 @@ class VllmProcessHandle:
 
     async def unload_model(self, model_name: str) -> bool:
         """vLLM doesn't support runtime unload — stop the process instead."""
-        logger.info("[%s] Unload not supported by vLLM — use stop/destroy", self.lane_id)
+        logger.info(
+            "[%s] Unload not supported by vLLM — use stop/destroy", self.lane_id
+        )
         return False
 
     async def pull_model(self, model_name: str) -> bool:
         """vLLM downloads from HuggingFace at startup — not a separate step."""
-        logger.info("[%s] vLLM pulls models at startup — no separate pull", self.lane_id)
+        logger.info(
+            "[%s] vLLM pulls models at startup — no separate pull", self.lane_id
+        )
         return False
 
     async def delete_model(self, model_name: str) -> bool:
-        logger.info("[%s] Model deletion is a filesystem operation for vLLM", self.lane_id)
+        logger.info(
+            "[%s] Model deletion is a filesystem operation for vLLM", self.lane_id
+        )
         return False
 
     async def create_model(self, name: str, modelfile: str) -> bool:
@@ -251,7 +476,9 @@ class VllmProcessHandle:
             logger.debug("[%s] Failed to query /v1/models: %s", self.lane_id, e)
         return None
 
-    async def pull_model_streaming(self, model_name: str) -> AsyncIterator[dict[str, Any]]:
+    async def pull_model_streaming(
+        self, model_name: str
+    ) -> AsyncIterator[dict[str, Any]]:
         """Not supported by vLLM — yields nothing."""
         logger.info("[%s] Streaming pull not supported by vLLM", self.lane_id)
         return
@@ -265,12 +492,14 @@ class VllmProcessHandle:
                 data = resp.json()
                 models = []
                 for m in data.get("data", []):
-                    models.append({
-                        "name": m.get("id", ""),
-                        "size": 0,
-                        "size_vram": 0,
-                        "details": {"backend": "vllm"},
-                    })
+                    models.append(
+                        {
+                            "name": m.get("id", ""),
+                            "size": 0,
+                            "size_vram": 0,
+                            "details": {"backend": "vllm"},
+                        }
+                    )
                 return models
         except httpx.HTTPError as e:
             logger.debug("[%s] Failed to query /v1/models: %s", self.lane_id, e)
@@ -308,6 +537,7 @@ class VllmProcessHandle:
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
+            "e2e_latency_histogram": {},
         }
         if self._http is None:
             return metrics
@@ -315,6 +545,8 @@ class VllmProcessHandle:
             resp = await self._http.get(f"{self._base_url()}/metrics", timeout=5.0)
             if resp.status_code != 200:
                 return metrics
+            _prefix_queries: float = 0.0
+            _prefix_hits: float = 0.0
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -331,10 +563,26 @@ class VllmProcessHandle:
                     metrics["queue_waiting"] = value
                 elif metric_name.endswith("num_requests_running"):
                     metrics["requests_running"] = value
-                elif metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent"):
+                elif (metric_name.endswith("gpu_cache_usage_perc") or metric_name.endswith("gpu_cache_usage_percent")
+                      or metric_name.endswith("kv_cache_usage_perc") or metric_name.endswith("kv_cache_usage_percent")):
                     metrics["gpu_cache_usage_percent"] = value * 100.0
                 elif metric_name.endswith("prefix_cache_hit_rate"):
+                    # Legacy gauge (vLLM < 0.20); kept for backward compatibility.
                     metrics["prefix_cache_hit_rate"] = value
+                elif (
+                    metric_name.endswith("gpu_prefix_cache_queries")
+                    or metric_name.endswith("gpu_prefix_cache_queries_total")
+                    or metric_name.endswith(":prefix_cache_queries_total")
+                    or metric_name.endswith(":prefix_cache_queries")
+                ):
+                    _prefix_queries += value
+                elif (
+                    metric_name.endswith("gpu_prefix_cache_hits")
+                    or metric_name.endswith("gpu_prefix_cache_hits_total")
+                    or metric_name.endswith(":prefix_cache_hits_total")
+                    or metric_name.endswith(":prefix_cache_hits")
+                ):
+                    _prefix_hits += value
                 elif metric_name.endswith("prompt_tokens_total"):
                     metrics["prompt_tokens_total"] = value
                 elif metric_name.endswith("generation_tokens_total"):
@@ -344,6 +592,15 @@ class VllmProcessHandle:
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["ttft_histogram"][bucket] = value
+                elif "e2e_request_latency_seconds_bucket" in metric_name:
+                    bucket = "unknown"
+                    if 'le="' in name:
+                        bucket = name.split('le="', 1)[1].split('"', 1)[0]
+                    metrics["e2e_latency_histogram"][bucket] = value
+            # vLLM 0.20+: compute prefix hit rate from counters when the legacy
+            # gauge was not present.
+            if metrics["prefix_cache_hit_rate"] is None and _prefix_queries > 0:
+                metrics["prefix_cache_hit_rate"] = _prefix_hits / _prefix_queries
         except httpx.HTTPError:
             return metrics
         return metrics
@@ -356,7 +613,9 @@ class VllmProcessHandle:
         try:
             resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"[{self.lane_id}] Failed to call vLLM /sleep: {exc}") from exc
+            raise RuntimeError(
+                f"[{self.lane_id}] Failed to call vLLM /sleep: {exc}"
+            ) from exc
 
         payload: dict[str, Any]
         try:
@@ -377,7 +636,9 @@ class VllmProcessHandle:
         try:
             resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"[{self.lane_id}] Failed to call vLLM /wake_up: {exc}") from exc
+            raise RuntimeError(
+                f"[{self.lane_id}] Failed to call vLLM /wake_up: {exc}"
+            ) from exc
 
         payload: dict[str, Any]
         try:
@@ -441,11 +702,17 @@ class VllmProcessHandle:
         vc = lane_config.vllm_config
         vllm_prefix = self._resolve_vllm_binary(vc.vllm_binary)
         cmd = [
-            *vllm_prefix, "serve", lane_config.model,
-            "--host", "0.0.0.0",
-            "--port", str(self.port),
-            "--tensor-parallel-size", str(vc.tensor_parallel_size),
-            "--dtype", vc.dtype,
+            *vllm_prefix,
+            "serve",
+            lane_config.model,
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(self.port),
+            "--tensor-parallel-size",
+            str(vc.tensor_parallel_size),
+            "--dtype",
+            vc.dtype,
         ]
         if vc.gpu_memory_utilization is not None:
             cmd.extend(["--gpu-memory-utilization", str(vc.gpu_memory_utilization)])
@@ -455,7 +722,13 @@ class VllmProcessHandle:
         # prevents the model weights from loading at all.
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
-        elif lane_config.context_length > 0:
+        # For vLLM lanes, context_length defaults to 4096 from shared lane
+        # schema. Treat that sentinel default as "unset" so vLLM can use the
+        # model's native maximum context unless an explicit override is given.
+        elif (
+            lane_config.context_length > 0
+            and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH
+        ):
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         if vc.kv_cache_memory_bytes:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
@@ -477,8 +750,28 @@ class VllmProcessHandle:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
             cmd.append("--enable-sleep-mode")
+        # Tool calling: enabled by default so OpenAI-compatible clients
+        # (OpenCode, etc.) can send tools/tool_choice without getting HTTP 400.
+        # vLLM requires --tool-call-parser when --enable-auto-tool-choice is set.
+        # When tool_call_parser is empty we infer the parser from the model name.
+        if vc.enable_auto_tool_choice:
+            parser = vc.tool_call_parser or _infer_tool_call_parser(lane_config.model)
+            cmd.append("--enable-auto-tool-choice")
+            cmd.extend(["--tool-call-parser", parser])
+        # Reasoning parser: empty = infer from model name; explicit = use as-is;
+        # explicit "none" = skip the flag entirely.
+        if vc.reasoning_parser != "none":
+            reasoning_parser = vc.reasoning_parser or _infer_reasoning_parser(
+                lane_config.model
+            )
+            if reasoning_parser:
+                cmd.extend(["--reasoning-parser", reasoning_parser])
         # CUDA graph sizes: opt-in, only when not in eager mode
-        if vc.cuda_graph_sizes and not vc.enforce_eager and lane_config.flash_attention is not False:
+        if (
+            vc.cuda_graph_sizes
+            and not vc.enforce_eager
+            and lane_config.flash_attention is not False
+        ):
             cmd.extend(["--cuda-graph-sizes", vc.cuda_graph_sizes])
         # CPU RAM offloading for KV cache
         if vc.cpu_offload_gb > 0:
@@ -487,11 +780,18 @@ class VllmProcessHandle:
         # restarts can reuse them instead of recompiling from scratch.
         if not self._has_compilation_config_override(vc.extra_args):
             import json as _json
+
             cache_root = os.path.join(self._global_config.models_path, ".cache", "vllm")
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
-        if vc.chat_template_kwargs:
+        # Default chat-template-kwargs: start from inferred defaults for the
+        # model family, then overlay explicit user-supplied keys (user wins
+        # key-by-key; the entire dict is never replaced wholesale).
+        inferred_kwargs = _infer_default_chat_template_kwargs(lane_config.model)
+        merged_kwargs = {**inferred_kwargs, **vc.chat_template_kwargs}
+        if merged_kwargs:
             import json as _json
-            cmd.extend(["--default-chat-template-kwargs", _json.dumps(vc.chat_template_kwargs)])
+
+            cmd.extend(["--default-chat-template-kwargs", _json.dumps(merged_kwargs)])
         cmd.extend(vc.extra_args)
         return cmd
 
@@ -512,7 +812,9 @@ class VllmProcessHandle:
         Returns an operator override when the worker has one, otherwise leaves
         backend selection to vLLM.
         """
-        forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
+        forced_backend = (
+            (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip().upper()
+        )
         if forced_backend:
             return forced_backend
         return ""
@@ -526,7 +828,9 @@ class VllmProcessHandle:
         try:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 caps = set()
@@ -585,13 +889,20 @@ class VllmProcessHandle:
         #    entry-point is missing or not on PATH (e.g. bare pip install without bin)
         try:
             import importlib.util
+
             if importlib.util.find_spec("vllm") is not None:
                 return [sys.executable, "-m", "vllm"]
         except Exception:
             pass
 
-        checked = [raw, "PATH", venv_sibling, "/opt/venv/bin/vllm", "/usr/local/bin/vllm",
-                   f"{sys.executable} -m vllm"]
+        checked = [
+            raw,
+            "PATH",
+            venv_sibling,
+            "/opt/venv/bin/vllm",
+            "/usr/local/bin/vllm",
+            f"{sys.executable} -m vllm",
+        ]
         raise FileNotFoundError(
             f"[{self.lane_id}] Could not find vLLM executable. Checked: {', '.join(checked)}. "
             f"Install vLLM in this interpreter: {sys.executable} -m pip install vllm"
@@ -610,10 +921,14 @@ class VllmProcessHandle:
         for candidate in candidates:
             if not candidate:
                 continue
-            if os.path.sep in candidate or (os.path.altsep and os.path.altsep in candidate):
+            if os.path.sep in candidate or (
+                os.path.altsep and os.path.altsep in candidate
+            ):
                 path_candidate = os.path.abspath(os.path.expanduser(candidate))
                 checked.append(path_candidate)
-                if os.path.isfile(path_candidate) and os.access(path_candidate, os.X_OK):
+                if os.path.isfile(path_candidate) and os.access(
+                    path_candidate, os.X_OK
+                ):
                     return
                 continue
             checked.append(candidate)
@@ -630,7 +945,11 @@ class VllmProcessHandle:
 
     def _require_nvcc(self, lane_config: LaneConfig) -> None:
         """Ensure CUDA toolkit compiler is available for GPU kernel compilation."""
-        gpu_devices = lane_config.gpu_devices if lane_config.gpu_devices else self._global_config.gpu_devices
+        gpu_devices = (
+            lane_config.gpu_devices
+            if lane_config.gpu_devices
+            else self._global_config.gpu_devices
+        )
         if (gpu_devices or "").lower() == "none":
             return
 
@@ -641,8 +960,14 @@ class VllmProcessHandle:
         candidates: list[str] = []
         if cuda_home_env:
             candidates.append(os.path.join(cuda_home_env, "bin", "nvcc"))
-        for root in ("/usr/local/cuda", "/usr/local/cuda-13.2", "/usr/local/cuda-13.1",
-                     "/usr/local/cuda-13", "/usr/local/cuda-12.8", "/usr/local/cuda-12"):
+        for root in (
+            "/usr/local/cuda",
+            "/usr/local/cuda-13.2",
+            "/usr/local/cuda-13.1",
+            "/usr/local/cuda-13",
+            "/usr/local/cuda-12.8",
+            "/usr/local/cuda-12",
+        ):
             candidates.append(os.path.join(root, "bin", "nvcc"))
 
         checked: list[str] = []
@@ -666,7 +991,9 @@ class VllmProcessHandle:
         env: dict[str, str] = {}
 
         # GPU device pinning
-        gpu_devices = lane_config.gpu_devices if lane_config.gpu_devices else gc.gpu_devices
+        gpu_devices = (
+            lane_config.gpu_devices if lane_config.gpu_devices else gc.gpu_devices
+        )
         if gpu_devices.lower() not in ("all", "none", ""):
             env["CUDA_VISIBLE_DEVICES"] = gpu_devices
         elif gpu_devices.lower() == "none":
@@ -674,8 +1001,14 @@ class VllmProcessHandle:
 
         # CUDA toolkit — FlashInfer JIT needs nvcc.  Detect common paths.
         if "CUDA_HOME" not in os.environ:
-            for candidate in ("/usr/local/cuda", "/usr/local/cuda-13.2", "/usr/local/cuda-13.1",
-                              "/usr/local/cuda-13", "/usr/local/cuda-12.8", "/usr/local/cuda-12"):
+            for candidate in (
+                "/usr/local/cuda",
+                "/usr/local/cuda-13.2",
+                "/usr/local/cuda-13.1",
+                "/usr/local/cuda-13",
+                "/usr/local/cuda-12.8",
+                "/usr/local/cuda-12",
+            ):
                 if os.path.isdir(candidate):
                     env["CUDA_HOME"] = candidate
                     break
@@ -695,13 +1028,20 @@ class VllmProcessHandle:
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
-        if vc.server_dev_mode:
+        # Sleep endpoints (/sleep, /wake_up, /is_sleeping) require
+        # VLLM_SERVER_DEV_MODE.  Auto-enable it when sleep mode is active
+        # so operators don't need to set both flags.
+        if vc.server_dev_mode or vc.enable_sleep_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
         if self._vllm_engine_config.flashinfer_loglevel > 0:
-            env["FLASHINFER_LOGLEVEL"] = str(self._vllm_engine_config.flashinfer_loglevel)
+            env["FLASHINFER_LOGLEVEL"] = str(
+                self._vllm_engine_config.flashinfer_loglevel
+            )
         if self._vllm_engine_config.flashinfer_logdest.strip():
-            env["FLASHINFER_LOGDEST"] = self._vllm_engine_config.flashinfer_logdest.strip()
+            env["FLASHINFER_LOGDEST"] = (
+                self._vllm_engine_config.flashinfer_logdest.strip()
+            )
 
         # Persistent compilation caches: point to models_path (mounted volume)
         # so JIT artifacts survive container rebuilds.
@@ -728,8 +1068,17 @@ class VllmProcessHandle:
             if detected_arch:
                 env["TORCH_CUDA_ARCH_LIST"] = detected_arch
 
-        if vc.disable_nccl_p2p:
+        # NCCL P2P: disabled globally by default (PCIe-only assumed).
+        # Set engines.vllm.nccl_p2p_available=true in config.yml for NVLink setups.
+        if not self._vllm_engine_config.nccl_p2p_available:
             env["NCCL_P2P_DISABLE"] = "1"
+            logger.info(
+                "[%s] NCCL_P2P_DISABLE=1 (PCIe topology — no NVLink; "
+                "set engines.vllm.nccl_p2p_available=true in config.yml to enable P2P)",
+                self.lane_id,
+            )
+        else:
+            logger.info("[%s] NCCL P2P enabled (NVLink topology)", self.lane_id)
 
         # NCCL defaults for tensor-parallel lanes (TP > 1).
         # IMPORTANT: Do NOT set NCCL transport tuning vars (P2P_LEVEL,
@@ -747,11 +1096,16 @@ class VllmProcessHandle:
             env.setdefault("NCCL_CUMEM_ENABLE", "0")
             # Extended timeout: FlashInfer JIT can take minutes on first
             # compile, default 10min NCCL timeout is sometimes not enough.
-            env.setdefault("NCCL_TIMEOUT", "1800")               # 30 min
+            env.setdefault("NCCL_TIMEOUT", "1800")  # 30 min
             if self._vllm_engine_config.nccl_debug:
                 env["NCCL_DEBUG"] = self._vllm_engine_config.nccl_debug
             if self._vllm_engine_config.nccl_debug_subsys:
                 env["NCCL_DEBUG_SUBSYS"] = self._vllm_engine_config.nccl_debug_subsys
+
+        # Per-model environment overrides (e.g. VLLM_USE_V1=0 for models
+        # whose head dimensions exceed V1 attention kernel limits on SM 7.5).
+        if vc.env_overrides:
+            env.update(vc.env_overrides)
 
         return env
 
@@ -772,13 +1126,29 @@ class VllmProcessHandle:
         for key in _SCRUBBED_ENV_VARS:
             process_env.pop(key, None)
 
-        resolved_gpu_devices = lane_config.gpu_devices or self._global_config.gpu_devices
+        resolved_gpu_devices = (
+            lane_config.gpu_devices or self._global_config.gpu_devices
+        )
         if resolved_gpu_devices.lower() == "all":
             # When a lane is meant to see all worker GPUs, do not leak an
             # inherited CUDA_VISIBLE_DEVICES restriction from the parent.
             process_env.pop("CUDA_VISIBLE_DEVICES", None)
 
         process_env.update(env)
+
+        # Ensure pip-vendored CUDA libraries (libcudart.so.12, libcublasLt.so.12
+        # from nvidia-* packages, libc10.so from torch) are discoverable.
+        # The Dockerfile registers these via ldconfig, but this is a defensive
+        # fallback for environments where ldconfig wasn't configured.
+        pip_cuda_dirs = _discover_pip_cuda_lib_dirs()
+        if pip_cuda_dirs:
+            existing_ld = process_env.get("LD_LIBRARY_PATH", "")
+            pip_cuda_path = os.pathsep.join(pip_cuda_dirs)
+            process_env["LD_LIBRARY_PATH"] = (
+                f"{pip_cuda_path}{os.pathsep}{existing_ld}"
+                if existing_ld
+                else pip_cuda_path
+            )
 
         # Keep helper tools from the same virtualenv (for example `ninja`
         # used by FlashInfer JIT) available even when the venv is not activated.
@@ -799,7 +1169,9 @@ class VllmProcessHandle:
         close to the Ollama storage. If that path is not writable for the
         current user, fall back to ``~/.cache/huggingface``.
         """
-        preferred = Path(models_path).expanduser() / ".hf_cache" if models_path else None
+        preferred = (
+            Path(models_path).expanduser() / ".hf_cache" if models_path else None
+        )
         fallback = Path.home() / ".cache" / "huggingface"
         candidates = [p for p in (preferred, fallback) if p is not None]
 
@@ -832,7 +1204,9 @@ class VllmProcessHandle:
             return
         pid = self._process.pid
         pgid = self._process_group_id
-        logger.info("[%s] Stopping vLLM process (pid=%d, pgid=%s)", self.lane_id, pid, pgid)
+        logger.info(
+            "[%s] Stopping vLLM process (pid=%d, pgid=%s)", self.lane_id, pid, pgid
+        )
         if self._log_task is not None and not self._log_task.done():
             self._log_task.cancel()
 
@@ -855,9 +1229,16 @@ class VllmProcessHandle:
         # Phase 2: Wait for the root process to exit
         try:
             await asyncio.wait_for(self._process.wait(), timeout=_STOP_TIMEOUT)
-            logger.info("[%s] vLLM process (pid=%d) exited gracefully", self.lane_id, pid)
+            logger.info(
+                "[%s] vLLM process (pid=%d) exited gracefully", self.lane_id, pid
+            )
         except asyncio.TimeoutError:
-            logger.warning("[%s] vLLM (pid=%d) did not exit in %ds — SIGKILL", self.lane_id, pid, _STOP_TIMEOUT)
+            logger.warning(
+                "[%s] vLLM (pid=%d) did not exit in %ds — SIGKILL",
+                self.lane_id,
+                pid,
+                _STOP_TIMEOUT,
+            )
             # Phase 3: SIGKILL the entire process group
             if pgid is not None:
                 try:
@@ -886,7 +1267,9 @@ class VllmProcessHandle:
         """Discover child PIDs of the root vLLM process (TP worker subprocesses)."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "pgrep", "-P", str(root_pid),
+                "pgrep",
+                "-P",
+                str(root_pid),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -915,7 +1298,9 @@ class VllmProcessHandle:
         child_pids = set(self._known_child_pids)
         try:
             proc = await asyncio.create_subprocess_exec(
-                "pgrep", "-P", str(root_pid),
+                "pgrep",
+                "-P",
+                str(root_pid),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -933,7 +1318,9 @@ class VllmProcessHandle:
                 os.kill(cpid, signal.SIGKILL)
                 logger.warning(
                     "[%s] Killed orphaned descendant pid=%d of root pid=%d",
-                    self.lane_id, cpid, root_pid,
+                    self.lane_id,
+                    cpid,
+                    root_pid,
                 )
             except (ProcessLookupError, OSError):
                 pass
@@ -941,7 +1328,10 @@ class VllmProcessHandle:
         self._known_child_pids.clear()
 
     async def _verify_vram_released(
-        self, pid: int, timeout: float = 10.0, poll_interval: float = 1.0,
+        self,
+        pid: int,
+        timeout: float = 10.0,
+        poll_interval: float = 1.0,
     ) -> bool:
         """Poll nvidia-smi to confirm the killed process no longer holds VRAM.
 
@@ -986,9 +1376,30 @@ class VllmProcessHandle:
 
         logger.warning(
             "[%s] VRAM still held by pid(s) %s after %.0fs — stuck CUDA context detected",
-            self.lane_id, check_pids, timeout,
+            self.lane_id,
+            check_pids,
+            timeout,
         )
         return False
+
+    # Matches vLLM startup line like:
+    #   "Maximum concurrency for 4,096 tokens per request: 10.66x"
+    _RE_MAX_CONCURRENCY = re.compile(
+        r"Maximum concurrency for [\d,]+ tokens per request:\s+([\d.]+)x"
+    )
+
+    # vLLM warnings that are expected side-effects of our configuration
+    # (e.g. VLLM_SERVER_DEV_MODE required for sleep endpoints) and add
+    # no operational value — suppress them from the log stream.
+    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "SECURITY WARNING: Development endpoints are enabled",
+    )
+
+    @property
+    def max_concurrency(self) -> int | None:
+        """Max concurrent full-context requests reported by vLLM at startup."""
+        return self._max_concurrency
+
 
     async def _stream_logs(self) -> None:
         if self._process is None or self._process.stdout is None:
@@ -998,7 +1409,17 @@ class VllmProcessHandle:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()
                 if line:
                     self._recent_logs.append(line)
+                    if any(frag in line for frag in self._SUPPRESSED_LOG_FRAGMENTS):
+                        continue
                     logger.info("[vllm:%s] %s", self.lane_id, line)
+                    if self._max_concurrency is None:
+                        m = self._RE_MAX_CONCURRENCY.search(line)
+                        if m:
+                            self._max_concurrency = max(1, math.floor(float(m.group(1))))
+                            logger.info(
+                                "[%s] vLLM reported max concurrency: %d",
+                                self.lane_id, self._max_concurrency,
+                            )
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -1036,7 +1457,9 @@ class VllmProcessHandle:
             path.write_text("\n".join(self._recent_logs), encoding="utf-8")
             logger.info("[%s] Failure logs saved to %s", self.lane_id, path)
         except OSError:
-            logger.debug("[%s] Could not persist failure logs", self.lane_id, exc_info=True)
+            logger.debug(
+                "[%s] Could not persist failure logs", self.lane_id, exc_info=True
+            )
 
     def persist_recent_logs(self, reason: str) -> None:
         """Public wrapper for persisting recent vLLM logs after runtime failures."""
@@ -1073,14 +1496,20 @@ class VllmProcessHandle:
             if self._process is not None and self._process.returncode is not None:
                 logger.error(
                     "[%s] vLLM exited with code %d during startup",
-                    self.lane_id, self._process.returncode,
+                    self.lane_id,
+                    self._process.returncode,
                 )
                 return False
             try:
                 resp = await self._http.get(f"{self._base_url()}/health", timeout=5.0)
                 if resp.status_code == 200:
                     elapsed_ms = int((loop.time() - (deadline - timeout)) * 1000)
-                    logger.info("[%s] vLLM ready at port %d (%dms)", self.lane_id, self.port, elapsed_ms)
+                    logger.info(
+                        "[%s] vLLM ready at port %d (%dms)",
+                        self.lane_id,
+                        self.port,
+                        elapsed_ms,
+                    )
                     return True
             except httpx.HTTPError:
                 pass

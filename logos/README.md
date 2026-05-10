@@ -82,19 +82,15 @@ To deploy Logos locally:
    
 ## Scheduling & Capacity Management
 
-Logos includes two independently toggleable subsystems for intelligent request routing and proactive worker management:
+Logos includes an independently toggleable subsystem for proactive worker management:
 
 | Subsystem | Env Variable | Default | What it does |
 |-----------|-------------|---------|-------------|
-| **ETTFT Scheduler** | `LOGOS_SCHEDULER_ETTFT_ENABLED` | `true` | Re-ranks classification candidates using estimated time-to-first-token penalties. Loaded models beat cold models even if classification weight is slightly lower. |
 | **Capacity Planner** | `LOGOS_CAPACITY_PLANNER_ENABLED` | `true` | Background loop (30s cycles) that sleeps idle lanes, wakes lanes on demand, and tunes vLLM GPU memory utilization. |
 
-Set either to `false` to disable. Set both to `false` for baseline (original) scheduling behavior.
-
-Add these to the `environment` section of `logos-server` in `docker-compose.yaml`:
+Set to `false` to disable. Add to the `environment` section of `logos-server` in `docker-compose.yaml`:
 ```yaml
 environment:
-  LOGOS_SCHEDULER_ETTFT_ENABLED: "true"
   LOGOS_CAPACITY_PLANNER_ENABLED: "true"
 ```
 
