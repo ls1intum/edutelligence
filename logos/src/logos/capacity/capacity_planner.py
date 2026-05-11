@@ -451,8 +451,11 @@ class CapacityPlanner:
                 prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action=action.action).inc()
             except Exception:
                 logger.exception(
-                    "Failed to execute capacity action: %s on lane %s",
-                    action.action, action.lane_id,
+                    "Failed to execute capacity action: %s on worker=%s model=%s lane=%s",
+                    action.action,
+                    self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                    action.model_name,
+                    action.lane_id,
                 )
 
         prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
@@ -4920,7 +4923,10 @@ class CapacityPlanner:
                 )
             except Exception:
                 logger.exception(
-                    "Failed to send reconfigure_lane for lane %s", action.lane_id,
+                    "Failed to send reconfigure_lane for worker=%s model=%s lane=%s",
+                    self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                    action.model_name,
+                    action.lane_id,
                 )
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
                 return False
@@ -5080,7 +5086,10 @@ class CapacityPlanner:
                     details=str(exc),
                 )
                 logger.exception(
-                    "Failed to send wake command for lane %s", action.lane_id,
+                    "Failed to send wake command for worker=%s model=%s lane=%s",
+                    self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                    action.model_name,
+                    action.lane_id,
                 )
                 return False
 
@@ -5127,7 +5136,10 @@ class CapacityPlanner:
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to send add_lane for lane %s", action.lane_id,
+                        "Failed to send add_lane for worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     return False
             else:
@@ -5162,7 +5174,10 @@ class CapacityPlanner:
                     self._clear_inflight_add(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
-                        "Failed to send apply_lanes for load of %s", action.lane_id,
+                        "Failed to send apply_lanes for load on worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     self._clear_inflight_add(action.provider_id, action.lane_id)
                     return False
@@ -5216,7 +5231,10 @@ class CapacityPlanner:
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to send delete_lane for lane %s", action.lane_id,
+                        "Failed to send delete_lane for worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     self._unmark_lane_cold(action.provider_id, action.lane_id)
                     return False
@@ -5247,7 +5265,10 @@ class CapacityPlanner:
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
-                        "Failed to send apply_lanes for stop of %s", action.lane_id,
+                        "Failed to send apply_lanes for stop on worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
                     self._unmark_lane_cold(action.provider_id, action.lane_id)

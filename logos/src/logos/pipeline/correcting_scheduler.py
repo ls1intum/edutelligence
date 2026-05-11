@@ -30,6 +30,7 @@ from .ettft_estimator import (
     compute_corrected_score,
     compute_weight_span,
 )
+from logos.terminal_logging import style_model, style_provider
 
 logger = logging.getLogger(__name__)
 
@@ -445,9 +446,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     logger.info(
                         "Reserved logosnode model=%s worker=%s "
                         "(score=%.2f, tier=%s, wait=%.1fs)",
-                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                        self._logosnode.get_provider_name(provider_id) or provider_id, score,
-                        ettft.tier.value, ettft.expected_wait_s,
+                        style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+                        style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
+                        score, ettft.tier.value, ettft.expected_wait_s,
                     )
                     return (model_id, provider_id, provider_type, score, priority_int, ettft)
                 logger.debug(
@@ -458,9 +459,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 logger.info(
                     "Selected Azure model=%s provider_id=%s "
                     "(score=%.2f, tier=%s, wait=%.1fs)",
-                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                    provider_id, score,
-                    ettft.tier.value, ettft.expected_wait_s,
+                    style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+                    style_provider(provider_id),
+                    score, ettft.tier.value, ettft.expected_wait_s,
                 )
                 return (model_id, provider_id, provider_type, score, priority_int, ettft)
 
@@ -490,8 +491,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             "Request %s queued for model=%s worker=%s "
             "(corrected_score=%.2f, tier=%s, depth=%s)",
             request.request_id,
-            self._logosnode.get_model_name(model_id, provider_id) or model_id,
-            self._logosnode.get_provider_name(provider_id) or provider_id,
+            style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+            style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
             score, ettft.tier.value, queue_depth,
         )
 
