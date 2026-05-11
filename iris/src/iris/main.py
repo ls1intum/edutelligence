@@ -1,3 +1,4 @@
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -23,7 +24,7 @@ from iris.web.routers.search import router as search_router
 from iris.web.routers.webhooks import router as webhooks_router
 
 # Initialize logging first
-setup_logging()
+setup_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
 
 logger = get_logger(__name__)
 
