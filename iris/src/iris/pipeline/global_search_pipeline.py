@@ -141,11 +141,9 @@ class GlobalSearchPipeline(SubPipeline):
             f"[{i + 1}] [{s.course.name} — {s.lecture.name}, {_location_label(s)}]\n{s.snippet}"
             for i, s in enumerate(grounded_sources)
         )
-        logger.debug("Answer context:\n%s", context)
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
             {"context": context, "query": query}
         )
-        logger.debug("LLM raw response: %s", raw)
 
         # Parse structured response — strip markdown code fences if present
         try:
