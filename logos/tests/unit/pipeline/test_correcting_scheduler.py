@@ -109,6 +109,13 @@ class MockLogosNodeFacade:
         view = self._views.get((model_id, provider_id))
         return view.model_name if view else None
 
+    def get_provider_name(self, provider_id):
+        return f"worker-{provider_id}"
+
+    def get_all_lane_signals(self, provider_id):
+        # No sibling-lane visibility needed for these tests.
+        raise KeyError(provider_id)
+
     def try_reserve_capacity(self, model_id, provider_id, request_id):
         return self._reserve_results.get((model_id, provider_id), True)
 

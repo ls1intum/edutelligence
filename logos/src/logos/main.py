@@ -1738,6 +1738,12 @@ async def _register_models_with_facades(
                         "provider_id": provider_id,
                     }
                 )
+            elif provider_type == "cloud":
+                # Cloud upstream has no local SDI state to track — it manages
+                # its own scheduling. The (model_id, provider_id) -> "cloud"
+                # mapping in the model registry is enough for the scheduler
+                # to route to it.
+                continue
             else:
                 logger.debug(
                     "Skipping provider %s (%s) for model %s: unsupported type '%s'",
@@ -2570,8 +2576,10 @@ async def _execute_proxy_mode(
             status_code=404, detail=f"No deployment found for model '{model_name}'"
         )
 
-    # Proxy mode still routes through classification/scheduling with a single allowed model.
-    # This preserves policy screening while constraining execution to the requested model.
+    # Proxy mode reuses the scheduling/execution pipeline. Policy + token
+    # screening still run (we want policy thresholds enforced even when the
+    # user names the model), but Laura's heavy ML ranking is skipped — it
+    # has nothing to decide once the model is pinned.
     return await _execute_resource_mode(
         deployments=model_deployments,
         body=body,
@@ -2583,6 +2591,7 @@ async def _execute_proxy_mode(
         profile_id=profile_id,
         request_id=request_id,
         request_path=request_path,
+        skip_laura=True,
     )
 
 
@@ -2597,6 +2606,7 @@ async def _execute_resource_mode(
     profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    skip_laura: bool = False,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -2650,6 +2660,8 @@ async def _execute_resource_mode(
         allowed_models=allowed_models,
         deployments=deployments,
         profile_id=profile_id,
+        skip_laura=skip_laura,
+        request_path=request_path,
     )
 
     # Process through classification and scheduling

@@ -27,6 +27,7 @@ from .ettft_estimator import (
     DEFAULT_GENERATION_TIME_S,
     estimate_ettft_local,
     estimate_ettft_azure,
+    estimate_ettft_cloud,
     compute_corrected_score,
     compute_weight_span,
 )
@@ -369,6 +370,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 capacity = None
             return estimate_ettft_azure(capacity)
 
+        if provider_type == "cloud":
+            return estimate_ettft_cloud()
+
         return EttftEstimate(
             expected_wait_s=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
@@ -460,6 +464,17 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     "(score=%.2f, tier=%s, wait=%.1fs)",
                     self._logosnode.get_model_name(model_id, provider_id) or model_id,
                     provider_id, score,
+                    ettft.tier.value, ettft.expected_wait_s,
+                )
+                return (model_id, provider_id, provider_type, score, priority_int, ettft)
+            elif provider_type == "cloud":
+                # Cloud upstream accepts immediately — we don't track its
+                # capacity locally, so there's no slot to reserve and no
+                # queue to wait in.
+                logger.info(
+                    "Selected cloud upstream model_id=%s provider_id=%s "
+                    "(score=%.2f, tier=%s, wait=%.1fs)",
+                    model_id, provider_id, score,
                     ettft.tier.value, ettft.expected_wait_s,
                 )
                 return (model_id, provider_id, provider_type, score, priority_int, ettft)
