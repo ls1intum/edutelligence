@@ -41,6 +41,7 @@ logger = get_logger(__name__)
 
 batch_update_lock = threading.Lock()
 
+
 _UNICODE_BULLETS = (
     "\u0095"  # BULLET (legacy Windows-1252)
     "\u2022"  # BULLET
@@ -447,44 +448,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         # Return interpretation if requested
         interpretation = response_text if has_images else None
         return slide_num, interpretation
-
-    def interpret_image(
-        self,
-        img_base64: str,
-        last_page_content: str,
-        name_of_lecture: str,
-        course_language: str,
-    ):
-        """
-        Interpret the image passed
-        """
-        image_interpretation_prompt = TextMessageContentDTO(
-            text_content=f"This page is part of the {name_of_lecture} university lecture."
-            f"I am the professor that created these slides, "
-            f" please interpret this slide in an academic way. "
-            f"For more context here is the content of the previous slide:\n "
-            f" {last_page_content} \n\n"
-            f" Only repond with the slide explanation and interpretation in {course_language}, "
-            f"do not add anything else to your response.Your explanation should not exceed 350 words."
-        )
-        image = ImageMessageContentDTO(base64=img_base64)
-        iris_message = PyrisMessage(
-            sender=IrisMessageRole.USER,
-            contents=[image_interpretation_prompt, image],
-        )
-        try:
-            response = self.llm_chat.chat(
-                [iris_message],
-                CompletionArguments(temperature=0),
-                tools=[],
-            )
-            self._append_tokens(
-                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
-            )
-        except Exception as e:
-            logger.error("Error interpreting image: %s", e)
-            return None
-        return response.contents[0].text_content
 
     def merge_page_content_and_image_interpretation(
         self, page_content: str, image_interpretation: str
