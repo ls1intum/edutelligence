@@ -219,6 +219,7 @@ class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
 
     api_key: str
+    supports_reasoning_effort: bool = False
 
     @observe(name="OpenAI Chat Completion")
     def chat(
@@ -257,6 +258,12 @@ class OpenAIChatModel(ChatModel):
 
                     if arguments.temperature is not None and not is_reasoning_model:
                         params["temperature"] = arguments.temperature
+
+                    if (
+                        self.supports_reasoning_effort
+                        and arguments.reasoning_effort is not None
+                    ):
+                        params["reasoning_effort"] = arguments.reasoning_effort
 
                     if arguments.response_format == "JSON":
                         params["response_format"] = ResponseFormatJSONObject(

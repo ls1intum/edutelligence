@@ -29,6 +29,16 @@
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 
+# ── Azure example (GPT 5.4 — supports reasoning effort) ─────────────────────
+- id: azure-gpt-5.4
+  type: azure_chat
+  model: gpt-5.4
+  api_key:
+  api_version: 2025-04-01-preview
+  azure_deployment: gpt-5.4
+  endpoint: "<your-endpoint>"
+  supports_reasoning_effort: true
+
 # ── Embedding models ─────────────────────────────────────────────────────────
 - id: azure-embedding-large
   type: azure_embedding
