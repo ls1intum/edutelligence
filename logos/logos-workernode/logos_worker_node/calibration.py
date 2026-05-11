@@ -339,7 +339,7 @@ def _build_vllm_cmd(
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
     max_model_len = plan.get("max_model_len")
-    enforce_eager = bool(plan.get("enforce_eager", True))
+    enforce_eager = bool(plan.get("enforce_eager", False))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
@@ -632,7 +632,7 @@ class CalibrationResult:
     # Records what enforce_eager was used during this calibration. Persisted in
     # the profile so the worker can detect mismatches against production overrides
     # and trigger recalibration when CUDA-graph state would change the footprint.
-    enforce_eager: bool = True
+    enforce_eager: bool = False
 
 
 def calibrate_model(
@@ -647,12 +647,12 @@ def calibrate_model(
     hf_home: str | None = None,
     model_cache: Any | None = None,
 ) -> CalibrationResult:
-    # Honor the production enforce_eager setting (default True, matching the
+    # Honor the production enforce_eager setting (default False, matching the
     # worker schema). Calibrating in a different mode than production runs
     # produces systematically wrong loaded_vram_mb / sleeping_residual_mb
     # because CUDA graph capture pools and workspace stay resident across
     # sleep_l1 — so the planner under-counts VRAM and OOMs at wake/load time.
-    eager_mode = bool(plan.get("enforce_eager", True))
+    eager_mode = bool(plan.get("enforce_eager", False))
     if eager_mode:
         logger.info(
             "  enforce_eager=True — CUDA graph capture skipped (~minutes faster, no graph state retained)"
@@ -1380,7 +1380,7 @@ def _try_calibrate(
             kv_cache_sent_mb=0.0,
             success=False,
             error=str(exc),
-            enforce_eager=bool(plan.get("enforce_eager", True)),
+            enforce_eager=bool(plan.get("enforce_eager", False)),
         )
 
 

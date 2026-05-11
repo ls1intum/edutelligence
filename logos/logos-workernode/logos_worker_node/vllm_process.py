@@ -787,9 +787,11 @@ class VllmProcessHandle:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
-        # enforce_eager defaults to True (skips torch.compile + CUDA graph
-        # capture).  Set enforce_eager=False in vllm_config to opt in to
-        # compilation on Ampere+ GPUs where it actually helps.
+        # enforce_eager defaults to False (CUDA graph capture enabled).
+        # Set enforce_eager=True in vllm_config to skip torch.compile + graph
+        # capture — required on Turing (SM 7.5) and other pre-Ampere boards
+        # where graph capture is unstable, and as a workaround for Marlin MoE
+        # kernels under TP>1.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
         # Attention backend: explicit config wins, otherwise auto-detect.

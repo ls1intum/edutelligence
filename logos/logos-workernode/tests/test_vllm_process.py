@@ -1059,13 +1059,14 @@ def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
     assert "--cpu-offload-gb" not in cmd
 
 
-def test_enforce_eager_on_by_default(monkeypatch):
-    """enforce_eager defaults to True so vLLM starts with --enforce-eager."""
+def test_enforce_eager_off_by_default(monkeypatch):
+    """enforce_eager defaults to False so vLLM starts WITHOUT --enforce-eager
+    (CUDA graph capture is enabled by default; opt in to eager mode per-lane)."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
-    assert "--enforce-eager" in cmd
+    assert "--enforce-eager" not in cmd
 
 
 def test_enforce_eager_can_be_enabled(monkeypatch):

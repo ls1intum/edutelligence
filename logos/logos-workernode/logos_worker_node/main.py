@@ -76,7 +76,7 @@ async def _auto_calibrate_if_needed(
                     continue
                 expected_settings[str(m)] = (
                     int(plan.get("tensor_parallel_size", 1)),
-                    bool(plan.get("enforce_eager", True)),
+                    bool(plan.get("enforce_eager", False)),
                 )
         except Exception as exc:
             logger.warning(
