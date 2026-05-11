@@ -1,0 +1,8 @@
+from enum import StrEnum
+
+
+class IrisChatMode(StrEnum):
+    COURSE = "COURSE_CHAT"
+    LECTURE = "LECTURE_CHAT"
+    EXERCISE = "PROGRAMMING_EXERCISE_CHAT"
+    TEXT_EXERCISE = "TEXT_EXERCISE_CHAT"
