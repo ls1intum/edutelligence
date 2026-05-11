@@ -28,6 +28,14 @@ COPY iris/log_conf.yml ./log_conf.yml
 
 # Copy intent-classifier ONNX model
 COPY iris/models ./models
+# Fail fast if git-lfs was not pulled — pointer files are ~130 bytes, real models are megabytes
+RUN python3 -c "
+import os, sys
+model = '/app/models/global_search_intent/onnx/model_quantized.onnx'
+if os.path.getsize(model) < 1024:
+    print(f'ERROR: {model} looks like a Git LFS pointer. Run: git lfs pull', file=sys.stderr)
+    sys.exit(1)
+"
 ENV INTENT_MODEL_DIR=/app/models/global_search_intent/onnx
 
 # Specify the command to run on container start
