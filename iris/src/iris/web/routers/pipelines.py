@@ -354,7 +354,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
 
     try:
         intent = classify_intent(dto.query)
-        logger.debug(
+        logger.info(
             "[global-search] query=%r  intent=%s  → %s",
             dto.query[:120],
             intent,
