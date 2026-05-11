@@ -85,6 +85,23 @@ class CapacityPlanner:
     LOAD_COMPETITIVE_RATIO = 2.0   # target must beat eviction set by 2×
     DRAIN_COMPETITIVE_RATIO = 3.0  # target must 3× outweigh victim (prevents flip-flop)
 
+    # Cross-provider best-first ranking: rough seconds-to-serve cost model.
+    # Used by _rank_providers_for_demanded_models to pick the cheapest worker
+    # for each demanded model in a cycle. Values are intentionally coarse —
+    # the ordering (wake ≪ load; sleep_l1 ≪ stop) is what matters, not the
+    # absolute numbers.
+    #   wake on a sleeping lane: ~2s
+    #   cold-load of a 90 GB model: ~90s
+    #   sleep_l1 of victim: ~1s execute, victim recoverable in ~2s
+    #   sleep_l2 of victim: slightly more (KV-cache discard)
+    #   stop of victim: ~5s execute, victim recovery costs a 30-90s cold-load
+    TARGET_ACTION_COST_S = {"wake": 2.0, "load": 90.0}
+    VICTIM_ACTION_COST_S = {
+        "sleep_l1": 1.0,
+        "sleep_l2": 1.5,
+        "stop": 30.0,
+    }
+
     # Queue depth contribution to effective demand at decision time.
     # Bumped 0.25 → 0.5: a model with several queued-but-unschedulable
     # requests needs to actually compete with idle awake lanes in the
@@ -220,6 +237,16 @@ class CapacityPlanner:
         self._eviction_gate_v2 = os.environ.get(
             "LOGOS_EVICTION_GATE_V2", "false"
         ).strip().lower() in ("1", "true", "yes")
+        # Cross-provider best-first ranking: before iterating providers in a
+        # cycle, pre-score every (provider, model) candidate by action cost
+        # (wake ≪ cold-load, sleep-evict ≪ stop-evict) and let only the
+        # lowest-cost provider plan that model. Replaces the legacy
+        # first-evaluated-wins behaviour that caused fast wakes to lose to
+        # slow cold-loads merely because the cold worker had a lower
+        # provider_id. Tie-breaks by free-VRAM descending.
+        self._cross_provider_best_first = os.environ.get(
+            "LOGOS_CROSS_PROVIDER_BEST_FIRST", "true"
+        ).strip().lower() not in ("0", "false", "no")
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
@@ -405,6 +432,23 @@ class CapacityPlanner:
             provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
 
+        # Cross-provider best-first ranking: pre-score every (provider,
+        # model) candidate so the cheapest worker for each model wins,
+        # regardless of iteration order. Without this, a worker that needs
+        # a 90s cold-load can beat a worker that only needs a 2s wake just
+        # because it was iterated first.
+        best_provider_for_model: Optional[dict[str, int]] = None
+        if self._cross_provider_best_first:
+            ready_provider_ids = [
+                pid for pid in provider_ids
+                if self._registry is None
+                or self._registry.has_received_first_status(pid)
+            ]
+            best_provider_for_model = self._rank_providers_for_demanded_models(
+                ready_provider_ids,
+                self._demand.get_ranked_models(),
+            )
+
         for provider_id in provider_ids:
             # Skip providers that haven't sent their first status yet —
             # we don't know what lanes are already loaded and acting on
@@ -426,7 +470,9 @@ class CapacityPlanner:
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
             all_actions.extend(
                 self._compute_demand_actions(
-                    provider_id, lanes, cycle_planned_models=cycle_planned_models,
+                    provider_id, lanes,
+                    cycle_planned_models=cycle_planned_models,
+                    best_provider_for_model=best_provider_for_model,
                 )
             )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
@@ -2120,6 +2166,182 @@ class CapacityPlanner:
         return False
 
     # ------------------------------------------------------------------
+    # Cross-provider best-first ranking
+    # ------------------------------------------------------------------
+
+    def _estimate_demand_action_cost(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: List[LaneSchedulerSignals],
+        profiles: dict[str, "ModelProfile"],
+        capacity,
+    ) -> Optional[tuple[float, float]]:
+        """Heuristic cost (seconds) to serve `model_name` on this provider.
+
+        Returns ``(target_cost + victim_cost, free_vram_mb)`` for ranking, or
+        ``None`` if the model is not feasibly servable on this provider.
+
+        Used by :meth:`_rank_providers_for_demanded_models` to pick the
+        cheapest worker per demanded model in a cycle. The number is rough
+        on purpose — the planner re-derives the actual eviction set inside
+        :meth:`_compute_demand_actions`. What we need here is just the
+        relative ordering so a fast wake on one worker can outrank a slow
+        cold-load on another regardless of iteration order.
+
+        Cost model:
+          - Awake usable lane already exists  → 0  (nothing to do)
+          - Sleeping lane exists              → TARGET_ACTION_COST_S["wake"]
+          - No lane                           → TARGET_ACTION_COST_S["load"]
+          - Plus the cheapest available victim cost if the action needs
+            eviction (i.e. estimated load/wake MB exceeds current free VRAM).
+        """
+        model_lanes = [l for l in lanes if l.model_name == model_name]
+        awake_lanes = [
+            l for l in model_lanes
+            if l.runtime_state in ("loaded", "running")
+            and l.sleep_state != "sleeping"
+        ]
+        sleeping_lanes = [
+            l for l in model_lanes
+            if l.sleep_state == "sleeping"
+            and not self._lane_is_in_wake_failure_cooldown(provider_id, l.lane_id)
+        ]
+
+        free_vram = float(getattr(capacity, "available_vram_mb", 0) or 0) if capacity else 0.0
+
+        # Already loaded and serving — no planner action needed, cost 0.
+        # Returned so ties between providers (e.g. two workers each with a
+        # loaded lane) tie-break on free VRAM downstream rather than this
+        # provider always claiming the model.
+        if awake_lanes:
+            return (0.0, free_vram)
+
+        profile = profiles.get(model_name)
+
+        if sleeping_lanes:
+            target_cost = self.TARGET_ACTION_COST_S["wake"]
+            # Wake VRAM need = loaded_vram - residual (the lane already holds
+            # residual, so we only need to re-allocate the KV pool).
+            if profile is not None:
+                loaded_mb = self._estimate_model_loaded_vram(profile)
+                residual_mb = float(profile.sleeping_residual_mb or 0.0)
+                needed_mb = max(loaded_mb - residual_mb, 0.0)
+            else:
+                needed_mb = 0.0
+        else:
+            target_cost = self.TARGET_ACTION_COST_S["load"]
+            # Cold-load VRAM need = full base_residency (with KV+TP if profile knows).
+            if profile is not None:
+                needed_mb = self._estimate_model_loaded_vram(profile)
+            else:
+                # Unknown model — assume something modest so we don't unfairly
+                # rule out providers; the real placement check will catch
+                # infeasibility later.
+                needed_mb = 4096.0
+
+        victim_cost = 0.0
+        if needed_mb > free_vram:
+            # Eviction will be needed. Pick the cheapest available victim type:
+            # sleep_l1 if any non-target lane can sleep, otherwise stop.
+            other_can_sleep = any(
+                l.is_vllm
+                and l.runtime_state in ("loaded", "running")
+                and l.sleep_state == "awake"
+                and l.model_name != model_name
+                for l in lanes
+            )
+            other_has_any_lane = any(l.model_name != model_name for l in lanes)
+            if other_can_sleep:
+                victim_cost = self.VICTIM_ACTION_COST_S["sleep_l1"]
+            elif other_has_any_lane:
+                victim_cost = self.VICTIM_ACTION_COST_S["stop"]
+            else:
+                # No eviction candidates at all — this provider cannot satisfy
+                # the deficit. Mark infeasible.
+                return None
+
+        return (target_cost + victim_cost, free_vram)
+
+    def _rank_providers_for_demanded_models(
+        self,
+        provider_ids: list[int],
+        ranked: list[tuple[str, float]],
+    ) -> dict[str, int]:
+        """Pre-cycle pass: pick the cheapest worker for each demanded model.
+
+        Iterates every (provider, model) pair, estimates the per-pair cost
+        via :meth:`_estimate_demand_action_cost`, and returns a mapping
+        ``{model_name: winning_provider_id}``. Tie-breaks by free-VRAM
+        descending, then provider_id ascending for determinism.
+
+        Models with no feasible provider are simply omitted from the result;
+        the per-provider planning loop will naturally produce no action for
+        them.
+
+        Logs one line per model showing the candidate scores.
+        """
+        # best[model] = (provider_id, cost, free_vram)
+        best: dict[str, tuple[int, float, float]] = {}
+        # For per-model logging
+        scored_by_model: dict[str, list[tuple[int, float, float]]] = {}
+
+        for provider_id in provider_ids:
+            try:
+                lanes = self._facade.get_all_provider_lane_signals(provider_id)
+            except Exception:
+                continue
+            try:
+                profiles = self._facade.get_model_profiles(provider_id)
+            except Exception:
+                profiles = {}
+            try:
+                capabilities = set(self._facade.get_worker_capabilities(provider_id))
+            except Exception:
+                capabilities = set()
+            try:
+                capacity = self._facade.get_capacity_info(provider_id)
+            except Exception:
+                capacity = None
+
+            for model_name, _score in ranked:
+                if capabilities and model_name not in capabilities:
+                    continue
+                scored = self._estimate_demand_action_cost(
+                    provider_id, model_name, lanes, profiles, capacity,
+                )
+                if scored is None:
+                    continue
+                cost, free_vram = scored
+                scored_by_model.setdefault(model_name, []).append(
+                    (provider_id, cost, free_vram)
+                )
+                current = best.get(model_name)
+                if (
+                    current is None
+                    or cost < current[1]
+                    or (cost == current[1] and free_vram > current[2])
+                    or (cost == current[1] and free_vram == current[2] and provider_id < current[0])
+                ):
+                    best[model_name] = (provider_id, cost, free_vram)
+
+        for model_name, scores in scored_by_model.items():
+            winner_pid, winner_cost, _ = best[model_name]
+            ranked_str = ", ".join(
+                f"{self._facade.get_provider_name(pid) or pid}={cost:.1f}s"
+                for pid, cost, _ in sorted(scores, key=lambda x: x[1])
+            )
+            logger.info(
+                "Best-first ranking: model=%s winner=%s cost=%.1fs candidates=[%s]",
+                model_name,
+                self._facade.get_provider_name(winner_pid) or winner_pid,
+                winner_cost,
+                ranked_str,
+            )
+
+        return {m: pid for m, (pid, _, _) in best.items()}
+
+    # ------------------------------------------------------------------
     # Demand-based actions
     # ------------------------------------------------------------------
 
@@ -2129,6 +2351,7 @@ class CapacityPlanner:
         lanes: List[LaneSchedulerSignals],
         *,
         cycle_planned_models: Optional[set[str]] = None,
+        best_provider_for_model: Optional[dict[str, int]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -2238,6 +2461,24 @@ class CapacityPlanner:
                     " for another worker this cycle",
                     self._facade.get_provider_name(provider_id) or provider_id,
                     model_name,
+                )
+                continue
+            # Cross-provider best-first: if a pre-cycle ranking picked a
+            # different worker as the cheapest for this model, skip here so
+            # the winner can serve it (wake on a sleeping lane beats a cold
+            # load on a different worker even when both have capability).
+            if (
+                self._cross_provider_best_first
+                and best_provider_for_model is not None
+                and best_provider_for_model.get(model_name, provider_id) != provider_id
+            ):
+                logger.info(
+                    "Skipping demand action for worker=%s model=%s: best-first"
+                    " ranker picked worker=%s",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    model_name,
+                    self._facade.get_provider_name(best_provider_for_model[model_name])
+                    or best_provider_for_model[model_name],
                 )
                 continue
             model_lanes = lanes_by_model.get(model_name, [])
