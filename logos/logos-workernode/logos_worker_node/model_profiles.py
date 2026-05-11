@@ -60,6 +60,11 @@ class ModelProfileRecord:
     #   "override"   — operator-provided value in config.yml
     #   "cached"     — loaded from persisted model_profiles.yml on restart
     residency_source: str | None = None
+    # Provenance: what enforce_eager mode the calibration ran under.
+    # When None on a "calibrated" profile, treat as legacy = True (the prior
+    # auto-calibrator hard-forced eager mode). Matched against the production
+    # override when deciding whether a cached profile is still valid.
+    enforce_eager_at_calibration: bool | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -103,6 +108,7 @@ class ModelProfileRecord:
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,
+            "enforce_eager_at_calibration": self.enforce_eager_at_calibration,
         }
 
 
@@ -441,6 +447,12 @@ class ModelProfileRegistry:
                 if not isinstance(profile_data, dict):
                     continue
                 persisted_source = profile_data.get("residency_source")
+                eager_at_cal = profile_data.get("enforce_eager_at_calibration")
+                # Legacy profiles predating provenance tracking were always
+                # measured with the hard-forced eager=True path. Carry that
+                # assumption forward so the reuse check doesn't false-mismatch.
+                if eager_at_cal is None and persisted_source == "calibrated":
+                    eager_at_cal = True
                 self._profiles[str(model_name)] = ModelProfileRecord(
                     loaded_vram_mb=profile_data.get("loaded_vram_mb"),
                     sleeping_residual_mb=profile_data.get("sleeping_residual_mb"),
@@ -456,6 +468,7 @@ class ModelProfileRegistry:
                     measurement_count=int(profile_data.get("measurement_count", 0) or 0),
                     last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
                     residency_source=persisted_source or "cached",
+                    enforce_eager_at_calibration=eager_at_cal,
                 )
             logger.info(
                 "Loaded %d model profile(s) from %s", len(self._profiles), state_path,

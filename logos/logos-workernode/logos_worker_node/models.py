@@ -66,7 +66,24 @@ class VllmConfig(BaseModel):
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
-    gpu_memory_utilization: float | None = Field(default=None, ge=0.1, le=1.0)
+    gpu_memory_utilization: float | None = Field(
+        default=None,
+        ge=0.1,
+        le=1.0,
+        description="Per-GPU VRAM fraction passed to vLLM as "
+        "--gpu-memory-utilization. vLLM uses this as a startup-floor gate: "
+        "free_per_gpu must be >= gmu * total_per_gpu or the engine refuses "
+        "to start, even when kv_cache_memory_bytes is set. None (default) "
+        "auto-derives from the calibrated profile so the gate matches the "
+        "lane's actual measured footprint: loaded_vram_mb / tp / "
+        "total_per_gpu, clamped to [0.5, 0.95]. The planner's separate "
+        "PER_GPU_COLD_START_MB headroom remains the sole safety buffer; "
+        "gmu itself stays free of margin to avoid double-counting. Set an "
+        "explicit float per model under engines.vllm.model_overrides.<model>"
+        ".gpu_memory_utilization to opt out of auto-derivation; vLLM falls "
+        "back to its own 0.9 default when neither this field nor a profile "
+        "is available.",
+    )
     kv_cache_memory_bytes: str = Field(
         default="",
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "

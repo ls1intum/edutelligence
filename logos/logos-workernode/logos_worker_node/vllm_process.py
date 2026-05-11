@@ -30,7 +30,7 @@ import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, AsyncIterator, ClassVar
+from typing import Any, AsyncIterator, Callable, ClassVar
 
 import httpx
 
@@ -255,11 +255,15 @@ class VllmProcessHandle:
         port: int,
         global_config: OllamaConfig,
         vllm_engine_config: VllmEngineConfig | None = None,
+        model_profiles: Any | None = None,
+        per_gpu_total_mb: Callable[[], float] | None = None,
     ) -> None:
         self.lane_id = lane_id
         self.port = port
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
+        self._model_profiles = model_profiles
+        self._per_gpu_total_mb = per_gpu_total_mb or (lambda: 0.0)
         self._lane_config: LaneConfig | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._http: httpx.AsyncClient | None = None
@@ -695,6 +699,51 @@ class VllmProcessHandle:
         if self._http is None:
             raise RuntimeError(f"[{self.lane_id}] HTTP client is not initialized")
 
+    _GMU_AUTO_FLOOR: ClassVar[float] = 0.5
+    _GMU_AUTO_CEILING: ClassVar[float] = 0.95
+
+    def _resolve_gmu(
+        self, vc: VllmConfig, lane_config: LaneConfig,
+    ) -> float | None:
+        """Return the gpu_memory_utilization to pass to vLLM, or None to omit.
+
+        Selection order:
+          1. Explicit per-model override (vc.gpu_memory_utilization is not
+             None) — operator's value wins, no derivation.
+          2. Auto-derive from calibrated profile when available:
+             gmu = clamp(loaded_vram_mb / tp / per_gpu_total_mb,
+                         _GMU_AUTO_FLOOR, _GMU_AUTO_CEILING)
+             Matches what the lane actually uses; the planner's separate
+             PER_GPU_COLD_START_MB headroom is the sole safety buffer.
+          3. None — no profile, no override; omit the flag and let vLLM
+             apply its own default (0.9 in current versions).
+        """
+        if vc.gpu_memory_utilization is not None:
+            return float(vc.gpu_memory_utilization)
+        if self._model_profiles is None:
+            return None
+        profile = self._model_profiles.get_profile(lane_config.model)
+        if profile is None:
+            return None
+        loaded = getattr(profile, "loaded_vram_mb", None)
+        tp = getattr(profile, "tensor_parallel_size", None) or vc.tensor_parallel_size
+        if not loaded or not tp or tp <= 0:
+            return None
+        per_gpu_total = self._per_gpu_total_mb()
+        if per_gpu_total <= 0:
+            return None
+        derived = float(loaded) / float(tp) / float(per_gpu_total)
+        clamped = min(self._GMU_AUTO_CEILING, max(self._GMU_AUTO_FLOOR, derived))
+        logger.info(
+            "[%s] Auto-derived gpu_memory_utilization=%.3f for %s "
+            "(loaded=%.0fMB / tp=%d / per_gpu_total=%.0fMB; raw=%.3f, "
+            "clamped to [%.2f, %.2f])",
+            self.lane_id, clamped, lane_config.model,
+            loaded, tp, per_gpu_total, derived,
+            self._GMU_AUTO_FLOOR, self._GMU_AUTO_CEILING,
+        )
+        return clamped
+
     def _build_cmd(self, lane_config: LaneConfig) -> list[str]:
         """Build the vllm serve command."""
         if not lane_config.vllm_config:
@@ -714,12 +763,16 @@ class VllmProcessHandle:
             "--dtype",
             vc.dtype,
         ]
-        if vc.gpu_memory_utilization is not None:
-            cmd.extend(["--gpu-memory-utilization", str(vc.gpu_memory_utilization)])
-        # When kv_cache_memory_bytes is set, omit --gpu-memory-utilization and let
-        # vLLM default to 0.9. kv_cache_memory_bytes controls the KV pool size
-        # directly; adding gpu_memory_utilization=0.1 caps total VRAM to 10% which
-        # prevents the model weights from loading at all.
+        # Resolve gpu_memory_utilization: explicit per-model override wins;
+        # otherwise auto-derive from the calibrated profile so vLLM's startup
+        # floor check (free_per_gpu >= gmu * total_per_gpu, raised by
+        # vllm/v1/worker/utils.py:request_memory) matches the lane's actual
+        # measured footprint. The +500 MB cold-start headroom lives only in the
+        # planner's PER_GPU_COLD_START_MB; baking it into gmu would
+        # double-count and unnecessarily reject co-resident sleeping lanes.
+        resolved_gmu = self._resolve_gmu(vc, lane_config)
+        if resolved_gmu is not None:
+            cmd.extend(["--gpu-memory-utilization", str(resolved_gmu)])
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
         # For vLLM lanes, context_length defaults to 4096 from shared lane

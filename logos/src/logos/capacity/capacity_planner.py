@@ -1691,6 +1691,69 @@ class CapacityPlanner:
                 if residual_mb <= 0 and profile:
                     residual_mb = float(profile.sleeping_residual_mb or 0.0)
                 freed_total = residual_mb
+            elif (
+                lane.is_vllm
+                and lane.runtime_state in ("loaded", "running")
+                and lane.sleep_state == "unsupported"
+            ):
+                # Lane was started with enable_sleep_mode=False (static
+                # operator config). Sleep is impossible — the only way to
+                # reclaim its VRAM is a destructive cold stop. Apply the
+                # same protections used for the sleeping-lane stop branch:
+                # demand checks, post-load cooldown, and tenure. Supported
+                # awake lanes still take the sleep_l1 branch above; the
+                # sort at the end of this function still prefers sleep
+                # over stop, so a sibling supported lane will be picked
+                # first when one is available.
+                has_real_queue = (
+                    self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
+                )
+                has_speculative_demand = (
+                    self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
+                )
+                is_self_eviction = (
+                    self._eviction_gate_v2
+                    and target_model_name is not None
+                    and lane.model_name == target_model_name
+                )
+                if is_self_eviction:
+                    pass
+                elif self._stop_dedup_siblings:
+                    chosen = self._pick_request_target_lane(provider_id, lane.model_name)
+                    is_chosen_sibling = chosen is not None and chosen.lane_id == lane.lane_id
+                    if has_real_queue and is_chosen_sibling:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            "chosen-sibling-with-queue",
+                        ))
+                        continue
+                else:
+                    if has_real_queue or has_speculative_demand:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            f"model-demanded(real_q={has_real_queue},"
+                            f"score>={self.DEMAND_LOAD_FLOOR}={has_speculative_demand})",
+                        ))
+                        continue
+                if in_cooldown:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"load_cooldown({age:.1f}s/{self._load_cooldown_seconds:.0f}s)",
+                    ))
+                    continue
+                if in_min_tenure:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"tenure({age:.1f}s/{tenure_seconds:.1f}s)",
+                    ))
+                    continue
+                action = "stop"
+                current_mb = float(lane.effective_vram_mb or 0.0)
+                if current_mb <= 0 and profile:
+                    current_mb = self._estimate_model_loaded_vram(profile)
+                freed_total = current_mb
             else:
                 skipped.append((
                     lane.lane_id, lane.model_name,
@@ -2685,12 +2748,19 @@ class CapacityPlanner:
                         if profile is not None:
                             current_vram = self._estimate_model_loaded_vram(profile)
                     if current_vram > 0:
-                        # Prefer sleep over stop: keeps model warm for fast wake
+                        # Prefer sleep over stop: keeps model warm for fast wake.
+                        # `sleeping_residual_mb` is per-model on the profile, so a
+                        # sibling sleep-enabled lane can populate it for a model
+                        # whose current lane has enable_sleep_mode=False — never
+                        # emit sleep_l1 unless this specific lane reports a
+                        # non-unsupported sleep_state (otherwise the worker would
+                        # raise in _ensure_sleep_mode_ready and the action fails).
                         lane_profile = profiles.get(lane.model_name)
                         sleeping_residual = float(
                             getattr(lane_profile, "sleeping_residual_mb", 0) or 0
                         ) if lane_profile else 0.0
-                        if sleeping_residual > 0:
+                        lane_can_sleep = lane.sleep_state != "unsupported"
+                        if sleeping_residual > 0 and lane_can_sleep:
                             drain_action = "sleep_l1"
                             drain_reason = f"Demand drain: sleep for {model_name}"
                             drain_params = {}
@@ -3295,7 +3365,15 @@ class CapacityPlanner:
                             getattr(lane_profile, "sleeping_residual_mb", 0) or 0
                         ) if lane_profile else 0.0
                         freed_by_sleep = max(0.0, current_vram - sleeping_residual)
-                        if lane.is_vllm and sleeping_residual > 0:
+                        # `sleeping_residual_mb` is keyed on model name in the
+                        # profile, so a sibling sleep-enabled lane can populate
+                        # it for a model whose current lane has
+                        # enable_sleep_mode=False. Always require the lane's
+                        # own sleep_state to differ from "unsupported" before
+                        # emitting sleep_l1 — otherwise the worker would raise
+                        # in _ensure_sleep_mode_ready and the action fails.
+                        lane_can_sleep = lane.sleep_state != "unsupported"
+                        if lane.is_vllm and sleeping_residual > 0 and lane_can_sleep:
                             # For vLLM lanes, ALWAYS prefer sleep over stop.
                             # Sleeping frees 14-18 GB (loaded - residual) while
                             # keeping the model warm for 2-3s wake.  Stopping
@@ -3313,7 +3391,11 @@ class CapacityPlanner:
                                     reason=f"Request-time reclaim (drain+sleep) for {target.model_name}",
                                 ),
                             ))
-                        elif freed_by_sleep >= required_free_mb and sleeping_residual > 0:
+                        elif (
+                            freed_by_sleep >= required_free_mb
+                            and sleeping_residual > 0
+                            and lane_can_sleep
+                        ):
                             # Non-vLLM lane: sleeping frees enough
                             sleep_candidates.append((
                                 freed_by_sleep,
@@ -3326,7 +3408,8 @@ class CapacityPlanner:
                                 ),
                             ))
                         else:
-                            # Non-vLLM or no residual: must fully stop
+                            # Non-vLLM, no residual, or sleep disabled: must
+                            # fully stop.
                             if not self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
                                 stop_candidates.append((
                                     current_vram,

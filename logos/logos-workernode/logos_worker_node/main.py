@@ -22,7 +22,7 @@ from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.runtime import SERVICE_VERSION
-from logos_worker_node.calibration import auto_calibrate_models
+from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +48,41 @@ async def _auto_calibrate_if_needed(
     caps = cfg.logos.capabilities_models if cfg.logos else []
     if not caps:
         return
+
+    # Resolve config.yml path (also needed below; resolve once and reuse).
+    config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+    if config_path_str:
+        config_path = Path(config_path_str)
+    else:
+        for candidate in [Path("/app/config.yml"), Path("config.yml")]:
+            if candidate.resolve().is_file():
+                config_path = candidate
+                break
+        else:
+            config_path = Path("config.yml")
+
+    # Build a {model_name: (tp, enforce_eager)} table from production config.
+    # A persisted profile is only valid if BOTH match what production will
+    # actually run — different tp or different enforce_eager produces a
+    # different VRAM footprint (CUDA graph capture pools persist across sleep
+    # and add 5-15 GB to both loaded_vram_mb and sleeping_residual_mb that
+    # eager-mode calibration never sees).
+    expected_settings: dict[str, tuple[int, bool]] = {}
+    if config_path.exists():
+        try:
+            for plan in plans_from_config(config_path):
+                m = plan.get("model")
+                if not m:
+                    continue
+                expected_settings[str(m)] = (
+                    int(plan.get("tensor_parallel_size", 1)),
+                    bool(plan.get("enforce_eager", True)),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Could not parse plans from %s for provenance check: %s",
+                config_path, exc,
+            )
 
     uncalibrated = []
     for model_name in caps:
@@ -80,6 +115,25 @@ async def _auto_calibrate_if_needed(
             # "measured" profiles intentionally differ (base=weights-only,
             # loaded=weights+KV) and must NOT be flagged as stale.
             reason = f"stale format (base={profile.base_residency_mb:.0f} << loaded={profile.loaded_vram_mb:.0f}, kv_budget={profile.kv_budget_mb:.0f})"
+        else:
+            # Provenance check: only honor a calibrated profile if its (tp,
+            # enforce_eager) matches what production will run. Mismatch means
+            # the persisted numbers describe a different configuration and
+            # the planner would budget VRAM incorrectly.
+            expected = expected_settings.get(model_name)
+            if expected is not None and profile.residency_source == "calibrated":
+                expected_tp, expected_eager = expected
+                cal_tp = profile.tensor_parallel_size
+                cal_eager = profile.enforce_eager_at_calibration
+                if cal_tp is not None and cal_tp != expected_tp:
+                    reason = (
+                        f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
+                    )
+                elif cal_eager is not None and cal_eager != expected_eager:
+                    reason = (
+                        f"enforce_eager mismatch (calibrated={cal_eager}, "
+                        f"production={expected_eager}) — graph footprint differs"
+                    )
         if reason:
             logger.info("  %s needs calibration: %s", model_name, reason)
             uncalibrated.append(model_name)
@@ -95,18 +149,6 @@ async def _auto_calibrate_if_needed(
         "%d of %d capabilities models need calibration: %s. Starting auto-calibration...",
         len(uncalibrated), len(caps), uncalibrated,
     )
-
-    # Resolve config.yml path (same logic as config.py)
-    config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
-    if config_path_str:
-        config_path = Path(config_path_str)
-    else:
-        for candidate in [Path("/app/config.yml"), Path("config.yml")]:
-            if candidate.resolve().is_file():
-                config_path = candidate
-                break
-        else:
-            config_path = Path("config.yml")
 
     t0 = time.perf_counter()
 
