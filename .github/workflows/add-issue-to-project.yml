@@ -23,7 +23,7 @@ jobs:
             ((github.event.action == 'opened' && contains(github.event.pull_request.labels.*.name, 'athena')) ||
              (github.event.action == 'labeled' && github.event.label.name == 'athena'))
           )
-        uses: actions/add-to-project@v1.0.2
+        uses: actions/add-to-project@v2.0.0
         with:
           project-url: https://github.com/orgs/ls1intum/projects/93
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
@@ -39,7 +39,7 @@ jobs:
             ((github.event.action == 'opened' && contains(github.event.pull_request.labels.*.name, 'atlas')) ||
              (github.event.action == 'labeled' && github.event.label.name == 'atlas'))
           )
-        uses: actions/add-to-project@v1.0.2
+        uses: actions/add-to-project@v2.0.0
         with:
           project-url: https://github.com/orgs/ls1intum/projects/38
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
