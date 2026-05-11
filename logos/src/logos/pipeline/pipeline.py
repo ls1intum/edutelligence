@@ -42,6 +42,14 @@ class PipelineRequest:
     policy: Optional[Dict[str, Any]] = None
     profile_id: Optional[int] = None  # NEW: Profile ID for authorization
     request_id: Optional[str] = None
+    # PROXY mode: skip Laura's ML ranking since the caller already named the
+    # model. Policy + token stages still run so policy thresholds (privacy,
+    # latency, cost, …) are enforced.
+    skip_laura: bool = False
+    # Original HTTP request path (e.g. "v1/chat/completions"); needed by the
+    # context resolver to build the forward URL for cloud upstream providers,
+    # which serve the same OpenAI-shaped surface as our /v1 routes.
+    request_path: Optional[str] = None
 
 
 @dataclass
@@ -119,8 +127,10 @@ class RequestPipeline:
             The result also includes classification and scheduling statistics for logging.
         """
         request_id = request.request_id or str(uuid.uuid4())
-        
-        # 1. Classification
+
+        # 1. Classification. PROXY mode still runs the policy + token stages
+        # (so policy thresholds remain enforced) but skips Laura's heavy ML
+        # ranking — the caller already named the model.
         classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
@@ -290,6 +300,7 @@ class RequestPipeline:
                     provider_id=scheduling_result.provider_id,
                     logos_key=request.logos_key,
                     profile_id=request.profile_id,
+                    request_path=request.request_path,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
@@ -386,6 +397,7 @@ class RequestPipeline:
             policy,
             allowed=request.allowed_models,
             system=system_prompt,
+            skip_laura=request.skip_laura,
         )
         
         elapsed = time.time() - start
