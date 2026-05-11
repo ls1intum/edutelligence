@@ -2591,6 +2591,15 @@ class CapacityPlanner:
                         else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
                     )
                 if proceed:
+                    # _pick_cold_load_placement already verified eviction-aware
+                    # feasibility (total VRAM + per-GPU, with the eviction set's
+                    # freed VRAM added back). _passes_minimum_load_feasibility is
+                    # NOT eviction-aware (reads capacity.available_vram_mb at
+                    # `now`, ignores the sleep/stop actions we're about to emit),
+                    # so calling it here orphans evictions: the victim sleeps,
+                    # the load gets rejected for "insufficient VRAM" that the
+                    # planner itself is about to free in the same cycle. Trust
+                    # the placement decision.
                     lane_id = self._planner_lane_id(model_name)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
@@ -2603,8 +2612,6 @@ class CapacityPlanner:
                             model_name=vlane.model_name,
                             reason=f"Evicted for {model_name} load ({gate_reason})",
                         ))
-                    if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
-                        continue
                     actions.append(CapacityPlanAction(
                         action="load",
                         provider_id=provider_id,
