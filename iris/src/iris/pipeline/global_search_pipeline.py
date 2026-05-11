@@ -50,7 +50,7 @@ class GlobalSearchPipeline(SubPipeline):
     def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="global_search_pipeline")
         self.tokens = []
-        self.retriever = LectureGlobalSearchRetrieval(client)
+        self.retriever = LectureGlobalSearchRetrieval(client, local=local)
 
         pipeline_id = "global_search_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
@@ -130,13 +130,22 @@ class GlobalSearchPipeline(SubPipeline):
         if not grounded_sources:
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
+        def _location_label(s: LectureSearchResultDTO) -> str:
+            page = s.lecture_unit.page_number
+            if page == -1:
+                meta = s.lecture_unit.display_meta or "video"
+                return f"Video @ {meta}"
+            return f"Slide {page}"
+
         context = "\n\n".join(
-            f"[{i + 1}] [{s.course.name} — {s.lecture.name}, Slide {s.lecture_unit.page_number}]\n{s.snippet}"
+            f"[{i + 1}] [{s.course.name} — {s.lecture.name}, {_location_label(s)}]\n{s.snippet}"
             for i, s in enumerate(grounded_sources)
         )
+        logger.debug("Answer context:\n%s", context)
         raw = (self.answer_prompt | self.answer_pipeline).invoke(
             {"context": context, "query": query}
         )
+        logger.debug("LLM raw response: %s", raw)
 
         # Parse structured response — strip markdown code fences if present
         try:

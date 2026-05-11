@@ -32,12 +32,19 @@ class LectureInfo(BaseModel):
 
 
 class LectureUnitInfo(BaseModel):
+    """Metadata for a lecture unit returned in search results."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     id: int
     name: str
     link: str
     page_number: int = Field(alias="pageNumber")
+    source_type: str = Field(alias="sourceType")
+    query_params: dict[str, str | int | float] = Field(
+        default_factory=dict, alias="queryParams"
+    )
+    display_meta: str | None = Field(default=None, alias="displayMeta")
 
 
 class LectureSearchResultDTO(BaseModel):
