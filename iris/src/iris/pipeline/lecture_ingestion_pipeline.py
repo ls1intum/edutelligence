@@ -330,24 +330,33 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            has_images = bool(page.get_images(full=False))
 
-            # Extract slide number (and interpretation if page has images) via vision
-            slide_num, interpretation = self.extract_slide_info_with_vision(
-                page=page,
-                has_images=has_images,
-                old_page_text=old_page_text,
-                lecture_name=lecture_unit_slide_dto.lecture_name,
-                course_language=self.course_language,
-            )
+            # Extract slide number via vision (for all pages)
+            slide_num = self.extract_slide_number(page)
             slide_page_numbers.append(slide_num)
 
-            # Merge interpretation with text if available
-            if interpretation:
-                page_text = self.merge_page_content_and_image_interpretation(
-                    page_text, interpretation
+            # Interpret images if page has them (existing logic)
+            if page.get_images(full=False):
+                logger.info(
+                    "%s Page %d/%d: has images, interpreting with LLM",
+                    prefix,
+                    page_num + 1,
+                    doc.page_count,
                 )
-
+                # more pixels thus more details and better quality
+                matrix = fitz.Matrix(5, 5)
+                pix = page.get_pixmap(matrix=matrix)
+                img_bytes = pix.tobytes("jpg")
+                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+                image_interpretation = self.interpret_image(
+                    img_base64,
+                    old_page_text,
+                    lecture_unit_slide_dto.lecture_name,
+                    self.course_language,
+                )
+                page_text = self.merge_page_content_and_image_interpretation(
+                    page_text, image_interpretation
+                )
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
@@ -374,44 +383,25 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         return data
 
-    def extract_slide_info_with_vision(
-        self,
-        page: fitz.Page,
-        has_images: bool,
-        old_page_text: str,
-        lecture_name: str,
-        course_language: str,
-    ) -> tuple[int, Optional[str]]:
-        """Extract slide number via vision, optionally with interpretation.
+    def extract_slide_number(self, page: fitz.Page) -> int:
+        """Extract slide number from page using vision.
 
         Args:
             page: PDF page to process
-            has_images: Whether to include academic interpretation
-            old_page_text: Previous page content for context
-            lecture_name: Lecture name
-            course_language: Language for interpretation
 
         Returns:
-            (slide_number, interpretation) - interpretation is None if has_images=False
+            int: Slide number (positive integer), or -1 if not found
         """
-        # Render page as image
-        matrix = fitz.Matrix(5, 5) if has_images else fitz.Matrix(2, 2)
+        # Render page as low-res image (just need to read the number)
+        matrix = fitz.Matrix(2, 2)
         pix = page.get_pixmap(matrix=matrix)
         img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
 
-        # Build prompt
-        if has_images:
-            prompt = (
-                f"**First line: Write the visible slide number as 'Slide: X' (or 'Slide: unknown' if not visible)**\n\n"
-                f"Then interpret this slide from '{lecture_name}' academically in {course_language}. "
-                f"Previous slide context:\n{old_page_text}\n\n"
-                f"Max 350 words."
-            )
-        else:
-            prompt = (
-                "You are an AI that reads slide numbers from presentation slides. "
-                "Respond only with the slide number as an integer, or 'null' if not visible."
-            )
+        # Simple prompt for slide number extraction (same as video processing)
+        prompt = (
+            "You are an AI that reads slide numbers from presentation slides. "
+            "Respond only with the slide number as an integer, or 'null' if not visible."
+        )
 
         # Vision call
         message = PyrisMessage(
@@ -432,22 +422,58 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
             )
         except Exception as e:
-            logger.error("Vision call failed for page %d: %s", page.number + 1, e)
-            return -1, None
+            logger.error(
+                "Slide number extraction failed for page %d: %s", page.number + 1, e
+            )
+            return -1
 
         response_text = response.contents[0].text_content or ""
 
         # Parse slide number
         text_lower = response_text.lower()
         if "null" in text_lower or "unknown" in text_lower:
-            slide_num = -1
-        else:
-            match = re.search(r"\d+", response_text)
-            slide_num = int(match.group(0)) if match else -1
+            return -1
 
-        # Return interpretation if requested
-        interpretation = response_text if has_images else None
-        return slide_num, interpretation
+        match = re.search(r"\d+", response_text)
+        return int(match.group(0)) if match else -1
+
+    def interpret_image(
+        self,
+        img_base64: str,
+        last_page_content: str,
+        name_of_lecture: str,
+        course_language: str,
+    ):
+        """
+        Interpret the image passed
+        """
+        image_interpretation_prompt = TextMessageContentDTO(
+            text_content=f"This page is part of the {name_of_lecture} university lecture."
+            f"I am the professor that created these slides, "
+            f" please interpret this slide in an academic way. "
+            f"For more context here is the content of the previous slide:\n "
+            f" {last_page_content} \n\n"
+            f" Only repond with the slide explanation and interpretation in {course_language}, "
+            f"do not add anything else to your response.Your explanation should not exceed 350 words."
+        )
+        image = ImageMessageContentDTO(base64=img_base64)
+        iris_message = PyrisMessage(
+            sender=IrisMessageRole.USER,
+            contents=[image_interpretation_prompt, image],
+        )
+        try:
+            response = self.llm_chat.chat(
+                [iris_message],
+                CompletionArguments(temperature=0),
+                tools=[],
+            )
+            self._append_tokens(
+                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
+            )
+        except Exception as e:
+            logger.error("Error interpreting image: %s", e)
+            return None
+        return response.contents[0].text_content
 
     def merge_page_content_and_image_interpretation(
         self, page_content: str, image_interpretation: str
