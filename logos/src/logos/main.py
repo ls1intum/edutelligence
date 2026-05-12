@@ -96,7 +96,15 @@ def _resolve_provider_name(provider_id: int) -> str:
 def _sync_logosnode_capabilities_to_db(
     provider_id: int, model_names: list[str]
 ) -> None:
-    """Callback: sync announced capabilities into DB tables."""
+    """Callback: sync announced capabilities into DB tables and reload the
+    SDI facade so the new (provider, model) deployments are visible to
+    in-memory lookups. Without the reload, ``_model_id_to_name`` on the
+    provider keeps whatever was loaded at server boot — the DB row is
+    inserted but the planner's queue-depth-by-model-name lookup falls
+    through the name match and returns 0, so the planner never sees
+    ``queue_here>0`` for newly-declared capabilities and the model never
+    gets loaded on the worker that just declared it.
+    """
     pname = _resolve_provider_name(provider_id)
     try:
         with DBManager() as db:
@@ -108,6 +116,22 @@ def _sync_logosnode_capabilities_to_db(
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
+        return
+    # Schedule facade refresh on the running loop. The callback is invoked
+    # from async paths in the registry (attach_session / on_hello /
+    # update_runtime) so a loop is always running; use a try/except to be
+    # defensive against future sync callers.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug(
+            "No running event loop; skipping facade refresh for %s "
+            "(next admin call will reload)", pname,
+        )
+        return
+    task = loop.create_task(refresh_pipeline_runtime_state())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 _logosnode_registry = LogosNodeRuntimeRegistry(
@@ -1634,12 +1658,12 @@ async def start_pipeline():
     # what to wake/load — request-time work no longer races for the
     # provider lock, so a low-demand request can't starve out a
     # high-demand one waiting on the same provider.
-    async def _on_capacity_needed(provider_id: int, model_name: str) -> None:
+    async def _on_capacity_needed(model_name: str, provider_id: int | None = None) -> None:
         try:
-            _capacity_planner.hint_capacity_needed(provider_id, model_name)
+            _capacity_planner.hint_capacity_needed(model_name, provider_id=provider_id)
         except Exception:
             logger.debug(
-                "Capacity hint for %s on provider %s failed",
+                "Capacity hint for %s (originating provider=%s) failed",
                 model_name, provider_id, exc_info=True,
             )
 
@@ -1738,6 +1762,12 @@ async def _register_models_with_facades(
                         "provider_id": provider_id,
                     }
                 )
+            elif provider_type == "cloud":
+                # Cloud upstream has no local SDI state to track — it manages
+                # its own scheduling. The (model_id, provider_id) -> "cloud"
+                # mapping in the model registry is enough for the scheduler
+                # to route to it.
+                continue
             else:
                 logger.debug(
                     "Skipping provider %s (%s) for model %s: unsupported type '%s'",
@@ -2570,8 +2600,10 @@ async def _execute_proxy_mode(
             status_code=404, detail=f"No deployment found for model '{model_name}'"
         )
 
-    # Proxy mode still routes through classification/scheduling with a single allowed model.
-    # This preserves policy screening while constraining execution to the requested model.
+    # Proxy mode reuses the scheduling/execution pipeline. Policy + token
+    # screening still run (we want policy thresholds enforced even when the
+    # user names the model), but Laura's heavy ML ranking is skipped — it
+    # has nothing to decide once the model is pinned.
     return await _execute_resource_mode(
         deployments=model_deployments,
         body=body,
@@ -2583,6 +2615,7 @@ async def _execute_proxy_mode(
         profile_id=profile_id,
         request_id=request_id,
         request_path=request_path,
+        skip_laura=True,
     )
 
 
@@ -2597,6 +2630,7 @@ async def _execute_resource_mode(
     profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    skip_laura: bool = False,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -2650,6 +2684,8 @@ async def _execute_resource_mode(
         allowed_models=allowed_models,
         deployments=deployments,
         profile_id=profile_id,
+        skip_laura=skip_laura,
+        request_path=request_path,
     )
 
     # Process through classification and scheduling
