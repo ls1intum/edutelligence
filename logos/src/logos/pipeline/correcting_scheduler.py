@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from typing import List, Tuple, Optional
 
@@ -402,6 +403,79 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         ReadinessTier.COLD_RECLAIM,
     })
 
+    # Tolerance for "scores tie" comparisons. corrected_score is computed
+    # with float math, so two warm workers serving the same model can
+    # differ in the last few ULPs without being meaningfully different.
+    _TIE_EPSILON = 1e-9
+
+    def _candidate_weight(self, candidate: tuple) -> float:
+        """Weight for weighted-RR tie-break. logosnode candidates use the
+        worker's declared `gpu_performance_score` (default 100). Azure /
+        cloud candidates default to 100 — they don't compete with
+        logosnode in the same tied group in practice (state_overhead and
+        rate-limit penalties differ), so the value is mostly nominal."""
+        _, provider_id, provider_type, _, _, _ = candidate
+        if provider_type == "logosnode":
+            try:
+                return float(self._logosnode.get_gpu_performance_score(provider_id))
+            except Exception:
+                return 100.0
+        return 100.0
+
+    def _weighted_shuffle_tied(self, scored: list) -> list:
+        """Reorder `scored` so that within each tied-score zone candidates
+        appear in weighted-random order. Across zones the original
+        score-descending order is preserved.
+
+        Implements the operator's heterogeneous-GPU policy: when two warm
+        workers serve the same model and tie on corrected_score, traffic
+        is split in proportion to each worker's gpu_performance_score
+        (e.g. 20 vs 40 → 1/3 vs 2/3 of requests). Homogeneous clusters
+        (all default 100) degenerate to uniform random — fixing the
+        sticky-first-registered bias.
+        """
+        if len(scored) <= 1:
+            return list(scored)
+        result: list = []
+        i = 0
+        n = len(scored)
+        while i < n:
+            anchor = scored[i][3]
+            j = i + 1
+            while j < n and abs(scored[j][3] - anchor) < self._TIE_EPSILON:
+                j += 1
+            zone = scored[i:j]
+            if len(zone) > 1:
+                zone = self._weighted_random_order(zone)
+            result.extend(zone)
+            i = j
+        return result
+
+    def _weighted_random_order(self, zone: list) -> list:
+        """Weighted-random sequencing without replacement. The first picked
+        candidate has probability proportional to its weight; if its
+        try_reserve fails, the second is picked from the remaining
+        candidates with their weights renormalised, and so on."""
+        remaining = list(zone)
+        order: list = []
+        while remaining:
+            weights = [self._candidate_weight(item) for item in remaining]
+            total = sum(weights)
+            if total <= 0:
+                # Pathological (all zero/negative); fall through to original order.
+                order.extend(remaining)
+                break
+            r = random.random() * total
+            cum = 0.0
+            picked = len(remaining) - 1  # default to last (covers float-edge cases)
+            for idx, w in enumerate(weights):
+                cum += w
+                if r <= cum:
+                    picked = idx
+                    break
+            order.append(remaining.pop(picked))
+        return order
+
     def _try_immediate_select(self, scored: list, request_id: str):
         """Try to reserve capacity on the best available candidate.
 
@@ -414,6 +488,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         capacity planner should handle it rather than silently downgrading
         to a lower-scored warm model.
         """
+        # Apply weighted-random tie-break within each tied-score zone
+        # before walking the list. Same-score warm logosnode workers
+        # are weighted by gpu_performance_score so the faster GPU
+        # absorbs proportionally more traffic.
+        scored = self._weighted_shuffle_tied(scored)
         for idx, (model_id, provider_id, provider_type, score, priority_int, ettft) in enumerate(scored):
             if provider_type == "logosnode":
                 # If the top-scored candidate is not ready (sleeping/cold),

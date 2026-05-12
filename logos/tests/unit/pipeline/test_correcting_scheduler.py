@@ -76,6 +76,7 @@ class MockLogosNodeFacade:
         self._reserve_results = {}  # (model_id, provider_id) -> bool
         self._tracking = {}
         self.raise_on_request_start = False
+        self._gpu_scores: dict[int, int] = {}  # provider_id -> gpu_performance_score
 
     def set_view(self, model_id, provider_id, view):
         self._views[(model_id, provider_id)] = view
@@ -115,6 +116,12 @@ class MockLogosNodeFacade:
     def get_all_lane_signals(self, provider_id):
         # No sibling-lane visibility needed for these tests.
         raise KeyError(provider_id)
+
+    def get_gpu_performance_score(self, provider_id):
+        return self._gpu_scores.get(provider_id, 100)
+
+    def set_gpu_performance_score(self, provider_id, score):
+        self._gpu_scores[provider_id] = score
 
     def try_reserve_capacity(self, model_id, provider_id, request_id):
         return self._reserve_results.get((model_id, provider_id), True)

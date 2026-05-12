@@ -252,6 +252,20 @@ class WorkerConfig(BaseModel):
             "host-side watchdog can detect and act on it."
         ),
     )
+    gpu_performance_score: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Operator-declared GPU capability weight used by the Logos request "
+            "scheduler for weighted round-robin tie-breaks. When two warm "
+            "workers tie on corrected_score for a model, traffic is split "
+            "across them in proportion to this value. Examples: A6000 → 20, "
+            "Blackwell RTX 6000 Pro → 40, H100 → 100. Default 100 means a "
+            "homogeneous cluster gets uniform random distribution (no "
+            "sticky-first bias). Set heterogeneous clusters explicitly so the "
+            "faster GPU receives proportionally more requests."
+        ),
+    )
 
 
 class LogosConfig(BaseModel):
@@ -465,6 +479,10 @@ class WorkerRuntimeStatus(BaseModel):
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None
     max_lanes: int = 0  # 0 = unlimited
+    # Operator-declared GPU capability weight (default 100). Used by the
+    # Logos request scheduler for weighted round-robin tie-breaks among
+    # workers with the same model loaded warm.
+    gpu_performance_score: int = 100
 
 
 class LaneSetRequest(BaseModel):

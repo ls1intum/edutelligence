@@ -214,6 +214,15 @@ class LogosNodeSchedulingDataFacade:
         provider = self._providers.get(int(provider_id))
         return provider.get_worker_capabilities() if provider else []
 
+    def get_gpu_performance_score(self, provider_id: int) -> int:
+        """Return the worker's declared GPU performance weight (default 100).
+
+        Used by the request scheduler for weighted-RR tie-breaks across
+        warm workers serving the same model.
+        """
+        provider = self._providers.get(int(provider_id))
+        return provider.get_gpu_performance_score() if provider else 100
+
     def provider_ids(self) -> list[int]:
         """Return list of registered provider IDs (for planner iteration)."""
         with self._lock:
