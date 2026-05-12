@@ -1,5 +1,6 @@
 {
   "name": "logos-ui",
+  "version": "2.2",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
