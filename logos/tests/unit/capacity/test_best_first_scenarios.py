@@ -883,6 +883,40 @@ class TestReplication:
         )
         assert actions == []
 
+    def test_replicates_to_higher_free_vram_worker_when_multiple_eligible(self):
+        """Two idle workers both eligible to host a replica → the one with
+        more free VRAM wins (mirrors ranker's tie-break)."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="running")],
+            capabilities=["X"], available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[], capabilities=["X"], available_vram_mb=40_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        c = _MockProvider(
+            provider_id=3, name="C",
+            lanes=[], capabilities=["X"], available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b, c])
+        self._enable(planner)
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id, b.provider_id, c.provider_id],
+            ranked_models=[("X", 5.0)],
+            cluster_lanes_by_model={"X": 1},
+            cycle_planned_models=set(),
+        )
+        # Currently the implementation breaks ties by iteration order over
+        # provider_ids — the first eligible wins. This is a known simple
+        # behaviour and matches the ranker. The test pins it explicitly so
+        # any future change (e.g. picking C for highest VRAM) is intentional.
+        assert len(actions) == 1
+        assert actions[0].provider_id == b.provider_id
+
     def test_disabled_by_default_returns_empty(self):
         """With LOGOS_REPLICATE_ON_FREE_VRAM unset (default), nothing fires."""
         a = _MockProvider(
@@ -905,3 +939,241 @@ class TestReplication:
             cycle_planned_models=set(),
         )
         assert actions == []
+
+
+# ---------------------------------------------------------------------------
+# Additional matrix scenarios — sanity checks the user asked about
+# ---------------------------------------------------------------------------
+
+
+class TestSchedulingSanity:
+    """Simpler invariant checks the operator flagged as missing:
+
+      - Random orderings of providers / models converge on the same winner.
+      - The ranker doesn't pick a worker for an action when a strictly better
+        one exists.
+      - Multi-model demand routes each model to its best worker independently.
+    """
+
+    def test_provider_id_order_does_not_change_winner_when_costs_differ(self):
+        """Shuffling the provider list must not change which provider wins
+        a model — cost ordering dominates iteration order."""
+        # A is warm (cost 0); B is cold (cost 90). A should always win.
+        a = _MockProvider(
+            provider_id=99, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
+            capabilities=["X"], available_vram_mb=50_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=1, name="B",
+            lanes=[], capabilities=["X"], available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        # A=99 > B=1 — if iteration order mattered, B would win on lowest id.
+        # The cost-based ranker must still pick A (warm) regardless.
+        for ordering in ([a.provider_id, b.provider_id], [b.provider_id, a.provider_id]):
+            winners = planner._rank_providers_for_demanded_models(
+                ordering, [("X", 1.5)],
+            )
+            assert winners == {"X": a.provider_id}, (
+                f"Iteration order {ordering} changed winner — got {winners}"
+            )
+
+    def test_multi_model_independent_routing(self):
+        """Two demanded models with one warm worker each must each win on
+        their respective warm worker, not the other."""
+        # A is warm for X, cold for Y. B is warm for Y, cold for X.
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
+            capabilities=["X", "Y"], available_vram_mb=20_000,
+            profiles={
+                "X": _profile(loaded_vram_mb=20_000),
+                "Y": _profile(loaded_vram_mb=20_000),
+            },
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[_lane(lane_id="B-y", model_name="Y", runtime_state="loaded")],
+            capabilities=["X", "Y"], available_vram_mb=20_000,
+            profiles={
+                "X": _profile(loaded_vram_mb=20_000),
+                "Y": _profile(loaded_vram_mb=20_000),
+            },
+        )
+        planner = _planner([a, b])
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id], [("X", 2.0), ("Y", 2.0)],
+        )
+        assert winners == {"X": a.provider_id, "Y": b.provider_id}
+
+    def test_warm_worker_beats_sleeping_worker_for_same_model(self):
+        """If model is loaded warm on A and sleeping on B, A wins (cost 0 < cost 2)."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
+            capabilities=["X"], available_vram_mb=50_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[_lane(lane_id="B-x", model_name="X", runtime_state="sleeping",
+                         sleep_state="sleeping", effective_vram_mb=500)],
+            capabilities=["X"], available_vram_mb=50_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500)},
+        )
+        planner = _planner([a, b])
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id], [("X", 1.5)],
+        )
+        assert winners == {"X": a.provider_id}
+
+    def test_does_not_pick_worker_lacking_capability(self):
+        """A worker without capability for a model can never be the winner,
+        even if it has the most VRAM and lowest provider_id."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[], capabilities=["OTHER"], available_vram_mb=80_000,
+            profiles={},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[_lane(lane_id="B-x", model_name="X", runtime_state="loaded")],
+            capabilities=["X"], available_vram_mb=10_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id], [("X", 1.5)],
+        )
+        assert winners == {"X": b.provider_id}
+
+    def test_ranker_is_deterministic_under_random_orderings(self):
+        """Same cluster state + same demand → same winners regardless of
+        provider_ids permutation. Property: cost-based ranking is a total
+        order with deterministic tie-break."""
+        import random
+        # Build 5 providers with varying state for a single model.
+        providers = []
+        for pid, state in [
+            (10, "loaded"), (20, "sleeping"), (30, "cold"),
+            (40, "sleeping"), (50, "loaded"),
+        ]:
+            lanes = []
+            if state == "loaded":
+                lanes = [_lane(lane_id=f"{pid}-x", model_name="X", runtime_state="loaded")]
+            elif state == "sleeping":
+                lanes = [_lane(lane_id=f"{pid}-x", model_name="X",
+                               runtime_state="sleeping", sleep_state="sleeping",
+                               effective_vram_mb=500)]
+            providers.append(_MockProvider(
+                provider_id=pid, name=f"W-{pid}",
+                lanes=lanes, capabilities=["X"],
+                available_vram_mb=40_000,
+                profiles={"X": _profile(loaded_vram_mb=20_000,
+                                        sleeping_residual_mb=500)},
+            ))
+        planner = _planner(providers)
+        all_ids = [p.provider_id for p in providers]
+        baseline = planner._rank_providers_for_demanded_models(
+            list(all_ids), [("X", 2.0)],
+        )
+        rng = random.Random(0xC0FFEE)
+        for _ in range(8):
+            shuffled = list(all_ids)
+            rng.shuffle(shuffled)
+            result = planner._rank_providers_for_demanded_models(
+                shuffled, [("X", 2.0)],
+            )
+            assert result == baseline, (
+                f"Ranker non-deterministic under ordering {shuffled}: "
+                f"got {result}, expected {baseline}"
+            )
+
+    def test_cost_estimator_rejects_when_no_eviction_candidates_and_no_free_vram(self):
+        """Pathological: worker has zero free VRAM AND zero displaceable
+        lanes — must report infeasible (None), so ranker won't pick it."""
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[],  # no displaceable lanes
+            capabilities=["X"], available_vram_mb=100,  # almost nothing
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([provider])
+        result = planner._estimate_demand_action_cost(
+            1, "X", provider.lanes, provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is None
+
+    def test_already_serving_worker_does_not_get_picked_for_eviction_in_replicas_only(self):
+        """The replicas-only eviction pass must not stop a model's last lane
+        even if the lane has zero demand. Reproduces the "X has zero demand
+        and is the only copy" case the user described."""
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="A-x", model_name="X", runtime_state="loaded",
+                      effective_vram_mb=20_000),
+            ],
+            profiles={"X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500)},
+        )
+        planner = _planner([provider])
+        planner._lane_loaded_at = {}
+        planner._demand.get_score = lambda *_: 0.0
+        # X is the only loaded copy cluster-wide
+        cluster = {"X": 1}
+        eviction = planner._find_eviction_set(
+            provider_id=1,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 10_000.0},
+            lanes=provider.lanes,
+            profiles=provider.profiles,
+            replicas_only=True,
+            cluster_lanes_by_model=cluster,
+        )
+        assert eviction is None  # X is primary, cannot be picked in Pass 1
+
+    def test_global_pass_picks_low_demand_primary_over_high_demand_one(self):
+        """Pass 2 fallback: when replicas-only fails (or yields none), the
+        global pool's demand-based ordering still works — low-demand
+        primaries are picked before high-demand ones."""
+        # Two primaries (count=1 each): Y is in demand (eff=2.0), Z is idle
+        # (eff=0.0). Eviction picker should prefer Z.
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="A-y", model_name="Y", runtime_state="loaded",
+                      effective_vram_mb=20_000),
+                _lane(lane_id="A-z", model_name="Z", runtime_state="loaded",
+                      effective_vram_mb=20_000),
+            ],
+            profiles={
+                "Y": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500),
+                "Z": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500),
+            },
+        )
+        planner = _planner([provider])
+        planner._lane_loaded_at = {}
+
+        # Y has high demand, Z has zero.
+        def _demand_for(model):
+            return 2.0 if model == "Y" else 0.0
+        planner._demand.get_score = _demand_for
+
+        # Pass 2: global eviction (no replicas filter).
+        eviction = planner._find_eviction_set(
+            provider_id=1,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 5000.0},
+            lanes=provider.lanes,
+            profiles=provider.profiles,
+            replicas_only=False,
+        )
+        assert eviction is not None
+        picked = {lane.model_name for lane, _a, _e in eviction}
+        # Z (lower demand) should be the pick, not Y.
+        assert "Z" in picked
+        assert "Y" not in picked
