@@ -251,6 +251,31 @@ class VRAMLedger:
                     return True
         return False
 
+    def has_overlapping_reservation(
+        self, provider_id: int, gpu_devices: frozenset[int],
+    ) -> bool:
+        """Return True if any in-flight reservation on this provider targets
+        a GPU in ``gpu_devices`` (or has unspecified gpu_devices, which we
+        conservatively treat as 'all GPUs').
+
+        Used by the capacity planner (Phase 3.4) to skip planning for a
+        specific model only when an in-flight reservation overlaps the
+        target GPUs — instead of skipping ALL planning on the provider,
+        which was the pre-3.4 behaviour.
+        """
+        for res in self._reservations.values():
+            if res.provider_id != provider_id:
+                continue
+            if not res.gpu_devices:
+                # Unspecified target → assume it could land on any GPU.
+                return True
+            if not gpu_devices:
+                # Querying with no constraint → any reservation overlaps.
+                return True
+            if res.gpu_devices & gpu_devices:
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Maintenance
     # ------------------------------------------------------------------

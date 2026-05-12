@@ -26,8 +26,8 @@ services:
       - "--entrypoints.web8080.address=:8080"
       - "--api.dashboard=false"
     ports:
-      - "${LOGOS_TRAEFIK_LANDING_PORT:-18443}:80"     # landing page
-      - "${LOGOS_TRAEFIK_UI_PORT:-18081}:8080"         # UI + API
+      - "${LOGOS_TRAEFIK_LANDING_PORT:-18443}:80" # landing page
+      - "${LOGOS_TRAEFIK_UI_PORT:-18081}:8080" # UI + API
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -40,7 +40,19 @@ services:
       dockerfile: ./logos/Dockerfile
     container_name: logos-server
     restart: unless-stopped
-    command: ["uvicorn", "logos.main:app", "--host", "0.0.0.0", "--port", "8080", "--ws-ping-interval", "60", "--ws-ping-timeout", "60"]
+    command:
+      [
+        "uvicorn",
+        "logos.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--ws-ping-interval",
+        "60",
+        "--ws-ping-timeout",
+        "60",
+      ]
     depends_on:
       logos-db:
         condition: service_healthy
@@ -190,49 +202,6 @@ services:
       - "traefik.http.services.landing-svc.loadbalancer.server.port=80"
     networks:
       - extern
-
-  logos-workernode:
-    image: logos-workernode-vllm:gemma4  # local image with transformers 5.5.3 for gemma4 arch support (based on pr-489)
-    container_name: logos-workernode-dev
-    init: true
-    restart: unless-stopped
-    stop_signal: SIGTERM
-    stop_grace_period: 2m
-    pid: host
-    ipc: host
-    shm_size: "16g"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    environment:
-      LOGOS_URL: "http://logos-server:8080"
-      LOGOS_API_KEY: "DzlgIX6bEhjZexiVUgo0DuG575-6PcWOXoYvUq1xwUJ59pLG6_xvXxqWOtx9h4Lo"
-      LOGOS_ALLOW_INSECURE_HTTP: "true"
-      LOGOS_WORKER_NODE_CONFIG: /app/config.yml
-      LOGOS_STATE_DIR: /app/data
-      LOGOS_SKIP_AUTO_CALIBRATION: "0"
-      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
-      HF_HUB_OFFLINE: "1"
-      NVIDIA_VISIBLE_DEVICES: all
-    volumes:
-      - ./logos-workernode/config.yml:/app/config.yml:ro
-      - ./logos-workernode/data:/app/data
-      # Mount repo code over pr-489 image code — gives us the latest
-      # worker code (max_concurrency, model_profiles fixes) without
-      # rebuilding the full vLLM+PyTorch image.
-      - ./logos-workernode/logos_worker_node:/app/logos_worker_node:ro
-      # Model weights + HF cache from standalone worker volume
-      - ollama-models:/usr/share/ollama/.ollama/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks:
-      - internal
 
 volumes:
   data_volume:

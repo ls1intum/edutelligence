@@ -1059,13 +1059,14 @@ def test_build_cmd_no_cpu_offload_when_zero(monkeypatch):
     assert "--cpu-offload-gb" not in cmd
 
 
-def test_enforce_eager_on_by_default(monkeypatch):
-    """enforce_eager defaults to True so vLLM starts with --enforce-eager."""
+def test_enforce_eager_off_by_default(monkeypatch):
+    """enforce_eager defaults to False so vLLM starts WITHOUT --enforce-eager
+    (CUDA graph capture is enabled by default; opt in to eager mode per-lane)."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
     cmd = handle._build_cmd(lc)
-    assert "--enforce-eager" in cmd
+    assert "--enforce-eager" not in cmd
 
 
 def test_enforce_eager_can_be_enabled(monkeypatch):
@@ -1117,11 +1118,12 @@ def test_auto_attention_backend_env_override(monkeypatch):
 
 
 def test_build_env_sets_persistent_caches(monkeypatch):
-    """All compilation caches should point to models_path for persistence."""
+    """All compilation caches should default to gc.models_path."""
+    monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
     monkeypatch.delenv("VLLM_CACHE_ROOT", raising=False)
     monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
     monkeypatch.delenv("TORCHINDUCTOR_FX_GRAPH_CACHE", raising=False)
-    monkeypatch.delenv("FLASHINFER_JIT_DIR", raising=False)
+    monkeypatch.delenv("FLASHINFER_WORKSPACE_BASE", raising=False)
     monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
     gc = OllamaConfig(models_path="/data/models")
     handle = VllmProcessHandle("lane-test", 19000, gc)
@@ -1131,8 +1133,37 @@ def test_build_env_sets_persistent_caches(monkeypatch):
     assert env["VLLM_CACHE_ROOT"] == "/data/models/.cache/vllm"
     assert env["TORCHINDUCTOR_CACHE_DIR"] == "/data/models/.cache/torch_inductor"
     assert env["TORCHINDUCTOR_FX_GRAPH_CACHE"] == "1"
-    assert env["FLASHINFER_JIT_DIR"] == "/data/models/.cache/flashinfer"
+    # flashinfer 0.6.x: FLASHINFER_WORKSPACE_BASE is the env var that actually
+    # relocates the JIT cache; it points to the cache root (the parent of
+    # .cache/flashinfer), not to .cache/flashinfer itself.
+    assert env["FLASHINFER_WORKSPACE_BASE"] == "/data/models"
     assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"
+
+
+def test_build_env_honors_logos_worker_cache_root(monkeypatch):
+    """LOGOS_WORKER_CACHE_ROOT overrides gc.models_path for every cache."""
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", "/var/cache/logos-worker")
+    monkeypatch.delenv("VLLM_CACHE_ROOT", raising=False)
+    monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
+    monkeypatch.delenv("TORCHINDUCTOR_FX_GRAPH_CACHE", raising=False)
+    monkeypatch.delenv("FLASHINFER_WORKSPACE_BASE", raising=False)
+    monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    gc = OllamaConfig(models_path="/data/models")
+    handle = VllmProcessHandle("lane-test", 19000, gc)
+    monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
+    # Make _resolve_hf_home deterministic — skip the writable-fallback dance
+    # by bypassing the real method.
+    monkeypatch.setattr(
+        handle, "_resolve_hf_home",
+        lambda root: f"{root}/.hf_cache",
+    )
+    lc = LaneConfig(model="test-model", vllm=True, vllm_config=VllmConfig())
+    env = handle._build_env(lc)
+    assert env["HF_HOME"] == "/var/cache/logos-worker/.hf_cache"
+    assert env["VLLM_CACHE_ROOT"] == "/var/cache/logos-worker/.cache/vllm"
+    assert env["TORCHINDUCTOR_CACHE_DIR"] == "/var/cache/logos-worker/.cache/torch_inductor"
+    assert env["FLASHINFER_WORKSPACE_BASE"] == "/var/cache/logos-worker"
 
 
 # ---------------------------------------------------------------------------

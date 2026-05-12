@@ -58,6 +58,18 @@ worker:
   # container at this path so a host-side watchdog can detect it.
   reboot_sentinel_path: /host/reboot-requested
 
+  # Persistent root directory for HF model weights and the worker's
+  # compilation/JIT caches:
+  #   <cache_path>/.hf_cache/             — HuggingFace model weights (HF_HOME)
+  #   <cache_path>/.cache/vllm/           — vLLM compilation artifacts
+  #   <cache_path>/.cache/torch_inductor/ — torch.compile / FX graph cache
+  #   <cache_path>/.cache/flashinfer/…    — FlashInfer JIT kernels
+  # Empty (default) → fall back to engines.ollama.models_path so existing
+  # ollama-aware deployments keep working unchanged. Set this to any
+  # persistent path mounted as a Docker volume for non-ollama deployments.
+  # The env var LOGOS_WORKER_CACHE_ROOT, when set, overrides this field.
+  cache_path: ""
+
 
 # ── Logos control-plane connection ───────────────────────────────────────────
 logos:
@@ -363,8 +375,8 @@ lanes: []
 # scheduling decisions.
 #
 # The syntax is identical to regular lanes. Each entry counts towards max_lanes.
-# Static lanes are NOT persisted to lanes.json — they are always loaded from
-# this config file on startup.
+# Loaded from this config file on every startup; the capacity planner will
+# never remove them.
 
 static_lanes: []
 # static_lanes:

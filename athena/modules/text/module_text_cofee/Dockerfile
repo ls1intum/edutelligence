@@ -3,7 +3,7 @@
 # This is the Dockerfile for the module_text_cofee.
 
 # Protobuf build
-FROM golang:alpine AS cofee_protobuf
+FROM golang:alpine3.22 AS cofee_protobuf
 RUN apk update && apk add --no-cache make protobuf-dev
 WORKDIR /proto
 COPY cofee.proto .
