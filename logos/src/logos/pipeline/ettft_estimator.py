@@ -396,3 +396,22 @@ def estimate_ettft_azure(capacity: Optional[AzureCapacity]) -> EttftEstimate:
         reasoning=f"Azure: healthy capacity (remaining_requests={remaining})",
         state_overhead_s=CLOUD_OVERHEAD_S,
     )
+
+
+# ── Cloud upstream estimation ────────────────────────────────────────
+
+
+def estimate_ettft_cloud() -> EttftEstimate:
+    """Estimate ETTFT for a generic OpenAI-shaped cloud upstream.
+
+    The upstream does its own scheduling / health tracking; from this side
+    we have no capacity signal, so we treat it as always WARM with the
+    baseline cloud overhead. Circuit-breaker / health-poll integration is
+    a follow-up.
+    """
+    return EttftEstimate(
+        expected_wait_s=CLOUD_OVERHEAD_S,
+        tier=ReadinessTier.WARM,
+        reasoning="Cloud upstream: assumed warm (no capacity tracking yet)",
+        state_overhead_s=CLOUD_OVERHEAD_S,
+    )

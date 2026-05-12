@@ -90,6 +90,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         profile_id=None,
         request_id=None,
         request_path=None,
+        skip_laura=False,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -149,6 +150,7 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         profile_id=None,
         request_id=None,
         request_path=None,
+        skip_laura=False,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -181,7 +183,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
     """A scheduled reservation is released if context resolution fails afterwards."""
 
     class FakeClassifier:
-        def classify(self, user_prompt, policy, allowed=None, system=None):  # noqa: ARG002
+        def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
             return [(27, 1.0, 1, 1)]
 
     class FakeScheduler:
@@ -211,7 +213,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
         pass
 
     class FakeContextResolver:
-        async def resolve_context(self, model_id, provider_id, logos_key=None, profile_id=None):  # noqa: ARG002
+        async def resolve_context(self, model_id, provider_id, logos_key=None, profile_id=None, request_path=None):  # noqa: ARG002
             return None
 
     class FakeMonitoring:
@@ -261,7 +263,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_raises():
     """A scheduled reservation is released if context resolution raises."""
 
     class FakeClassifier:
-        def classify(self, user_prompt, policy, allowed=None, system=None):  # noqa: ARG002
+        def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
             return [(27, 1.0, 1, 1)]
 
     class FakeScheduler:
@@ -291,7 +293,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_raises():
         pass
 
     class FakeContextResolver:
-        async def resolve_context(self, model_id, provider_id, logos_key=None, profile_id=None):  # noqa: ARG002
+        async def resolve_context(self, model_id, provider_id, logos_key=None, profile_id=None, request_path=None):  # noqa: ARG002
             raise RuntimeError("worker offline")
 
     class FakeMonitoring:

@@ -175,6 +175,19 @@ class LogosNodeSchedulingDataFacade:
                 return self.queue_manager.get_total_depth_by_deployment(model_id, provider_id)
         return 0
 
+    def has_cold_queued_entries_by_model_name(self, model_name: str, provider_id: int) -> bool:
+        """Return True iff any queued entry for this (model, provider) was flagged
+        is_cold_at_queue at enqueue time. Used by the planner to extend lane
+        tenure when a freshly-woken lane is serving a cold-flagged waiter.
+        """
+        provider = self._providers.get(int(provider_id))
+        if not provider:
+            return False
+        for model_id, name in provider._model_id_to_name.items():
+            if name == model_name:
+                return self.queue_manager.has_cold_queued_entries(model_id, provider_id)
+        return False
+
     # ------------------------------------------------------------------
     # Scheduler-view and lane-signal facade methods (Phase 1.3)
     # ------------------------------------------------------------------
@@ -200,6 +213,15 @@ class LogosNodeSchedulingDataFacade:
         """Return the capability models declared by a worker."""
         provider = self._providers.get(int(provider_id))
         return provider.get_worker_capabilities() if provider else []
+
+    def get_gpu_performance_score(self, provider_id: int) -> int:
+        """Return the worker's declared GPU performance weight (default 100).
+
+        Used by the request scheduler for weighted-RR tie-breaks across
+        warm workers serving the same model.
+        """
+        provider = self._providers.get(int(provider_id))
+        return provider.get_gpu_performance_score() if provider else 100
 
     def provider_ids(self) -> list[int]:
         """Return list of registered provider IDs (for planner iteration)."""
