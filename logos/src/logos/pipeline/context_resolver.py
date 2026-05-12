@@ -5,6 +5,7 @@ Context resolution - prepares execution inputs from database lookups.
 Separates the "what to execute" (context resolution) from "how to execute" (executor).
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple
 import logging
@@ -56,7 +57,8 @@ class ContextResolver:
         model_id: int,
         provider_id: int,
         logos_key: Optional[str] = None,
-        profile_id: Optional[int] = None
+        profile_id: Optional[int] = None,
+        request_path: Optional[str] = None,
     ) -> Optional[ExecutionContext]:
         """
         Resolve all DB information needed to execute a request with authorization verification.
@@ -118,6 +120,23 @@ class ContextResolver:
                 lane = prepared_lane
                 if lane is None:
                     lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                # Retry loop: lane may be transitioning (loading/waking) after
+                # reevaluate_model_queues dispatched us.
+                if lane is None:
+                    # Retry up to ~120s — must survive worst-case multi-lane
+                    # drain (busy vLLM lanes with continuous batching can have
+                    # 10-20 active requests that must finish before sleep) plus
+                    # sleep/wake cycle (~5s).  First 10 retries are 1s apart
+                    # (fast path); remaining retries back off to 2s.
+                    for attempt in range(65):
+                        await asyncio.sleep(1.0 if attempt < 10 else 2.0)
+                        lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                        if lane is not None:
+                            logger.info(
+                                "Lane became available after %ds for provider=%s model=%s",
+                                attempt + 1, provider_name, model_name,
+                            )
+                            break
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:
@@ -126,8 +145,8 @@ class ContextResolver:
                         logger.error("logosnode lane missing lane_id for provider=%s", provider_name)
                         return None
                 else:
-                    logger.info(
-                        "No logosnode lane available yet for provider=%s model=%s; waiting instead of falling back to HTTP",
+                    logger.warning(
+                        "No logosnode lane available for provider=%s model=%s after retries",
                         provider_name,
                         model_name,
                     )
@@ -135,10 +154,16 @@ class ContextResolver:
             else:
                 logger.error(
                     "logosnode registry unavailable for provider=%s model=%s; cannot resolve execution without a lane",
-                    provider_id,
+                    provider_name,
                     model_name,
                 )
                 return None
+        elif provider_type == "cloud":
+            # Cloud upstream serves the same OpenAI-shaped surface as our /v1
+            # (and /v2) routes, so forward like-for-like on the inbound path.
+            # Auth comes from the DB (auth_name / auth_format / api_key) like
+            # every other non-logosnode provider.
+            forward_url = self._cloud_forward_url(base_url, request_path, endpoint)
         else:
             forward_url = self._merge_url(base_url, endpoint)
 
@@ -188,4 +213,31 @@ class ContextResolver:
             return endpoint
         base = base_url.rstrip("/")
         path = endpoint.lstrip("/")
+        return f"{base}/{path}"
+
+    @staticmethod
+    def _cloud_forward_url(
+        base_url: str,
+        request_path: Optional[str],
+        endpoint_fallback: Optional[str],
+    ) -> str:
+        """Build forward URL for a cloud upstream provider.
+
+        Prefer reusing the inbound `request_path` so we forward like-for-like
+        (e.g. /v1/chat/completions in → /v1/chat/completions out). If the
+        provider's base_url already ends in /v1 or /v2 and the inbound path
+        starts with the same prefix, strip the prefix to avoid duplicating it
+        (".../v1" + "v1/chat/completions" → ".../v1/chat/completions").
+
+        Falls back to the per-model endpoint when no request_path is supplied
+        (background jobs that don't know the original HTTP route).
+        """
+        base = (base_url or "").rstrip("/")
+        if not request_path:
+            return ContextResolver._merge_url(base_url, endpoint_fallback or "")
+        path = request_path.lstrip("/")
+        for prefix in ("v1/", "v2/"):
+            if base.endswith("/" + prefix.rstrip("/")) and path.startswith(prefix):
+                path = path[len(prefix):]
+                break
         return f"{base}/{path}"

@@ -193,16 +193,19 @@ class TracingContext:
             ctx.session_id = getattr(dto.settings, "authentication_token", None)
             ctx.artemis_base_url = getattr(dto.settings, "artemis_base_url", None)
 
-        # Extract course info (handles both CourseDTO and ExtendedCourseDTO)
+        # Extract course info from CourseDTO
         if hasattr(dto, "course") and dto.course:
             ctx.course_id = getattr(dto.course, "id", None)
             ctx.course_name = getattr(dto.course, "name", None)
 
         # Extract exercise info
-        if hasattr(dto, "exercise") and dto.exercise:
-            ctx.exercise_id = getattr(dto.exercise, "id", None)
-            ctx.exercise_title = getattr(dto.exercise, "title", None)
-            ctx.exercise_type = getattr(dto.exercise, "type", None)
+        exercise = getattr(dto, "programming_exercise", None) or getattr(
+            dto, "text_exercise", None
+        )
+        if exercise:
+            ctx.exercise_id = exercise.id
+            ctx.exercise_title = exercise.title
+            ctx.exercise_type = getattr(exercise, "type", None)
 
         # Extract lecture info
         if hasattr(dto, "lecture") and dto.lecture:

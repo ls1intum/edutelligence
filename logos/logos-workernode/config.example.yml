@@ -37,8 +37,13 @@ worker:
   # Identifier shown in Logos UI and logs.
   name: logos-workernode
 
-  # Maximum number of concurrent lanes this worker may run. 0 = unlimited
-  # (limited only by port range and VRAM). Set via config or MAX_LANES env var.
+  # max_lanes is deprecated — leave at 0 (unlimited). The MAX_LANES env var
+  # is no longer forwarded to the container by docker-compose.yml. Lane
+  # count is bounded naturally by VRAM (capacity planner) and by the lane
+  # port range (worker.lane_port_start/end). A non-zero value here will
+  # still be honoured if read from this file, but is discouraged because
+  # it can block eviction-driven cold-loads when the planner needs to
+  # swap models in/out.
   max_lanes: 0
 
   # When true (default), initiate a host OS reboot when all lanes exhaust their
@@ -52,6 +57,18 @@ worker:
   # unavailable. Mount the host's /tmp or a dedicated directory into the
   # container at this path so a host-side watchdog can detect it.
   reboot_sentinel_path: /host/reboot-requested
+
+  # Persistent root directory for HF model weights and the worker's
+  # compilation/JIT caches:
+  #   <cache_path>/.hf_cache/             — HuggingFace model weights (HF_HOME)
+  #   <cache_path>/.cache/vllm/           — vLLM compilation artifacts
+  #   <cache_path>/.cache/torch_inductor/ — torch.compile / FX graph cache
+  #   <cache_path>/.cache/flashinfer/…    — FlashInfer JIT kernels
+  # Empty (default) → fall back to engines.ollama.models_path so existing
+  # ollama-aware deployments keep working unchanged. Set this to any
+  # persistent path mounted as a Docker volume for non-ollama deployments.
+  # The env var LOGOS_WORKER_CACHE_ROOT, when set, overrides this field.
+  cache_path: ""
 
 
 # ── Logos control-plane connection ───────────────────────────────────────────
@@ -358,8 +375,8 @@ lanes: []
 # scheduling decisions.
 #
 # The syntax is identical to regular lanes. Each entry counts towards max_lanes.
-# Static lanes are NOT persisted to lanes.json — they are always loaded from
-# this config file on startup.
+# Loaded from this config file on every startup; the capacity planner will
+# never remove them.
 
 static_lanes: []
 # static_lanes:

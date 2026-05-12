@@ -12,9 +12,25 @@ worker:
 logos:
   enabled: true
   capabilities_models:
-    - Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+    - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+      tensor_parallel_size: 2
+      kv_cache_memory_bytes: 4G
     - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ
       tensor_parallel_size: 2
+      kv_cache_memory_bytes: 4G
+    - model: solidrust/Mistral-7B-Instruct-v0.3-AWQ
+      tensor_parallel_size: 2
+      kv_cache_memory_bytes: 4G
+    - model: casperhansen/deepseek-r1-distill-llama-8b-awq
+      tensor_parallel_size: 2
+      kv_cache_memory_bytes: 4G
+    - model: Alibaba-NLP/gte-Qwen2-1.5B-instruct
+      tensor_parallel_size: 2
+      kv_cache_memory_bytes: 2G
+    # cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit: DISABLED on SM 7.5 (Turing).
+    # head_dim=256/512 requires 96KB shared memory for attention kernels;
+    # SM 7.5 has 64KB max. Needs Ampere+ (SM 8.0+, 100KB shared mem).
+    # openai/gpt-oss-20b requires MXFP4 (SM 8.0+ / Ampere+), incompatible with Quadro RTX 5000 (SM 7.5)
   heartbeat_interval_seconds: 5
   reconnect_backoff_seconds: 3
 
@@ -27,8 +43,46 @@ engines:
     nccl_debug: WARN
     nccl_debug_subsys: INIT
     # Turing (SM 7.5) workaround for AWQ + TP=2 on Quadro RTX 5000:
-    # force awq path and avoid vLLM custom all-reduce kernels.
+    # force AWQ path, disable vLLM custom all-reduce kernels (PCIe, no NVLink),
+    # disable NCCL P2P transfers, and run in eager mode for SM 7.5 stability.
+    # gpu_memory_utilization=0.10: effectively disabled.  We set
+    # kv_cache_memory_bytes explicitly for every model so vLLM never
+    # allocates a percentage of total GPU.  Actual VRAM is controlled by
+    # base_residency + kv_cache_memory_bytes, validated by the planner.
     model_overrides:
+      Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
+        quantization: awq
+        enforce_eager: true
+        disable_custom_all_reduce: true
+        disable_nccl_p2p: true
+        gpu_memory_utilization: 0.10
       Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:
         quantization: awq
+        enforce_eager: true
         disable_custom_all_reduce: true
+        disable_nccl_p2p: true
+        gpu_memory_utilization: 0.10
+      solidrust/Mistral-7B-Instruct-v0.3-AWQ:
+        quantization: awq
+        enforce_eager: true
+        disable_custom_all_reduce: true
+        disable_nccl_p2p: true
+        gpu_memory_utilization: 0.10
+      casperhansen/deepseek-r1-distill-llama-8b-awq:
+        quantization: awq
+        enforce_eager: true
+        disable_custom_all_reduce: true
+        disable_nccl_p2p: true
+        gpu_memory_utilization: 0.10
+        max_model_len: 8192
+      Alibaba-NLP/gte-Qwen2-1.5B-instruct:
+        # Embedding model — no quantization (native fp16, only 1.5B params)
+        enforce_eager: true
+        disable_custom_all_reduce: true
+        disable_nccl_p2p: true
+        gpu_memory_utilization: 0.10
+        enable_prefix_caching: false
+        extra_args:
+          - "--runner"
+          - "pooling"
+      # cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit: DISABLED — see capabilities_models comment above

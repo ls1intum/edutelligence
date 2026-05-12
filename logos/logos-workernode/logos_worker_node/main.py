@@ -15,14 +15,14 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from logos_worker_node.config import load_config, get_state_dir, save_lanes_state
+from logos_worker_node.config import load_config, get_state_dir
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.runtime import SERVICE_VERSION
-from logos_worker_node.calibration import auto_calibrate_models
+from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +49,41 @@ async def _auto_calibrate_if_needed(
     if not caps:
         return
 
+    # Resolve config.yml path (also needed below; resolve once and reuse).
+    config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+    if config_path_str:
+        config_path = Path(config_path_str)
+    else:
+        for candidate in [Path("/app/config.yml"), Path("config.yml")]:
+            if candidate.resolve().is_file():
+                config_path = candidate
+                break
+        else:
+            config_path = Path("config.yml")
+
+    # Build a {model_name: (tp, enforce_eager)} table from production config.
+    # A persisted profile is only valid if BOTH match what production will
+    # actually run — different tp or different enforce_eager produces a
+    # different VRAM footprint (CUDA graph capture pools persist across sleep
+    # and add 5-15 GB to both loaded_vram_mb and sleeping_residual_mb that
+    # eager-mode calibration never sees).
+    expected_settings: dict[str, tuple[int, bool]] = {}
+    if config_path.exists():
+        try:
+            for plan in plans_from_config(config_path):
+                m = plan.get("model")
+                if not m:
+                    continue
+                expected_settings[str(m)] = (
+                    int(plan.get("tensor_parallel_size", 1)),
+                    bool(plan.get("enforce_eager", False)),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Could not parse plans from %s for provenance check: %s",
+                config_path, exc,
+            )
+
     uncalibrated = []
     for model_name in caps:
         profile = model_profiles.get_profile(model_name)
@@ -62,13 +97,43 @@ async def _auto_calibrate_if_needed(
         elif (
             profile.residency_source == "calibrated"
             and profile.loaded_vram_mb is not None
-            and abs(profile.base_residency_mb - profile.loaded_vram_mb) > 1.0
+            and profile.kv_budget_mb is not None
+            and profile.loaded_vram_mb - profile.base_residency_mb > 0.5 * profile.kv_budget_mb
         ):
             # Old-format calibrated profile: base_residency was stored as
-            # weights-only. New format stores full loaded VRAM. Force recalibration.
-            # Note: "measured" profiles intentionally differ (base=weights-only,
+            # weights-only, so loaded_vram (= weights + KV) sits roughly one
+            # full kv_budget *above* base. New format stores full loaded VRAM,
+            # so base ≈ loaded at calibration time and runtime EMA only nudges
+            # loaded a few percent below base after real traffic (the KV pool
+            # is reserved at calibration peak but rarely fully used in practice).
+            #
+            # Only flag as stale when `loaded - base > 0.5 × kv_budget` — that
+            # captures genuine weights-only convention without firing on the
+            # routine "loaded EMA-drifted below base" case, which is what every
+            # restart after real traffic produces.
+            #
+            # "measured" profiles intentionally differ (base=weights-only,
             # loaded=weights+KV) and must NOT be flagged as stale.
-            reason = f"stale format (base={profile.base_residency_mb:.0f} != loaded={profile.loaded_vram_mb:.0f})"
+            reason = f"stale format (base={profile.base_residency_mb:.0f} << loaded={profile.loaded_vram_mb:.0f}, kv_budget={profile.kv_budget_mb:.0f})"
+        else:
+            # Provenance check: only honor a calibrated profile if its (tp,
+            # enforce_eager) matches what production will run. Mismatch means
+            # the persisted numbers describe a different configuration and
+            # the planner would budget VRAM incorrectly.
+            expected = expected_settings.get(model_name)
+            if expected is not None and profile.residency_source == "calibrated":
+                expected_tp, expected_eager = expected
+                cal_tp = profile.tensor_parallel_size
+                cal_eager = profile.enforce_eager_at_calibration
+                if cal_tp is not None and cal_tp != expected_tp:
+                    reason = (
+                        f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
+                    )
+                elif cal_eager is not None and cal_eager != expected_eager:
+                    reason = (
+                        f"enforce_eager mismatch (calibrated={cal_eager}, "
+                        f"production={expected_eager}) — graph footprint differs"
+                    )
         if reason:
             logger.info("  %s needs calibration: %s", model_name, reason)
             uncalibrated.append(model_name)
@@ -84,18 +149,6 @@ async def _auto_calibrate_if_needed(
         "%d of %d capabilities models need calibration: %s. Starting auto-calibration...",
         len(uncalibrated), len(caps), uncalibrated,
     )
-
-    # Resolve config.yml path (same logic as config.py)
-    config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
-    if config_path_str:
-        config_path = Path(config_path_str)
-    else:
-        for candidate in [Path("/app/config.yml"), Path("config.yml")]:
-            if candidate.resolve().is_file():
-                config_path = candidate
-                break
-        else:
-            config_path = Path("config.yml")
 
     t0 = time.perf_counter()
 
@@ -140,6 +193,49 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _log_storage_layout(cfg) -> None:
+    """Log the resolved storage paths for HF + the four compilation/JIT caches.
+
+    Surfaces (a) where the cache root resolves from — env var vs. config field
+    vs. ollama-path fallback — and (b) the absolute path each cache will use,
+    so a single grep at boot is enough to debug "is X being persisted?"
+    questions.
+    """
+    from logos_worker_node.vllm_process import VllmProcessHandle
+
+    cache_root = VllmProcessHandle._resolve_persistent_cache_root(cfg.engines.ollama)
+    if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
+        source = "LOGOS_WORKER_CACHE_ROOT env var"
+    elif cfg.worker.cache_path:
+        source = "config.yml worker.cache_path"
+    else:
+        source = "fallback: engines.ollama.models_path"
+
+    hf_home = (
+        os.environ.get("HF_HOME", "").strip()
+        or os.path.join(cache_root, ".hf_cache")
+    )
+    cache_dir = os.path.join(cache_root, ".cache")
+    vllm_cache = os.environ.get("VLLM_CACHE_ROOT", "").strip() or os.path.join(cache_dir, "vllm")
+    inductor_cache = (
+        os.environ.get("TORCHINDUCTOR_CACHE_DIR", "").strip()
+        or os.path.join(cache_dir, "torch_inductor")
+    )
+    flashinfer_base = (
+        os.environ.get("FLASHINFER_WORKSPACE_BASE", "").strip() or cache_root
+    )
+
+    logger.info(
+        "\033[1m\033[36m══ STORAGE LAYOUT ══\033[0m\n"
+        "  cache root: %s  (%s)\n"
+        "    HF_HOME                  → %s\n"
+        "    VLLM_CACHE_ROOT          → %s\n"
+        "    TORCHINDUCTOR_CACHE_DIR  → %s\n"
+        "    FLASHINFER_WORKSPACE_BASE→ %s  (kernels at <base>/.cache/flashinfer/<version>/<sm>/cached_ops/)",
+        cache_root, source, hf_home, vllm_cache, inductor_cache, flashinfer_base,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -148,17 +244,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception("Failed to load configuration")
         sys.exit(1)
 
+    _log_storage_layout(cfg)
+
     gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
     # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
     # subsequent vLLM launches — including TP>1 — find cached .so files and
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
+    # workspace_base is the parent of .cache/flashinfer; flashinfer 0.6.x reads
+    # FLASHINFER_WORKSPACE_BASE (not FLASHINFER_JIT_DIR) to relocate its cache.
+    # Honor LOGOS_WORKER_CACHE_ROOT first so deployments without ollama can
+    # point all worker caches at any persistent path; default to the ollama
+    # models_path which is the persistent volume in the standard compose.
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
-        cache_dir = os.path.join(cfg.engines.ollama.models_path, ".cache", "flashinfer")
+        workspace_base = (
+            os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
+            or cfg.engines.ollama.models_path
+        )
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
-        warmup_ok = flashinfer_warmup(cache_dir, model_names=capability_models)
+        warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
             forced_backend = (os.environ.get("LOGOS_VLLM_AUTO_ATTENTION_BACKEND") or "").strip()
             if not forced_backend:
@@ -276,13 +382,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if cfg.lanes and cfg.worker.max_lanes > 0 and len(cfg.lanes) > effective_max_dynamic:
         logger.warning(
-            "Restored %d dynamic lane(s) from lanes.json but MAX_LANES=%d "
+            "config.yml declares %d dynamic lane(s) but MAX_LANES=%d "
             "(%d static lane(s) already active); "
-            "dropping all restored lanes and starting in zero-lane mode",
+            "dropping all dynamic lanes and starting in zero-lane mode",
             len(cfg.lanes), cfg.worker.max_lanes, len(static_lane_ids),
         )
         cfg.lanes = []
-        save_lanes_state([])
 
     if cfg.lanes:
         logger.info("Applying %d lane(s) from config", len(cfg.lanes))

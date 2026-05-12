@@ -17,7 +17,6 @@ from logos.monitoring.recorder import MonitoringRecorder
 from logos.monitoring import prometheus_metrics as prom
 
 from logos.queue.models import Priority
-from logos.terminal_logging import BOLD, RED, model_name_cache, paint
 
 from .scheduler_interface import (
     SchedulerInterface,
@@ -43,6 +42,14 @@ class PipelineRequest:
     policy: Optional[Dict[str, Any]] = None
     profile_id: Optional[int] = None  # NEW: Profile ID for authorization
     request_id: Optional[str] = None
+    # PROXY mode: skip Laura's ML ranking since the caller already named the
+    # model. Policy + token stages still run so policy thresholds (privacy,
+    # latency, cost, …) are enforced.
+    skip_laura: bool = False
+    # Original HTTP request path (e.g. "v1/chat/completions"); needed by the
+    # context resolver to build the forward URL for cloud upstream providers,
+    # which serve the same OpenAI-shaped surface as our /v1 routes.
+    request_path: Optional[str] = None
 
 
 @dataclass
@@ -120,8 +127,10 @@ class RequestPipeline:
             The result also includes classification and scheduling statistics for logging.
         """
         request_id = request.request_id or str(uuid.uuid4())
-        
-        # 1. Classification
+
+        # 1. Classification. PROXY mode still runs the policy + token stages
+        # (so policy thresholds remain enforced) but skips Laura's heavy ML
+        # ranking — the caller already named the model.
         classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
@@ -148,6 +157,17 @@ class RequestPipeline:
             None,
         )
 
+        # Record demand at classification time — i.e., based on what the
+        # user actually asked for, not what we ended up scheduling. The
+        # success-path `_record_demand` runs after a candidate is reserved,
+        # which is too late for a request hanging in the queue waiting on
+        # a cold-load: the planner needs to see the demand *now* so it
+        # can prioritise waking/loading the model.
+        if self._demand_tracker:
+            top_name = self._resolve_model_name(target_model_id)
+            if top_name:
+                self._demand_tracker.record_request(top_name)
+
         # 2. Scheduling
         scheduling_request = SchedulingRequest(
             request_id=request_id,
@@ -170,12 +190,7 @@ class RequestPipeline:
         try:
             scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
-            logger.warning(
-                "%s Request %s %s",
-                paint("‼ QUEUE TIMEOUT", RED, BOLD),
-                request_id,
-                paint("timed out waiting in queue", RED),
-            )
+            logger.warning("Request %s timed out waiting in queue", request_id)
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
             self.record_completion(
                 request_id=request_id,
@@ -246,15 +261,18 @@ class RequestPipeline:
         return ctx_result
 
     def _record_demand(self, scheduling_result, sorted_candidates: list) -> None:
+        """Record post-scheduling demand signals.
+
+        Demand for the *requested* model is recorded earlier, right after
+        classification, so the planner sees pressure even for requests
+        hung in the queue. Here we only record the latent-demand signal
+        for the case where the scheduler picked a model other than the
+        user's preference (typically because of an ETTFT or rate-limit
+        penalty) — the user still wanted the top choice, even though
+        they got served by a fallback.
+        """
         if not self._demand_tracker:
             return
-        model_name = self._resolve_model_name(scheduling_result.model_id)
-        if model_name:
-            self._demand_tracker.record_request(model_name)
-        # Record latent demand when the scheduler overrides classification's top
-        # choice due to availability (e.g. ETTFT penalties). This lets the
-        # capacity planner see that users want the unloaded model, so it can
-        # drain/wake it before it starves in resource mode.
         if sorted_candidates and scheduling_result.model_id != sorted_candidates[0][0]:
             top_model_name = self._resolve_model_name(sorted_candidates[0][0])
             if top_model_name:
@@ -282,6 +300,7 @@ class RequestPipeline:
                     provider_id=scheduling_result.provider_id,
                     logos_key=request.logos_key,
                     profile_id=request.profile_id,
+                    request_path=request.request_path,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
@@ -378,6 +397,7 @@ class RequestPipeline:
             policy,
             allowed=request.allowed_models,
             system=system_prompt,
+            skip_laura=request.skip_laura,
         )
         
         elapsed = time.time() - start
@@ -447,12 +467,29 @@ class RequestPipeline:
         self._monitoring.record_provider_metrics(request_id, provider_metrics)
 
     def _resolve_model_name(self, model_id: int) -> Optional[str]:
-        """Look up the human-readable model name for demand/loadavg tracking."""
-        name = model_name_cache.get(model_id)
-        # model_name_cache falls back to str(model_id) on lookup failures;
-        # treat pure-digit fallbacks as "not found" so we don't record demand
-        # under a numeric string.
-        return name if name and not name.isdigit() else None
+        """Look up model name for a model_id.
+
+        The scheduler's `_model_registry` is keyed on (model_id, provider_id)
+        but the *value* is the provider_type (e.g. "logosnode") — it was
+        never the model name. The actual name lives in the SDI facade's
+        per-provider `_model_id_to_name` map. Find any (model_id, *) entry
+        in the registry to learn its provider_id, then ask the facade.
+        Falls back to None if nothing knows about this model_id.
+        """
+        registry = getattr(self._scheduler, "_model_registry", None)
+        facade = getattr(self._scheduler, "_logosnode", None)
+        if not registry or facade is None:
+            return None
+        for (mid, pid), _ptype in registry.items():
+            if mid != model_id:
+                continue
+            try:
+                name = facade.get_model_name(model_id, pid)
+            except Exception:
+                name = None
+            if name:
+                return name
+        return None
 
 
 @dataclass

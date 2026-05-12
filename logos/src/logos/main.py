@@ -43,7 +43,7 @@ from logos.responses import (
     extract_token_usage,
 )
 from logos.pipeline.pipeline import RequestPipeline, PipelineRequest
-from logos.pipeline.simple_scheduler import SimpleScheduler
+from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import Executor, ExecutionResult
 from logos.pipeline.context_resolver import ContextResolver
 from logos.capacity.demand_tracker import DemandTracker
@@ -96,7 +96,15 @@ def _resolve_provider_name(provider_id: int) -> str:
 def _sync_logosnode_capabilities_to_db(
     provider_id: int, model_names: list[str]
 ) -> None:
-    """Callback: sync announced capabilities into DB tables."""
+    """Callback: sync announced capabilities into DB tables and reload the
+    SDI facade so the new (provider, model) deployments are visible to
+    in-memory lookups. Without the reload, ``_model_id_to_name`` on the
+    provider keeps whatever was loaded at server boot — the DB row is
+    inserted but the planner's queue-depth-by-model-name lookup falls
+    through the name match and returns 0, so the planner never sees
+    ``queue_here>0`` for newly-declared capabilities and the model never
+    gets loaded on the worker that just declared it.
+    """
     pname = _resolve_provider_name(provider_id)
     try:
         with DBManager() as db:
@@ -108,6 +116,22 @@ def _sync_logosnode_capabilities_to_db(
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
+        return
+    # Schedule facade refresh on the running loop. The callback is invoked
+    # from async paths in the registry (attach_session / on_hello /
+    # update_runtime) so a loop is always running; use a try/except to be
+    # defensive against future sync callers.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug(
+            "No running event loop; skipping facade refresh for %s "
+            "(next admin call will reload)", pname,
+        )
+        return
+    task = loop.create_task(refresh_pipeline_runtime_state())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 _logosnode_registry = LogosNodeRuntimeRegistry(
@@ -404,6 +428,23 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "runtime_modes": _runtime_modes_for_lanes(lanes),
     }
 
+    raw_device_list = devices.get("devices") or []
+    provider_signals["devices"] = [
+        {
+            "device_id": d.get("device_id", ""),
+            "kind": d.get("kind", "nvidia"),
+            "name": d.get("name", ""),
+            "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
+            "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
+            "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
+            "utilization_percent": _safe_float(d.get("utilization_percent")),
+            "temperature_celsius": _safe_float(d.get("temperature_celsius")),
+            "power_draw_watts": _safe_float(d.get("power_draw_watts")),
+        }
+        for d in raw_device_list
+        if isinstance(d, dict)
+    ]
+
     model_signals: dict[str, Dict[str, Any]] = {}
     lane_signals: dict[str, Dict[str, Any]] = {}
 
@@ -635,9 +676,21 @@ def _build_live_local_provider_sample(
     if remaining_vram_mb is None and not loaded_models and used_vram_mb <= 0:
         return None
 
-    timestamp = runtime.get("timestamp") or snapshot.get("last_heartbeat")
-    if not isinstance(timestamp, str) or not timestamp.strip():
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Pick the freshest timestamp the worker has given us. With an idle
+    # cluster the cached `runtime.timestamp` can be hours old (the worker
+    # only emits status on lane-state changes), while `last_heartbeat`
+    # advances on every WS heartbeat. Using the older of the two would
+    # collide with the already-persisted DB sample inside
+    # _merge_provider_samples and add no new point — leaving the chart
+    # with a single dot that scatter `mode: "lines"` can't draw.
+    runtime_ts = runtime.get("timestamp") if isinstance(runtime.get("timestamp"), str) else None
+    heartbeat_ts = snapshot.get("last_heartbeat") if isinstance(snapshot, dict) else None
+    if isinstance(heartbeat_ts, datetime.datetime):
+        heartbeat_ts = heartbeat_ts.isoformat()
+    elif not isinstance(heartbeat_ts, str):
+        heartbeat_ts = None
+    candidates = [t for t in (heartbeat_ts, runtime_ts) if isinstance(t, str) and t.strip()]
+    timestamp = max(candidates) if candidates else datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     return {
         "timestamp": timestamp,
@@ -700,8 +753,16 @@ def _load_persisted_local_provider_vram_payload(
                 after_snapshot_id=int(after_snapshot_id or 0),
             )
         elif str(day).strip().lower() == "all":
+            # Initial WS load with no cursor. Cap to a recent window so the
+            # init payload stays small even after weeks of accumulated
+            # snapshots — the UI only renders a 30-min live window anyway,
+            # and live deltas keep flowing afterwards via after_snapshot_id.
+            recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
             payload, status = db.get_ollama_vram_deltas(
-                logos_key, day="all", after_snapshot_id=0
+                logos_key,
+                day="all",
+                after_snapshot_id=0,
+                since=recent_since,
             )
         else:
             payload, status = db.get_ollama_vram_stats(
@@ -865,6 +926,26 @@ def _merge_local_provider_vram_payload(
         )
         if transport:
             entry["transport_connected"] = bool(transport.get("connected", connected))
+
+        runtime_devices = runtime.get("devices") if isinstance(runtime, dict) else {}
+        if isinstance(runtime_devices, dict):
+            raw_device_list = runtime_devices.get("devices") or []
+            if isinstance(raw_device_list, list) and raw_device_list:
+                entry["devices"] = [
+                    {
+                        "device_id": d.get("device_id", ""),
+                        "kind": d.get("kind", "nvidia"),
+                        "name": d.get("name", ""),
+                        "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
+                        "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
+                        "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
+                        "utilization_percent": _safe_float(d.get("utilization_percent")),
+                        "temperature_celsius": _safe_float(d.get("temperature_celsius")),
+                        "power_draw_watts": _safe_float(d.get("power_draw_watts")),
+                    }
+                    for d in raw_device_list
+                    if isinstance(d, dict)
+                ]
 
         data = list(entry.get("data") or [])
 
@@ -1104,17 +1185,10 @@ async def lifespan(app: FastAPI):
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
-    # Start Pipeline
-    await start_pipeline()
-
-    # Start gRPC server
-    global _grpc_server
-    _grpc_server = grpc.aio.server()
-    model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(_pipeline), _grpc_server)
-    _grpc_server.add_insecure_port("[::]:50051")
-    await _grpc_server.start()
-
-    # Auto-setup: create root user + API key on first startup
+    # Auto-setup + migrations must run BEFORE start_pipeline(), because the
+    # pipeline immediately queries the schema (e.g. get_all_deployments). If
+    # migrations ran after, an out-of-date schema crashes the lifespan and the
+    # migrator is never reached, producing a permanent crash loop.
     with DBManager() as db:
         db.is_root_initialized()
     if not DBManager.is_initialized():
@@ -1135,6 +1209,16 @@ async def lifespan(app: FastAPI):
         with DBManager() as db:
             logging.info("Checking for pending migrations...")
             db.run_migrations(is_fresh_install=False)
+
+    # Start Pipeline
+    await start_pipeline()
+
+    # Start gRPC server
+    global _grpc_server
+    _grpc_server = grpc.aio.server()
+    model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(_pipeline), _grpc_server)
+    _grpc_server.add_insecure_port("[::]:50051")
+    await _grpc_server.start()
 
     yield
 
@@ -1518,14 +1602,16 @@ async def start_pipeline():
 
     model_registry = _build_model_registry()
 
-    # Scheduler: trust vLLM queue signals
-    scheduler = SimpleScheduler(
+    # Scheduler: use ETTFT-correcting scheduler (ablatable via env var)
+    ettft_enabled = os.getenv("LOGOS_SCHEDULER_ETTFT_ENABLED", "true").lower() == "true"
+    scheduler = ClassificationCorrectingScheduler(
         queue_manager=_queue_mgr,
         logosnode_facade=_logosnode_facade,
         azure_facade=_azure_facade,
         model_registry=model_registry,
+        ettft_enabled=ettft_enabled,
     )
-    logger.info("Scheduler: SimpleScheduler (trust-vLLM-queue-signals)")
+    logger.info("Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled)
 
     # 5. Executor
     executor = Executor()
@@ -1564,12 +1650,31 @@ async def start_pipeline():
         lane_preparer=_capacity_planner,
     )
     _pipeline._context_resolver = _context_resolver
+
+    # Wire capacity-needed callback: when the scheduler queues a request
+    # for a sleeping/unloaded model, kick the planner cycle immediately
+    # so it acts on the new demand within milliseconds. The cycle's
+    # globally-fair eviction logic is the single source of truth for
+    # what to wake/load — request-time work no longer races for the
+    # provider lock, so a low-demand request can't starve out a
+    # high-demand one waiting on the same provider.
+    async def _on_capacity_needed(model_name: str, provider_id: int | None = None) -> None:
+        try:
+            _capacity_planner.hint_capacity_needed(model_name, provider_id=provider_id)
+        except Exception:
+            logger.debug(
+                "Capacity hint for %s (originating provider=%s) failed",
+                model_name, provider_id, exc_info=True,
+            )
+
+    scheduler._on_capacity_needed = _on_capacity_needed
+
     await _capacity_planner.start()
 
     logger.info(
-        "Request Pipeline Initialized with SimpleScheduler "
-        "(planner=%s)",
-        planner_enabled,
+        "Request Pipeline Initialized with ClassificationCorrectingScheduler "
+        "(planner=%s, ettft=%s)",
+        planner_enabled, ettft_enabled,
     )
 
 
@@ -1657,6 +1762,12 @@ async def _register_models_with_facades(
                         "provider_id": provider_id,
                     }
                 )
+            elif provider_type == "cloud":
+                # Cloud upstream has no local SDI state to track — it manages
+                # its own scheduling. The (model_id, provider_id) -> "cloud"
+                # mapping in the model registry is enough for the scheduler
+                # to route to it.
+                continue
             else:
                 logger.debug(
                     "Skipping provider %s (%s) for model %s: unsupported type '%s'",
@@ -2489,8 +2600,10 @@ async def _execute_proxy_mode(
             status_code=404, detail=f"No deployment found for model '{model_name}'"
         )
 
-    # Proxy mode still routes through classification/scheduling with a single allowed model.
-    # This preserves policy screening while constraining execution to the requested model.
+    # Proxy mode reuses the scheduling/execution pipeline. Policy + token
+    # screening still run (we want policy thresholds enforced even when the
+    # user names the model), but Laura's heavy ML ranking is skipped — it
+    # has nothing to decide once the model is pinned.
     return await _execute_resource_mode(
         deployments=model_deployments,
         body=body,
@@ -2502,6 +2615,7 @@ async def _execute_proxy_mode(
         profile_id=profile_id,
         request_id=request_id,
         request_path=request_path,
+        skip_laura=True,
     )
 
 
@@ -2516,6 +2630,7 @@ async def _execute_resource_mode(
     profile_id: Optional[int] = None,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    skip_laura: bool = False,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -2569,6 +2684,8 @@ async def _execute_resource_mode(
         allowed_models=allowed_models,
         deployments=deployments,
         profile_id=profile_id,
+        skip_laura=skip_laura,
+        request_path=request_path,
     )
 
     # Process through classification and scheduling
@@ -4140,6 +4257,42 @@ async def request_logs(request: Request):
 
 @app.options("/logosdb/latest_requests", tags=["admin"])
 async def latest_requests_options():
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+    )
+
+
+@app.post("/logosdb/paginated_requests", tags=["admin"])
+async def paginated_requests_endpoint(request: Request):
+    """
+    Fetch paginated request logs with Cloud/Local type classification.
+    """
+    headers = dict(request.headers)
+    logos_key, _ = authenticate_logos_key(headers)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    if not isinstance(body, dict):
+        body = {}
+
+    page = int(body.get("page", 1))
+    per_page = int(body.get("per_page", 20))
+
+    with DBManager() as db:
+        payload, status = db.get_paginated_requests(logos_key, page=page, per_page=per_page)
+        return JSONResponse(content=payload, status_code=status)
+
+
+@app.options("/logosdb/paginated_requests", tags=["admin"])
+async def paginated_requests_options():
     return JSONResponse(
         content={},
         headers={

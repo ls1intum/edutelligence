@@ -15,7 +15,10 @@ type SegmentedSwitchProps = {
 
 function SegmentedSwitch({ options, value, onChange }: SegmentedSwitchProps) {
   return (
-    <View className="flex-row self-start overflow-hidden rounded-full border border-outline-300 bg-background-50 p-0.5">
+    <View
+      className="flex-row self-start rounded-full border border-outline-200 bg-secondary-100"
+      style={{ padding: 3 }}
+    >
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -23,22 +26,26 @@ function SegmentedSwitch({ options, value, onChange }: SegmentedSwitchProps) {
             key={String(option.value)}
             onPress={() => onChange(option.value)}
             className={[
-              "min-h-0 rounded-full px-4 py-1.5 border-2 border-transparent web:cursor-pointer web:transition-colors web:duration-200 web:ease-out",
+              "items-center justify-center rounded-full border web:cursor-pointer web:transition-colors web:duration-200 web:ease-out",
               active
-                ? "bg-info-600 hover:bg-info-700"
-                : "bg-transparent dark:hover:bg-background-100 hover:bg-background-100 hover:border-outline-400",
+                ? "border-outline-200 bg-background-0"
+                : "border-transparent web:hover:bg-background-0/40",
             ].join(" ")}
+            style={{ height: 30, paddingHorizontal: 14 }}
           >
             {({ hovered }) => (
               <Text
-                className={[
-                  "text-sm",
+                style={{
+                  fontSize: 12,
+                  fontWeight: active ? "600" : "500",
+                }}
+                className={
                   active
-                    ? "font-semibold text-typography-0"
+                    ? "text-typography-900"
                     : hovered
-                      ? "font-medium text-typography-700"
-                      : "font-medium text-typography-600",
-                ].join(" ")}
+                      ? "text-typography-700"
+                      : "text-typography-500"
+                }
               >
                 {option.label}
               </Text>
