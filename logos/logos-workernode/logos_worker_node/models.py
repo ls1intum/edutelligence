@@ -66,13 +66,30 @@ class VllmConfig(BaseModel):
     max_model_len: int = Field(default=0, ge=0)
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
-    gpu_memory_utilization: float | None = Field(default=None, ge=0.1, le=1.0)
+    gpu_memory_utilization: float | None = Field(
+        default=None,
+        ge=0.1,
+        le=1.0,
+        description="Per-GPU VRAM fraction passed to vLLM as "
+        "--gpu-memory-utilization. vLLM uses this as a startup-floor gate: "
+        "free_per_gpu must be >= gmu * total_per_gpu or the engine refuses "
+        "to start, even when kv_cache_memory_bytes is set. None (default) "
+        "auto-derives from the calibrated profile so the gate matches the "
+        "lane's actual measured footprint: loaded_vram_mb / tp / "
+        "total_per_gpu, clamped to [0.5, 0.95]. The planner's separate "
+        "PER_GPU_COLD_START_MB headroom remains the sole safety buffer; "
+        "gmu itself stays free of margin to avoid double-counting. Set an "
+        "explicit float per model under engines.vllm.model_overrides.<model>"
+        ".gpu_memory_utilization to opt out of auto-derivation; vLLM falls "
+        "back to its own 0.9 default when neither this field nor a profile "
+        "is available.",
+    )
     kv_cache_memory_bytes: str = Field(
         default="",
         description="KV cache size per GPU, e.g. '4G', '2048M', or raw bytes. "
         "Empty = let vLLM decide from gpu_memory_utilization when that value is explicitly set.",
     )
-    enforce_eager: bool = True
+    enforce_eager: bool = False
     attention_backend: str = Field(
         default="",
         description="Attention backend override (e.g. 'TRITON_ATTN', 'FLASHINFER'). "
@@ -207,6 +224,17 @@ class WorkerConfig(BaseModel):
     lane_port_end: int = 11499
     name: str = "logos-workernode"
     max_lanes: int = 0  # 0 = unlimited (backwards compatible)
+    cache_path: str = Field(
+        default="",
+        description=(
+            "Persistent root directory for HF model weights, vLLM compilation "
+            "cache, torch inductor cache, and FlashInfer JIT kernels. Empty "
+            "(default) → fall back to engines.ollama.models_path so existing "
+            "ollama-aware deployments keep working unchanged. The env var "
+            "LOGOS_WORKER_CACHE_ROOT, when set, takes precedence over this "
+            "field."
+        ),
+    )
     auto_reboot_on_stuck_gpu: bool = Field(
         default=True,
         description=(
@@ -222,6 +250,20 @@ class WorkerConfig(BaseModel):
             "Path for the reboot-request sentinel file written when 'sudo reboot' is "
             "unavailable. Mount the host's /tmp or a dedicated directory so a "
             "host-side watchdog can detect and act on it."
+        ),
+    )
+    gpu_performance_score: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Operator-declared GPU capability weight used by the Logos request "
+            "scheduler for weighted round-robin tie-breaks. When two warm "
+            "workers tie on corrected_score for a model, traffic is split "
+            "across them in proportion to this value. Examples: A6000 → 20, "
+            "Blackwell RTX 6000 Pro → 40, H100 → 100. Default 100 means a "
+            "homogeneous cluster gets uniform random distribution (no "
+            "sticky-first bias). Set heterogeneous clusters explicitly so the "
+            "faster GPU receives proportionally more requests."
         ),
     )
 
@@ -437,6 +479,10 @@ class WorkerRuntimeStatus(BaseModel):
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None
     max_lanes: int = 0  # 0 = unlimited
+    # Operator-declared GPU capability weight (default 100). Used by the
+    # Logos request scheduler for weighted round-robin tie-breaks among
+    # workers with the same model loaded warm.
+    gpu_performance_score: int = 100
 
 
 class LaneSetRequest(BaseModel):

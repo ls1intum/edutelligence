@@ -96,7 +96,15 @@ def _resolve_provider_name(provider_id: int) -> str:
 def _sync_logosnode_capabilities_to_db(
     provider_id: int, model_names: list[str]
 ) -> None:
-    """Callback: sync announced capabilities into DB tables."""
+    """Callback: sync announced capabilities into DB tables and reload the
+    SDI facade so the new (provider, model) deployments are visible to
+    in-memory lookups. Without the reload, ``_model_id_to_name`` on the
+    provider keeps whatever was loaded at server boot — the DB row is
+    inserted but the planner's queue-depth-by-model-name lookup falls
+    through the name match and returns 0, so the planner never sees
+    ``queue_here>0`` for newly-declared capabilities and the model never
+    gets loaded on the worker that just declared it.
+    """
     pname = _resolve_provider_name(provider_id)
     try:
         with DBManager() as db:
@@ -108,6 +116,22 @@ def _sync_logosnode_capabilities_to_db(
         )
     except Exception:
         logger.exception("Failed to sync capabilities to DB for provider %s", pname)
+        return
+    # Schedule facade refresh on the running loop. The callback is invoked
+    # from async paths in the registry (attach_session / on_hello /
+    # update_runtime) so a loop is always running; use a try/except to be
+    # defensive against future sync callers.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug(
+            "No running event loop; skipping facade refresh for %s "
+            "(next admin call will reload)", pname,
+        )
+        return
+    task = loop.create_task(refresh_pipeline_runtime_state())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 _logosnode_registry = LogosNodeRuntimeRegistry(
@@ -1634,12 +1658,12 @@ async def start_pipeline():
     # what to wake/load — request-time work no longer races for the
     # provider lock, so a low-demand request can't starve out a
     # high-demand one waiting on the same provider.
-    async def _on_capacity_needed(provider_id: int, model_name: str) -> None:
+    async def _on_capacity_needed(model_name: str, provider_id: int | None = None) -> None:
         try:
-            _capacity_planner.hint_capacity_needed(provider_id, model_name)
+            _capacity_planner.hint_capacity_needed(model_name, provider_id=provider_id)
         except Exception:
             logger.debug(
-                "Capacity hint for %s on provider %s failed",
+                "Capacity hint for %s (originating provider=%s) failed",
                 model_name, provider_id, exc_info=True,
             )
 
