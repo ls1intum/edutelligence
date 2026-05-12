@@ -247,6 +247,17 @@ class CapacityPlanner:
         self._cross_provider_best_first = os.environ.get(
             "LOGOS_CROSS_PROVIDER_BEST_FIRST", "true"
         ).strip().lower() not in ("0", "false", "no")
+        # Replicas-first eviction: when freeing VRAM for a load/wake, first
+        # try to cover the deficit by evicting only lanes whose model has
+        # another loaded copy elsewhere in the cluster. If that succeeds,
+        # the primary (last) copy of each model is preserved. If replicas
+        # alone can't cover the deficit, fall back to the global eviction
+        # pool (current behaviour). The picker decrements the working
+        # replica count as it selects, so the last copy of a model is never
+        # taken in the replicas-only pass.
+        self._replica_first_eviction = os.environ.get(
+            "LOGOS_REPLICA_FIRST_EVICTION", "true"
+        ).strip().lower() not in ("0", "false", "no")
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
@@ -449,6 +460,16 @@ class CapacityPlanner:
                 self._demand.get_ranked_models(),
             )
 
+        # Count loaded lanes per model across the entire cluster, once per
+        # cycle. Used by the replicas-first eviction pass to identify lanes
+        # that have siblings (count > 1, safe to evict first) vs lanes that
+        # are the last loaded copy of their model (count == 1, fall to the
+        # global pool only when no replica victim covers the deficit).
+        cluster_lanes_by_model = (
+            self._count_loaded_lanes_per_model()
+            if self._replica_first_eviction else None
+        )
+
         for provider_id in provider_ids:
             # Skip providers that haven't sent their first status yet —
             # we don't know what lanes are already loaded and acting on
@@ -473,6 +494,7 @@ class CapacityPlanner:
                     provider_id, lanes,
                     cycle_planned_models=cycle_planned_models,
                     best_provider_for_model=best_provider_for_model,
+                    cluster_lanes_by_model=cluster_lanes_by_model,
                 )
             )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
@@ -1546,6 +1568,9 @@ class CapacityPlanner:
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
         target_model_name: Optional[str] = None,
+        *,
+        replicas_only: bool = False,
+        cluster_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> Optional[list[tuple[LaneSchedulerSignals, str, float]]]:
         """Find the minimum-score set of lanes to evict to cover per_gpu_deficit.
 
@@ -1560,6 +1585,14 @@ class CapacityPlanner:
         when every GPU in required_gpus has had its deficit covered.
 
         Algorithm: greedy by effective_demand ascending (evict cheapest first).
+
+        Replicas-first pass: when ``replicas_only=True`` and
+        ``cluster_lanes_by_model`` is provided, candidates are restricted to
+        lanes whose model has another loaded copy elsewhere in the cluster
+        (replica count > 1). As selections are made, a working copy of the
+        count is decremented so the *last* remaining copy of any model is
+        never picked in this pass. Callers should fall back to a normal
+        (non-replicas-only) call when this pass cannot cover the deficit.
         """
         # Nothing to do if deficit is already met
         if all(d <= 0 for d in per_gpu_deficit.values()):
@@ -1851,10 +1884,28 @@ class CapacityPlanner:
         # Greedy covering: pick candidates until all per-GPU deficits are met
         remaining: dict[int, float] = dict(per_gpu_deficit)
         chosen: list[tuple[LaneSchedulerSignals, str, float]] = []
+        # Working copy of per-model loaded-lane counts. Decremented every time
+        # we pick a lane in replicas-only mode so the *last* loaded copy of a
+        # model is never selected. Only consulted when replicas_only is True.
+        working_counts: dict[str, int] = (
+            dict(cluster_lanes_by_model or {}) if replicas_only else {}
+        )
 
         for cand in candidates:
             if all(v <= 0 for v in remaining.values()):
                 break
+            # Replicas-only gate: skip lanes whose model has only one
+            # remaining loaded copy in the cluster. The "remaining" count
+            # is decremented as siblings get selected earlier in this loop,
+            # so we never pick the final copy of a model in this pass.
+            if replicas_only:
+                model_count = working_counts.get(cand.lane.model_name, 0)
+                if model_count <= 1:
+                    skipped.append((
+                        cand.lane.lane_id, cand.lane.model_name,
+                        "primary (last loaded copy in cluster)",
+                    ))
+                    continue
             # Only include if it helps at least one still-deficient GPU
             useful = any(
                 remaining.get(g, 0) > 0
@@ -1866,12 +1917,18 @@ class CapacityPlanner:
             for g, freed in cand.freed_per_gpu.items():
                 if g in remaining:
                     remaining[g] = max(0.0, remaining[g] - freed)
+            if replicas_only:
+                working_counts[cand.lane.model_name] = (
+                    working_counts.get(cand.lane.model_name, 0) - 1
+                )
 
         if all(v <= 0 for v in remaining.values()):
             return chosen
         logger.info(
-            "Eviction set INSUFFICIENT for worker=%s: remaining deficit=%s after %d candidates",
+            "Eviction set INSUFFICIENT for worker=%s%s: remaining deficit=%s "
+            "after %d candidates",
             self._facade.get_provider_name(provider_id) or provider_id,
+            " (replicas-only)" if replicas_only else "",
             {g: f"{d:.0f}MB" for g, d in remaining.items() if d > 0}, len(chosen),
         )
         return None  # couldn't cover the deficit
@@ -1884,6 +1941,8 @@ class CapacityPlanner:
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
         target_model_name: Optional[str] = None,
+        *,
+        cluster_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> Optional[tuple[frozenset[int], list[tuple[LaneSchedulerSignals, str, float]]]]:
         """Find the best GPU set for a cold load and its required eviction set.
 
@@ -1894,6 +1953,13 @@ class CapacityPlanner:
         calls ``_find_eviction_set``. Returns the placement whose eviction set
         has the lowest maximum effective-demand score (sacrifice least-valued
         models first).
+
+        Replicas-first: when ``self._replica_first_eviction`` is on AND
+        ``cluster_lanes_by_model`` is provided, runs a Pass 1 over all GPU
+        combos restricted to replica victims (lanes whose model has another
+        loaded copy elsewhere). If any combo can cover the deficit with
+        replicas alone, the cheapest such placement is returned. Pass 2 is
+        the legacy global eviction, used only when Pass 1 yields nothing.
 
         Returns (gpu_set, eviction_set) or None if no feasible placement exists.
         """
@@ -1911,11 +1977,20 @@ class CapacityPlanner:
             deficit = max(0.0, needed - available)
             if deficit <= 0:
                 return frozenset(), []
+            # Replicas-first pass for the aggregate path
+            if self._replica_first_eviction and cluster_lanes_by_model is not None:
+                eviction_set = self._find_eviction_set(
+                    provider_id, frozenset(), {}, lanes, profiles,
+                    target_model_name=target_model_name,
+                    replicas_only=True,
+                    cluster_lanes_by_model=cluster_lanes_by_model,
+                )
+                if eviction_set is not None:
+                    return frozenset(), eviction_set
             eviction_set = self._find_eviction_set(
                 provider_id, frozenset(), {}, lanes, profiles,
                 target_model_name=target_model_name,
             )
-            # Can't do proper per-GPU accounting; return aggregate result
             if eviction_set is None:
                 return None
             return frozenset(), eviction_set
@@ -1924,28 +1999,39 @@ class CapacityPlanner:
         if len(all_gpu_ids) < tp:
             return None  # Not enough GPUs
 
-        best: Optional[tuple[frozenset[int], list, float]] = None  # (gpus, eviction, max_score)
+        def _try(replicas_only: bool):
+            """Iterate GPU combos, return cheapest placement found in this mode."""
+            best_local: Optional[tuple[frozenset[int], list, float]] = None
+            for gpu_combo in combinations(all_gpu_ids, tp):
+                gpu_set = frozenset(gpu_combo)
+                per_gpu_deficit: dict[int, float] = {}
+                for g in gpu_set:
+                    free = per_gpu_free.get(g, 0.0)
+                    deficit = max(0.0, per_gpu_needed - free)
+                    if deficit > 0:
+                        per_gpu_deficit[g] = deficit
+                eviction_set = self._find_eviction_set(
+                    provider_id, gpu_set, per_gpu_deficit, lanes, profiles,
+                    target_model_name=target_model_name,
+                    replicas_only=replicas_only,
+                    cluster_lanes_by_model=cluster_lanes_by_model,
+                )
+                if eviction_set is None:
+                    continue
+                max_score = max((s for _, _, s in eviction_set), default=0.0)
+                if best_local is None or max_score < best_local[2]:
+                    best_local = (gpu_set, eviction_set, max_score)
+            return best_local
 
-        for gpu_combo in combinations(all_gpu_ids, tp):
-            gpu_set = frozenset(gpu_combo)
-            per_gpu_deficit: dict[int, float] = {}
-            for g in gpu_set:
-                free = per_gpu_free.get(g, 0.0)
-                deficit = max(0.0, per_gpu_needed - free)
-                if deficit > 0:
-                    per_gpu_deficit[g] = deficit
+        # Pass 1: replicas-only — preserves the last loaded copy of each model.
+        if self._replica_first_eviction and cluster_lanes_by_model is not None:
+            best_replicas = _try(replicas_only=True)
+            if best_replicas is not None:
+                return best_replicas[0], best_replicas[1]
 
-            eviction_set = self._find_eviction_set(
-                provider_id, gpu_set, per_gpu_deficit, lanes, profiles,
-                target_model_name=target_model_name,
-            )
-            if eviction_set is None:
-                continue  # Can't cover this GPU combo
-
-            max_score = max((s for _, _, s in eviction_set), default=0.0)
-            if best is None or max_score < best[2]:
-                best = (gpu_set, eviction_set, max_score)
-
+        # Pass 2: global eviction (legacy behaviour). Reached when replicas
+        # alone can't cover the deficit, or when the feature is disabled.
+        best = _try(replicas_only=False)
         if best is None:
             return None
         return best[0], best[1]
@@ -2166,6 +2252,29 @@ class CapacityPlanner:
         return False
 
     # ------------------------------------------------------------------
+    # Cluster-wide aggregation helpers
+    # ------------------------------------------------------------------
+
+    def _count_loaded_lanes_per_model(self) -> dict[str, int]:
+        """Count loaded/running lanes across the whole cluster, keyed by model.
+
+        Used by the replicas-first eviction pass to identify lanes that have
+        siblings (count > 1) vs lanes that are the last loaded copy of their
+        model (count == 1). Sleeping lanes are not counted — a sleeping
+        replica isn't a serving replica.
+        """
+        counts: dict[str, int] = {}
+        for pid in self._facade.provider_ids():
+            try:
+                lanes = self._facade.get_all_provider_lane_signals(pid)
+            except Exception:
+                continue
+            for lane in lanes:
+                if lane.runtime_state in ("loaded", "running"):
+                    counts[lane.model_name] = counts.get(lane.model_name, 0) + 1
+        return counts
+
+    # ------------------------------------------------------------------
     # Cross-provider best-first ranking
     # ------------------------------------------------------------------
 
@@ -2352,6 +2461,7 @@ class CapacityPlanner:
         *,
         cycle_planned_models: Optional[set[str]] = None,
         best_provider_for_model: Optional[dict[str, int]] = None,
+        cluster_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -2587,10 +2697,22 @@ class CapacityPlanner:
 
                 # Remove already-claimed victims from eviction candidates
                 available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
-                eviction_set = self._find_eviction_set(
-                    provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
-                    target_model_name=model_name,
-                )
+                # Pass 1: try evicting replicas only — preserves the last
+                # loaded copy of every other model. If that can't cover the
+                # per-GPU deficit, Pass 2 falls back to the global pool.
+                eviction_set = None
+                if self._replica_first_eviction and cluster_lanes_by_model is not None:
+                    eviction_set = self._find_eviction_set(
+                        provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
+                        target_model_name=model_name,
+                        replicas_only=True,
+                        cluster_lanes_by_model=cluster_lanes_by_model,
+                    )
+                if eviction_set is None:
+                    eviction_set = self._find_eviction_set(
+                        provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
+                        target_model_name=model_name,
+                    )
 
                 if eviction_set is None:
                     logger.info(
@@ -2730,6 +2852,7 @@ class CapacityPlanner:
             placement = self._pick_cold_load_placement(
                 provider_id, load_cost, tp, available_lanes, profiles,
                 target_model_name=model_name,
+                cluster_lanes_by_model=cluster_lanes_by_model,
             )
 
             if placement is None:

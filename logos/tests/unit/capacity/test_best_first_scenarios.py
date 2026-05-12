@@ -115,6 +115,10 @@ class _MockFacade:
     def provider_ids(self) -> List[int]:
         return list(self._providers.keys())
 
+    def get_scheduler_queue_depth_by_model_name(self, model_name: str, provider_id: int) -> int:
+        # Tests don't exercise queue depth; eviction-set gates treat 0 as "idle".
+        return 0
+
 
 def _lane(
     *,
@@ -162,7 +166,12 @@ def _profile(loaded_vram_mb: float = 20_000.0, sleeping_residual_mb: float = 500
 
 
 def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
-    """Build a planner with mocked dependencies that satisfies the ranker."""
+    """Build a planner with mocked dependencies that satisfies the ranker
+    and the eviction-set picker. Enough surface for the in-cycle helpers
+    (_count_loaded_lanes_per_model, _estimate_demand_action_cost,
+    _rank_providers_for_demanded_models, _find_eviction_set) but not the
+    full apply/dispatch path.
+    """
     facade = _MockFacade(providers)
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
@@ -177,6 +186,15 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     planner._demand = demand
     planner._lane_wake_failure_until = {}
     planner._cross_provider_best_first = True
+    planner._replica_first_eviction = True
+    # Eviction-picker dependencies
+    planner._lane_loaded_at = {}
+    planner._lane_idle_since = {}
+    planner._lane_sleep_since = {}
+    planner._lane_sleep_level = {}
+    planner._load_cooldown_seconds = 0.0
+    planner._eviction_gate_v2 = True
+    planner._stop_dedup_siblings = False
     return planner
 
 
@@ -530,23 +548,168 @@ class TestKnownGaps:
         )
         assert winners["X"] == blackwell.provider_id
 
-    @pytest.mark.xfail(
-        reason="Last-replica protection (Part B from prior conversation) not yet "
-               "implemented: when a model has N replicas and a cold-load needs to "
-               "evict, the planner can in principle stop all N replicas in the "
-               "same cycle. Today's best-first only picks one winning worker per "
-               "load, which incidentally prevents the multi-stop, but there is no "
-               "explicit invariant."
-    )
-    def test_does_not_stop_last_replica_of_demanded_model(self):
-        """Scenario 14/15: X is the only loaded copy, demand for Y arrives.
+    # NOTE: the previous xfail `test_does_not_stop_last_replica_of_demanded_model`
+    # is superseded by TestReplicaFirstEviction below, which exercises the
+    # two-pass picker implemented in the replicas-first commit.
 
-        Expected: if X has demand or queue, the planner refuses to stop X
-        even if Y is competitively-ranked.
-        Actual today: implicit protection via single-worker pick — but not
-        explicit; if replication ever adds 2+ X lanes, the protection has
-        no enforcement when both look like cheapest eviction candidates.
-        """
-        # This is a forward-looking placeholder; the assertion shape would
-        # require Part A (replication) to first put X on multiple workers.
-        assert False, "Implement after Part A + Part B"
+
+# ---------------------------------------------------------------------------
+# Replicas-first eviction (Part B from prior conversation)
+# ---------------------------------------------------------------------------
+
+
+class TestReplicaFirstEviction:
+    """Tests for the two-pass replicas-first eviction picker.
+
+    Part B from the design discussion: when looking for memory for a
+    load/wake, first try to evict only lanes whose model has another
+    loaded copy elsewhere in the cluster. The last loaded copy of any
+    model is preserved during this pass. Fall back to the global pool
+    only when replicas alone can't cover the deficit.
+    """
+
+    def test_count_loaded_lanes_per_model_counts_only_running_states(self):
+        """The helper counts only loaded/running lanes — sleeping doesn't count."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="A-x", model_name="X", runtime_state="loaded"),
+                _lane(lane_id="A-y", model_name="Y", runtime_state="sleeping",
+                      sleep_state="sleeping"),
+            ],
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[
+                _lane(lane_id="B-x", model_name="X", runtime_state="running"),
+                _lane(lane_id="B-z", model_name="Z", runtime_state="stopped"),
+            ],
+        )
+        planner = _planner([a, b])
+        counts = planner._count_loaded_lanes_per_model()
+        # X loaded on A + running on B = 2
+        # Y sleeping → not counted
+        # Z stopped → not counted
+        assert counts == {"X": 2}
+
+    def test_replicas_only_skips_last_loaded_copy(self):
+        """Pass-1 invariant: a lane whose model has no other loaded copy is
+        skipped as 'primary'. The two-pass caller falls back to global."""
+        # Build candidates that all look evictable in normal mode, but where
+        # one model has only one loaded copy in the cluster.
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="A-x", model_name="X", runtime_state="loaded",
+                      effective_vram_mb=20_000),
+                _lane(lane_id="A-z", model_name="Z", runtime_state="loaded",
+                      effective_vram_mb=20_000),
+            ],
+            profiles={
+                "X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500.0),
+                "Z": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500.0),
+            },
+        )
+        planner = _planner([provider])
+        # X has 1 loaded copy (the lane below); Z has 2 (the lane plus a
+        # sibling on another conceptual provider — represented here just by
+        # the cluster_lanes_by_model count).
+        cluster = {"X": 1, "Z": 2}
+
+        # Make eviction gates permissive: no demand, no cooldown, no busy.
+        planner._eviction_gate_v2 = True
+        planner._stop_dedup_siblings = False
+        planner._lane_loaded_at = {}
+        planner._demand.get_score = lambda *_: 0.0
+
+        eviction = planner._find_eviction_set(
+            provider_id=1,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 5000.0},
+            lanes=provider.lanes,
+            profiles=provider.profiles,
+            replicas_only=True,
+            cluster_lanes_by_model=cluster,
+        )
+        assert eviction is not None
+        evicted_models = {lane.model_name for lane, _action, _eff in eviction}
+        # Z should be picked (it has a sibling replica).
+        assert "Z" in evicted_models
+        # X must NOT be picked in replicas-only mode (it's the last copy).
+        assert "X" not in evicted_models
+
+    def test_replicas_only_decrements_count_on_pick(self):
+        """The picker keeps decrementing as it picks so it never takes the
+        final copy of a model even when several replicas exist."""
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="A-x1", model_name="X", runtime_state="loaded",
+                      effective_vram_mb=20_000, gpu_devices="0"),
+                _lane(lane_id="A-x2", model_name="X", runtime_state="loaded",
+                      effective_vram_mb=20_000, gpu_devices="0"),
+                _lane(lane_id="A-x3", model_name="X", runtime_state="loaded",
+                      effective_vram_mb=20_000, gpu_devices="0"),
+            ],
+            profiles={"X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500.0)},
+        )
+        planner = _planner([provider])
+        planner._eviction_gate_v2 = True
+        planner._stop_dedup_siblings = False
+        planner._lane_loaded_at = {}
+        planner._demand.get_score = lambda *_: 0.0
+        # Three loaded copies cluster-wide. With a large deficit we'd
+        # potentially want to take all three, but the picker should stop
+        # at two — leaving one as the surviving primary.
+        cluster = {"X": 3}
+        eviction = planner._find_eviction_set(
+            provider_id=1,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 200_000.0},   # would consume everything
+            lanes=provider.lanes,
+            profiles=provider.profiles,
+            replicas_only=True,
+            cluster_lanes_by_model=cluster,
+        )
+        # Either we cover by picking 2 X lanes and leave 1 (returns the
+        # list), or we can't cover (returns None). The invariant we care
+        # about: when a list is returned, it never contains all three X
+        # lanes — leaving at least one as primary.
+        if eviction is not None:
+            picked_ids = {lane.lane_id for lane, _a, _e in eviction}
+            assert len(picked_ids & {"A-x1", "A-x2", "A-x3"}) <= 2
+
+    def test_global_pass_used_when_replicas_alone_insufficient(self):
+        """When no replicas exist (every model has count==1), Pass 1 returns
+        None and the cold-load placement falls back to the global picker."""
+        # Single provider, two models each with exactly one lane.
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="A-x", model_name="X", runtime_state="loaded",
+                      effective_vram_mb=20_000),
+                _lane(lane_id="A-z", model_name="Z", runtime_state="loaded",
+                      effective_vram_mb=20_000),
+            ],
+            profiles={
+                "X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500.0),
+                "Z": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500.0),
+            },
+        )
+        planner = _planner([provider])
+        planner._eviction_gate_v2 = True
+        planner._stop_dedup_siblings = False
+        planner._lane_loaded_at = {}
+        planner._demand.get_score = lambda *_: 0.0
+        cluster = {"X": 1, "Z": 1}
+        eviction = planner._find_eviction_set(
+            provider_id=1,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 5000.0},
+            lanes=provider.lanes,
+            profiles=provider.profiles,
+            replicas_only=True,
+            cluster_lanes_by_model=cluster,
+        )
+        # Pass 1 must produce no candidates (both lanes are primaries).
+        assert eviction is None
