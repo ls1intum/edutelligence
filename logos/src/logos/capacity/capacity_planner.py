@@ -85,6 +85,13 @@ class CapacityPlanner:
     LOAD_COMPETITIVE_RATIO = 2.0   # target must beat eviction set by 2×
     DRAIN_COMPETITIVE_RATIO = 3.0  # target must 3× outweigh victim (prevents flip-flop)
 
+    # Speculative replication: when a hot model is already loaded on at least
+    # one worker and other workers have free VRAM + capability, the planner
+    # can opportunistically load a replica without eviction. Caps and floors
+    # below; rollout is behind LOGOS_REPLICATE_ON_FREE_VRAM (default off).
+    DEMAND_REPLICATION_FLOOR = 2.0   # twice DEMAND_LOAD_FLOOR — sustained hot
+    MAX_REPLICAS_PER_MODEL = 3       # safety cap; never more than N copies cluster-wide
+
     # Cross-provider best-first ranking: rough seconds-to-serve cost model.
     # Used by _rank_providers_for_demanded_models to pick the cheapest worker
     # for each demanded model in a cycle. Values are intentionally coarse —
@@ -258,6 +265,13 @@ class CapacityPlanner:
         self._replica_first_eviction = os.environ.get(
             "LOGOS_REPLICA_FIRST_EVICTION", "true"
         ).strip().lower() not in ("0", "false", "no")
+        # Speculative replication: after the main demand pass, emit
+        # additional load actions for hot models onto workers with free
+        # VRAM (no eviction). One replica per cycle per model. Off by
+        # default — this consumes more VRAM, so operators should opt in.
+        self._replicate_on_free_vram = os.environ.get(
+            "LOGOS_REPLICATE_ON_FREE_VRAM", "false"
+        ).strip().lower() in ("1", "true", "yes")
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
@@ -461,13 +475,14 @@ class CapacityPlanner:
             )
 
         # Count loaded lanes per model across the entire cluster, once per
-        # cycle. Used by the replicas-first eviction pass to identify lanes
-        # that have siblings (count > 1, safe to evict first) vs lanes that
-        # are the last loaded copy of their model (count == 1, fall to the
-        # global pool only when no replica victim covers the deficit).
+        # cycle. Consumed by:
+        #   - replicas-first eviction (Pass 1 in the eviction picker),
+        #   - speculative replication (skip models already at MAX_REPLICAS).
+        # Only built when at least one consumer is enabled.
         cluster_lanes_by_model = (
             self._count_loaded_lanes_per_model()
-            if self._replica_first_eviction else None
+            if (self._replica_first_eviction or self._replicate_on_free_vram)
+            else None
         )
 
         for provider_id in provider_ids:
@@ -504,6 +519,21 @@ class CapacityPlanner:
             # all_actions.extend(self._compute_fleet_kv_allocation(provider_id, lanes))
             # Execute any deferred KV reconfigs for lanes that have gone idle
             # all_actions.extend(self._flush_deferred_kv_reconfigs(provider_id, lanes))
+
+        # Speculative replication: after the per-provider demand pass, look
+        # for hot models that have a single (or few) loaded copy and idle
+        # workers with capability + free VRAM. Emits one replica load per
+        # model per cycle, no eviction. Off by default; see
+        # LOGOS_REPLICATE_ON_FREE_VRAM.
+        if self._replicate_on_free_vram and cluster_lanes_by_model is not None:
+            all_actions.extend(
+                self._compute_replication_actions(
+                    provider_ids,
+                    self._demand.get_ranked_models(),
+                    cluster_lanes_by_model,
+                    cycle_planned_models,
+                )
+            )
 
         if all_actions:
             self._log_action_plan(all_actions)
@@ -3022,6 +3052,130 @@ class CapacityPlanner:
         # set so subsequent providers in the iteration order skip them.
         if cycle_planned_models is not None:
             cycle_planned_models |= planned_models
+
+        return actions
+
+    # ------------------------------------------------------------------
+    # Speculative replication (Part A)
+    # ------------------------------------------------------------------
+
+    def _compute_replication_actions(
+        self,
+        provider_ids: list[int],
+        ranked_models: list[tuple[str, float]],
+        cluster_lanes_by_model: dict[str, int],
+        cycle_planned_models: set[str],
+    ) -> list[CapacityPlanAction]:
+        """Cross-provider replication pass — runs once per cycle.
+
+        For each demanded model that is *already* loaded on at least one
+        worker and whose demand score meets ``DEMAND_REPLICATION_FLOOR``,
+        find one additional worker that:
+          - declares capability for the model,
+          - does not already host it,
+          - has enough free VRAM to load it *without* eviction
+            (``loaded_vram_mb + tp × PER_GPU_COLD_START_MB``), and
+          - passes the per-GPU feasibility gate.
+        Emit a single ``load`` action onto that worker. At most one new
+        replica per model per cycle; capped at ``MAX_REPLICAS_PER_MODEL``
+        copies cluster-wide.
+
+        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
+
+        Models that already had an action emitted this cycle (in
+        ``cycle_planned_models``) are skipped — the main demand pass
+        already handles them.
+        """
+        if not self._replicate_on_free_vram:
+            return []
+
+        actions: list[CapacityPlanAction] = []
+
+        for model_name, score in ranked_models:
+            if score < self.DEMAND_REPLICATION_FLOOR:
+                continue
+            if model_name in cycle_planned_models:
+                continue  # main demand pass already planned something for this model
+            current_replicas = cluster_lanes_by_model.get(model_name, 0)
+            if current_replicas == 0:
+                continue  # not loaded anywhere yet → main demand pass owns first load
+            if current_replicas >= self.MAX_REPLICAS_PER_MODEL:
+                continue
+
+            for pid in provider_ids:
+                if self._registry is not None and not self._registry.has_received_first_status(pid):
+                    continue
+                try:
+                    lanes = self._facade.get_all_provider_lane_signals(pid)
+                except Exception:
+                    continue
+                # Skip workers that already host the model in any non-terminal
+                # state — including sleeping (would wake instead of replicate)
+                # and starting (an in-flight load is in progress).
+                if any(
+                    l.model_name == model_name
+                    and l.runtime_state in ("loaded", "running", "sleeping", "starting")
+                    for l in lanes
+                ):
+                    continue
+                try:
+                    capabilities = set(self._facade.get_worker_capabilities(pid))
+                except Exception:
+                    capabilities = set()
+                if model_name not in capabilities:
+                    continue
+                try:
+                    capacity = self._facade.get_capacity_info(pid)
+                except Exception:
+                    continue
+                try:
+                    profiles = self._facade.get_model_profiles(pid)
+                except Exception:
+                    profiles = {}
+                profile = profiles.get(model_name)
+                if profile is None:
+                    continue
+                # Replication NEVER evicts — only proceed if free VRAM
+                # covers the loaded footprint plus per-GPU cold-start
+                # headroom (mirrors the no-eviction branch of the placement
+                # picker).
+                needed_mb = self._estimate_model_loaded_vram(profile)
+                tp = 1
+                if profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+                    tp = int(profile.tensor_parallel_size)
+                free_mb = float(getattr(capacity, "available_vram_mb", 0) or 0)
+                budget_mb = needed_mb + tp * self.PER_GPU_COLD_START_MB
+                if free_mb < budget_mb:
+                    continue
+                # Defer to the standard pre-emission gate (per-GPU + ledger).
+                if not self._passes_minimum_load_feasibility(
+                    model_name, profile, capacity, provider_id=pid,
+                ):
+                    continue
+
+                lane_id = self._planner_lane_id(model_name)
+                actions.append(CapacityPlanAction(
+                    action="load",
+                    provider_id=pid,
+                    lane_id=lane_id,
+                    model_name=model_name,
+                    params=self._build_load_params(model_name, lane_id, profile, capacity, pid),
+                    reason=(
+                        f"Speculative replica: demand eff={score:.2f} ≥ "
+                        f"floor={self.DEMAND_REPLICATION_FLOOR}, "
+                        f"current_replicas={current_replicas}, "
+                        f"max={self.MAX_REPLICAS_PER_MODEL}"
+                    ),
+                ))
+                cycle_planned_models.add(model_name)
+                logger.info(
+                    "Speculative replica for model=%s onto worker=%s "
+                    "(current replicas=%d, free_vram=%.0fMB, needed=%.0fMB)",
+                    model_name,
+                    self._facade.get_provider_name(pid) or pid,
+                    current_replicas, free_mb, budget_mb,
+                )
+                break  # one replica per cycle per model
 
         return actions
 

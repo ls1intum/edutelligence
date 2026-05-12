@@ -187,6 +187,7 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     planner._lane_wake_failure_until = {}
     planner._cross_provider_best_first = True
     planner._replica_first_eviction = True
+    planner._replicate_on_free_vram = False  # opt-in; tests turn it on
     # Eviction-picker dependencies
     planner._lane_loaded_at = {}
     planner._lane_idle_since = {}
@@ -479,37 +480,9 @@ class TestKnownGaps:
     Remove the xfail marker as each is implemented.
     """
 
-    @pytest.mark.xfail(
-        reason="No proactive replication on free VRAM (Part A from prior conversation): "
-               "when X is loaded on A and B has free VRAM with capability, the ranker "
-               "picks A (cost 0) and B is skipped. Idle B is left unused under load."
-    )
-    def test_replicates_to_free_vram_under_high_demand(self):
-        """Scenario 7/13: A has X loaded with many queued, B is idle with capability+VRAM.
-
-        Expected: planner replicates X onto B so routing can balance.
-        Actual today: B is skipped (cost 0 wins everything).
-        """
-        a = _MockProvider(
-            provider_id=1, name="A",
-            lanes=[_lane(
-                lane_id="A-x", model_name="X", runtime_state="running",
-                active_requests=4, queue_waiting=20.0,
-            )],
-            capabilities=["X"], available_vram_mb=5_000,
-            profiles={"X": _profile(loaded_vram_mb=20_000)},
-        )
-        b = _MockProvider(
-            provider_id=2, name="B",
-            lanes=[], capabilities=["X"], available_vram_mb=80_000,
-            profiles={"X": _profile(loaded_vram_mb=20_000)},
-        )
-        planner = _planner([a, b])
-        winners = planner._rank_providers_for_demanded_models(
-            [a.provider_id, b.provider_id], [("X", 3.0)],
-        )
-        # When replication is implemented, both providers should be in winners.
-        assert b.provider_id in winners.values()
+    # NOTE: the replication xfail is superseded by TestReplication below,
+    # which exercises _compute_replication_actions directly. The ranker
+    # itself doesn't fan out — that's the replication pass's job.
 
     @pytest.mark.xfail(
         reason="No tie-break by observed e2e_p50 or GPU class (Fallacy #1/16): "
@@ -713,3 +686,222 @@ class TestReplicaFirstEviction:
         )
         # Pass 1 must produce no candidates (both lanes are primaries).
         assert eviction is None
+
+
+# ---------------------------------------------------------------------------
+# Speculative replication (Part A from prior conversation)
+# ---------------------------------------------------------------------------
+
+
+def _build_load_params_stub(self, model_name, lane_id, profile, capacity, provider_id):
+    """Minimal stub of _build_load_params for tests — avoids the full vLLM
+    config inference. The replication tests don't care about the params'
+    contents, only that an action gets emitted."""
+    return {"lane_id": lane_id, "model": model_name}
+
+
+class TestReplication:
+    """Tests for `_compute_replication_actions` (Part A)."""
+
+    def _enable(self, planner):
+        """Turn the flag on and stub load-param generation for tests."""
+        planner._replicate_on_free_vram = True
+        planner._build_load_params = (
+            lambda *a, **kw: _build_load_params_stub(planner, *a, **kw)
+        )
+        # Bypass the per-GPU feasibility gate that reads a runtime snapshot
+        # we don't fully construct in unit tests.
+        planner._passes_minimum_load_feasibility = lambda *a, **kw: True
+
+    def test_replicates_to_free_worker_under_high_demand(self):
+        """Scenario 7/13: X loaded on A; B is idle with capability+VRAM.
+        Replication pass adds X onto B."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="running")],
+            capabilities=["X"], available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[], capabilities=["X"], available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        self._enable(planner)
+
+        cluster = planner._count_loaded_lanes_per_model()
+        assert cluster == {"X": 1}
+
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id, b.provider_id],
+            ranked_models=[("X", 3.0)],     # well above REPLICATION_FLOOR
+            cluster_lanes_by_model=cluster,
+            cycle_planned_models=set(),
+        )
+        assert len(actions) == 1
+        action = actions[0]
+        assert action.action == "load"
+        assert action.provider_id == b.provider_id
+        assert action.model_name == "X"
+
+    def test_does_not_replicate_below_floor(self):
+        """Demand below DEMAND_REPLICATION_FLOOR → no replication."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
+            capabilities=["X"], available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[], capabilities=["X"], available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        self._enable(planner)
+
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id, b.provider_id],
+            ranked_models=[("X", CapacityPlanner.DEMAND_REPLICATION_FLOOR - 0.1)],
+            cluster_lanes_by_model=planner._count_loaded_lanes_per_model(),
+            cycle_planned_models=set(),
+        )
+        assert actions == []
+
+    def test_does_not_replicate_when_model_not_loaded_anywhere(self):
+        """If nobody has X loaded yet, the replication pass leaves the first
+        load to the main demand pass."""
+        a = _MockProvider(
+            provider_id=1, name="A", lanes=[], capabilities=["X"],
+            available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a])
+        self._enable(planner)
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id],
+            ranked_models=[("X", 5.0)],
+            cluster_lanes_by_model={},
+            cycle_planned_models=set(),
+        )
+        assert actions == []
+
+    def test_respects_max_replicas_per_model(self):
+        """Already at MAX_REPLICAS_PER_MODEL → don't add another."""
+        # Pretend X is already loaded on MAX_REPLICAS workers via the
+        # cluster_lanes_by_model count (we don't need real lanes on each).
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
+            capabilities=["X"], available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[], capabilities=["X"], available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        self._enable(planner)
+        # Inject a count at the cap
+        cluster = {"X": CapacityPlanner.MAX_REPLICAS_PER_MODEL}
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id, b.provider_id],
+            ranked_models=[("X", 5.0)],
+            cluster_lanes_by_model=cluster,
+            cycle_planned_models=set(),
+        )
+        assert actions == []
+
+    def test_does_not_replicate_when_no_free_vram_anywhere(self):
+        """When every candidate worker lacks free VRAM for the model, the
+        replication pass refuses to emit (it must never evict)."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="running")],
+            capabilities=["X"], available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[_lane(lane_id="B-z", model_name="Z", runtime_state="loaded",
+                         effective_vram_mb=90_000)],
+            capabilities=["X"], available_vram_mb=2_000,  # tight
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        self._enable(planner)
+
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id, b.provider_id],
+            ranked_models=[("X", 5.0)],
+            cluster_lanes_by_model={"X": 1, "Z": 1},
+            cycle_planned_models=set(),
+        )
+        assert actions == []  # no free worker, no eviction allowed
+
+    def test_skips_worker_that_already_hosts_model(self):
+        """Worker A already has X — never picked even though it has free VRAM."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
+            capabilities=["X"], available_vram_mb=80_000,  # plenty
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a])
+        self._enable(planner)
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id],
+            ranked_models=[("X", 5.0)],
+            cluster_lanes_by_model={"X": 1},
+            cycle_planned_models=set(),
+        )
+        assert actions == []  # only worker that could host it already has it
+
+    def test_skips_model_already_planned_this_cycle(self):
+        """If the main demand pass planned a load/wake for X this cycle,
+        skip — don't double-plan."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="running")],
+            capabilities=["X"], available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[], capabilities=["X"], available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        self._enable(planner)
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id, b.provider_id],
+            ranked_models=[("X", 5.0)],
+            cluster_lanes_by_model={"X": 1},
+            cycle_planned_models={"X"},  # already planned
+        )
+        assert actions == []
+
+    def test_disabled_by_default_returns_empty(self):
+        """With LOGOS_REPLICATE_ON_FREE_VRAM unset (default), nothing fires."""
+        a = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="running")],
+            capabilities=["X"], available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2, name="B",
+            lanes=[], capabilities=["X"], available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        # Do NOT call self._enable — leave flag at False
+        actions = planner._compute_replication_actions(
+            provider_ids=[a.provider_id, b.provider_id],
+            ranked_models=[("X", 5.0)],
+            cluster_lanes_by_model={"X": 1},
+            cycle_planned_models=set(),
+        )
+        assert actions == []
