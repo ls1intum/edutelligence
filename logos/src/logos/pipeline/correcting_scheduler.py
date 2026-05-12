@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from typing import List, Tuple, Optional
 
@@ -27,9 +28,11 @@ from .ettft_estimator import (
     DEFAULT_GENERATION_TIME_S,
     estimate_ettft_local,
     estimate_ettft_azure,
+    estimate_ettft_cloud,
     compute_corrected_score,
     compute_weight_span,
 )
+from logos.terminal_logging import style_model, style_provider
 
 logger = logging.getLogger(__name__)
 
@@ -162,13 +165,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             self._log_decision(request.request_id, scored, request.classified_models or [], None, False)
             return None  # All cloud, none accepted → caller returns 503
 
-        # Tie diagnostic: when several logosnode candidates share the top
-        # corrected score, the stable sort funnels every queued request
-        # onto the first one — leaving other equally-scored capable
-        # workers idle.  Surfacing this explicitly so the symptom
-        # "request queued on worker A even though worker B is also cold
-        # with the same score" doesn't require staring at the scored
-        # array to spot.
+        # Diagnostic only: the candidate's provider_id is no longer a binding
+        # under model-only queue — any provider serving the model can pull
+        # this request when its lane releases. The picked candidate is just
+        # the representative used to record ETTFT tier and originating
+        # provider in metadata.
         top_score = logosnode_candidate[3]
         tied = [s for s in scored if s[2] == "logosnode" and abs(s[3] - top_score) < 1e-9]
         if len(tied) > 1:
@@ -176,12 +177,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 f"model={m} worker={self._logosnode.get_provider_name(p) or p} tier={e.tier.value}"
                 for m, p, _, _, _, e in tied
             )
-            chosen_pid = logosnode_candidate[1]
             logger.info(
-                "Tied logosnode candidates for request %s (top score=%.2f, count=%d): %s "
-                "→ funnelling to worker=%s (deterministic first-tied)",
+                "Tied logosnode candidates for request %s (top score=%.2f, count=%d): %s"
+                " — model-only queue: any of these workers may dispatch.",
                 request.request_id, top_score, len(tied), tied_desc,
-                self._logosnode.get_provider_name(chosen_pid) or chosen_pid,
             )
 
         self._log_decision(request.request_id, scored, request.classified_models or [], logosnode_candidate, True)
@@ -373,6 +372,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 capacity = None
             return estimate_ettft_azure(capacity)
 
+        if provider_type == "cloud":
+            return estimate_ettft_cloud()
+
         return EttftEstimate(
             expected_wait_s=float("inf"),
             tier=ReadinessTier.UNAVAILABLE,
@@ -401,6 +403,79 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         ReadinessTier.COLD_RECLAIM,
     })
 
+    # Tolerance for "scores tie" comparisons. corrected_score is computed
+    # with float math, so two warm workers serving the same model can
+    # differ in the last few ULPs without being meaningfully different.
+    _TIE_EPSILON = 1e-9
+
+    def _candidate_weight(self, candidate: tuple) -> float:
+        """Weight for weighted-RR tie-break. logosnode candidates use the
+        worker's declared `gpu_performance_score` (default 100). Azure /
+        cloud candidates default to 100 — they don't compete with
+        logosnode in the same tied group in practice (state_overhead and
+        rate-limit penalties differ), so the value is mostly nominal."""
+        _, provider_id, provider_type, _, _, _ = candidate
+        if provider_type == "logosnode":
+            try:
+                return float(self._logosnode.get_gpu_performance_score(provider_id))
+            except Exception:
+                return 100.0
+        return 100.0
+
+    def _weighted_shuffle_tied(self, scored: list) -> list:
+        """Reorder `scored` so that within each tied-score zone candidates
+        appear in weighted-random order. Across zones the original
+        score-descending order is preserved.
+
+        Implements the operator's heterogeneous-GPU policy: when two warm
+        workers serve the same model and tie on corrected_score, traffic
+        is split in proportion to each worker's gpu_performance_score
+        (e.g. 20 vs 40 → 1/3 vs 2/3 of requests). Homogeneous clusters
+        (all default 100) degenerate to uniform random — fixing the
+        sticky-first-registered bias.
+        """
+        if len(scored) <= 1:
+            return list(scored)
+        result: list = []
+        i = 0
+        n = len(scored)
+        while i < n:
+            anchor = scored[i][3]
+            j = i + 1
+            while j < n and abs(scored[j][3] - anchor) < self._TIE_EPSILON:
+                j += 1
+            zone = scored[i:j]
+            if len(zone) > 1:
+                zone = self._weighted_random_order(zone)
+            result.extend(zone)
+            i = j
+        return result
+
+    def _weighted_random_order(self, zone: list) -> list:
+        """Weighted-random sequencing without replacement. The first picked
+        candidate has probability proportional to its weight; if its
+        try_reserve fails, the second is picked from the remaining
+        candidates with their weights renormalised, and so on."""
+        remaining = list(zone)
+        order: list = []
+        while remaining:
+            weights = [self._candidate_weight(item) for item in remaining]
+            total = sum(weights)
+            if total <= 0:
+                # Pathological (all zero/negative); fall through to original order.
+                order.extend(remaining)
+                break
+            r = random.random() * total
+            cum = 0.0
+            picked = len(remaining) - 1  # default to last (covers float-edge cases)
+            for idx, w in enumerate(weights):
+                cum += w
+                if r <= cum:
+                    picked = idx
+                    break
+            order.append(remaining.pop(picked))
+        return order
+
     def _try_immediate_select(self, scored: list, request_id: str):
         """Try to reserve capacity on the best available candidate.
 
@@ -413,6 +488,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         capacity planner should handle it rather than silently downgrading
         to a lower-scored warm model.
         """
+        # Apply weighted-random tie-break within each tied-score zone
+        # before walking the list. Same-score warm logosnode workers
+        # are weighted by gpu_performance_score so the faster GPU
+        # absorbs proportionally more traffic.
+        scored = self._weighted_shuffle_tied(scored)
         for idx, (model_id, provider_id, provider_type, score, priority_int, ettft) in enumerate(scored):
             if provider_type == "logosnode":
                 # If the top-scored candidate is not ready (sleeping/cold),
@@ -449,9 +529,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     logger.info(
                         "Reserved logosnode model=%s worker=%s "
                         "(score=%.2f, tier=%s, wait=%.1fs)",
-                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                        self._logosnode.get_provider_name(provider_id) or provider_id, score,
-                        ettft.tier.value, ettft.expected_wait_s,
+                        style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+                        style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
+                        score, ettft.tier.value, ettft.expected_wait_s,
                     )
                     return (model_id, provider_id, provider_type, score, priority_int, ettft)
                 logger.debug(
@@ -462,8 +542,19 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 logger.info(
                     "Selected Azure model=%s provider_id=%s "
                     "(score=%.2f, tier=%s, wait=%.1fs)",
-                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                    provider_id, score,
+                    style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+                    style_provider(provider_id),
+                    score, ettft.tier.value, ettft.expected_wait_s,
+                )
+                return (model_id, provider_id, provider_type, score, priority_int, ettft)
+            elif provider_type == "cloud":
+                # Cloud upstream accepts immediately — we don't track its
+                # capacity locally, so there's no slot to reserve and no
+                # queue to wait in.
+                logger.info(
+                    "Selected cloud upstream model_id=%s provider_id=%s "
+                    "(score=%.2f, tier=%s, wait=%.1fs)",
+                    model_id, provider_id, score,
                     ettft.tier.value, ettft.expected_wait_s,
                 )
                 return (model_id, provider_id, provider_type, score, priority_int, ettft)
@@ -494,19 +585,21 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             "Request %s queued for model=%s worker=%s "
             "(corrected_score=%.2f, tier=%s, depth=%s)",
             request.request_id,
-            self._logosnode.get_model_name(model_id, provider_id) or model_id,
-            self._logosnode.get_provider_name(provider_id) or provider_id,
+            style_model(self._logosnode.get_model_name(model_id, provider_id) or model_id),
+            style_provider(self._logosnode.get_provider_name(provider_id) or provider_id),
             score, ettft.tier.value, queue_depth,
         )
 
         # Fire-and-forget: signal capacity planner to wake/load the model
-        # so queued requests don't wait for the 30s background cycle.
+        # on whichever provider it deems best. With model-only queue we no
+        # longer pin the capacity decision to one provider — the planner
+        # picks via lane_comparator across the cluster.
         if self._on_capacity_needed and provider_type == "logosnode":
             model_name = self._logosnode.get_model_name(model_id, provider_id)
             if model_name:
                 asyncio.create_task(
-                    self._on_capacity_needed(provider_id, model_name),
-                    name=f"capacity-needed-{model_name}-{provider_id}",
+                    self._on_capacity_needed(model_name, provider_id),
+                    name=f"capacity-needed-{model_name}",
                 )
 
         try:
@@ -518,12 +611,20 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             result.ettft_tier = ettft.tier.value
 
             if provider_type == "logosnode":
+                # Phase 2 (model-only queue): the provider we enqueued against
+                # may not be the one that ultimately dispatched the request —
+                # any provider serving this model can pop from the shared
+                # queue. Attribute SDI accounting to the *dispatched* provider
+                # (result.provider_id) rather than the candidate, otherwise
+                # active-request counts drift away from what's actually
+                # running on each worker.
+                dispatched_pid = result.provider_id
                 try:
                     if result.was_queued:
                         self._logosnode.on_request_start(
                             request.request_id,
                             model_id=result.model_id,
-                            provider_id=provider_id,
+                            provider_id=dispatched_pid,
                             priority=priority.name.lower(),
                         )
                     # slot_transferred=True means a completing request kept its
@@ -533,7 +634,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
                         increment_active=not result.slot_transferred,
-                        provider_id=provider_id,
+                        provider_id=dispatched_pid,
                     )
                 except KeyError:
                     pass

@@ -36,6 +36,7 @@ from logos.terminal_logging import (
 )
 
 from .demand_tracker import DemandTracker
+from .lane_comparator import best_lane
 from .vram_ledger import VRAMLedger
 from logos.monitoring import prometheus_metrics as prom
 
@@ -84,6 +85,30 @@ class CapacityPlanner:
     LOAD_COMPETITIVE_RATIO = 2.0   # target must beat eviction set by 2×
     DRAIN_COMPETITIVE_RATIO = 3.0  # target must 3× outweigh victim (prevents flip-flop)
 
+    # Speculative replication: when a hot model is already loaded on at least
+    # one worker and other workers have free VRAM + capability, the planner
+    # can opportunistically load a replica without eviction. Caps and floors
+    # below; rollout is behind LOGOS_REPLICATE_ON_FREE_VRAM (default off).
+    DEMAND_REPLICATION_FLOOR = 2.0   # twice DEMAND_LOAD_FLOOR — sustained hot
+    MAX_REPLICAS_PER_MODEL = 3       # safety cap; never more than N copies cluster-wide
+
+    # Cross-provider best-first ranking: rough seconds-to-serve cost model.
+    # Used by _rank_providers_for_demanded_models to pick the cheapest worker
+    # for each demanded model in a cycle. Values are intentionally coarse —
+    # the ordering (wake ≪ load; sleep_l1 ≪ stop) is what matters, not the
+    # absolute numbers.
+    #   wake on a sleeping lane: ~2s
+    #   cold-load of a 90 GB model: ~90s
+    #   sleep_l1 of victim: ~1s execute, victim recoverable in ~2s
+    #   sleep_l2 of victim: slightly more (KV-cache discard)
+    #   stop of victim: ~5s execute, victim recovery costs a 30-90s cold-load
+    TARGET_ACTION_COST_S = {"wake": 2.0, "load": 90.0}
+    VICTIM_ACTION_COST_S = {
+        "sleep_l1": 1.0,
+        "sleep_l2": 1.5,
+        "stop": 30.0,
+    }
+
     # Queue depth contribution to effective demand at decision time.
     # Bumped 0.25 → 0.5: a model with several queued-but-unschedulable
     # requests needs to actually compete with idle awake lanes in the
@@ -105,6 +130,11 @@ class CapacityPlanner:
     # it an easy drain target — causing thrashing cascades where models
     # wake and immediately sleep without serving anything.
     LANE_MIN_TENURE_SECONDS = 5.0
+    # Extended tenure when a freshly-loaded lane has a queued waiter that
+    # was flagged is_cold_at_queue (the request that triggered the wake is
+    # still inside the queue; sleeping the lane within the standard 5s
+    # window would bounce it).
+    LANE_COLD_WAITER_TENURE_SECONDS = 15.0
     # Backward-compat aliases (tests / external callers)
     DRAIN_MIN_COLD_LOADED_SECONDS = 0.0
     DRAIN_MIN_WOKEN_SECONDS = 0.0
@@ -116,8 +146,33 @@ class CapacityPlanner:
     GPU_CACHE_HIGH = 85.0
     GPU_CACHE_LOW = 40.0
 
-    # VRAM safety margin
-    VRAM_SAFETY_MARGIN = 1.0  # no margin — calibrated profiles include KV, measurements are exact
+    # ─── VRAM headroom model ────────────────────────────────────────────────
+    # Two independent concerns kept separate, each with one knob:
+    #
+    #   PER_GPU_COLD_START_MB — additive per-GPU headroom for cold-start runtime
+    #     overhead (CUDA context, NCCL ring buffers, vLLM allocator warm-up).
+    #     Constant per GPU, independent of model size. Same number is used
+    #     wherever per-GPU feasibility is checked — there is exactly one
+    #     correct answer for "how much room must I leave on a GPU at boot."
+    #
+    #   ESTIMATION_SLACK_RATIO — multiplicative slack on disk-size → memory
+    #     estimates for non-calibrated profiles. Applied at the *size estimation*
+    #     site, not the gate. Calibrated/measured profiles skip it because their
+    #     base_residency was observed empirically.
+    #
+    #   VRAM_SAFETY_MARGIN — aggregate (whole-provider) multiplier; left at 1.0
+    #     because calibrated profiles already include KV+TP and per-GPU headroom
+    #     is enforced by the additive constant above. Kept as a knob in case a
+    #     future operator wants global aggregate padding.
+    #
+    # The previous code had three multiplicative margins (1.0 / 1.05 / 1.15) and
+    # picked between them based on (calibrated, action_kind). Different call
+    # sites picked different ones, producing silent stalls (placement said
+    # "feasible, no eviction needed" while feasibility rejected). One physical
+    # quantity → one constant.
+    VRAM_SAFETY_MARGIN = 1.0
+    PER_GPU_COLD_START_MB = 500.0
+    ESTIMATION_SLACK_RATIO = 1.10
     # Tensor-parallel overhead: NCCL buffers + duplicated embedding/output layers
     TP_OVERHEAD_RATIO = 0.10  # 10% overhead per GPU for TP > 1
 
@@ -126,12 +181,6 @@ class CapacityPlanner:
     WAKE_FAILURE_COOLDOWN_SECONDS = 15.0
     COOLDOWN_WAIT_BUFFER_SECONDS = 2.0   # extra margin added after load cooldown expires
     BUSY_DRAIN_POLL_SECONDS = 5.0        # poll interval while waiting for a busy lane to drain
-    WAKE_PER_GPU_SAFETY_MARGIN = 1.15    # 15% per-GPU margin for wake ops — CUDA allocator pools
-                                         # and KV-cache growth can consume memory between the check
-                                         # and the actual wake, causing OOM on tight fits
-    CALIBRATED_PER_GPU_SAFETY_MARGIN = 1.05  # 5% margin for calibrated models — base_residency is
-                                         # measured but vLLM needs small headroom for startup
-                                         # (CUDA context, NCCL init, allocator pools)
     TP_RANK0_VRAM_FRACTION = 0.62        # rank 0 hosts API server, tokenizer, sampling, embedding
                                          # layers — empirically ~60% of total VRAM for TP=2;
                                          # use 0.62 for safety margin
@@ -179,6 +228,50 @@ class CapacityPlanner:
         self._use_additive_loads = os.environ.get(
             "LOGOS_USE_ADDITIVE_LOADS", "true"
         ).strip().lower() not in ("0", "false", "no")
+        # Phase 1.2: allow stopping non-chosen sleeping siblings of a model that
+        # has real queued demand. Default off until staging confirms.
+        self._stop_dedup_siblings = os.environ.get(
+            "LOGOS_STOP_DEDUP_SIBLINGS", "false"
+        ).strip().lower() in ("1", "true", "yes")
+        # Phase 1.3: cycle-scoped dedup of planned cold-loads across providers.
+        self._cross_provider_dedup = os.environ.get(
+            "LOGOS_PLANNER_CROSS_PROVIDER_DEDUP", "true"
+        ).strip().lower() not in ("0", "false", "no")
+        # Phase 3: split Gate 1 (drop scheduler queue from pre-filter), tighten
+        # branch A of the proceed check, and gate the per-lane VRAM ledger.
+        # Default off until staging confirms the deimama symptom unblocks
+        # without surprising eviction patterns.
+        self._eviction_gate_v2 = os.environ.get(
+            "LOGOS_EVICTION_GATE_V2", "false"
+        ).strip().lower() in ("1", "true", "yes")
+        # Cross-provider best-first ranking: before iterating providers in a
+        # cycle, pre-score every (provider, model) candidate by action cost
+        # (wake ≪ cold-load, sleep-evict ≪ stop-evict) and let only the
+        # lowest-cost provider plan that model. Replaces the legacy
+        # first-evaluated-wins behaviour that caused fast wakes to lose to
+        # slow cold-loads merely because the cold worker had a lower
+        # provider_id. Tie-breaks by free-VRAM descending.
+        self._cross_provider_best_first = os.environ.get(
+            "LOGOS_CROSS_PROVIDER_BEST_FIRST", "true"
+        ).strip().lower() not in ("0", "false", "no")
+        # Replicas-first eviction: when freeing VRAM for a load/wake, first
+        # try to cover the deficit by evicting only lanes whose model has
+        # another loaded copy elsewhere in the cluster. If that succeeds,
+        # the primary (last) copy of each model is preserved. If replicas
+        # alone can't cover the deficit, fall back to the global eviction
+        # pool (current behaviour). The picker decrements the working
+        # replica count as it selects, so the last copy of a model is never
+        # taken in the replicas-only pass.
+        self._replica_first_eviction = os.environ.get(
+            "LOGOS_REPLICA_FIRST_EVICTION", "true"
+        ).strip().lower() not in ("0", "false", "no")
+        # Speculative replication: after the main demand pass, emit
+        # additional load actions for hot models onto workers with free
+        # VRAM (no eviction). One replica per cycle per model. Off by
+        # default — this consumes more VRAM, so operators should opt in.
+        self._replicate_on_free_vram = os.environ.get(
+            "LOGOS_REPLICATE_ON_FREE_VRAM", "false"
+        ).strip().lower() in ("1", "true", "yes")
 
         # Phase 1a: Track inflight desired-state mutations so rapid sequential
         # apply_lanes calls don't build from stale registry data.
@@ -251,26 +344,34 @@ class CapacityPlanner:
             logger.info("Capacity planner started (cycle=%ss)", self._cycle_seconds)
 
     def hint_capacity_needed(
-        self, provider_id: int, model_name: str
+        self, model_name: str, provider_id: Optional[int] = None,
     ) -> None:
-        """Wake the planner cycle ahead of schedule.
+        """Wake the planner cycle ahead of schedule for ``model_name``.
 
-        Called by the scheduler when a request gets queued for a model
-        whose lane isn't ready (cold or sleeping). Bumping demand is
-        already handled at classification time, so this only needs to
-        kick the cycle out of its sleep.
+        Called by the scheduler when a request gets queued for a model whose
+        lane isn't ready on any provider (cold or sleeping). The planner
+        decides which provider to wake using the unified comparator.
 
-        Idempotent: a burst of N requests coalesces into one extra
-        cycle execution.
+        ``provider_id`` is accepted for backward compatibility but treated
+        only as a logging breadcrumb — the planner picks the actual provider.
+
+        Idempotent: a burst of N hints coalesces into one extra cycle.
         """
         if not self._enabled or self._tick_event is None:
             return
         if not self._tick_event.is_set():
-            logger.info(
-                "Capacity hint received: worker=%s model=%s (waking cycle)",
-                self._facade.get_provider_name(provider_id) or provider_id, model_name,
-            )
-        self._tick_hints.append((provider_id, model_name))
+            if provider_id is not None:
+                logger.info(
+                    "Capacity hint received: model=%s (originating worker=%s; waking cycle)",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                )
+            else:
+                logger.info(
+                    "Capacity hint received: model=%s (waking cycle)", model_name,
+                )
+        # Provider id retained as a breadcrumb (-1 sentinel when unspecified).
+        self._tick_hints.append((provider_id if provider_id is not None else -1, model_name))
         # Trim hint log so it doesn't grow unboundedly under heavy load.
         if len(self._tick_hints) > 64:
             del self._tick_hints[: len(self._tick_hints) - 64]
@@ -337,9 +438,52 @@ class CapacityPlanner:
             )
 
         all_actions: List[CapacityPlanAction] = []
+        # Phase 1.3: cycle-scoped tracking of planned cold-loads/wakes across
+        # providers, so two providers don't independently agree to load the
+        # same model in the same cycle.
+        cycle_planned_models: set[str] = set()
 
-        provider_ids = self._facade.provider_ids()
+        provider_ids = list(self._facade.provider_ids())
+        # Sort providers by current queue pressure so the worker most under
+        # load gets first crack at the cycle's planning budget. Without this
+        # the iteration order is whatever provider_ids() returns (typically
+        # registration order), which is arbitrary under contention.
+        if self._cross_provider_dedup:
+            def _provider_pressure(pid: int) -> int:
+                try:
+                    return self._facade.queue_manager.get_total_depth_by_provider(pid)
+                except Exception:
+                    return 0
+            provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
+
+        # Cross-provider best-first ranking: pre-score every (provider,
+        # model) candidate so the cheapest worker for each model wins,
+        # regardless of iteration order. Without this, a worker that needs
+        # a 90s cold-load can beat a worker that only needs a 2s wake just
+        # because it was iterated first.
+        best_provider_for_model: Optional[dict[str, int]] = None
+        if self._cross_provider_best_first:
+            ready_provider_ids = [
+                pid for pid in provider_ids
+                if self._registry is None
+                or self._registry.has_received_first_status(pid)
+            ]
+            best_provider_for_model = self._rank_providers_for_demanded_models(
+                ready_provider_ids,
+                self._demand.get_ranked_models(),
+            )
+
+        # Count loaded lanes per model across the entire cluster, once per
+        # cycle. Consumed by:
+        #   - replicas-first eviction (Pass 1 in the eviction picker),
+        #   - speculative replication (skip models already at MAX_REPLICAS).
+        # Only built when at least one consumer is enabled.
+        cluster_lanes_by_model = (
+            self._count_loaded_lanes_per_model()
+            if (self._replica_first_eviction or self._replicate_on_free_vram)
+            else None
+        )
 
         for provider_id in provider_ids:
             # Skip providers that haven't sent their first status yet —
@@ -360,7 +504,14 @@ class CapacityPlanner:
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
-            all_actions.extend(self._compute_demand_actions(provider_id, lanes))
+            all_actions.extend(
+                self._compute_demand_actions(
+                    provider_id, lanes,
+                    cycle_planned_models=cycle_planned_models,
+                    best_provider_for_model=best_provider_for_model,
+                    cluster_lanes_by_model=cluster_lanes_by_model,
+                )
+            )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
             # TODO: KV fleet rebalancing disabled — was computing budgets from total
             # worker VRAM instead of per-lane GPU VRAM, causing OOM on reconfigure.
@@ -368,6 +519,21 @@ class CapacityPlanner:
             # all_actions.extend(self._compute_fleet_kv_allocation(provider_id, lanes))
             # Execute any deferred KV reconfigs for lanes that have gone idle
             # all_actions.extend(self._flush_deferred_kv_reconfigs(provider_id, lanes))
+
+        # Speculative replication: after the per-provider demand pass, look
+        # for hot models that have a single (or few) loaded copy and idle
+        # workers with capability + free VRAM. Emits one replica load per
+        # model per cycle, no eviction. Off by default; see
+        # LOGOS_REPLICATE_ON_FREE_VRAM.
+        if self._replicate_on_free_vram and cluster_lanes_by_model is not None:
+            all_actions.extend(
+                self._compute_replication_actions(
+                    provider_ids,
+                    self._demand.get_ranked_models(),
+                    cluster_lanes_by_model,
+                    cycle_planned_models,
+                )
+            )
 
         if all_actions:
             self._log_action_plan(all_actions)
@@ -383,8 +549,11 @@ class CapacityPlanner:
                 prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action=action.action).inc()
             except Exception:
                 logger.exception(
-                    "Failed to execute capacity action: %s on lane %s",
-                    action.action, action.lane_id,
+                    "Failed to execute capacity action: %s on worker=%s model=%s lane=%s",
+                    action.action,
+                    self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                    action.model_name,
+                    action.lane_id,
                 )
 
         prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
@@ -599,7 +768,7 @@ class CapacityPlanner:
                 self._facade.get_provider_name(provider_id) or provider_id, model_name,
             )
             return None
-        self.hint_capacity_needed(provider_id, model_name)
+        self.hint_capacity_needed(model_name, provider_id=provider_id)
         return None
 
     async def _prepare_existing_lane(
@@ -923,6 +1092,17 @@ class CapacityPlanner:
         check_time = time.time() if now is None else now
         return (check_time - loaded_at) < self._load_cooldown_seconds
 
+    def _model_has_cold_queued_waiter(self, provider_id: int, model_name: str) -> bool:
+        """Return True if any queued entry for this model on this provider was
+        flagged is_cold_at_queue at enqueue. Drives extended lane tenure so a
+        freshly-woken lane isn't put back to sleep before serving the request
+        that triggered its wake.
+        """
+        try:
+            return self._facade.has_cold_queued_entries_by_model_name(model_name, provider_id)
+        except Exception:
+            return False
+
     def _time_until_cooldown_unblocked_stop(
         self,
         *,
@@ -1045,7 +1225,9 @@ class CapacityPlanner:
             if loaded_at is None:
                 continue  # no timestamp — not blocked
             was_cold = self._lane_was_cold_loaded.get(key, True)
-            min_tenure = self._get_effective_tenure(was_cold)
+            min_tenure = self._get_effective_tenure(
+                was_cold, provider_id=provider_id, model_name=lane.model_name,
+            )
             remaining_tenure = min_tenure - (now - loaded_at)
             if remaining_tenure <= 0:
                 continue  # not actually blocked
@@ -1181,7 +1363,9 @@ class CapacityPlanner:
             if loaded_at is None:
                 continue  # unknown load time — not blocked by cooldown
             was_cold = self._lane_was_cold_loaded.get(key, True)
-            min_seconds = self._get_effective_tenure(was_cold)
+            min_seconds = self._get_effective_tenure(
+                was_cold, provider_id=provider_id, model_name=lane.model_name,
+            )
             drain_remaining = min_seconds - (now - loaded_at)
             if drain_remaining <= 0:
                 continue  # cooldown already expired — not what we're looking for
@@ -1262,8 +1446,30 @@ class CapacityPlanner:
     # Anti-thrashing helpers
     # ------------------------------------------------------------------
 
-    def _get_effective_tenure(self, was_cold_loaded: bool = False) -> float:
-        """Return minimum lane tenure (uniform — sleep is cheap)."""
+    def _get_effective_tenure(
+        self,
+        was_cold_loaded: bool = False,
+        *,
+        provider_id: Optional[int] = None,
+        model_name: Optional[str] = None,
+    ) -> float:
+        """Return minimum lane tenure for reclaim / drain decisions.
+
+        Defaults to ``LANE_MIN_TENURE_SECONDS`` (5 s).  When ``provider_id`` and
+        ``model_name`` are supplied AND the model has a queued waiter that was
+        flagged cold-at-queue, returns the extended
+        ``LANE_COLD_WAITER_TENURE_SECONDS`` (15 s) so a freshly woken lane is
+        not reclaimed before its triggering request gets to dispatch.  Mirrors
+        the gate inside ``_find_eviction_set``; threading the same helper here
+        means every tenure decision (idle reclaim, drain, request-time sleep)
+        honors cold-waiter protection consistently.
+        """
+        if (
+            provider_id is not None
+            and model_name
+            and self._model_has_cold_queued_waiter(provider_id, model_name)
+        ):
+            return self.LANE_COLD_WAITER_TENURE_SECONDS
         return self.LANE_MIN_TENURE_SECONDS
 
     def _get_queue_depth_for_model(
@@ -1391,6 +1597,10 @@ class CapacityPlanner:
         per_gpu_deficit: dict[int, float],
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
+        target_model_name: Optional[str] = None,
+        *,
+        replicas_only: bool = False,
+        cluster_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> Optional[list[tuple[LaneSchedulerSignals, str, float]]]:
         """Find the minimum-score set of lanes to evict to cover per_gpu_deficit.
 
@@ -1405,6 +1615,14 @@ class CapacityPlanner:
         when every GPU in required_gpus has had its deficit covered.
 
         Algorithm: greedy by effective_demand ascending (evict cheapest first).
+
+        Replicas-first pass: when ``replicas_only=True`` and
+        ``cluster_lanes_by_model`` is provided, candidates are restricted to
+        lanes whose model has another loaded copy elsewhere in the cluster
+        (replica count > 1). As selections are made, a working copy of the
+        count is decremented so the *last* remaining copy of any model is
+        never picked in this pass. Callers should fall back to a normal
+        (non-replicas-only) call when this pass cannot cover the deficit.
         """
         # Nothing to do if deficit is already met
         if all(d <= 0 for d in per_gpu_deficit.values()):
@@ -1422,11 +1640,34 @@ class CapacityPlanner:
                 self.freed_per_gpu: dict[int, float] = freed_per_gpu
 
         candidates: list[_Cand] = []
+        # Phase 1.5: track per-candidate skip reasons so the existing
+        # "Eviction candidates ... [none]" log line explains *why* the set is
+        # empty. Each entry is (lane_id, model_name, reason).
+        skipped: list[tuple[str, str, str]] = []
         for lane in lanes:
-            # Skip if lane has active traffic or scheduler queue demand
             total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
-            if lane.active_requests > 0 or lane.queue_waiting > 0 or total_demand > 0:
-                continue
+            # Phase 3.1: under LOGOS_EVICTION_GATE_V2, hard-block only on
+            # vLLM-internal busyness (active_requests / queue_waiting). The
+            # Logos-external scheduler queue is no longer a hard pre-filter
+            # — it contributes to victim eff at the competitive-ratio site
+            # below. Drain (lines 2330+) handles vLLM-busy lanes; eviction
+            # handles vLLM-idle lanes whose model has external demand.
+            if self._eviction_gate_v2:
+                if lane.active_requests > 0 or lane.queue_waiting > 0:
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"busy(active={lane.active_requests},"
+                        f"vllm_q={int(lane.queue_waiting)})",
+                    ))
+                    continue
+            else:
+                if lane.active_requests > 0 or lane.queue_waiting > 0 or total_demand > 0:
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"busy/queued(active={lane.active_requests},"
+                        f"vllm_q={int(lane.queue_waiting)},sched_q={total_demand})",
+                    ))
+                    continue
             # NOTE: load_cooldown is checked *per-action* below, not as a
             # blanket filter. A freshly-loaded lane is fair game for sleep_l1
             # (cheap, reversible — no work is wasted by sleeping a vLLM lane
@@ -1441,9 +1682,12 @@ class CapacityPlanner:
             # (state=sleeping)" errors. Stop uses the longer LOAD_COOLDOWN
             # since its destructive, sleep_l1 just needs LANE_MIN_TENURE.
             lane_loaded_at = self._lane_loaded_at.get(self._lane_key(provider_id, lane.lane_id))
+            tenure_seconds = self._get_effective_tenure(
+                provider_id=provider_id, model_name=lane.model_name,
+            )
             in_min_tenure = (
                 lane_loaded_at is not None
-                and (now - lane_loaded_at) < self.LANE_MIN_TENURE_SECONDS
+                and (now - lane_loaded_at) < tenure_seconds
             )
 
             lane_gpus = frozenset(self._parse_gpu_device_ids(lane.gpu_devices))
@@ -1462,6 +1706,7 @@ class CapacityPlanner:
                 overlap = lane_gpus  # no constraint → all GPUs count
 
             if not overlap and required_gpus:
+                skipped.append((lane.lane_id, lane.model_name, "gpu_disjoint"))
                 continue  # This lane is on disjoint GPUs — useless
 
             profile = profiles.get(lane.model_name)
@@ -1475,6 +1720,11 @@ class CapacityPlanner:
                 # (~5s) is enough to absorb dispatch races and let the lane
                 # serve its first batch.
                 if in_min_tenure:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"tenure({age:.1f}s/{tenure_seconds:.1f}s)",
+                    ))
                     continue
                 action = "sleep_l1"
                 current_mb = float(lane.effective_vram_mb or 0.0)
@@ -1484,19 +1734,56 @@ class CapacityPlanner:
                 freed_total = max(current_mb - residual_mb, 0.0)
             elif lane.runtime_state in ("sleeping",) and lane.sleep_state == "sleeping":
                 # Stopping a sleeping lane destroys the process; recovery
-                # requires a 30-60s cold-load. Only do it when this model
-                # is genuinely idle — no queued requests, no recent demand.
-                # If demand exists, the planner should keep the lane
-                # sleeping so a fast wake can serve it later.
-                pending_demand = (
+                # requires a 30-60s cold-load. Default behaviour: protect any
+                # sleeping lane whose model has queued demand or score above
+                # the load floor. With LOGOS_STOP_DEDUP_SIBLINGS enabled we
+                # only protect the *chosen* lane (per lane_comparator) for
+                # the model — extra sleeping siblings can be stopped to
+                # reclaim residual without losing the wake target.
+                has_real_queue = (
                     self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
-                    or self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
                 )
-                if pending_demand:
-                    continue
+                has_speculative_demand = (
+                    self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
+                )
+                # Phase 3.3: self-eviction (this sleeping lane is the same
+                # model as the wake/load target) is degenerate — stopping it
+                # to make room for itself is always safe.
+                is_self_eviction = (
+                    self._eviction_gate_v2
+                    and target_model_name is not None
+                    and lane.model_name == target_model_name
+                )
+                if is_self_eviction:
+                    pass  # bypass demand checks below
+                elif self._stop_dedup_siblings:
+                    chosen = self._pick_request_target_lane(provider_id, lane.model_name)
+                    is_chosen_sibling = chosen is not None and chosen.lane_id == lane.lane_id
+                    if has_real_queue and is_chosen_sibling:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            "chosen-sibling-with-queue",
+                        ))
+                        continue
+                    # has_speculative_demand alone no longer blocks stop:
+                    # if the model is needed we'd rather cold-load fresh
+                    # than hoard residuals on every provider.
+                else:
+                    if has_real_queue or has_speculative_demand:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            f"model-demanded(real_q={has_real_queue},"
+                            f"score>={self.DEMAND_LOAD_FLOOR}={has_speculative_demand})",
+                        ))
+                        continue
                 # Stop is destructive — respect the post-load cooldown so we
                 # don't throw away a cold-load we just paid for.
                 if in_cooldown:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"load_cooldown({age:.1f}s/{self._load_cooldown_seconds:.0f}s)",
+                    ))
                     continue
                 action = "stop"
                 # Stopping a sleeping vLLM lane frees only the small residual
@@ -1516,10 +1803,78 @@ class CapacityPlanner:
                 if residual_mb <= 0 and profile:
                     residual_mb = float(profile.sleeping_residual_mb or 0.0)
                 freed_total = residual_mb
+            elif (
+                lane.is_vllm
+                and lane.runtime_state in ("loaded", "running")
+                and lane.sleep_state == "unsupported"
+            ):
+                # Lane was started with enable_sleep_mode=False (static
+                # operator config). Sleep is impossible — the only way to
+                # reclaim its VRAM is a destructive cold stop. Apply the
+                # same protections used for the sleeping-lane stop branch:
+                # demand checks, post-load cooldown, and tenure. Supported
+                # awake lanes still take the sleep_l1 branch above; the
+                # sort at the end of this function still prefers sleep
+                # over stop, so a sibling supported lane will be picked
+                # first when one is available.
+                has_real_queue = (
+                    self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
+                )
+                has_speculative_demand = (
+                    self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
+                )
+                is_self_eviction = (
+                    self._eviction_gate_v2
+                    and target_model_name is not None
+                    and lane.model_name == target_model_name
+                )
+                if is_self_eviction:
+                    pass
+                elif self._stop_dedup_siblings:
+                    chosen = self._pick_request_target_lane(provider_id, lane.model_name)
+                    is_chosen_sibling = chosen is not None and chosen.lane_id == lane.lane_id
+                    if has_real_queue and is_chosen_sibling:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            "chosen-sibling-with-queue",
+                        ))
+                        continue
+                else:
+                    if has_real_queue or has_speculative_demand:
+                        skipped.append((
+                            lane.lane_id, lane.model_name,
+                            f"model-demanded(real_q={has_real_queue},"
+                            f"score>={self.DEMAND_LOAD_FLOOR}={has_speculative_demand})",
+                        ))
+                        continue
+                if in_cooldown:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"load_cooldown({age:.1f}s/{self._load_cooldown_seconds:.0f}s)",
+                    ))
+                    continue
+                if in_min_tenure:
+                    age = (now - lane_loaded_at) if lane_loaded_at else 0.0
+                    skipped.append((
+                        lane.lane_id, lane.model_name,
+                        f"tenure({age:.1f}s/{tenure_seconds:.1f}s)",
+                    ))
+                    continue
+                action = "stop"
+                current_mb = float(lane.effective_vram_mb or 0.0)
+                if current_mb <= 0 and profile:
+                    current_mb = self._estimate_model_loaded_vram(profile)
+                freed_total = current_mb
             else:
+                skipped.append((
+                    lane.lane_id, lane.model_name,
+                    f"wrong-state(runtime={lane.runtime_state},sleep={lane.sleep_state})",
+                ))
                 continue  # busy, cold, stopped, or starting — not evictable
 
             if freed_total <= 0:
+                skipped.append((lane.lane_id, lane.model_name, "no-freed-vram"))
                 continue
 
             # Distribute freed VRAM across the GPUs this lane occupies
@@ -1538,8 +1893,13 @@ class CapacityPlanner:
         _action_cost = {"sleep_l1": 0, "sleep_l2": 0, "stop": 1}
         candidates.sort(key=lambda c: (_action_cost.get(c.action, 2), c.eff_demand))
 
+        skipped_str = (
+            "; ".join(f"{lid}[{mn}]:{reason}" for lid, mn, reason in skipped)
+            if skipped else "none"
+        )
         logger.info(
-            "Eviction candidates for worker=%s gpus=%s deficit=%s: [%s]",
+            "Eviction candidates for worker=%s gpus=%s deficit=%s: [%s]"
+            " | skipped: [%s]",
             self._facade.get_provider_name(provider_id) or provider_id,
             sorted(required_gpus) if required_gpus else "any",
             {g: f"{d:.0f}MB" for g, d in per_gpu_deficit.items()},
@@ -1548,15 +1908,34 @@ class CapacityPlanner:
                 f"free={sum(c.freed_per_gpu.values()):.0f}MB)"
                 for c in candidates
             ) if candidates else "none",
+            skipped_str,
         )
 
         # Greedy covering: pick candidates until all per-GPU deficits are met
         remaining: dict[int, float] = dict(per_gpu_deficit)
         chosen: list[tuple[LaneSchedulerSignals, str, float]] = []
+        # Working copy of per-model loaded-lane counts. Decremented every time
+        # we pick a lane in replicas-only mode so the *last* loaded copy of a
+        # model is never selected. Only consulted when replicas_only is True.
+        working_counts: dict[str, int] = (
+            dict(cluster_lanes_by_model or {}) if replicas_only else {}
+        )
 
         for cand in candidates:
             if all(v <= 0 for v in remaining.values()):
                 break
+            # Replicas-only gate: skip lanes whose model has only one
+            # remaining loaded copy in the cluster. The "remaining" count
+            # is decremented as siblings get selected earlier in this loop,
+            # so we never pick the final copy of a model in this pass.
+            if replicas_only:
+                model_count = working_counts.get(cand.lane.model_name, 0)
+                if model_count <= 1:
+                    skipped.append((
+                        cand.lane.lane_id, cand.lane.model_name,
+                        "primary (last loaded copy in cluster)",
+                    ))
+                    continue
             # Only include if it helps at least one still-deficient GPU
             useful = any(
                 remaining.get(g, 0) > 0
@@ -1568,12 +1947,18 @@ class CapacityPlanner:
             for g, freed in cand.freed_per_gpu.items():
                 if g in remaining:
                     remaining[g] = max(0.0, remaining[g] - freed)
+            if replicas_only:
+                working_counts[cand.lane.model_name] = (
+                    working_counts.get(cand.lane.model_name, 0) - 1
+                )
 
         if all(v <= 0 for v in remaining.values()):
             return chosen
         logger.info(
-            "Eviction set INSUFFICIENT for worker=%s: remaining deficit=%s after %d candidates",
+            "Eviction set INSUFFICIENT for worker=%s%s: remaining deficit=%s "
+            "after %d candidates",
             self._facade.get_provider_name(provider_id) or provider_id,
+            " (replicas-only)" if replicas_only else "",
             {g: f"{d:.0f}MB" for g, d in remaining.items() if d > 0}, len(chosen),
         )
         return None  # couldn't cover the deficit
@@ -1585,30 +1970,57 @@ class CapacityPlanner:
         tp: int,
         lanes: List[LaneSchedulerSignals],
         profiles: dict[str, "ModelProfile"],
+        target_model_name: Optional[str] = None,
+        *,
+        cluster_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> Optional[tuple[frozenset[int], list[tuple[LaneSchedulerSignals, str, float]]]]:
         """Find the best GPU set for a cold load and its required eviction set.
 
-        Tries every combination of `tp` GPUs.  For each combination, computes
-        the per-GPU deficit and calls _find_eviction_set.  Returns the placement
-        whose eviction set has the lowest maximum effective-demand score (i.e. the
-        one that sacrifices the least-valuable models).
+        Tries every combination of `tp` GPUs. For each combination, computes
+        the per-GPU deficit using the same headroom rule as
+        ``_passes_minimum_load_feasibility`` / ``_check_per_gpu_feasibility``
+        (even split of ``load_cost_mb`` + fixed ``PER_GPU_COLD_START_MB``) and
+        calls ``_find_eviction_set``. Returns the placement whose eviction set
+        has the lowest maximum effective-demand score (sacrifice least-valued
+        models first).
+
+        Replicas-first: when ``self._replica_first_eviction`` is on AND
+        ``cluster_lanes_by_model`` is provided, runs a Pass 1 over all GPU
+        combos restricted to replica victims (lanes whose model has another
+        loaded copy elsewhere). If any combo can cover the deficit with
+        replicas alone, the cheapest such placement is returned. Pass 2 is
+        the legacy global eviction, used only when Pass 1 yields nothing.
 
         Returns (gpu_set, eviction_set) or None if no feasible placement exists.
         """
-        per_gpu_needed = load_cost_mb / max(tp, 1)
+        per_gpu_needed = (load_cost_mb / max(tp, 1)) + self.PER_GPU_COLD_START_MB
         per_gpu_free = self._get_per_gpu_free(provider_id)
 
         if not per_gpu_free:
-            # No per-GPU info — fall back to aggregate check with no GPU constraint
+            # No per-GPU info — fall back to aggregate check with no GPU constraint.
+            # Add per-GPU cold-start headroom (×tp) so the aggregate path is as
+            # conservative as the per-GPU path; otherwise tight aggregate fits
+            # silently bypass the runtime overhead allowance.
             capacity = self._safe_get_capacity(provider_id)
             available = float(capacity.available_vram_mb) if capacity else 0.0
-            deficit = max(0.0, load_cost_mb * self.VRAM_SAFETY_MARGIN - available)
+            needed = load_cost_mb + tp * self.PER_GPU_COLD_START_MB
+            deficit = max(0.0, needed - available)
             if deficit <= 0:
                 return frozenset(), []
+            # Replicas-first pass for the aggregate path
+            if self._replica_first_eviction and cluster_lanes_by_model is not None:
+                eviction_set = self._find_eviction_set(
+                    provider_id, frozenset(), {}, lanes, profiles,
+                    target_model_name=target_model_name,
+                    replicas_only=True,
+                    cluster_lanes_by_model=cluster_lanes_by_model,
+                )
+                if eviction_set is not None:
+                    return frozenset(), eviction_set
             eviction_set = self._find_eviction_set(
                 provider_id, frozenset(), {}, lanes, profiles,
+                target_model_name=target_model_name,
             )
-            # Can't do proper per-GPU accounting; return aggregate result
             if eviction_set is None:
                 return None
             return frozenset(), eviction_set
@@ -1617,27 +2029,39 @@ class CapacityPlanner:
         if len(all_gpu_ids) < tp:
             return None  # Not enough GPUs
 
-        best: Optional[tuple[frozenset[int], list, float]] = None  # (gpus, eviction, max_score)
+        def _try(replicas_only: bool):
+            """Iterate GPU combos, return cheapest placement found in this mode."""
+            best_local: Optional[tuple[frozenset[int], list, float]] = None
+            for gpu_combo in combinations(all_gpu_ids, tp):
+                gpu_set = frozenset(gpu_combo)
+                per_gpu_deficit: dict[int, float] = {}
+                for g in gpu_set:
+                    free = per_gpu_free.get(g, 0.0)
+                    deficit = max(0.0, per_gpu_needed - free)
+                    if deficit > 0:
+                        per_gpu_deficit[g] = deficit
+                eviction_set = self._find_eviction_set(
+                    provider_id, gpu_set, per_gpu_deficit, lanes, profiles,
+                    target_model_name=target_model_name,
+                    replicas_only=replicas_only,
+                    cluster_lanes_by_model=cluster_lanes_by_model,
+                )
+                if eviction_set is None:
+                    continue
+                max_score = max((s for _, _, s in eviction_set), default=0.0)
+                if best_local is None or max_score < best_local[2]:
+                    best_local = (gpu_set, eviction_set, max_score)
+            return best_local
 
-        for gpu_combo in combinations(all_gpu_ids, tp):
-            gpu_set = frozenset(gpu_combo)
-            per_gpu_deficit: dict[int, float] = {}
-            for g in gpu_set:
-                free = per_gpu_free.get(g, 0.0)
-                deficit = max(0.0, per_gpu_needed * self.VRAM_SAFETY_MARGIN - free)
-                if deficit > 0:
-                    per_gpu_deficit[g] = deficit
+        # Pass 1: replicas-only — preserves the last loaded copy of each model.
+        if self._replica_first_eviction and cluster_lanes_by_model is not None:
+            best_replicas = _try(replicas_only=True)
+            if best_replicas is not None:
+                return best_replicas[0], best_replicas[1]
 
-            eviction_set = self._find_eviction_set(
-                provider_id, gpu_set, per_gpu_deficit, lanes, profiles,
-            )
-            if eviction_set is None:
-                continue  # Can't cover this GPU combo
-
-            max_score = max((s for _, _, s in eviction_set), default=0.0)
-            if best is None or max_score < best[2]:
-                best = (gpu_set, eviction_set, max_score)
-
+        # Pass 2: global eviction (legacy behaviour). Reached when replicas
+        # alone can't cover the deficit, or when the feature is disabled.
+        best = _try(replicas_only=False)
         if best is None:
             return None
         return best[0], best[1]
@@ -1858,11 +2282,216 @@ class CapacityPlanner:
         return False
 
     # ------------------------------------------------------------------
+    # Cluster-wide aggregation helpers
+    # ------------------------------------------------------------------
+
+    def _count_loaded_lanes_per_model(self) -> dict[str, int]:
+        """Count loaded/running lanes across the whole cluster, keyed by model.
+
+        Used by the replicas-first eviction pass to identify lanes that have
+        siblings (count > 1) vs lanes that are the last loaded copy of their
+        model (count == 1). Sleeping lanes are not counted — a sleeping
+        replica isn't a serving replica.
+        """
+        counts: dict[str, int] = {}
+        for pid in self._facade.provider_ids():
+            try:
+                lanes = self._facade.get_all_provider_lane_signals(pid)
+            except Exception:
+                continue
+            for lane in lanes:
+                if lane.runtime_state in ("loaded", "running"):
+                    counts[lane.model_name] = counts.get(lane.model_name, 0) + 1
+        return counts
+
+    # ------------------------------------------------------------------
+    # Cross-provider best-first ranking
+    # ------------------------------------------------------------------
+
+    def _estimate_demand_action_cost(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: List[LaneSchedulerSignals],
+        profiles: dict[str, "ModelProfile"],
+        capacity,
+    ) -> Optional[tuple[float, float]]:
+        """Heuristic cost (seconds) to serve `model_name` on this provider.
+
+        Returns ``(target_cost + victim_cost, free_vram_mb)`` for ranking, or
+        ``None`` if the model is not feasibly servable on this provider.
+
+        Used by :meth:`_rank_providers_for_demanded_models` to pick the
+        cheapest worker per demanded model in a cycle. The number is rough
+        on purpose — the planner re-derives the actual eviction set inside
+        :meth:`_compute_demand_actions`. What we need here is just the
+        relative ordering so a fast wake on one worker can outrank a slow
+        cold-load on another regardless of iteration order.
+
+        Cost model:
+          - Awake usable lane already exists  → 0  (nothing to do)
+          - Sleeping lane exists              → TARGET_ACTION_COST_S["wake"]
+          - No lane                           → TARGET_ACTION_COST_S["load"]
+          - Plus the cheapest available victim cost if the action needs
+            eviction (i.e. estimated load/wake MB exceeds current free VRAM).
+        """
+        model_lanes = [l for l in lanes if l.model_name == model_name]
+        awake_lanes = [
+            l for l in model_lanes
+            if l.runtime_state in ("loaded", "running")
+            and l.sleep_state != "sleeping"
+        ]
+        sleeping_lanes = [
+            l for l in model_lanes
+            if l.sleep_state == "sleeping"
+            and not self._lane_is_in_wake_failure_cooldown(provider_id, l.lane_id)
+        ]
+
+        free_vram = float(getattr(capacity, "available_vram_mb", 0) or 0) if capacity else 0.0
+
+        # Already loaded and serving — no planner action needed, cost 0.
+        # Returned so ties between providers (e.g. two workers each with a
+        # loaded lane) tie-break on free VRAM downstream rather than this
+        # provider always claiming the model.
+        if awake_lanes:
+            return (0.0, free_vram)
+
+        profile = profiles.get(model_name)
+
+        if sleeping_lanes:
+            target_cost = self.TARGET_ACTION_COST_S["wake"]
+            # Wake VRAM need = loaded_vram - residual (the lane already holds
+            # residual, so we only need to re-allocate the KV pool).
+            if profile is not None:
+                loaded_mb = self._estimate_model_loaded_vram(profile)
+                residual_mb = float(profile.sleeping_residual_mb or 0.0)
+                needed_mb = max(loaded_mb - residual_mb, 0.0)
+            else:
+                needed_mb = 0.0
+        else:
+            target_cost = self.TARGET_ACTION_COST_S["load"]
+            # Cold-load VRAM need = full base_residency (with KV+TP if profile knows).
+            if profile is not None:
+                needed_mb = self._estimate_model_loaded_vram(profile)
+            else:
+                # Unknown model — assume something modest so we don't unfairly
+                # rule out providers; the real placement check will catch
+                # infeasibility later.
+                needed_mb = 4096.0
+
+        victim_cost = 0.0
+        if needed_mb > free_vram:
+            # Eviction will be needed. Pick the cheapest available victim type:
+            # sleep_l1 if any non-target lane can sleep, otherwise stop.
+            other_can_sleep = any(
+                l.is_vllm
+                and l.runtime_state in ("loaded", "running")
+                and l.sleep_state == "awake"
+                and l.model_name != model_name
+                for l in lanes
+            )
+            other_has_any_lane = any(l.model_name != model_name for l in lanes)
+            if other_can_sleep:
+                victim_cost = self.VICTIM_ACTION_COST_S["sleep_l1"]
+            elif other_has_any_lane:
+                victim_cost = self.VICTIM_ACTION_COST_S["stop"]
+            else:
+                # No eviction candidates at all — this provider cannot satisfy
+                # the deficit. Mark infeasible.
+                return None
+
+        return (target_cost + victim_cost, free_vram)
+
+    def _rank_providers_for_demanded_models(
+        self,
+        provider_ids: list[int],
+        ranked: list[tuple[str, float]],
+    ) -> dict[str, int]:
+        """Pre-cycle pass: pick the cheapest worker for each demanded model.
+
+        Iterates every (provider, model) pair, estimates the per-pair cost
+        via :meth:`_estimate_demand_action_cost`, and returns a mapping
+        ``{model_name: winning_provider_id}``. Tie-breaks by free-VRAM
+        descending, then provider_id ascending for determinism.
+
+        Models with no feasible provider are simply omitted from the result;
+        the per-provider planning loop will naturally produce no action for
+        them.
+
+        Logs one line per model showing the candidate scores.
+        """
+        # best[model] = (provider_id, cost, free_vram)
+        best: dict[str, tuple[int, float, float]] = {}
+        # For per-model logging
+        scored_by_model: dict[str, list[tuple[int, float, float]]] = {}
+
+        for provider_id in provider_ids:
+            try:
+                lanes = self._facade.get_all_provider_lane_signals(provider_id)
+            except Exception:
+                continue
+            try:
+                profiles = self._facade.get_model_profiles(provider_id)
+            except Exception:
+                profiles = {}
+            try:
+                capabilities = set(self._facade.get_worker_capabilities(provider_id))
+            except Exception:
+                capabilities = set()
+            try:
+                capacity = self._facade.get_capacity_info(provider_id)
+            except Exception:
+                capacity = None
+
+            for model_name, _score in ranked:
+                if capabilities and model_name not in capabilities:
+                    continue
+                scored = self._estimate_demand_action_cost(
+                    provider_id, model_name, lanes, profiles, capacity,
+                )
+                if scored is None:
+                    continue
+                cost, free_vram = scored
+                scored_by_model.setdefault(model_name, []).append(
+                    (provider_id, cost, free_vram)
+                )
+                current = best.get(model_name)
+                if (
+                    current is None
+                    or cost < current[1]
+                    or (cost == current[1] and free_vram > current[2])
+                    or (cost == current[1] and free_vram == current[2] and provider_id < current[0])
+                ):
+                    best[model_name] = (provider_id, cost, free_vram)
+
+        for model_name, scores in scored_by_model.items():
+            winner_pid, winner_cost, _ = best[model_name]
+            ranked_str = ", ".join(
+                f"{self._facade.get_provider_name(pid) or pid}={cost:.1f}s"
+                for pid, cost, _ in sorted(scores, key=lambda x: x[1])
+            )
+            logger.info(
+                "Best-first ranking: model=%s winner=%s cost=%.1fs candidates=[%s]",
+                model_name,
+                self._facade.get_provider_name(winner_pid) or winner_pid,
+                winner_cost,
+                ranked_str,
+            )
+
+        return {m: pid for m, (pid, _, _) in best.items()}
+
+    # ------------------------------------------------------------------
     # Demand-based actions
     # ------------------------------------------------------------------
 
     def _compute_demand_actions(
-        self, provider_id: int, lanes: List[LaneSchedulerSignals]
+        self,
+        provider_id: int,
+        lanes: List[LaneSchedulerSignals],
+        *,
+        cycle_planned_models: Optional[set[str]] = None,
+        best_provider_for_model: Optional[dict[str, int]] = None,
+        cluster_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -1898,19 +2527,27 @@ class CapacityPlanner:
         # We check both the ledger (covers the load/wake phase after the capacity
         # lock is released) and the lock itself (covers the reclaim phase before
         # the reservation is created).
-        # TODO: per-lane awareness instead of full-provider skip — the current
-        #       check blocks planning for ALL models on the provider even when only
-        #       one lane is being loaded.  A finer-grained approach would track
-        #       which model/lane the in-flight operation targets and only skip
-        #       planning decisions that conflict with it.
+        # Phase 3.4: under LOGOS_EVICTION_GATE_V2 the ledger check moves into
+        # the per-model loop so disjoint-GPU planning isn't blocked by an
+        # unrelated in-flight reservation. The capacity-lock check stays at
+        # function-level — that lock serializes reclaim+commit on the provider
+        # and dropping it would race the ledger update.
         committed = self._vram_ledger.get_committed_mb(provider_id)
         capacity_locked = self._provider_capacity_lock(provider_id).locked()
-        if committed > 0 or capacity_locked:
+        if capacity_locked:
+            logger.info(
+                "Skipping demand planning for worker=%s: provider capacity lock"
+                " held (committed=%.0fMB)",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                committed,
+            )
+            return []
+        if committed > 0 and not self._eviction_gate_v2:
             logger.info(
                 "Skipping demand planning for worker=%s: "
-                "in-flight VRAM reservation (committed=%.0fMB locked=%s)",
+                "in-flight VRAM reservation (committed=%.0fMB)",
                 self._facade.get_provider_name(provider_id) or provider_id,
-                committed, capacity_locked,
+                committed,
             )
             return []
 
@@ -1951,7 +2588,65 @@ class CapacityPlanner:
         for model_name, score in candidates:
             if capabilities and model_name not in capabilities:
                 continue
+            # Phase 1.3: skip a model that another provider already planned a
+            # wake/load for in this same cycle. Prevents two providers from
+            # racing to cold-load the same model when both have capability.
+            if (
+                self._cross_provider_dedup
+                and cycle_planned_models is not None
+                and model_name in cycle_planned_models
+            ):
+                logger.info(
+                    "Skipping demand action for worker=%s model=%s: already planned"
+                    " for another worker this cycle",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    model_name,
+                )
+                continue
+            # Cross-provider best-first: if a pre-cycle ranking picked a
+            # different worker as the cheapest for this model, skip here so
+            # the winner can serve it (wake on a sleeping lane beats a cold
+            # load on a different worker even when both have capability).
+            if (
+                self._cross_provider_best_first
+                and best_provider_for_model is not None
+                and best_provider_for_model.get(model_name, provider_id) != provider_id
+            ):
+                logger.info(
+                    "Skipping demand action for worker=%s model=%s: best-first"
+                    " ranker picked worker=%s",
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    model_name,
+                    self._facade.get_provider_name(best_provider_for_model[model_name])
+                    or best_provider_for_model[model_name],
+                )
+                continue
             model_lanes = lanes_by_model.get(model_name, [])
+            # Phase 3.4: per-lane VRAM ledger gate — under v2, only skip this
+            # model when an in-flight reservation overlaps the GPUs its target
+            # lane(s) would use. Models targeting disjoint GPUs proceed.
+            #
+            # For COLD models with no existing lane the GPU set is unknown
+            # here (model_lanes is empty), and the empty frozenset would be
+            # treated by has_overlapping_reservation as "match anything" —
+            # which would incorrectly block every cold seed/load whenever
+            # any unrelated reservation is in flight. Defer that check to
+            # the cold-load branch below where we have a concrete placement
+            # GPU set from _pick_cold_load_placement.
+            if self._eviction_gate_v2 and committed > 0 and model_lanes:
+                target_gpus: frozenset[int] = frozenset()
+                for l in model_lanes:
+                    target_gpus = target_gpus | frozenset(self._parse_gpu_device_ids(l.gpu_devices))
+                if target_gpus and self._vram_ledger.has_overlapping_reservation(
+                    provider_id, target_gpus,
+                ):
+                    logger.info(
+                        "Skipping demand action for worker=%s model=%s: in-flight"
+                        " VRAM reservation overlaps target GPUs %s",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        model_name, sorted(target_gpus),
+                    )
+                    continue
             eff = self._effective_demand(model_name, provider_id, lanes)
             here_queue = self._get_queue_depth_for_model(provider_id, model_name, lanes)
             cross_queue = self._get_queue_depth_across_deployments(model_name)
@@ -1972,7 +2667,7 @@ class CapacityPlanner:
                 and not self._lane_is_in_wake_failure_cooldown(provider_id, l.lane_id)
             ]
             if sleeping_lanes:
-                target = sleeping_lanes[0]
+                target = best_lane(sleeping_lanes)
                 profile = profiles.get(model_name)
 
                 # Per-GPU deficit on the GPUs the sleeping lane occupies.
@@ -2001,13 +2696,22 @@ class CapacityPlanner:
                 if effective_target_gpus and per_gpu_free:
                     for g in effective_target_gpus:
                         free = per_gpu_free.get(g, 0.0)
-                        deficit = max(0.0, wake_cost_per_gpu * self.VRAM_SAFETY_MARGIN - free)
+                        # Add fixed cold-start headroom (CUDA context, NCCL,
+                        # allocator pools) per GPU so the wake check matches
+                        # _passes_minimum_load_feasibility / _check_per_gpu_feasibility.
+                        # Without this, an awake-on-GPU0 sibling can leave just
+                        # enough raw free for the model footprint but not the
+                        # ~500 MB runtime overhead → OOM at wake time.
+                        per_gpu_needed = wake_cost_per_gpu + self.PER_GPU_COLD_START_MB
+                        deficit = max(0.0, per_gpu_needed - free)
                         if deficit > 0:
                             per_gpu_deficit[g] = deficit
                 else:
                     # No per-GPU info at all: fall back to aggregate sentinel.
+                    # Same +cold-start headroom applied per GPU we'd touch (tp).
                     avail = float(capacity.available_vram_mb) if capacity else 0.0
-                    deficit = max(0.0, (loaded_mb - residual_mb) * self.VRAM_SAFETY_MARGIN - avail)
+                    needed = (loaded_mb - residual_mb) + tp * self.PER_GPU_COLD_START_MB
+                    deficit = max(0.0, needed - avail)
                     if deficit > 0:
                         per_gpu_deficit[-1] = deficit  # sentinel for aggregate
                 target_gpus = effective_target_gpus
@@ -2023,9 +2727,22 @@ class CapacityPlanner:
 
                 # Remove already-claimed victims from eviction candidates
                 available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
-                eviction_set = self._find_eviction_set(
-                    provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
-                )
+                # Pass 1: try evicting replicas only — preserves the last
+                # loaded copy of every other model. If that can't cover the
+                # per-GPU deficit, Pass 2 falls back to the global pool.
+                eviction_set = None
+                if self._replica_first_eviction and cluster_lanes_by_model is not None:
+                    eviction_set = self._find_eviction_set(
+                        provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
+                        target_model_name=model_name,
+                        replicas_only=True,
+                        cluster_lanes_by_model=cluster_lanes_by_model,
+                    )
+                if eviction_set is None:
+                    eviction_set = self._find_eviction_set(
+                        provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
+                        target_model_name=model_name,
+                    )
 
                 if eviction_set is None:
                     logger.info(
@@ -2059,18 +2776,50 @@ class CapacityPlanner:
                     #     → keep the ratio gate so a model that *might*
                     #     be popular doesn't preempt a recently-warm one
                     #     on speculation alone.
+                    #
+                    # Phase 3.2: under v2, branch (a) only fires when the
+                    # victim is genuinely idle (eff < floor). Otherwise
+                    # both target and victim have queue and we must use
+                    # the ratio comparison — which, after base demand
+                    # decays, reduces to fair queue-size ranking.
+                    # Phase 3.3: self-eviction (target_model == victim_model)
+                    # is degenerate — sleeping a loaded copy of the model
+                    # to wake another lane for the same model is always
+                    # safe; bypass the ratio in that case.
                     has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
+                    non_self_victims = [s for vlane, _, s in eviction_set if vlane.model_name != model_name]
+                    self_only = not non_self_victims
                     max_victim_score = max(s for _, _, s in eviction_set)
-                    proceed = (
-                        (has_queued and eff >= self.DEMAND_WAKE_FLOOR)
-                        or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
-                    )
-                    if proceed:
+                    if self._eviction_gate_v2:
+                        max_non_self = max(non_self_victims) if non_self_victims else 0.0
+                        victim_below_floor = max_non_self < self.DEMAND_WAKE_FLOOR
+                        proceed = (
+                            self_only
+                            or (has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR)
+                            or eff > max_non_self * self.WAKE_COMPETITIVE_RATIO
+                        )
+                        if self_only:
+                            gate_reason = "self-eviction (same model as target)"
+                        elif has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR:
+                            gate_reason = (
+                                f"queued_demand & victims_idle → bypass ratio "
+                                f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
+                            )
+                        else:
+                            gate_reason = (
+                                f"target_eff={eff:.2f} > victim={max_non_self:.2f}×{self.WAKE_COMPETITIVE_RATIO}"
+                            )
+                    else:
+                        proceed = (
+                            (has_queued and eff >= self.DEMAND_WAKE_FLOOR)
+                            or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
+                        )
                         gate_reason = (
                             f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                             if has_queued and eff <= max_victim_score * self.WAKE_COMPETITIVE_RATIO
                             else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.WAKE_COMPETITIVE_RATIO}"
                         )
+                    if proceed:
                         for vlane, vaction, _ in eviction_set:
                             if vlane.lane_id in claimed_victims:
                                 continue
@@ -2132,6 +2881,8 @@ class CapacityPlanner:
             available_lanes = [l for l in lanes if l.lane_id not in claimed_victims]
             placement = self._pick_cold_load_placement(
                 provider_id, load_cost, tp, available_lanes, profiles,
+                target_model_name=model_name,
+                cluster_lanes_by_model=cluster_lanes_by_model,
             )
 
             if placement is None:
@@ -2141,7 +2892,27 @@ class CapacityPlanner:
                 )
                 continue
 
-            _, eviction_set = placement
+            placement_gpus, eviction_set = placement
+            # Phase 3.4 (post-placement): now that we have a concrete GPU set
+            # for this cold model, enforce the per-lane VRAM-ledger gate that
+            # was deferred above (model_lanes was empty for cold candidates).
+            # An in-flight reservation overlapping these specific GPUs would
+            # collide with this load.
+            if (
+                self._eviction_gate_v2
+                and committed > 0
+                and placement_gpus
+                and self._vram_ledger.has_overlapping_reservation(
+                    provider_id, placement_gpus,
+                )
+            ):
+                logger.info(
+                    "Skipping load of %s on worker=%s: in-flight VRAM "
+                    "reservation overlaps planned GPUs %s",
+                    model_name, self._facade.get_provider_name(provider_id) or provider_id,
+                    sorted(placement_gpus),
+                )
+                continue
             logger.info(
                 "Load candidate model=%s tp=%d load_cost=%.0fMB placement=%s eviction_needed=%s",
                 model_name, tp, load_cost,
@@ -2179,17 +2950,50 @@ class CapacityPlanner:
                 # already idle by construction); speculative score is
                 # gated by LOAD_COMPETITIVE_RATIO to avoid thrashing on
                 # a model that *might* become popular.
+                # Phase 3.2/3.3: under v2, branch (a) requires victim_below_floor
+                # and self-eviction is degenerate.
+                non_self_victims = [s for vlane, _, s in eviction_set if vlane.model_name != model_name]
+                self_only = not non_self_victims
                 max_victim_score = max(s for _, _, s in eviction_set)
-                proceed = (
-                    (has_queued and eff >= self.DEMAND_LOAD_FLOOR)
-                    or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
-                )
-                if proceed:
+                if self._eviction_gate_v2:
+                    max_non_self = max(non_self_victims) if non_self_victims else 0.0
+                    victim_below_floor = max_non_self < self.DEMAND_LOAD_FLOOR
+                    proceed = (
+                        self_only
+                        or (has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR)
+                        or eff > max_non_self * self.LOAD_COMPETITIVE_RATIO
+                    )
+                    if self_only:
+                        gate_reason = "self-eviction (same model as target)"
+                    elif has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR:
+                        gate_reason = (
+                            f"queued_demand & victims_idle → bypass ratio "
+                            f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
+                        )
+                    else:
+                        gate_reason = (
+                            f"target_eff={eff:.2f} > victim={max_non_self:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
+                        )
+                else:
+                    proceed = (
+                        (has_queued and eff >= self.DEMAND_LOAD_FLOOR)
+                        or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
+                    )
                     gate_reason = (
                         f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                         if has_queued and eff <= max_victim_score * self.LOAD_COMPETITIVE_RATIO
                         else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
                     )
+                if proceed:
+                    # _pick_cold_load_placement already verified eviction-aware
+                    # feasibility (total VRAM + per-GPU, with the eviction set's
+                    # freed VRAM added back). _passes_minimum_load_feasibility is
+                    # NOT eviction-aware (reads capacity.available_vram_mb at
+                    # `now`, ignores the sleep/stop actions we're about to emit),
+                    # so calling it here orphans evictions: the victim sleeps,
+                    # the load gets rejected for "insufficient VRAM" that the
+                    # planner itself is about to free in the same cycle. Trust
+                    # the placement decision.
                     lane_id = self._planner_lane_id(model_name)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
@@ -2202,8 +3006,6 @@ class CapacityPlanner:
                             model_name=vlane.model_name,
                             reason=f"Evicted for {model_name} load ({gate_reason})",
                         ))
-                    if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
-                        continue
                     actions.append(CapacityPlanAction(
                         action="load",
                         provider_id=provider_id,
@@ -2242,6 +3044,138 @@ class CapacityPlanner:
                     params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                     reason=f"Capability seeding: worker declares {model_name}, eff={eff:.2f}",
                 ))
+                # Phase 1.3: capability-seed must also feed cycle dedup so a
+                # second provider doesn't seed the same model in the same cycle.
+                planned_models.add(model_name)
+
+        # Phase 1.3: lift this provider's planned models into the cycle-wide
+        # set so subsequent providers in the iteration order skip them.
+        if cycle_planned_models is not None:
+            cycle_planned_models |= planned_models
+
+        return actions
+
+    # ------------------------------------------------------------------
+    # Speculative replication (Part A)
+    # ------------------------------------------------------------------
+
+    def _compute_replication_actions(
+        self,
+        provider_ids: list[int],
+        ranked_models: list[tuple[str, float]],
+        cluster_lanes_by_model: dict[str, int],
+        cycle_planned_models: set[str],
+    ) -> list[CapacityPlanAction]:
+        """Cross-provider replication pass — runs once per cycle.
+
+        For each demanded model that is *already* loaded on at least one
+        worker and whose demand score meets ``DEMAND_REPLICATION_FLOOR``,
+        find one additional worker that:
+          - declares capability for the model,
+          - does not already host it,
+          - has enough free VRAM to load it *without* eviction
+            (``loaded_vram_mb + tp × PER_GPU_COLD_START_MB``), and
+          - passes the per-GPU feasibility gate.
+        Emit a single ``load`` action onto that worker. At most one new
+        replica per model per cycle; capped at ``MAX_REPLICAS_PER_MODEL``
+        copies cluster-wide.
+
+        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
+
+        Models that already had an action emitted this cycle (in
+        ``cycle_planned_models``) are skipped — the main demand pass
+        already handles them.
+        """
+        if not self._replicate_on_free_vram:
+            return []
+
+        actions: list[CapacityPlanAction] = []
+
+        for model_name, score in ranked_models:
+            if score < self.DEMAND_REPLICATION_FLOOR:
+                continue
+            if model_name in cycle_planned_models:
+                continue  # main demand pass already planned something for this model
+            current_replicas = cluster_lanes_by_model.get(model_name, 0)
+            if current_replicas == 0:
+                continue  # not loaded anywhere yet → main demand pass owns first load
+            if current_replicas >= self.MAX_REPLICAS_PER_MODEL:
+                continue
+
+            for pid in provider_ids:
+                if self._registry is not None and not self._registry.has_received_first_status(pid):
+                    continue
+                try:
+                    lanes = self._facade.get_all_provider_lane_signals(pid)
+                except Exception:
+                    continue
+                # Skip workers that already host the model in any non-terminal
+                # state — including sleeping (would wake instead of replicate)
+                # and starting (an in-flight load is in progress).
+                if any(
+                    l.model_name == model_name
+                    and l.runtime_state in ("loaded", "running", "sleeping", "starting")
+                    for l in lanes
+                ):
+                    continue
+                try:
+                    capabilities = set(self._facade.get_worker_capabilities(pid))
+                except Exception:
+                    capabilities = set()
+                if model_name not in capabilities:
+                    continue
+                try:
+                    capacity = self._facade.get_capacity_info(pid)
+                except Exception:
+                    continue
+                try:
+                    profiles = self._facade.get_model_profiles(pid)
+                except Exception:
+                    profiles = {}
+                profile = profiles.get(model_name)
+                if profile is None:
+                    continue
+                # Replication NEVER evicts — only proceed if free VRAM
+                # covers the loaded footprint plus per-GPU cold-start
+                # headroom (mirrors the no-eviction branch of the placement
+                # picker).
+                needed_mb = self._estimate_model_loaded_vram(profile)
+                tp = 1
+                if profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+                    tp = int(profile.tensor_parallel_size)
+                free_mb = float(getattr(capacity, "available_vram_mb", 0) or 0)
+                budget_mb = needed_mb + tp * self.PER_GPU_COLD_START_MB
+                if free_mb < budget_mb:
+                    continue
+                # Defer to the standard pre-emission gate (per-GPU + ledger).
+                if not self._passes_minimum_load_feasibility(
+                    model_name, profile, capacity, provider_id=pid,
+                ):
+                    continue
+
+                lane_id = self._planner_lane_id(model_name)
+                actions.append(CapacityPlanAction(
+                    action="load",
+                    provider_id=pid,
+                    lane_id=lane_id,
+                    model_name=model_name,
+                    params=self._build_load_params(model_name, lane_id, profile, capacity, pid),
+                    reason=(
+                        f"Speculative replica: demand eff={score:.2f} ≥ "
+                        f"floor={self.DEMAND_REPLICATION_FLOOR}, "
+                        f"current_replicas={current_replicas}, "
+                        f"max={self.MAX_REPLICAS_PER_MODEL}"
+                    ),
+                ))
+                cycle_planned_models.add(model_name)
+                logger.info(
+                    "Speculative replica for model=%s onto worker=%s "
+                    "(current replicas=%d, free_vram=%.0fMB, needed=%.0fMB)",
+                    model_name,
+                    self._facade.get_provider_name(pid) or pid,
+                    current_replicas, free_mb, budget_mb,
+                )
+                break  # one replica per cycle per model
 
         return actions
 
@@ -2342,12 +3276,19 @@ class CapacityPlanner:
                         if profile is not None:
                             current_vram = self._estimate_model_loaded_vram(profile)
                     if current_vram > 0:
-                        # Prefer sleep over stop: keeps model warm for fast wake
+                        # Prefer sleep over stop: keeps model warm for fast wake.
+                        # `sleeping_residual_mb` is per-model on the profile, so a
+                        # sibling sleep-enabled lane can populate it for a model
+                        # whose current lane has enable_sleep_mode=False — never
+                        # emit sleep_l1 unless this specific lane reports a
+                        # non-unsupported sleep_state (otherwise the worker would
+                        # raise in _ensure_sleep_mode_ready and the action fails).
                         lane_profile = profiles.get(lane.model_name)
                         sleeping_residual = float(
                             getattr(lane_profile, "sleeping_residual_mb", 0) or 0
                         ) if lane_profile else 0.0
-                        if sleeping_residual > 0:
+                        lane_can_sleep = lane.sleep_state != "unsupported"
+                        if sleeping_residual > 0 and lane_can_sleep:
                             drain_action = "sleep_l1"
                             drain_reason = f"Demand drain: sleep for {model_name}"
                             drain_params = {}
@@ -2433,28 +3374,7 @@ class CapacityPlanner:
             for lane in self._safe_get_lanes(provider_id)
             if lane.model_name == model_name and lane.runtime_state not in {"stopped", "error"}
         ]
-        if not lanes:
-            return None
-
-        state_rank = {
-            "running": 0,
-            "loaded": 1,
-            "sleeping": 2,
-            "cold": 3,
-            "starting": 4,
-        }
-        lanes.sort(
-            key=lambda lane: (
-                state_rank.get(lane.runtime_state, 99),
-                lane.queue_waiting,
-                lane.requests_running,
-                lane.active_requests,
-                lane.ttft_p95_seconds,
-                -float(lane.effective_vram_mb or 0.0),
-                lane.lane_id,
-            )
-        )
-        return lanes[0]
+        return best_lane(lanes)
 
     PROVIDER_RECONNECT_POLL_SECONDS = 2.0
 
@@ -2575,17 +3495,13 @@ class CapacityPlanner:
                         per_gpu_needed = needed * self.TP_RANK0_VRAM_FRACTION
                 else:
                     per_gpu_needed = needed
-                # Wake operations are concurrent with loaded models on the same
-                # GPUs — CUDA allocator pools and KV-cache growth can consume
-                # memory between this check and the actual wake.  Apply extra
-                # safety margin so tight fits fall through to the reclaim path
-                # rather than risking a CUDA OOM.
-                # Calibrated models use a smaller margin (5%) since base_residency
-                # is measured; uncalibrated models use the full 15% wake margin.
-                if is_calibrated:
-                    per_gpu_needed *= self.CALIBRATED_PER_GPU_SAFETY_MARGIN
-                elif target_action.action == "wake":
-                    per_gpu_needed *= self.WAKE_PER_GPU_SAFETY_MARGIN
+                # Cold-start runtime overhead (CUDA context, NCCL ring buffers,
+                # vLLM allocator warm-up) is constant per GPU regardless of
+                # profile calibration or action kind. Estimation slack for
+                # non-calibrated profiles was already applied upstream by
+                # _estimate_action_vram, so `needed` here is the model's
+                # actual footprint estimate.
+                per_gpu_needed += self.PER_GPU_COLD_START_MB
                 gpu_effective = [
                     self._vram_ledger.get_gpu_effective_available_mb(
                         provider_id,
@@ -2655,10 +3571,8 @@ class CapacityPlanner:
                         per_gpu_needed = needed * self.TP_RANK0_VRAM_FRACTION
                 else:
                     per_gpu_needed = needed
-                if is_calibrated_tp:
-                    per_gpu_needed *= self.CALIBRATED_PER_GPU_SAFETY_MARGIN
-                elif target_action.action == "wake":
-                    per_gpu_needed *= self.WAKE_PER_GPU_SAFETY_MARGIN
+                # Same fixed per-GPU cold-start headroom as the known-GPU path.
+                per_gpu_needed += self.PER_GPU_COLD_START_MB
                 sorted_free = sorted(
                     (
                         self._vram_ledger.get_gpu_effective_available_mb(
@@ -2894,7 +3808,9 @@ class CapacityPlanner:
             if reclaim.action == "sleep_l1":
                 lane_key = (reclaim.provider_id, reclaim.lane_id)
                 loaded_at = self._lane_loaded_at.get(lane_key)
-                min_tenure = self._get_effective_tenure()
+                min_tenure = self._get_effective_tenure(
+                    provider_id=reclaim.provider_id, model_name=reclaim.model_name,
+                )
                 if min_tenure > 0:
                     if self._vram_ledger.has_active_reservation(
                         reclaim.provider_id, reclaim.lane_id,
@@ -2977,7 +3893,15 @@ class CapacityPlanner:
                             getattr(lane_profile, "sleeping_residual_mb", 0) or 0
                         ) if lane_profile else 0.0
                         freed_by_sleep = max(0.0, current_vram - sleeping_residual)
-                        if lane.is_vllm and sleeping_residual > 0:
+                        # `sleeping_residual_mb` is keyed on model name in the
+                        # profile, so a sibling sleep-enabled lane can populate
+                        # it for a model whose current lane has
+                        # enable_sleep_mode=False. Always require the lane's
+                        # own sleep_state to differ from "unsupported" before
+                        # emitting sleep_l1 — otherwise the worker would raise
+                        # in _ensure_sleep_mode_ready and the action fails.
+                        lane_can_sleep = lane.sleep_state != "unsupported"
+                        if lane.is_vllm and sleeping_residual > 0 and lane_can_sleep:
                             # For vLLM lanes, ALWAYS prefer sleep over stop.
                             # Sleeping frees 14-18 GB (loaded - residual) while
                             # keeping the model warm for 2-3s wake.  Stopping
@@ -2995,7 +3919,11 @@ class CapacityPlanner:
                                     reason=f"Request-time reclaim (drain+sleep) for {target.model_name}",
                                 ),
                             ))
-                        elif freed_by_sleep >= required_free_mb and sleeping_residual > 0:
+                        elif (
+                            freed_by_sleep >= required_free_mb
+                            and sleeping_residual > 0
+                            and lane_can_sleep
+                        ):
                             # Non-vLLM lane: sleeping frees enough
                             sleep_candidates.append((
                                 freed_by_sleep,
@@ -3008,7 +3936,8 @@ class CapacityPlanner:
                                 ),
                             ))
                         else:
-                            # Non-vLLM or no residual: must fully stop
+                            # Non-vLLM, no residual, or sleep disabled: must
+                            # fully stop.
                             if not self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
                                 stop_candidates.append((
                                     current_vram,
@@ -3100,7 +4029,9 @@ class CapacityPlanner:
                 # wake and sleep without serving anything.
                 lane_key = (provider_id, lane.lane_id)
                 loaded_at = self._lane_loaded_at.get(lane_key)
-                min_tenure = self._get_effective_tenure()
+                min_tenure = self._get_effective_tenure(
+                    provider_id=provider_id, model_name=lane.model_name,
+                )
                 if min_tenure > 0:
                     # Block 1: in-flight VRAM reservation means a concurrent
                     # ensure_capacity is loading/waking this lane right now.
@@ -3632,7 +4563,9 @@ class CapacityPlanner:
             else:
                 kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
 
-            minimum_needed = base_mb + kv_mb
+            # Apply estimation slack to the disk → memory size estimate so
+            # the gate matches what _estimate_model_loaded_vram returns.
+            minimum_needed = (base_mb + kv_mb) * self.ESTIMATION_SLACK_RATIO
 
             # Determine TP size for this model
             tp = 1
@@ -3658,14 +4591,14 @@ class CapacityPlanner:
             )
             return False
 
-        # Per-GPU feasibility check for TP models
-        # Use calibrated safety margin for cold-start overhead (CUDA context,
-        # NCCL init, allocator pools) — must match _ensure_request_capacity.
+        # Per-GPU feasibility check for TP models. Cold-start overhead is a
+        # fixed PER_GPU_COLD_START_MB additive headroom (CUDA context, NCCL
+        # init, allocator pools) regardless of whether the profile is
+        # calibrated — must match _ensure_request_capacity and
+        # _pick_cold_load_placement.
         if tp > 1 and provider_id is not None:
-            gpu_margin = self.CALIBRATED_PER_GPU_SAFETY_MARGIN if is_calibrated else None
             per_gpu_ok = self._check_per_gpu_feasibility(
                 provider_id, minimum_needed, tp, model_name,
-                per_gpu_margin=gpu_margin,
             )
             if not per_gpu_ok:
                 return False
@@ -3678,7 +4611,6 @@ class CapacityPlanner:
         total_needed_mb: float,
         tp: int,
         model_name: str,
-        per_gpu_margin: Optional[float] = None,
     ) -> bool:
         """Check if a TP model fits on tp individual GPUs given per-GPU free VRAM.
 
@@ -3727,10 +4659,10 @@ class CapacityPlanner:
         if len(per_gpu_free) < tp:
             return True  # can't determine per-GPU, allow
 
-        # Sort by most free first; check if the tp-th GPU has enough
+        # Sort by most free first; check if the tp-th GPU has enough.
+        # Per-GPU need = even split of the total + fixed cold-start headroom.
         per_gpu_free.sort(key=lambda x: x[1], reverse=True)
-        margin = per_gpu_margin if per_gpu_margin is not None else self.VRAM_SAFETY_MARGIN
-        per_gpu_needed = (total_needed_mb / tp) * margin
+        per_gpu_needed = (total_needed_mb / tp) + self.PER_GPU_COLD_START_MB
         best_tp_gpus = per_gpu_free[:tp]
         weakest_gpu = best_tp_gpus[-1]
 
@@ -3997,16 +4929,17 @@ class CapacityPlanner:
         the KV cache — return it directly.
 
         For uncalibrated vLLM profiles: base_residency is weights only, so add
-        the estimated KV pool on top.
+        the estimated KV pool and apply ESTIMATION_SLACK_RATIO to account for
+        the disk-size → memory estimate spread.
 
         For other engines: use the directly measured loaded_vram_mb from the profile.
         """
         if profile.engine == "vllm":
             base = float(profile.estimate_base_residency_mb() or 0.0)
             if profile.residency_source in ("calibrated", "measured"):
-                return base  # KV already baked in
+                return base  # KV already baked in; estimate is exact, no slack
             kv = self._estimate_kv_mb(profile)
-            return base + kv
+            return (base + kv) * self.ESTIMATION_SLACK_RATIO
         return profile.estimate_vram_mb()
 
     def _estimate_action_vram(
@@ -4033,14 +4966,15 @@ class CapacityPlanner:
                 # TP overhead is also baked in from the actual measured run.
                 loaded_vram = base_residency
             else:
-                # Uncalibrated: base_residency is weights only — add KV estimate.
+                # Uncalibrated: base_residency is weights only — add KV estimate
+                # and apply ESTIMATION_SLACK_RATIO for disk → memory spread.
                 params = action.params or {}
                 vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
                 kv_str = vllm_config.get("kv_cache_memory_bytes", "")
                 kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
                 if kv_mb <= 0:
                     kv_mb = self._estimate_kv_mb(profile)
-                loaded_vram = base_residency + kv_mb
+                loaded_vram = (base_residency + kv_mb) * self.ESTIMATION_SLACK_RATIO
 
                 tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
                 if tp <= 0 and profile.tensor_parallel_size:
@@ -4308,7 +5242,9 @@ class CapacityPlanner:
         loaded_at = self._lane_loaded_at.get(lane_key)
         if loaded_at is not None:
             tenure_elapsed = time.time() - loaded_at
-            min_tenure = self._get_effective_tenure()
+            min_tenure = self._get_effective_tenure(
+                provider_id=provider_id, model_name=busy_lane.model_name,
+            )
             if tenure_elapsed < min_tenure:
                 logger.info(
                     "Drain skip lane=%s: tenure %.1f/%.1fs",
@@ -4512,7 +5448,10 @@ class CapacityPlanner:
                 )
             except Exception:
                 logger.exception(
-                    "Failed to send reconfigure_lane for lane %s", action.lane_id,
+                    "Failed to send reconfigure_lane for worker=%s model=%s lane=%s",
+                    self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                    action.model_name,
+                    action.lane_id,
                 )
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
                 return False
@@ -4672,7 +5611,10 @@ class CapacityPlanner:
                     details=str(exc),
                 )
                 logger.exception(
-                    "Failed to send wake command for lane %s", action.lane_id,
+                    "Failed to send wake command for worker=%s model=%s lane=%s",
+                    self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                    action.model_name,
+                    action.lane_id,
                 )
                 return False
 
@@ -4719,7 +5661,10 @@ class CapacityPlanner:
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to send add_lane for lane %s", action.lane_id,
+                        "Failed to send add_lane for worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     return False
             else:
@@ -4754,7 +5699,10 @@ class CapacityPlanner:
                     self._clear_inflight_add(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
-                        "Failed to send apply_lanes for load of %s", action.lane_id,
+                        "Failed to send apply_lanes for load on worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     self._clear_inflight_add(action.provider_id, action.lane_id)
                     return False
@@ -4808,7 +5756,10 @@ class CapacityPlanner:
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to send delete_lane for lane %s", action.lane_id,
+                        "Failed to send delete_lane for worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     self._unmark_lane_cold(action.provider_id, action.lane_id)
                     return False
@@ -4839,7 +5790,10 @@ class CapacityPlanner:
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
                 except Exception:
                     logger.exception(
-                        "Failed to send apply_lanes for stop of %s", action.lane_id,
+                        "Failed to send apply_lanes for stop on worker=%s model=%s lane=%s",
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.model_name,
+                        action.lane_id,
                     )
                     self._clear_inflight_removal(action.provider_id, action.lane_id)
                     self._unmark_lane_cold(action.provider_id, action.lane_id)

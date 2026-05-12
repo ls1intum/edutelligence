@@ -8,4 +8,5 @@ class UserDTO(BaseModel):
     first_name: Optional[str] = Field(alias="firstName", default=None)
     last_name: Optional[str] = Field(alias="lastName", default=None)
     memiris_enabled: Optional[bool] = Field(alias="memirisEnabled", default=False)
-    lang_key: Optional[str] = Field(alias="langKey", default="en")
+    # Non-Optional: Artemis omits null/empty via @JsonInclude(NON_EMPTY).
+    lang_key: str = Field(alias="langKey", default="en")

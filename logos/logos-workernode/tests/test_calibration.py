@@ -640,8 +640,9 @@ def _patch_calibration_infra(
     )
 
     # sample_vram_mb → returns values from sequence
+    # Sequence: baseline, awake, sleeping_1, sleeping_2 (post-Fix-3 double-sample).
     if sample_vram_sequence is None:
-        sample_vram_sequence = [500.0, 7500.0, 600.0]  # baseline, awake, sleeping
+        sample_vram_sequence = [500.0, 7500.0, 600.0, 600.0]
     patches["sample"] = patch(
         "logos_worker_node.calibration.sample_vram_mb",
         side_effect=sample_vram_sequence,
@@ -854,7 +855,8 @@ def _patch_search_infra(
     )
 
     if sample_vram_sequence is None:
-        sample_vram_sequence = [500.0, 7500.0, 600.0]  # baseline, awake, sleeping
+        # baseline, awake, sleeping_1, sleeping_2 (Fix-3 double-sample)
+        sample_vram_sequence = [500.0, 7500.0, 600.0, 600.0]
     patches["sample"] = patch(
         "logos_worker_node.calibration.sample_vram_mb",
         side_effect=sample_vram_sequence,

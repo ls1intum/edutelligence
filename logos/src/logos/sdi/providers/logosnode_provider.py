@@ -703,6 +703,27 @@ class LogosNodeDataProvider:
         caps = snap.get("capabilities_models")
         return list(caps) if caps else []
 
+    def get_gpu_performance_score(self) -> int:
+        """Return the operator-declared GPU performance weight.
+
+        Used by the request scheduler's weighted-RR tie-break: when two
+        warm workers tie on corrected_score, traffic is split in proportion
+        to this value. Defaults to 100 so a homogeneous cluster gets
+        uniform random distribution (no sticky-first bias).
+        """
+        if self._runtime_registry is None:
+            return 100
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return 100
+        runtime = snap.get("runtime") or {}
+        score = runtime.get("gpu_performance_score")
+        try:
+            value = int(score) if score is not None else 100
+        except (TypeError, ValueError):
+            return 100
+        return value if value >= 1 else 100
+
     def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
         with self._lock:
             if request_id:

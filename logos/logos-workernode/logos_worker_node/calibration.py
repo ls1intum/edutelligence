@@ -339,7 +339,7 @@ def _build_vllm_cmd(
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
     max_model_len = plan.get("max_model_len")
-    enforce_eager = bool(plan.get("enforce_eager", True))
+    enforce_eager = bool(plan.get("enforce_eager", False))
     disable_custom_all_reduce = bool(plan.get("disable_custom_all_reduce", False))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
@@ -574,6 +574,29 @@ def wait_ready(
     raise TimeoutError(f"vLLM not ready after {timeout_s:.0f}s")
 
 
+def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> bool:
+    """Trigger a single 1-token completion to force lazy GPU allocations.
+
+    Without this, ``/health=200`` only guarantees weights are loaded — CUDA
+    graphs are captured lazily on the first real request, FlashInfer kernels
+    JIT on first use, and Triton autotunes per-shape. The peak VRAM the
+    planner needs to budget for is post-first-request, not post-load.
+
+    Sends one ``/v1/completions`` with ``max_tokens=1``. Returns True on
+    success, False on any HTTP error (caller logs and continues — failure
+    here doesn't fail calibration, the awake measurement is still useful).
+    """
+    body = {
+        "model": model,
+        "prompt": "hi",
+        "max_tokens": 1,
+        "temperature": 0.0,
+        "stream": False,
+    }
+    status, _ = _post(f"{base_url}/v1/completions", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
 def wait_sleep_state(
     base_url: str, target: bool, timeout_s: float
 ) -> None:
@@ -606,6 +629,10 @@ class CalibrationResult:
     base_residency_mb: float = 0.0  # = loaded_vram_mb (weights + KV, full footprint)
     calibrated_at: float = 0.0
     error: str = ""
+    # Records what enforce_eager was used during this calibration. Persisted in
+    # the profile so the worker can detect mismatches against production overrides
+    # and trigger recalibration when CUDA-graph state would change the footprint.
+    enforce_eager: bool = False
 
 
 def calibrate_model(
@@ -620,14 +647,21 @@ def calibrate_model(
     hf_home: str | None = None,
     model_cache: Any | None = None,
 ) -> CalibrationResult:
-    # Always force eager mode for calibration: CUDA graph capture is not
-    # needed for VRAM measurement and can add 10-30 minutes of startup time.
-    # The per-model production enforce_eager setting is irrelevant here.
-    if not plan.get("enforce_eager"):
+    # Honor the production enforce_eager setting (default False, matching the
+    # worker schema). Calibrating in a different mode than production runs
+    # produces systematically wrong loaded_vram_mb / sleeping_residual_mb
+    # because CUDA graph capture pools and workspace stay resident across
+    # sleep_l1 — so the planner under-counts VRAM and OOMs at wake/load time.
+    eager_mode = bool(plan.get("enforce_eager", False))
+    if eager_mode:
         logger.info(
-            "  enforce_eager=True (forced for calibration — CUDA graph capture skipped)"
+            "  enforce_eager=True — CUDA graph capture skipped (~minutes faster, no graph state retained)"
         )
-        plan = {**plan, "enforce_eager": True}
+    else:
+        logger.info(
+            "  enforce_eager=False — graphs will be captured; loaded/sleeping VRAM include capture-pool overhead"
+        )
+    plan = {**plan, "enforce_eager": eager_mode}
 
     model = plan["model"]
     gpu_devices = str(plan.get("gpu_devices") or "")
@@ -1025,6 +1059,33 @@ def calibrate_model(
     partial.kv_cache_sent_mb = kv_cache_sent_mb
 
     try:
+        # Phase 2.5 — Warmup with a 1-token completion. Forces:
+        #   • CUDA graph capture (when enforce_eager=False)
+        #   • FlashInfer kernel JIT + workspace allocation
+        #   • Triton autotune for the model's attention shapes
+        #   • Real KV cache page allocation (vs lazy)
+        # Without this, the awake VRAM sample below misses the peak the
+        # planner actually needs to budget for at runtime.
+        if eager_mode:
+            logger.info("  [2.5/6] Warming up engine (1-token completion, eager mode)...")
+        else:
+            logger.info(
+                "  [2.5/6] Warming up engine (1-token completion, capturing CUDA graphs — may take a couple minutes)..."
+            )
+        warmup_t0 = time.perf_counter()
+        warmup_ok = warmup_inference(base_url, model, timeout_s=600.0)
+        warmup_dt = time.perf_counter() - warmup_t0
+        if warmup_ok:
+            logger.info(
+                "        warmup done in %.1fs — graphs/JIT/KV pools allocated",
+                warmup_dt,
+            )
+        else:
+            logger.warning(
+                "        warmup failed (%.1fs) — awake VRAM may underestimate peak",
+                warmup_dt,
+            )
+
         # Phase 3 — Measure awake VRAM
         logger.info(
             "  [3/6] Measuring awake VRAM (settling %.0fs)...", _VRAM_SETTLE_S
@@ -1066,23 +1127,43 @@ def calibrate_model(
             logger.warning("  ERROR: %s", partial.error)
             return partial
 
-        # Phase 5 — Measure sleeping VRAM (independent observation)
+        # Phase 5 — Measure sleeping VRAM. Sample twice with a settle between
+        # samples and take the max. CuMemAllocator's release is asynchronous;
+        # a single-shot sample can read mid-release and underestimate the
+        # residual (which leads to wake-time OOM when the planner trusts an
+        # artificially low value). The first sample is required; the second
+        # is a refinement and falls back silently if it fails.
         logger.info(
-            "  [5/6] Measuring sleeping VRAM (settling %.0fs)...", _VRAM_SETTLE_S
+            "  [5/6] Measuring sleeping VRAM (settling %.0fs, double-sample)...",
+            _VRAM_SETTLE_S,
         )
         time.sleep(_VRAM_SETTLE_S)
         try:
-            sleeping_total_mb = sample_vram_mb(gpu_indices)
+            s1 = sample_vram_mb(gpu_indices)
         except Exception as exc:
             partial.error = f"nvidia-smi sleep failed: {exc}"
             logger.warning("  ERROR: %s", partial.error)
             return partial
+        time.sleep(3.0)
+        s2: float | None = None
+        try:
+            s2 = sample_vram_mb(gpu_indices)
+        except Exception as exc:
+            logger.info(
+                "        re-sample skipped (%s) — using single sample", exc
+            )
+        sleeping_total_mb = max(s1, s2) if s2 is not None else s1
         sleeping_residual_mb = max(sleeping_total_mb - baseline_mb, 0.0)
-        logger.info(
-            "        sleeping total = %.0f MB  →  sleeping delta = %.0f MB",
-            sleeping_total_mb,
-            sleeping_residual_mb,
-        )
+        if s2 is not None:
+            logger.info(
+                "        sleeping samples = %.0f / %.0f MB  →  max delta = %.0f MB",
+                s1, s2, sleeping_residual_mb,
+            )
+        else:
+            logger.info(
+                "        sleeping sample = %.0f MB  →  delta = %.0f MB",
+                s1, sleeping_residual_mb,
+            )
 
         logger.info("  Results:")
         logger.info(
@@ -1111,6 +1192,7 @@ def calibrate_model(
             sleeping_residual_mb=sleeping_residual_mb,
             base_residency_mb=base_residency_mb,
             calibrated_at=time.time(),
+            enforce_eager=eager_mode,
         )
 
     finally:
@@ -1152,6 +1234,7 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "measurement_count": 1,
         "last_measured_epoch": r.calibrated_at,
         "residency_source": "calibrated",
+        "enforce_eager_at_calibration": r.enforce_eager,
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime
@@ -1297,6 +1380,7 @@ def _try_calibrate(
             kv_cache_sent_mb=0.0,
             success=False,
             error=str(exc),
+            enforce_eager=bool(plan.get("enforce_eager", False)),
         )
 
 
