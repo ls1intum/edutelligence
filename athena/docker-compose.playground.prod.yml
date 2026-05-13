@@ -8,6 +8,8 @@ services:
   playground:
     hostname: playground
     image: ls1tum/athena_playground:${ATHENA_TAG:-develop}
+    extra_hosts:
+      - "${ATHENA_DOMAIN}:${ATHENA_PUBLIC_IPV4}"
 
   log_viewer:
     hostname: log-viewer
