@@ -1,6 +1,6 @@
 import os
 
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_core.messages.ai import UsageMetadata
 
