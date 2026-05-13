@@ -18,7 +18,7 @@ module = "athena:run_module"
 
 [tool.poetry.group.dev.dependencies]
 pydantic = "2.13.4"
-prospector = "1.18.0"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
 types-requests = "2.33.0.20260513"
 
 [tool.poetry.group.test.dependencies]

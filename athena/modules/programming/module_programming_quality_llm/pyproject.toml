@@ -20,7 +20,7 @@ nltk = "3.9.4"
 [tool.poetry.group.dev.dependencies]
 types-requests = "2.33.0.20260513"
 pydantic = "2.13.4"
-prospector = "1.18.0"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
 
 [tool.poetry.group.test.dependencies]
 pytest = "8.2.0"

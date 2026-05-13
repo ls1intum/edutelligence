@@ -17,7 +17,7 @@ javalang = { git = "https://github.com/c2nes/javalang" }
 [tool.poetry.group.dev.dependencies]
 types-requests = "2.33.0.20260513"
 pydantic = "2.13.4"
-prospector = "1.18.0"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
 
 [tool.poetry.scripts]
 module = "athena:run_module"

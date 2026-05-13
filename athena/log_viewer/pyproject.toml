@@ -14,7 +14,7 @@ docker = "7.1.0"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "2.33.0.20260513"
-prospector = "1.18.0"
+prospector = { version = "1.18.0", extras = ["with_mypy"] }
 
 [build-system]
 requires = ["poetry-core"]
