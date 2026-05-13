@@ -15,7 +15,18 @@ import { BaseModal } from "@/components/modals/base-modal";
 import { ConfirmDeleteModal } from "@/components/modals/confirm-delete-modal";
 
 type TeamOwner = { id: number; username: string };
-type Team = { id: number; name: string; owners: TeamOwner[]; member_count: number };
+type Team = {
+    id: number;
+    name: string;
+    owners: TeamOwner[];
+    member_count: number;
+    model_count: number;
+    default_cloud_rpm_limit: number | null;
+    default_cloud_tpm_limit: number | null;
+    default_local_rpm_limit: number | null;
+    default_local_tpm_limit: number | null;
+    is_caller_owner?: boolean;
+};
 
 export default function TeamManagement() {
     const { apiKey, role } = useAuth();
@@ -95,7 +106,8 @@ export default function TeamManagement() {
                                         <TableHead>Name</TableHead>
                                         <TableHead>Owners</TableHead>
                                         <TableHead>Members</TableHead>
-                                        <TableHead>Rate Limit</TableHead>
+                                        <TableHead>Cloud Limits</TableHead>
+                                        <TableHead>Local Limits</TableHead>
                                         <TableHead>Models</TableHead>
                                         <TableHead>{""}</TableHead>
                                     </TableRow>
@@ -122,16 +134,25 @@ export default function TeamManagement() {
                                                 </TableData>
                                                 <TableData>
                                                     <Pressable onPress={goToDetail} style={{ flex: 1 }}>
-                                                        <Text style={{ color: "#9ca3af" }}>-</Text>
+                                                        <Text style={{ fontSize: 13 }}>
+                                                            {team.default_cloud_rpm_limit ?? "∞"} RPM / {team.default_cloud_tpm_limit ? (team.default_cloud_tpm_limit >= 1000 ? `${Math.round(team.default_cloud_tpm_limit / 1000)}k` : String(team.default_cloud_tpm_limit)) : "∞"} TPM
+                                                        </Text>
                                                     </Pressable>
                                                 </TableData>
                                                 <TableData>
                                                     <Pressable onPress={goToDetail} style={{ flex: 1 }}>
-                                                        <Text style={{ color: "#9ca3af" }}>-</Text>
+                                                        <Text style={{ fontSize: 13 }}>
+                                                            {team.default_local_rpm_limit ?? "∞"} RPM / {team.default_local_tpm_limit ? (team.default_local_tpm_limit >= 1000 ? `${Math.round(team.default_local_tpm_limit / 1000)}k` : String(team.default_local_tpm_limit)) : "∞"} TPM
+                                                        </Text>
+                                                    </Pressable>
+                                                </TableData>
+                                                <TableData>
+                                                    <Pressable onPress={goToDetail} style={{ flex: 1 }}>
+                                                        <Text style={{ fontSize: 13 }}>{team.model_count ?? 0}</Text>
                                                     </Pressable>
                                                 </TableData>
                                                 <TableData style={{ width: 48, alignItems: "flex-end" }}>
-                                                    {isLogosAdmin && (
+                                                    {(isLogosAdmin || team.is_caller_owner) && (
                                                         <Pressable onPress={() => setDeleteTarget(team)} style={{ padding: 8 }}>
                                                             <Icon as={TrashIcon} size="sm" className="text-typography-400" />
                                                         </Pressable>

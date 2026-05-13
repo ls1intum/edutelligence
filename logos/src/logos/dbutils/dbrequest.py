@@ -26,7 +26,7 @@ class LogosSetupRequest(BaseModel):
 
 class SetLogRequest(LogosKeyModel):
     set_log: str
-    process_id: int
+    api_key_id: int
 
 
 class AddServiceProxyRequest(LogosKeyModel):
@@ -44,11 +44,6 @@ class AddProviderRequest(LogosKeyModel):
     provider_type: str
 
 
-class AddProfileRequest(LogosKeyModel):
-    profile_name: str
-    process_id: int
-
-
 class UpdateProviderSdiConfigRequest(LogosKeyModel):
     provider_id: int
     ollama_admin_url: str | None = None
@@ -62,24 +57,20 @@ class GetRole(LogosKeyModel):
     pass
 
 
-class ConnectProcessProviderRequest(LogosKeyModel):
-    profile_id: int
+class ConnectApiKeyProviderRequest(LogosKeyModel):
+    api_key_id: int
     provider_id: int
 
 
-class ConnectProcessModelRequest(LogosKeyModel):
-    profile_id: int
+class ConnectApiKeyModelRequest(LogosKeyModel):
+    api_key_id: int
     model_id: int
 
 
-class ConnectProfileModelRequest(LogosKeyModel):
-    profile_id: int
-    model_id: int
-
-
-class ConnectServiceProcessRequest(LogosKeyModel):
-    service_id: int
-    process_name: str
+class ConnectApplicationKeyRequest(LogosKeyModel):
+    team_id: int
+    key_name: str
+    environment: str = ""
 
 
 class ConnectModelProviderRequest(LogosKeyModel):
@@ -96,6 +87,14 @@ class ConnectModelApiRequest(LogosKeyModel):
 
 class AddModelRequest(LogosKeyModel):
     name: str
+    tags: Optional[str] = ""
+    parallel: Optional[int] = 1
+    weight_privacy: Optional[str] = "LOCAL"
+    worse_latency: Optional[int] = None
+    worse_accuracy: Optional[int] = None
+    worse_cost: Optional[int] = None
+    worse_quality: Optional[int] = None
+    description: Optional[str] = ""
 
 
 class AddFullModelRequest(LogosKeyModel):
@@ -125,7 +124,6 @@ class GetModelRequest(LogosKeyModel):
 
 
 class AddPolicyRequest(LogosKeyModel):
-    entity_id: int
     name: str
     description: str
     threshold_privacy: str
@@ -135,11 +133,12 @@ class AddPolicyRequest(LogosKeyModel):
     threshold_quality: int
     priority: int
     topic: str
+    api_key_id: Optional[int] = None
+    team_id: Optional[int] = None
 
 
 class UpdatePolicyRequest(LogosKeyModel):
     id: int
-    entity_id: int
     name: str
     description: str
     threshold_privacy: str
@@ -149,6 +148,8 @@ class UpdatePolicyRequest(LogosKeyModel):
     threshold_quality: int
     priority: int
     topic: str
+    api_key_id: Optional[int] = None
+    team_id: Optional[int] = None
 
 
 class DeletePolicyRequest(LogosKeyModel):
@@ -159,11 +160,7 @@ class GetPolicyRequest(LogosKeyModel):
     id: int
 
 
-class AddServiceRequest(LogosKeyModel):
-    name: str
-
-
-class GetProcessIdRequest(LogosKeyModel):
+class GetApiKeyIdRequest(LogosKeyModel):
     pass
 
 
@@ -231,6 +228,12 @@ class CreateUserRequest(BaseModel):
 class CreateTeamRequest(BaseModel):
     name: str
     owner_ids: list[int] = []
+    default_cloud_rpm_limit: Optional[int] = None
+    default_cloud_tpm_limit: Optional[int] = None
+    default_local_rpm_limit: Optional[int] = None
+    default_local_tpm_limit: Optional[int] = None
+    default_monthly_budget_micro_cents: Optional[int] = None
+    team_monthly_budget_micro_cents: Optional[int] = None
 
 class AddTeamMemberRequest(BaseModel):
     user_id: int
@@ -238,3 +241,50 @@ class AddTeamMemberRequest(BaseModel):
 
 class SetOwnerRequest(BaseModel):
     is_owner: bool
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str
+    key_type: str = "developer"
+    team_id: Optional[int] = None
+    user_id: Optional[int] = None
+    environment: str = ""
+    log: str = "BILLING"
+    settings: Optional[dict] = None
+    default_priority: int = 1
+
+
+class SetApiKeyModelPermissionsRequest(BaseModel):
+    model_ids: list[int]
+
+
+class SetTeamModelPermissionsRequest(BaseModel):
+    model_ids: list[int]
+
+
+class UpdateApiKeyRequest(BaseModel):
+    environment: Optional[str] = None
+    default_priority: Optional[int] = None
+    log: Optional[str] = None
+    budget_limit_micro_cents: Optional[int] = None
+    cloud_rpm_limit: Optional[int] = None
+    cloud_tpm_limit: Optional[int] = None
+    local_rpm_limit: Optional[int] = None
+    local_tpm_limit: Optional[int] = None
+
+
+class UpdateTeamRequest(BaseModel):
+    default_cloud_rpm_limit: Optional[int] = None
+    default_cloud_tpm_limit: Optional[int] = None
+    default_local_rpm_limit: Optional[int] = None
+    default_local_tpm_limit: Optional[int] = None
+    default_monthly_budget_micro_cents: Optional[int] = None
+    team_monthly_budget_micro_cents: Optional[int] = None
+
+class CreateAppKeyEndpointRequest(BaseModel):
+    name: str
+    key_type: str = "application"
+    environment: str = "-"
+    default_priority: int = 0
+    log: str = "BILLING"
+    settings: Optional[dict] = None

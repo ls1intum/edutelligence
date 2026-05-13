@@ -169,9 +169,9 @@ class _DummyBase:
 
 sa = _make_module("sqlalchemy", {
     # Column types / constraints  (all callable, return None — fine for class bodies)
-    "Column": _noop, "Integer": _noop, "String": _noop, "Text": _noop,
+    "Column": _noop, "Integer": _noop, "BigInteger": _noop, "String": _noop, "Text": _noop,
     "Float": _noop, "Boolean": _noop, "Numeric": _noop, "Enum": _noop,
-    "JSON": _noop, "TIMESTAMP": _noop, "DateTime": _noop,
+    "JSON": _noop, "TIMESTAMP": _noop, "DateTime": _noop, "Date": _noop,
     "ForeignKey": _noop, "CheckConstraint": _noop,
     # DDL / query helpers
     "Table": _noop, "MetaData": _DummyMeta, "create_engine": _noop,

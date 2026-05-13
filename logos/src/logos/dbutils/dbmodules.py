@@ -1,6 +1,6 @@
 import datetime
 from sqlalchemy import Column, Integer, String, Enum, Text, ForeignKey, JSON, TIMESTAMP, \
-    Numeric, CheckConstraint, Boolean
+    Numeric, CheckConstraint, Boolean, BigInteger, Date
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 import enum
@@ -27,40 +27,49 @@ class ResultStatus(enum.Enum):
     TIMEOUT = 'timeout'
 
 
+class ApiKeyType(enum.Enum):
+    DEVELOPER = 'developer'
+    APPLICATION = 'application'
+
+
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
     username = Column(String, nullable=False)
     prename = Column(String)
     name = Column(String)
+    email = Column(String, unique=True)
+    role = Column(String, default='app_developer')
 
 
-class Service(Base):
-    __tablename__ = 'services'
+class Team(Base):
+    __tablename__ = 'teams'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
+    default_cloud_rpm_limit = Column(Integer, nullable=True, default=5)
+    default_cloud_tpm_limit = Column(Integer, nullable=True, default=10000)
+    default_local_rpm_limit = Column(Integer, nullable=True, default=5)
+    default_local_tpm_limit = Column(Integer, nullable=True, default=10000)
+    default_monthly_budget_micro_cents = Column(BigInteger, nullable=True, default=100000000)
+    team_monthly_budget_micro_cents = Column(BigInteger, nullable=True, default=500000000)
 
 
-class Profile(Base):
-    __tablename__ = 'profiles'
+class ApiKey(Base):
+    __tablename__ = 'api_keys'
     id = Column(Integer, primary_key=True)
+    key_value = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
-    process_id = Column(Integer, ForeignKey('process.id', ondelete="CASCADE"), nullable=False)
-    process = relationship("Process")
-
-
-class Process(Base):
-    __tablename__ = 'process'
-    id = Column(Integer, primary_key=True)
-    logos_key = Column(String, unique=True, nullable=False)
-    name = Column(String, nullable=False)
-    user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"))
-    service_id = Column(Integer, ForeignKey('services.id', ondelete="SET NULL"))
-    log = Column(Enum(LoggingLevel))
+    key_type = Column(Enum(ApiKeyType, name='api_key_type_enum'), nullable=False, default=ApiKeyType.DEVELOPER)
+    team_id = Column(Integer, ForeignKey('teams.id', ondelete='CASCADE'))
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
+    environment = Column(Text)
+    log = Column(Enum(LoggingLevel), default=LoggingLevel.BILLING)
     settings = Column(JSON)
+    default_priority = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)
 
+    team = relationship("Team")
     user = relationship("User")
-    service = relationship("Service")
 
 
 class Model(Base):
@@ -115,7 +124,6 @@ class ModelApiKey(Base):
 class Policy(Base):
     __tablename__ = 'policies'
     id = Column(Integer, primary_key=True)
-    entity_id = Column(Integer, ForeignKey('process.id', ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text)
     threshold_privacy = Column(Enum(ThresholdLevel))
@@ -125,18 +133,8 @@ class Policy(Base):
     threshold_quality = Column(Integer)
     priority = Column(Integer)
     topic = Column(Text)
-
-    entity = relationship("Process")
-
-
-class ProfileModelPermission(Base):
-    __tablename__ = 'profile_model_permissions'
-    id = Column(Integer, primary_key=True)
-    profile_id = Column(Integer, ForeignKey('profiles.id', ondelete="CASCADE"), nullable=False)
-    model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
-
-    profile = relationship("Profile")
-    model = relationship("Model")
+    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete="CASCADE"))
+    team_id = Column(Integer, ForeignKey('teams.id', ondelete="CASCADE"))
 
 
 class LogEntry(Base):
@@ -149,8 +147,10 @@ class LogEntry(Base):
     time_at_first_token = Column(TIMESTAMP(timezone=True))
 
     privacy_level = Column(Enum(LoggingLevel))
-
-    process_id = Column(Integer, ForeignKey("process.id", ondelete="SET NULL"))
+    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete="SET NULL"))
+    team_id = Column(Integer, ForeignKey('teams.id', ondelete="SET NULL"))
+    user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"))
+    environment = Column(Text)
     client_ip = Column(Text)
     input_payload = Column(JSON)
     headers = Column(JSON)
@@ -179,6 +179,7 @@ class LogEntry(Base):
     error_message = Column(Text)
 
     usage_tokens = relationship("UsageTokens")
+    api_key = relationship("ApiKey")
 
 
 class TokenTypes(Base):
@@ -209,6 +210,25 @@ class TokenPrice(Base):
     token_type = relationship("TokenTypes")
 
 
+class TeamModelPermission(Base):
+    __tablename__ = 'team_model_permissions'
+    team_id = Column(Integer, ForeignKey('teams.id', ondelete='CASCADE'), primary_key=True)
+    model_id = Column(Integer, ForeignKey('models.id', ondelete='CASCADE'), primary_key=True)
+
+
+class ApiKeyModelPermission(Base):
+    __tablename__ = 'api_key_model_permissions'
+    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete='CASCADE'), primary_key=True)
+    model_id = Column(Integer, ForeignKey('models.id', ondelete='CASCADE'), primary_key=True)
+
+
+class BudgetUsage(Base):
+    __tablename__ = 'budget_usage'
+    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete='CASCADE'), primary_key=True)
+    month = Column(Date, primary_key=True)
+    cost_micro_cents = Column(BigInteger, nullable=False, default=0)
+
+
 class JobStatus(enum.Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -221,7 +241,10 @@ class Job(Base):
 
     id = Column(Integer, primary_key=True)
     status = Column(Enum(JobStatus), nullable=False, default=JobStatus.PENDING)
-    process_id = Column(Integer, ForeignKey("process.id", ondelete="CASCADE"), nullable=False)
+    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete="SET NULL"))
+    team_id = Column(Integer, ForeignKey('teams.id', ondelete="SET NULL"))
+    user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"))
+    environment = Column(Text)
     request_payload = Column(JSON, nullable=False)
     result_payload = Column(JSON)
     error_message = Column(Text)
@@ -230,3 +253,5 @@ class Job(Base):
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False,
                         default=lambda: datetime.datetime.now(datetime.timezone.utc),
                         onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    api_key = relationship("ApiKey")

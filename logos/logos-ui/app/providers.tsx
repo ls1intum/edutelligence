@@ -51,9 +51,8 @@ export default function Providers() {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${key}`,
             "Content-Type": "application/json",
-            logos_key: key,
+            "logos_key": key,
           },
           body: JSON.stringify({
             logos_key: key,
@@ -61,9 +60,11 @@ export default function Providers() {
         }
       );
 
-      const [data, code] = JSON.parse(await response.text());
-      if (code === 200) {
-        const formattedProviders = data.map((provider: any[][]) => ({
+      const result = await response.json();
+      const [data, code] = Array.isArray(result) ? result : [result, response.status];
+
+      if (code === 200 && Array.isArray(data)) {
+        const formattedProviders = data.map((provider: any) => ({
           id: provider[0],
           name: provider[1],
           baseUrl: provider[2],
@@ -88,7 +89,6 @@ export default function Providers() {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${key}`,
             "Content-Type": "application/json",
             logos_key: key,
           },
@@ -97,7 +97,9 @@ export default function Providers() {
           }),
         }
       );
-      const [data, code] = JSON.parse(await response.text());
+      const result = await response.json();
+      const [data, code] = Array.isArray(result) ? result : [result, response.status];
+
       if (code === 200) {
         setStats(data);
       } else {

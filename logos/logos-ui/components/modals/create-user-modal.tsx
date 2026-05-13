@@ -18,6 +18,7 @@ export type CreatedUser = {
     email: string;
     role: UserRole;
     teams: BasicTeam[];
+    logos_keys?: string[];
 };
 
 type Props = {
@@ -40,7 +41,7 @@ const EMPTY_FORM = {
 export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleSelector, showTeamPicker, preselectedTeamIds = [] }: Props) {
     const [form, setForm] = useState(EMPTY_FORM);
     const [loading, setLoading] = useState(false);
-    const [generatedKey, setGeneratedKey] = useState("");
+    const [generatedKeys, setGeneratedKeys] = useState<string[]>([]);
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState("");
     const [teams, setTeams] = useState<BasicTeam[]>([]);
@@ -53,7 +54,9 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
         if (showTeamPicker && visible) {
             fetch(`${API_BASE}/teams`, { headers: { "logos-key": apiKey } })
                 .then(r => r.ok ? r.json() : [])
-                .then(setTeams)
+                .then(data => {
+                    setTeams(data.filter((t: any) => t.name !== "default" && t.is_caller_owner === true));
+                })
                 .catch(() => setTeams([]));
         }
     }, [visible, showTeamPicker, apiKey]);
@@ -76,12 +79,11 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
             });
             const data = await res.json();
             if (res.ok) {
-                setGeneratedKey(data.logos_key);
+                setGeneratedKeys(data.logos_keys || []);
                 setGeneratedUsername(data.username);
-                const assignedTeams = teams.filter(t => teamIds.includes(t.id));
-                onCreated({ ...data, teams: assignedTeams } as CreatedUser);
+                onCreated(data as CreatedUser);
             } else {
-                setError(data.detail || "This username or email is already taken.");
+                setError(data.detail || "This email is already taken.");
             }
         } catch {
             setError("Connection failed. Please try again.");
@@ -91,14 +93,15 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
     };
 
     const handleCopy = async () => {
-        if (Platform.OS === "web") await navigator.clipboard.writeText(generatedKey);
+        const textToCopy = generatedKeys.join("\n");
+        if (Platform.OS === "web") await navigator.clipboard.writeText(textToCopy);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
 
     const closeAndReset = () => {
         setForm(EMPTY_FORM);
-        setGeneratedKey("");
+        setGeneratedKeys([]);
         setGeneratedUsername("");
         setError("");
         setSelectedTeamIds([]);
@@ -123,10 +126,10 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
     };
 
     return (
-        <Modal visible={visible} transparent onRequestClose={generatedKey ? undefined : closeAndReset}>
-            <Pressable style={OVERLAY} onPress={generatedKey ? undefined : closeAndReset}>
+        <Modal visible={visible} transparent onRequestClose={generatedKeys.length > 0 ? undefined : closeAndReset}>
+            <Pressable style={OVERLAY} onPress={generatedKeys.length > 0 ? undefined : closeAndReset}>
                 <Pressable style={[CARD, { maxWidth: 380, width: "100%" }]} onPress={e => e.stopPropagation?.()}>
-                    {!generatedKey ? (
+                    {generatedKeys.length === 0 ? (
                         <VStack space="md">
                             <Text style={{ fontWeight: "700", fontSize: 18 }}>Create New User</Text>
                             <Input><InputField placeholder="First Name" value={form.prename} onChangeText={v => setForm(f => ({ ...f, prename: v }))} /></Input>
@@ -202,14 +205,25 @@ export function CreateUserModal({ visible, onClose, onCreated, apiKey, showRoleS
                         <VStack space="md">
                             <Text style={{ fontWeight: "700", fontSize: 18 }}>User Created!</Text>
                             <Text style={{ fontSize: 14 }}>Username: {generatedUsername}</Text>
-                            <Text style={{ fontSize: 14 }}>Copy the API key now, it won't be shown again:</Text>
-                            <Box className="bg-gray-100 p-3 rounded-lg border border-gray-200">
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                                    <Text>{generatedKey}</Text>
-                                </ScrollView>
-                            </Box>
+                            <Text style={{ fontSize: 14 }}>Copy the API keys now, they won't be shown again:</Text>
+                            <ScrollView style={{ maxHeight: 150 }} indicatorStyle="black">
+                                <VStack space="sm">
+                                    {generatedKeys.map((key, index) => (
+                                        <Box key={index} className="bg-gray-100 p-3 rounded-lg border border-gray-200">
+                                            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                                <Text selectable style={{ fontFamily: "monospace", fontSize: 13 }}>
+                                                    {key}
+                                                </Text>
+                                            </ScrollView>
+                                        </Box>
+                                    ))}
+                                </VStack>
+                            </ScrollView>
+
                             <HStack space="md" className="justify-end mt-2">
-                                <Button variant="outline" onPress={handleCopy}><ButtonText>{copied ? "Copied!" : "Copy Key"}</ButtonText></Button>
+                                <Button variant="outline" onPress={handleCopy}>
+                                    <ButtonText>{copied ? "Copied!" : "Copy All Keys"}</ButtonText>
+                                </Button>
                                 <Button onPress={closeAndReset}><ButtonText>Done</ButtonText></Button>
                             </HStack>
                         </VStack>

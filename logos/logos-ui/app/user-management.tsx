@@ -180,7 +180,7 @@ export default function UserManagement() {
                                             <TableData>
                                                 <Text>{user.teams.map(t => t.name).join(", ") || "-"}</Text>
                                             </TableData>
-                                            {isLogosAdmin && (
+                                            {isLogosAdmin && user.username !== "root" && (
                                                 <TableData>
                                                     <Pressable onPress={() => setDeleteTarget(user)} style={{ padding: 8 }}>
                                                         <Icon as={TrashIcon} size="sm" className="text-typography-400" />
@@ -210,7 +210,7 @@ export default function UserManagement() {
                 onCreated={(user: CreatedUser) => setUsers(prev => [user as User, ...prev])}
                 apiKey={apiKey}
                 showRoleSelector={isLogosAdmin}
-                showTeamPicker={isLogosAdmin}
+                showTeamPicker={true}
                 preselectedTeamIds={[]}
             />
             <CsvImportModal
