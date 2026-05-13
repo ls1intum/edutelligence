@@ -244,10 +244,6 @@ def mcq_pre_agent_hook(
     if not hasattr(state, "mcq_result_storage"):
         setattr(state, "mcq_result_storage", {})
 
-    user_language = "en"
-    if state.dto.user and state.dto.user.lang_key:
-        user_language = state.dto.user.lang_key
-
     user_message = get_text_of_latest_user_message(state)
     count = getattr(state, "mcq_count", 1)
 
@@ -261,7 +257,7 @@ def mcq_pre_agent_hook(
         mcq_pipeline.run_in_thread(
             command=user_message,
             chat_history=chat_history,
-            user_language=user_language,
+            user_language=state.dto.user.lang_key,
             result_storage=getattr(state, "mcq_result_storage", {}),
             count=count,
             lecture_content=lecture_content,

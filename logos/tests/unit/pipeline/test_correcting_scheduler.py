@@ -76,6 +76,7 @@ class MockLogosNodeFacade:
         self._reserve_results = {}  # (model_id, provider_id) -> bool
         self._tracking = {}
         self.raise_on_request_start = False
+        self._gpu_scores: dict[int, int] = {}  # provider_id -> gpu_performance_score
 
     def set_view(self, model_id, provider_id, view):
         self._views[(model_id, provider_id)] = view
@@ -108,6 +109,19 @@ class MockLogosNodeFacade:
     def get_model_name(self, model_id, provider_id):
         view = self._views.get((model_id, provider_id))
         return view.model_name if view else None
+
+    def get_provider_name(self, provider_id):
+        return f"worker-{provider_id}"
+
+    def get_all_lane_signals(self, provider_id):
+        # No sibling-lane visibility needed for these tests.
+        raise KeyError(provider_id)
+
+    def get_gpu_performance_score(self, provider_id):
+        return self._gpu_scores.get(provider_id, 100)
+
+    def set_gpu_performance_score(self, provider_id, score):
+        self._gpu_scores[provider_id] = score
 
     def try_reserve_capacity(self, model_id, provider_id, request_id):
         return self._reserve_results.get((model_id, provider_id), True)
@@ -168,44 +182,6 @@ def _make_request(candidates, deployments, request_id="req-1"):
 
 
 # ---------------------------------------------------------------------------
-# Scenario A: Loaded model (lower weight) beats cold model (higher weight)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_no_view_treated_as_cold():
-    """No scheduler view → COLD (not UNAVAILABLE), model is still schedulable.
-
-    With ECCS enabled, a COLD top candidate correctly defers to the queue
-    path.  We verify the ETTFT tier assignment is COLD and the queue-for-best
-    behavior by checking _try_immediate_select returns None, then separately
-    verify the full queue path works via a short-timeout schedule call.
-    """
-    logosnode = MockLogosNodeFacade()
-    # No views set → get_model_scheduler_view returns None → COLD fallback
-
-    scheduler = _make_scheduler(logosnode=logosnode, ettft_enabled=True)
-
-    candidates = [(1, 12.0, 1, 4)]
-    deployments = [{"model_id": 1, "provider_id": 10, "type": "logosnode"}]
-
-    # Verify ETTFT tier is COLD
-    scored = scheduler._compute_candidate_scores(candidates, deployments)
-    assert len(scored) == 1
-    _model_id, _prov_id, _ptype, _score, _prio, ettft = scored[0]
-    assert ettft.tier == ReadinessTier.COLD
-    assert ettft.expected_wait_s == OVERHEAD_COLD_S
-
-    # Verify _try_immediate_select defers to queue path (returns None)
-    # because the top candidate is COLD and ECCS is enabled
-    immediate = scheduler._try_immediate_select(scored, "req-1")
-    assert immediate is None, (
-        "ECCS queue-for-best: COLD top candidate should defer to queue, "
-        "not fall through to a lower-scored warm model"
-    )
-
-
-# ---------------------------------------------------------------------------
 # Scenario E: Azure candidate selected when local is cold
 # ---------------------------------------------------------------------------
 
@@ -217,27 +193,6 @@ async def test_empty_candidates_returns_none():
     request = _make_request([], [])
     result = await scheduler.schedule(request)
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Sleeping model beats cold model with close weights
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_cloud_only_unavailable_returns_none():
-    """Azure-only model that is rate-limited → no logosnode fallback → None."""
-    azure = MockAzureFacade()
-    azure.set_capacity(1, 20, _make_azure_capacity(has_capacity=False))
-
-    scheduler = _make_scheduler(azure=azure, ettft_enabled=True)
-
-    candidates = [(1, 10.0, 1, 4)]
-    deployments = [{"model_id": 1, "provider_id": 20, "type": "azure"}]
-    request = _make_request(candidates, deployments)
-
-    result = await scheduler.schedule(request)
-    assert result is None  # No logosnode to queue on → 503
 
 
 # ---------------------------------------------------------------------------

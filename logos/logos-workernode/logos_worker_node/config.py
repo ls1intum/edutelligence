@@ -149,6 +149,23 @@ def _wire_kv_budget(cfg: AppConfig) -> None:
             overrides["kv_budget_mb"] = _parse_kv_to_mb(kv)
 
 
+def _propagate_cache_path_to_env(cfg: AppConfig) -> None:
+    """Lift ``cfg.worker.cache_path`` into ``LOGOS_WORKER_CACHE_ROOT``.
+
+    Downstream code (the per-vLLM-process env builder, the boot-time
+    flashinfer warmup) reads ``LOGOS_WORKER_CACHE_ROOT`` directly. Doing the
+    lift once here means a single config field is the source of truth:
+    operators set ``worker.cache_path`` in ``config.yml``; the env var
+    continues to win when set explicitly, so per-host overrides via ``.env``
+    still work.
+    """
+    if not cfg.worker.cache_path:
+        return
+    if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
+        return  # explicit env var wins
+    os.environ["LOGOS_WORKER_CACHE_ROOT"] = cfg.worker.cache_path
+
+
 def load_config() -> AppConfig:
     """Load config.yml (hardware/tuning), then apply .env overrides (credentials)."""
     global _config
@@ -156,5 +173,6 @@ def load_config() -> AppConfig:
     _config = _load_config_yml()
     _apply_env_overrides(_config)
     _wire_kv_budget(_config)
+    _propagate_cache_path_to_env(_config)
 
     return _config

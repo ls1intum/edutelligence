@@ -1,7 +1,7 @@
 {
   "name": "logos-ui",
+  "version": "2.2",
   "main": "expo-router/entry",
-  "version": "1.0.0",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",

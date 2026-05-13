@@ -194,10 +194,19 @@ def _create_handle(
     global_config: OllamaConfig,
     vllm_engine_config: VllmEngineConfig,
     lane_config: LaneConfig,
+    model_profiles: ModelProfileRegistry | None = None,
+    per_gpu_total_mb: Callable[[], float] | None = None,
 ) -> ProcessHandle:
     """Factory: create the correct process handle based on backend type."""
     if lane_config.vllm:
-        return VllmProcessHandle(lane_id, port, global_config, vllm_engine_config)
+        return VllmProcessHandle(
+            lane_id,
+            port,
+            global_config,
+            vllm_engine_config,
+            model_profiles=model_profiles,
+            per_gpu_total_mb=per_gpu_total_mb,
+        )
     return OllamaProcessHandle(lane_id, port, global_config)
 
 
@@ -467,6 +476,7 @@ class LaneManager:
                 # with active KV-cache allocations in running lanes.
                 to_add = desired_ids - current_ids
                 slept_lids: list[str] = []
+                non_sleep_lids: list[str] = []
                 if to_add:
                     for existing_lid, existing_h in self._handles.items():
                         elc = existing_h.lane_config
@@ -491,6 +501,22 @@ class LaneManager:
                                     existing_lid,
                                     exc_info=True,
                                 )
+                        elif elc is not None:
+                            # Lane lacks sleep-mode support (Ollama, or vLLM with
+                            # enable_sleep_mode=False). It will continue to hold
+                            # its full VRAM allocation while the new lane spawns,
+                            # so the new spawn may OOM if total fleet VRAM is
+                            # tight. Operators with enable_sleep_mode=false in
+                            # their static config are opting out of stagger.
+                            non_sleep_lids.append(existing_lid)
+                    if non_sleep_lids:
+                        logger.warning(
+                            "Staggered startup: lanes %s lack sleep-mode support "
+                            "and will keep their VRAM during spawn of %d new "
+                            "lane(s); set lanes[].vllm_config.enable_sleep_mode=true "
+                            "to participate in staggered placement",
+                            non_sleep_lids, len(to_add),
+                        )
                 try:
                     add_list = list(to_add)
                     for idx, lid in enumerate(add_list):
@@ -1453,6 +1479,8 @@ class LaneManager:
             self._global_config,
             self._vllm_engine_config,
             lane_config,
+            model_profiles=self._model_profiles,
+            per_gpu_total_mb=self._per_gpu_vram_mb,
         )
         if hf_home_override and hasattr(handle, "hf_home_override"):
             handle.hf_home_override = hf_home_override
@@ -1526,6 +1554,8 @@ class LaneManager:
             self._global_config,
             self._vllm_engine_config,
             new_config,
+            model_profiles=self._model_profiles,
+            per_gpu_total_mb=self._per_gpu_vram_mb,
         )
         await new_handle.init()
 
@@ -1653,6 +1683,8 @@ class LaneManager:
                             self._global_config,
                             self._vllm_engine_config,
                             orig_lc,
+                            model_profiles=self._model_profiles,
+                            per_gpu_total_mb=self._per_gpu_vram_mb,
                         )
                         await restored.init()
                         await restored.spawn(orig_lc)
@@ -1675,6 +1707,8 @@ class LaneManager:
                         self._global_config,
                         self._vllm_engine_config,
                         lc,
+                        model_profiles=self._model_profiles,
+                        per_gpu_total_mb=self._per_gpu_vram_mb,
                     )
                     await restored.init()
                     await restored.spawn(lc)

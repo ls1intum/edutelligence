@@ -51,7 +51,7 @@ class ClassificationManager:
             if model["description"] is not None:
                 self.laura.register_model(model["id"], model["description"])
 
-    def classify(self, prompt: str, policy: dict, allowed=None, classifier=None, system=None) -> List[Tuple[int, int, int, int]]:
+    def classify(self, prompt: str, policy: dict, allowed=None, classifier=None, system=None, skip_laura: bool = False) -> List[Tuple[int, int, int, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with
@@ -96,7 +96,11 @@ class ClassificationManager:
             filtered = TokenClassifier(filtered).classify(system, adjusted_policy)
         logging.debug(f"Token-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = allowed
-        if classifier is None or classifier == "laura":
+        # PROXY mode skips the Laura embedding stage (caller already named the
+        # model, so the ML ranking adds latency without changing the choice).
+        # Policy + token stages still run so policy thresholds are enforced.
+        run_laura = (classifier is None or classifier == "laura") and not skip_laura
+        if run_laura:
             filtered = AIClassifier(filtered).classify(prompt, adjusted_policy, laura=self.laura)
         logging.debug(f"AI-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = list()
