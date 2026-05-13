@@ -1,9 +1,10 @@
 # Dockerfile to build a container image for a Python 3.13 FastAPI application
 FROM python:3.13.3-slim
 
-# Install system dependencies for video transcription
+# Install system dependencies for video transcription and model download
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory in the container
@@ -26,10 +27,14 @@ COPY iris/src/iris ./iris
 # Copy logging configuration
 COPY iris/log_conf.yml ./log_conf.yml
 
-# Copy intent-classifier ONNX model
+# Copy intent-classifier model config files (small, not in LFS)
 COPY iris/models ./models
-# Fail fast if git-lfs was not pulled — pointer files are ~130 bytes, real models are megabytes
-RUN python3 -c "import os, sys; m='/app/models/global_search_intent/onnx/model_quantized.onnx'; sys.exit('ERROR: LFS pointer found. Run: git lfs pull') if os.path.getsize(m) < 1024 else None"
+
+# Download the quantized ONNX model from Hugging Face (too large for git, stored externally)
+RUN curl -fsSL \
+    "https://huggingface.co/NayerKotry/iris-intent-classifier/resolve/main/model_quantized.onnx" \
+    -o /app/models/global_search_intent/onnx/model_quantized.onnx
+
 ENV INTENT_MODEL_DIR=/app/models/global_search_intent/onnx
 
 # Specify the command to run on container start
