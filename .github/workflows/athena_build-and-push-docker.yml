@@ -15,7 +15,7 @@ on:
       - "!athena/README.md"
   release:
     types:
-      - created
+      - published
 
 # prevent Docker image push conflicts
 concurrency: 
