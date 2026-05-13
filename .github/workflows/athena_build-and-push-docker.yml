@@ -50,6 +50,7 @@ jobs:
     if: needs.find_images_to_build.outputs.has_images == 'true'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         image: ${{fromJson(needs.find_images_to_build.outputs.matrix)}}
     steps:
