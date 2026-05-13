@@ -30,7 +30,7 @@ import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, AsyncIterator, ClassVar
+from typing import Any, AsyncIterator, Callable, ClassVar
 
 import httpx
 
@@ -255,11 +255,15 @@ class VllmProcessHandle:
         port: int,
         global_config: OllamaConfig,
         vllm_engine_config: VllmEngineConfig | None = None,
+        model_profiles: Any | None = None,
+        per_gpu_total_mb: Callable[[], float] | None = None,
     ) -> None:
         self.lane_id = lane_id
         self.port = port
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
+        self._model_profiles = model_profiles
+        self._per_gpu_total_mb = per_gpu_total_mb or (lambda: 0.0)
         self._lane_config: LaneConfig | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._http: httpx.AsyncClient | None = None
@@ -695,6 +699,51 @@ class VllmProcessHandle:
         if self._http is None:
             raise RuntimeError(f"[{self.lane_id}] HTTP client is not initialized")
 
+    _GMU_AUTO_FLOOR: ClassVar[float] = 0.5
+    _GMU_AUTO_CEILING: ClassVar[float] = 0.95
+
+    def _resolve_gmu(
+        self, vc: VllmConfig, lane_config: LaneConfig,
+    ) -> float | None:
+        """Return the gpu_memory_utilization to pass to vLLM, or None to omit.
+
+        Selection order:
+          1. Explicit per-model override (vc.gpu_memory_utilization is not
+             None) — operator's value wins, no derivation.
+          2. Auto-derive from calibrated profile when available:
+             gmu = clamp(loaded_vram_mb / tp / per_gpu_total_mb,
+                         _GMU_AUTO_FLOOR, _GMU_AUTO_CEILING)
+             Matches what the lane actually uses; the planner's separate
+             PER_GPU_COLD_START_MB headroom is the sole safety buffer.
+          3. None — no profile, no override; omit the flag and let vLLM
+             apply its own default (0.9 in current versions).
+        """
+        if vc.gpu_memory_utilization is not None:
+            return float(vc.gpu_memory_utilization)
+        if self._model_profiles is None:
+            return None
+        profile = self._model_profiles.get_profile(lane_config.model)
+        if profile is None:
+            return None
+        loaded = getattr(profile, "loaded_vram_mb", None)
+        tp = getattr(profile, "tensor_parallel_size", None) or vc.tensor_parallel_size
+        if not loaded or not tp or tp <= 0:
+            return None
+        per_gpu_total = self._per_gpu_total_mb()
+        if per_gpu_total <= 0:
+            return None
+        derived = float(loaded) / float(tp) / float(per_gpu_total)
+        clamped = min(self._GMU_AUTO_CEILING, max(self._GMU_AUTO_FLOOR, derived))
+        logger.info(
+            "[%s] Auto-derived gpu_memory_utilization=%.3f for %s "
+            "(loaded=%.0fMB / tp=%d / per_gpu_total=%.0fMB; raw=%.3f, "
+            "clamped to [%.2f, %.2f])",
+            self.lane_id, clamped, lane_config.model,
+            loaded, tp, per_gpu_total, derived,
+            self._GMU_AUTO_FLOOR, self._GMU_AUTO_CEILING,
+        )
+        return clamped
+
     def _build_cmd(self, lane_config: LaneConfig) -> list[str]:
         """Build the vllm serve command."""
         if not lane_config.vllm_config:
@@ -714,12 +763,16 @@ class VllmProcessHandle:
             "--dtype",
             vc.dtype,
         ]
-        if vc.gpu_memory_utilization is not None:
-            cmd.extend(["--gpu-memory-utilization", str(vc.gpu_memory_utilization)])
-        # When kv_cache_memory_bytes is set, omit --gpu-memory-utilization and let
-        # vLLM default to 0.9. kv_cache_memory_bytes controls the KV pool size
-        # directly; adding gpu_memory_utilization=0.1 caps total VRAM to 10% which
-        # prevents the model weights from loading at all.
+        # Resolve gpu_memory_utilization: explicit per-model override wins;
+        # otherwise auto-derive from the calibrated profile so vLLM's startup
+        # floor check (free_per_gpu >= gmu * total_per_gpu, raised by
+        # vllm/v1/worker/utils.py:request_memory) matches the lane's actual
+        # measured footprint. The +500 MB cold-start headroom lives only in the
+        # planner's PER_GPU_COLD_START_MB; baking it into gmu would
+        # double-count and unnecessarily reject co-resident sleeping lanes.
+        resolved_gmu = self._resolve_gmu(vc, lane_config)
+        if resolved_gmu is not None:
+            cmd.extend(["--gpu-memory-utilization", str(resolved_gmu)])
         if vc.max_model_len > 0:
             cmd.extend(["--max-model-len", str(vc.max_model_len)])
         # For vLLM lanes, context_length defaults to 4096 from shared lane
@@ -734,9 +787,11 @@ class VllmProcessHandle:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
-        # enforce_eager defaults to True (skips torch.compile + CUDA graph
-        # capture).  Set enforce_eager=False in vllm_config to opt in to
-        # compilation on Ampere+ GPUs where it actually helps.
+        # enforce_eager defaults to False (CUDA graph capture enabled).
+        # Set enforce_eager=True in vllm_config to skip torch.compile + graph
+        # capture — required on Turing (SM 7.5) and other pre-Ampere boards
+        # where graph capture is unstable, and as a workaround for Marlin MoE
+        # kernels under TP>1.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
         # Attention backend: explicit config wins, otherwise auto-detect.
@@ -776,12 +831,15 @@ class VllmProcessHandle:
         # CPU RAM offloading for KV cache
         if vc.cpu_offload_gb > 0:
             cmd.extend(["--cpu-offload-gb", str(vc.cpu_offload_gb)])
-        # Persist vLLM compilation artifacts on the shared models volume so
+        # Persist vLLM compilation artifacts on the resolved cache root so
         # restarts can reuse them instead of recompiling from scratch.
         if not self._has_compilation_config_override(vc.extra_args):
             import json as _json
 
-            cache_root = os.path.join(self._global_config.models_path, ".cache", "vllm")
+            cache_root = os.path.join(
+                self._resolve_persistent_cache_root(self._global_config),
+                ".cache", "vllm",
+            )
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
         # Default chat-template-kwargs: start from inferred defaults for the
         # model family, then overlay explicit user-supplied keys (user wins
@@ -1018,12 +1076,19 @@ class VllmProcessHandle:
         if hf_token:
             env["HF_TOKEN"] = hf_token
 
-        # HuggingFace cache — use same location as Ollama models for consistency
-        # (though vLLM uses HF format, not GGUF)
+        # All four worker caches (HF_HOME, VLLM_CACHE_ROOT, TORCHINDUCTOR_CACHE_DIR,
+        # FLASHINFER_WORKSPACE_BASE) hang off this single root.  Default is the
+        # ollama models_path because the standard docker-compose mounts that as
+        # a persistent named volume; deployments without ollama (or with a
+        # different storage layout) can override globally via
+        # LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
+        cache_root_dir = self._resolve_persistent_cache_root(gc)
+
+        # HuggingFace cache — write into the persistent root.
         if self.hf_home_override:
             env["HF_HOME"] = self.hf_home_override
         elif "HF_HOME" not in os.environ:
-            env["HF_HOME"] = self._resolve_hf_home(gc.models_path)
+            env["HF_HOME"] = self._resolve_hf_home(cache_root_dir)
 
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
@@ -1043,9 +1108,9 @@ class VllmProcessHandle:
                 self._vllm_engine_config.flashinfer_logdest.strip()
             )
 
-        # Persistent compilation caches: point to models_path (mounted volume)
-        # so JIT artifacts survive container rebuilds.
-        cache_root = os.path.join(gc.models_path, ".cache")
+        # Persistent compilation caches: point to the resolved cache root so
+        # JIT artifacts survive container rebuilds.
+        cache_root = os.path.join(cache_root_dir, ".cache")
 
         # vLLM cache root — controls where vLLM stores torch.compile cache,
         # CUDA graph cache, and other artifacts (~/.cache/vllm by default).
@@ -1058,9 +1123,17 @@ class VllmProcessHandle:
         if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
             env["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
 
-        # FlashInfer JIT kernel cache (critical — first compile can take 60s+)
-        if "FLASHINFER_JIT_DIR" not in os.environ:
-            env["FLASHINFER_JIT_DIR"] = os.path.join(cache_root, "flashinfer")
+        # FlashInfer JIT kernel cache (critical — first compile can take 60s+).
+        # flashinfer 0.6.x reads FLASHINFER_WORKSPACE_BASE (see
+        # flashinfer/jit/env.py) and writes its cache to
+        # <base>/.cache/flashinfer/<version>/<arch>/cached_ops/.  Pointing the
+        # base at the persistent volume keeps compiled .so files across
+        # container rebuilds so the worker boot warmup + first lane spawn pay
+        # JIT cost only once per (head_dim, dtype).  FLASHINFER_JIT_DIR is a
+        # Python attribute on flashinfer.jit.env, NOT an env var read at
+        # runtime — setting it has no effect.
+        if "FLASHINFER_WORKSPACE_BASE" not in os.environ:
+            env["FLASHINFER_WORKSPACE_BASE"] = cache_root_dir
 
         # Auto-detect CUDA arch for faster compilation
         if "TORCH_CUDA_ARCH_LIST" not in os.environ:
@@ -1162,15 +1235,38 @@ class VllmProcessHandle:
             )
         return process_env
 
-    def _resolve_hf_home(self, models_path: str) -> str:
+    @staticmethod
+    def _resolve_persistent_cache_root(gc) -> str:
+        """Single root directory for all worker-side persistent caches.
+
+        Resolution order:
+          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty.
+          2. ``gc.models_path`` (the ollama models_path) — used because the
+             standard docker-compose mounts that as a persistent named volume,
+             so it's the one path the worker can rely on surviving container
+             rebuilds in the default deployment.
+
+        ``HF_HOME``, ``VLLM_CACHE_ROOT``, ``TORCHINDUCTOR_CACHE_DIR`` and
+        ``FLASHINFER_WORKSPACE_BASE`` all derive from this root; deployments
+        without ollama (or with a different storage layout) only need to set
+        ``LOGOS_WORKER_CACHE_ROOT`` to point at any persistent path they have
+        — no need to override each cache env var individually.
+        """
+        override = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
+        if override:
+            return override
+        return getattr(gc, "models_path", "") or ""
+
+    def _resolve_hf_home(self, cache_root_dir: str) -> str:
         """Pick a writable HuggingFace cache path for vLLM downloads.
 
-        Preferred path is ``<models_path>/.hf_cache`` to keep model artifacts
-        close to the Ollama storage. If that path is not writable for the
-        current user, fall back to ``~/.cache/huggingface``.
+        Preferred path is ``<cache_root_dir>/.hf_cache`` (where
+        ``cache_root_dir`` is the resolved persistent cache root). If that
+        path is not writable for the current user, fall back to
+        ``~/.cache/huggingface``.
         """
         preferred = (
-            Path(models_path).expanduser() / ".hf_cache" if models_path else None
+            Path(cache_root_dir).expanduser() / ".hf_cache" if cache_root_dir else None
         )
         fallback = Path.home() / ".cache" / "huggingface"
         candidates = [p for p in (preferred, fallback) if p is not None]

@@ -81,6 +81,11 @@ def style_model(name: str) -> str:
     return paint(str(name), BOLD)
 
 
+def style_provider(name: str) -> str:
+    """Bold provider/worker name."""
+    return paint(str(name), BOLD)
+
+
 def style_request_id(rid: str) -> str:
     """Cyan request identifier."""
     return paint(str(rid), CYAN)

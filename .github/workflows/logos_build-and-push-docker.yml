@@ -17,7 +17,7 @@ on:
       - "!logos/README.md"
   release:
     types:
-      - created
+      - published
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -71,37 +71,37 @@ jobs:
     needs: [compute-tag]
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos
+      image-name: ls1intum/edutelligence/logos
       docker-file: ./logos/Dockerfile
       docker-context: .
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos:latest,ghcr.io/ls1intum/edutelligence/logos:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos:{0}', needs.compute-tag.outputs.result) }}
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}
 
   build-and-push-ui:
     name: Build Logos UI
     needs: [compute-tag]
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-ui
+      image-name: ls1intum/edutelligence/logos-ui
       docker-file: ./logos/logos-ui/Dockerfile
       docker-context: ./logos/logos-ui
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-ui:latest,ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-ui:{0}', needs.compute-tag.outputs.result) }}
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}
 
   build-and-push-db:
     name: Build Logos DB
     needs: [compute-tag]
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-db
+      image-name: ls1intum/edutelligence/logos-db
       docker-file: ./logos/db/Dockerfile
       docker-context: ./logos/db
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-db:latest,ghcr.io/ls1intum/edutelligence/logos-db:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-db:{0}', needs.compute-tag.outputs.result) }}
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}
 
   build-and-push-workernode-vllm:
     name: Build Logos Worker Node (vLLM)
     needs: [compute-tag]
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-workernode-vllm
+      image-name: ls1intum/edutelligence/logos-workernode-vllm
       docker-file: ./logos/logos-workernode/Dockerfile
       docker-context: ./logos/logos-workernode
       build-args: |
@@ -109,18 +109,18 @@ jobs:
         RUNTIME_IMAGE=nvidia/cuda:13.1.1-cudnn-runtime-ubuntu24.04
         INSTALL_VLLM=1
         INSTALL_OLLAMA=0
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:latest,ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-workernode-vllm:{0}', needs.compute-tag.outputs.result) }}
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}
 
   build-and-push-workernode-ollama:
     name: Build Logos Worker Node (Ollama)
     needs: [compute-tag]
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
     with:
-      image-name: ghcr.io/ls1intum/edutelligence/logos-workernode-ollama
+      image-name: ls1intum/edutelligence/logos-workernode-ollama
       docker-file: ./logos/logos-workernode/Dockerfile
       docker-context: ./logos/logos-workernode
       build-args: |
         BASE_IMAGE=python:3.12-slim
         INSTALL_VLLM=0
         INSTALL_OLLAMA=1
-      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:latest,ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/logos-workernode-ollama:{0}', needs.compute-tag.outputs.result) }}
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('latest,{0}', needs.compute-tag.outputs.release_tag) || needs.compute-tag.outputs.result }}

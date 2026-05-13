@@ -57,7 +57,8 @@ class ContextResolver:
         model_id: int,
         provider_id: int,
         logos_key: Optional[str] = None,
-        profile_id: Optional[int] = None
+        profile_id: Optional[int] = None,
+        request_path: Optional[str] = None,
     ) -> Optional[ExecutionContext]:
         """
         Resolve all DB information needed to execute a request with authorization verification.
@@ -157,6 +158,12 @@ class ContextResolver:
                     model_name,
                 )
                 return None
+        elif provider_type == "cloud":
+            # Cloud upstream serves the same OpenAI-shaped surface as our /v1
+            # (and /v2) routes, so forward like-for-like on the inbound path.
+            # Auth comes from the DB (auth_name / auth_format / api_key) like
+            # every other non-logosnode provider.
+            forward_url = self._cloud_forward_url(base_url, request_path, endpoint)
         else:
             forward_url = self._merge_url(base_url, endpoint)
 
@@ -206,4 +213,31 @@ class ContextResolver:
             return endpoint
         base = base_url.rstrip("/")
         path = endpoint.lstrip("/")
+        return f"{base}/{path}"
+
+    @staticmethod
+    def _cloud_forward_url(
+        base_url: str,
+        request_path: Optional[str],
+        endpoint_fallback: Optional[str],
+    ) -> str:
+        """Build forward URL for a cloud upstream provider.
+
+        Prefer reusing the inbound `request_path` so we forward like-for-like
+        (e.g. /v1/chat/completions in → /v1/chat/completions out). If the
+        provider's base_url already ends in /v1 or /v2 and the inbound path
+        starts with the same prefix, strip the prefix to avoid duplicating it
+        (".../v1" + "v1/chat/completions" → ".../v1/chat/completions").
+
+        Falls back to the per-model endpoint when no request_path is supplied
+        (background jobs that don't know the original HTTP route).
+        """
+        base = (base_url or "").rstrip("/")
+        if not request_path:
+            return ContextResolver._merge_url(base_url, endpoint_fallback or "")
+        path = request_path.lstrip("/")
+        for prefix in ("v1/", "v2/"):
+            if base.endswith("/" + prefix.rstrip("/")) and path.startswith(prefix):
+                path = path[len(prefix):]
+                break
         return f"{base}/{path}"
