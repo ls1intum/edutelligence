@@ -27,10 +27,10 @@ COPY iris/src/iris ./iris
 # Copy logging configuration
 COPY iris/log_conf.yml ./log_conf.yml
 
-# Copy intent-classifier model config files (small, not in LFS)
+# Copy intent-classifier model config files
 COPY iris/models ./models
 
-# Download the quantized ONNX model from Hugging Face (too large for git, stored externally)
+# Download the quantized ONNX model from Hugging Face
 RUN curl -fsSL \
     "https://huggingface.co/NayerKotry/iris-intent-classifier/resolve/main/model_quantized.onnx" \
     -o /app/models/global_search_intent/onnx/model_quantized.onnx
