@@ -411,16 +411,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
         # Unified prompt combining both tasks
         prompt = (
-            f"You are analyzing a slide from the university lecture '{lecture_name}'.\n\n"
-            f"Extract TWO pieces of information:\n"
-            f"1. display_page_number: The slide/page number (usually bottom-right). Return -1 if not visible.\n"
-            f"2. academic_description: An academic interpretation of the slide content.\n\n"
-            f"For the description:\n"
-            f"- Describe key concepts, diagrams, formulas, or text structure\n"
-            f"- Even text-only slides can have meaningful layout\n"
-            f"- Use {course_language} language\n"
-            f"- Maximum 350 words\n\n"
-            f"Previous slide content for context:\n{last_page_content}\n\n"
+            f"This page is part of the {lecture_name} university lecture. "
+            f"I am the professor that created these slides, please interpret this slide in an academic way. "
+            f"For more context here is the content of the previous slide:\n{last_page_content}\n\n"
+            f"Extract TWO pieces of information and respond with valid JSON:\n"
+            f"1. display_page_number: The slide/page number visible on the slide (usually bottom-right corner). "
+            f"Return -1 if no number is visible.\n"
+            f"2. academic_description: Your academic explanation and interpretation of this slide "
+            f"in {course_language}. Your explanation should not exceed 350 words.\n\n"
             f"Respond with valid JSON matching this structure:\n"
             f'{{"display_page_number": <int or -1>, "academic_description": "<text>"}}'
         )
