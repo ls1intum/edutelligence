@@ -23,6 +23,8 @@ class LectureTranscriptionSchema(Enum):
     SEGMENT_START_TIME = "segment_start_time"
     SEGMENT_END_TIME = "segment_end_time"
     PAGE_NUMBER = "page_number"
+    DISPLAY_PAGE_NUMBER = "display_page_number"
+    ACADEMIC_DESCRIPTION = "academic_description"
     SEGMENT_TEXT = "segment_text"
     SEGMENT_SUMMARY = "segment_summary"
     BASE_URL = "base_url"
@@ -30,7 +32,40 @@ class LectureTranscriptionSchema(Enum):
 
 def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureTranscriptionSchema.COLLECTION_NAME.value):
-        return client.collections.get(LectureTranscriptionSchema.COLLECTION_NAME.value)
+        collection = client.collections.get(
+            LectureTranscriptionSchema.COLLECTION_NAME.value
+        )
+        properties = collection.config.get(simple=True).properties
+
+        # Check and add 'display_page_number' property if missing
+        if not any(
+            property.name == LectureTranscriptionSchema.DISPLAY_PAGE_NUMBER.value
+            for property in properties
+        ):
+            collection.config.add_property(
+                Property(
+                    name=LectureTranscriptionSchema.DISPLAY_PAGE_NUMBER.value,
+                    description="Page number displayed on slide (extracted), -1 if not found",
+                    data_type=DataType.INT,
+                    index_searchable=False,
+                )
+            )
+
+        # Check and add 'academic_description' property if missing
+        if not any(
+            property.name == LectureTranscriptionSchema.ACADEMIC_DESCRIPTION.value
+            for property in properties
+        ):
+            collection.config.add_property(
+                Property(
+                    name=LectureTranscriptionSchema.ACADEMIC_DESCRIPTION.value,
+                    description="Academic interpretation of slide content (vision-generated)",
+                    data_type=DataType.TEXT,
+                    index_searchable=True,  # Searchable for RAG retrieval
+                )
+            )
+
+        return collection
 
     return client.collections.create(
         name=LectureTranscriptionSchema.COLLECTION_NAME.value,
@@ -81,6 +116,18 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 description="The page number of the lecture unit of the segment",
                 data_type=DataType.INT,
                 index_searchable=False,
+            ),
+            Property(
+                name=LectureTranscriptionSchema.DISPLAY_PAGE_NUMBER.value,
+                description="Page number displayed on slide (extracted), -1 if not found",
+                data_type=DataType.INT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureTranscriptionSchema.ACADEMIC_DESCRIPTION.value,
+                description="Academic interpretation of slide content (vision-generated)",
+                data_type=DataType.TEXT,
+                index_searchable=True,  # Searchable for RAG retrieval
             ),
             Property(
                 name=LectureTranscriptionSchema.SEGMENT_TEXT.value,

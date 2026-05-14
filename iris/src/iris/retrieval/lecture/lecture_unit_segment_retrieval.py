@@ -175,6 +175,12 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],
+            display_page_number=lecture_unit_segment.get(
+                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value, -1
+            ),
+            academic_description=lecture_unit_segment.get(
+                LectureUnitSegmentSchema.ACADEMIC_DESCRIPTION.value, ""
+            ),
             segment_summary=lecture_unit_segment[
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value
             ],

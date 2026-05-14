@@ -198,6 +198,12 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 page_number=lecture_transcription_segment[
                     LectureTranscriptionSchema.PAGE_NUMBER.value
                 ],
+                display_page_number=lecture_transcription_segment.get(
+                    LectureTranscriptionSchema.DISPLAY_PAGE_NUMBER.value, -1
+                ),
+                academic_description=lecture_transcription_segment.get(
+                    LectureTranscriptionSchema.ACADEMIC_DESCRIPTION.value, ""
+                ),
                 segment_summary=lecture_transcription_segment[
                     LectureTranscriptionSchema.SEGMENT_SUMMARY.value
                 ],

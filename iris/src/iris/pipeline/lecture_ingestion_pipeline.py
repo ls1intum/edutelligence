@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import tempfile
@@ -22,6 +23,7 @@ from iris.domain.variant.variant import Variant
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
 from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
+from ..domain.data.slide_vision_dto import SlideVisionDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
@@ -118,7 +120,13 @@ def save_pdf(pdf_file_base64):
 
 
 def create_page_data(
-    page_num, page_splits, lecture_unit_dto, course_language, base_url
+    page_num,
+    page_splits,
+    lecture_unit_dto,
+    course_language,
+    base_url,
+    slide_number,
+    academic_description,
 ):
     """
     Create and return a list of dictionnaries to be ingested in the Vector Database.
@@ -130,6 +138,8 @@ def create_page_data(
             LectureUnitPageChunkSchema.COURSE_ID.value: lecture_unit_dto.course_id,
             LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: slide_number,
+            LectureUnitPageChunkSchema.ACADEMIC_DESCRIPTION.value: academic_description,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
             LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
@@ -331,32 +341,22 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             page = doc.load_page(page_num)
             page_text = page.get_text()
 
-            # Extract slide number via vision (for all pages)
-            slide_num = self.extract_slide_number(page)
-            slide_page_numbers.append(slide_num)
+            # SINGLE UNIFIED CALL: Vision extraction (high-res, all slides)
+            vision_result = self.extract_slide_vision(
+                page,
+                old_page_text,
+                lecture_unit_slide_dto.lecture_name,
+                self.course_language,
+            )
+            slide_page_numbers.append(vision_result.display_page_number)
 
-            # Interpret images if page has them (existing logic)
-            if page.get_images(full=False):
-                logger.info(
-                    "%s Page %d/%d: has images, interpreting with LLM",
-                    prefix,
-                    page_num + 1,
-                    doc.page_count,
-                )
-                # more pixels thus more details and better quality
-                matrix = fitz.Matrix(5, 5)
-                pix = page.get_pixmap(matrix=matrix)
-                img_bytes = pix.tobytes("jpg")
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                image_interpretation = self.interpret_image(
-                    img_base64,
-                    old_page_text,
-                    lecture_unit_slide_dto.lecture_name,
-                    self.course_language,
-                )
+            # Merge academic description with page text
+            if vision_result.academic_description:
                 page_text = self.merge_page_content_and_image_interpretation(
-                    page_text, image_interpretation
+                    page_text, vision_result.academic_description
                 )
+
+            # Create data with both vision outputs
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
@@ -365,6 +365,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit_slide_dto,
                     self.course_language,
                     base_url,
+                    vision_result.display_page_number,
+                    vision_result.academic_description,
                 )
             )
             old_page_text = page_text
@@ -383,27 +385,46 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         return data
 
-    def extract_slide_number(self, page: fitz.Page) -> int:
-        """Extract slide number from page using vision.
+    def extract_slide_vision(
+        self,
+        page: fitz.Page,
+        last_page_content: str,
+        lecture_name: str,
+        course_language: str,
+    ) -> SlideVisionDTO:
+        """
+        Extract slide number and academic description via unified vision call.
 
         Args:
             page: PDF page to process
+            last_page_content: Content of previous page for context
+            lecture_name: Name of the lecture for context
+            course_language: Language for the description
 
         Returns:
-            int: Slide number (positive integer), or -1 if not found
+            SlideVisionDTO with display_page_number and academic_description
         """
-        # Render page as low-res image (just need to read the number)
-        matrix = fitz.Matrix(2, 2)
+        # High-res rendering (5x like interpret_image, not 2x like extract_slide_number)
+        matrix = fitz.Matrix(5, 5)
         pix = page.get_pixmap(matrix=matrix)
         img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
 
-        # Simple prompt for slide number extraction (same as video processing)
+        # Unified prompt combining both tasks
         prompt = (
-            "You are an AI that reads slide numbers from presentation slides. "
-            "Respond only with the slide number as an integer, or 'null' if not visible."
+            f"You are analyzing a slide from the university lecture '{lecture_name}'.\n\n"
+            f"Extract TWO pieces of information:\n"
+            f"1. display_page_number: The slide/page number (usually bottom-right). Return -1 if not visible.\n"
+            f"2. academic_description: An academic interpretation of the slide content.\n\n"
+            f"For the description:\n"
+            f"- Describe key concepts, diagrams, formulas, or text structure\n"
+            f"- Even text-only slides can have meaningful layout\n"
+            f"- Use {course_language} language\n"
+            f"- Maximum 350 words\n\n"
+            f"Previous slide content for context:\n{last_page_content}\n\n"
+            f"Respond with valid JSON matching this structure:\n"
+            f'{{"display_page_number": <int or -1>, "academic_description": "<text>"}}'
         )
 
-        # Vision call
         message = PyrisMessage(
             sender=IrisMessageRole.USER,
             contents=[
@@ -415,65 +436,30 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             response = self.llm_chat.chat(
                 [message],
-                CompletionArguments(temperature=0),
+                CompletionArguments(temperature=0, response_format="JSON"),
                 tools=[],
             )
             self._append_tokens(
                 response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
             )
+
+            # Parse structured response
+            response_text = response.contents[0].text_content or "{}"
+            # Strip markdown code fences if present
+            cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
+            parsed = json.loads(cleaned)
+
+            return SlideVisionDTO(
+                display_page_number=parsed.get("display_page_number", -1),
+                academic_description=parsed.get("academic_description", ""),
+            )
+
         except Exception as e:
             logger.error(
-                "Slide number extraction failed for page %d: %s", page.number + 1, e
+                "Slide vision extraction failed for page %d: %s", page.number + 1, e
             )
-            return -1
-
-        response_text = response.contents[0].text_content or ""
-
-        # Parse slide number
-        text_lower = response_text.lower()
-        if "null" in text_lower or "unknown" in text_lower:
-            return -1
-
-        match = re.search(r"\d+", response_text)
-        return int(match.group(0)) if match else -1
-
-    def interpret_image(
-        self,
-        img_base64: str,
-        last_page_content: str,
-        name_of_lecture: str,
-        course_language: str,
-    ):
-        """
-        Interpret the image passed
-        """
-        image_interpretation_prompt = TextMessageContentDTO(
-            text_content=f"This page is part of the {name_of_lecture} university lecture."
-            f"I am the professor that created these slides, "
-            f" please interpret this slide in an academic way. "
-            f"For more context here is the content of the previous slide:\n "
-            f" {last_page_content} \n\n"
-            f" Only repond with the slide explanation and interpretation in {course_language}, "
-            f"do not add anything else to your response.Your explanation should not exceed 350 words."
-        )
-        image = ImageMessageContentDTO(base64=img_base64)
-        iris_message = PyrisMessage(
-            sender=IrisMessageRole.USER,
-            contents=[image_interpretation_prompt, image],
-        )
-        try:
-            response = self.llm_chat.chat(
-                [iris_message],
-                CompletionArguments(temperature=0),
-                tools=[],
-            )
-            self._append_tokens(
-                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
-            )
-        except Exception as e:
-            logger.error("Error interpreting image: %s", e)
-            return None
-        return response.contents[0].text_content
+            # Fallback to safe defaults
+            return SlideVisionDTO(display_page_number=-1, academic_description="")
 
     def merge_page_content_and_image_interpretation(
         self, page_content: str, image_interpretation: str
