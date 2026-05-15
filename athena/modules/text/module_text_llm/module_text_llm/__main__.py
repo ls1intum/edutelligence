@@ -13,7 +13,7 @@ from athena import (
 )
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-from athena.schemas import LearnerProfile, Competency
+from athena.schemas import AiSelectionDecision, LearnerProfile, Competency
 
 from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
@@ -62,13 +62,15 @@ async def suggest_feedback(
     learner_profile: Optional[LearnerProfile] = None,
     latest_submission: Optional[Submission] = None,
     competencies: Optional[List[Competency]] = None,
+    selection: Optional[AiSelectionDecision] = None,
 ) -> List[Feedback]:
     logger.info(
-        "suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s",
+        "suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s, selection: %s",
         "Graded" if is_graded else "Non-graded",
         submission.id,
         exercise.id,
         module_config.approach.__class__.__name__,
+        selection.value if selection is not None else "None",
     )
     return await generate_suggestions(
         exercise=exercise,
