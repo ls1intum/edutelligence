@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from athena import app, config_schema_provider, submissions_consumer, submission_selector, feedback_consumer, feedback_provider, evaluation_provider, emit_meta
 from athena.programming import Exercise, Submission, Feedback
 from athena.logger import logger
+from athena.schemas import AiSelectionDecision
 from athena.storage import store_exercise, store_submissions, store_feedback
 
 
@@ -70,8 +71,18 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 
 
 @feedback_provider
-def suggest_feedback(exercise: Exercise, submission: Submission, module_config: Configuration) -> List[Feedback]:
-    logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
+def suggest_feedback(
+    exercise: Exercise,
+    submission: Submission,
+    module_config: Configuration,
+    selection: AiSelectionDecision | None = None,
+) -> List[Feedback]:
+    logger.info(
+        "suggest_feedback: Suggestions for submission %d of exercise %d were requested, with selection: %s",
+        submission.id,
+        exercise.id,
+        selection.value if selection is not None else "None",
+    )
     # Do something with the submission and return a list of feedback
 
     # Example use of module config

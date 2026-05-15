@@ -5,6 +5,7 @@ from typing import List
 
 from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
 from athena.storage import store_feedback
+from athena.schemas import AiSelectionDecision
 from athena.text import Exercise, Submission, Feedback, TextLanguageEnum
 from athena.logger import logger
 
@@ -45,10 +46,17 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 
 
 @feedback_provider
-def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool = True) -> List[Feedback]:
+def suggest_feedback(
+    exercise: Exercise,
+    submission: Submission,
+    is_graded: bool = True,
+    selection: AiSelectionDecision | None = None,
+) -> List[Feedback]:
     logger.info(
-        "suggest_feedback: Suggestions for submission %d of exercise %d were requested",
-        submission.id, exercise.id
+        "suggest_feedback: Suggestions for submission %d of exercise %d were requested, with selection: %s",
+        submission.id,
+        exercise.id,
+        selection.value if selection is not None else "None",
     )
     suggestions = suggest_feedback_for_submission(submission)
     logger.info("suggest_feedback: Returning %d suggestions", len(suggestions))
