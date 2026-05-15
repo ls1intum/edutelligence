@@ -371,7 +371,6 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             query=dto.query,
             limit=dto.limit,
             intent=intent,
-            on_token=callback.streaming if intent == SearchIntent.TRIGGER_AI else None,
         )
         if result.answer:
             logger.info(
