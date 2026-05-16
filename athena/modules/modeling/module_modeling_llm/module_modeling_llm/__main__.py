@@ -6,6 +6,7 @@ import tiktoken
 from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
 from athena.logger import logger
 from athena.modeling import Exercise, Feedback, Submission
+from athena.schemas import AiSelectionDecision
 from module_modeling_llm.config import Configuration
 from module_modeling_llm.core.filter_feedback import filter_feedback
 from module_modeling_llm.core.generate_suggestions import generate_suggestions
@@ -32,9 +33,19 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 
 
 @feedback_provider
-async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
-    logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id,
-                exercise.id)
+async def suggest_feedback(
+    exercise: Exercise,
+    submission: Submission,
+    is_graded: bool,
+    module_config: Configuration,
+    selection: AiSelectionDecision | None = None,
+) -> List[Feedback]:
+    logger.info(
+        "suggest_feedback: Suggestions for submission %d of exercise %d were requested, with selection: %s",
+        submission.id,
+        exercise.id,
+        selection.value if selection is not None else "None",
+    )
     
     # First, we convert the incoming exercise and submission to our internal models and textual representations
     exercise_model = get_exercise_model(exercise, submission)
