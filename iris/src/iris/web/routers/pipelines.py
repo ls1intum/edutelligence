@@ -354,7 +354,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
 
     try:
         intent = classify_intent(dto.query)
-        logger.debug(
+        logger.info(
             "[global-search] query=%r  intent=%s  → %s",
             dto.query[:120],
             intent,
@@ -367,10 +367,13 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         if intent == SearchIntent.TRIGGER_AI:
             callback.thinking()
         client = VectorDatabase().get_client()
+        course_ids = dto.access_context.course_ids if dto.access_context else None
         result = GlobalSearchPipeline(client, local=dto.settings.is_local())(
             query=dto.query,
             limit=dto.limit,
             intent=intent,
+            course_ids=course_ids,
+            access_context=dto.access_context,
         )
         if result.answer:
             logger.info(

@@ -21,4 +21,11 @@ logger = get_logger(__name__)
 def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]:
     """Search for lectures based on a query."""
     client = VectorDatabase().get_client()
-    return LectureGlobalSearchRetrieval(client).search(dto.query, dto.limit)
+    course_ids = dto.access_context.course_ids if dto.access_context else None
+    # search() returns scored tuples (float, dto) for pipeline use — strip scores for the HTTP response
+    return [
+        result
+        for _, result in LectureGlobalSearchRetrieval(client).search(
+            dto.query, dto.limit, course_ids=course_ids
+        )
+    ]

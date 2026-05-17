@@ -48,32 +48,73 @@ class LectureGlobalSearchRetrieval:
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
 
-    def search(self, query: str, limit: int) -> list[LectureSearchResultDTO]:
+    def search(
+        self, query: str, limit: int, course_ids: list[int] | None = None
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
+        logger.info("[LectureSearch] course_ids filter=%s", course_ids)
+        if course_ids is not None and len(course_ids) == 0:
+            logger.info(
+                "[LectureSearch] user has no accessible courses — returning nothing"
+            )
+            return []
         query_embedding = self.llm_embedding.embed(query)
         return self._run_hybrid_search(
-            query=query, vector=query_embedding, alpha=0.9, limit=limit
+            query=query,
+            vector=query_embedding,
+            alpha=0.9,
+            limit=limit,
+            course_ids=course_ids,
         )
 
     def search_with_vector_override(
-        self, query: str, vector_text: str, alpha: float, limit: int
-    ) -> list[LectureSearchResultDTO]:
+        self,
+        query: str,
+        vector_text: str,
+        alpha: float,
+        limit: int,
+        course_ids: list[int] | None = None,
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
         """Used by HyDE: embed ``vector_text`` for semantic search while keeping
         ``query`` for BM25 keyword matching."""
+        logger.info("[LectureSearch/HyDE] course_ids filter=%s", course_ids)
+        if course_ids is not None and len(course_ids) == 0:
+            logger.info(
+                "[LectureSearch/HyDE] user has no accessible courses — returning nothing"
+            )
+            return []
         vector = self.llm_embedding.embed(vector_text)
         return self._run_hybrid_search(
-            query=query, vector=vector, alpha=alpha, limit=limit
+            query=query, vector=vector, alpha=alpha, limit=limit, course_ids=course_ids
         )
 
     def _run_hybrid_search(
-        self, query: str, vector: list[float], alpha: float, limit: int
-    ) -> list[LectureSearchResultDTO]:
+        self,
+        query: str,
+        vector: list[float],
+        alpha: float,
+        limit: int,
+        course_ids: list[int] | None = None,
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
+        course_filter = (
+            Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
+                course_ids
+            )
+            if course_ids
+            else None
+        )
+
         # Phase 1: both hybrid searches in parallel
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             seg_future = executor.submit(
-                self._search_segments, query, vector, alpha, limit
+                self._search_segments, query, vector, alpha, limit, course_filter
             )
             trans_future = executor.submit(
-                self._search_video_transcriptions, query, vector, alpha, limit
+                self._search_video_transcriptions,
+                query,
+                vector,
+                alpha,
+                limit,
+                course_filter,
             )
         seg_objects = seg_future.result()
         trans_objects = trans_future.result()
@@ -140,32 +181,58 @@ class LectureGlobalSearchRetrieval:
                 scored.append((score, dto))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [dto for _, dto in scored[:limit]]
+        top = scored[:limit]
+        final_with_scores: list[tuple[float, LectureSearchResultDTO]] = top
+        logger.info(
+            "[LectureSearch] hits=%d  results=%s",
+            len(top),
+            [
+                f"{dto.course.name}/{dto.lecture.name}/{dto.lecture_unit.name}"
+                f"(p.{dto.lecture_unit.page_number},score={score:.3f})"
+                for score, dto in top
+            ],
+        )
+        return final_with_scores
 
     def _search_segments(
-        self, query: str, vector: list[float], alpha: float, limit: int
+        self,
+        query: str,
+        vector: list[float],
+        alpha: float,
+        limit: int,
+        course_filter: Filter | None = None,
     ) -> list[Any]:
         return self.collection.query.hybrid(
             query=query,
             alpha=alpha,
             vector=vector,
             limit=limit,
+            filters=course_filter,
             return_metadata=MetadataQuery(score=True),
         ).objects
 
     def _search_video_transcriptions(
-        self, query: str, vector: list[float], alpha: float, limit: int
+        self,
+        query: str,
+        vector: list[float],
+        alpha: float,
+        limit: int,
+        course_filter: Filter | None = None,
     ) -> list[Any]:
         """Search LectureTranscriptions restricted to segments with no associated slide
         (page_number == -1). These are video-only moments not captured in any segment.
         """
+        page_filter = Filter.by_property(
+            LectureTranscriptionSchema.PAGE_NUMBER.value
+        ).equal(-1)
+        combined_filter = (
+            (page_filter & course_filter) if course_filter else page_filter
+        )
         return self.transcription_collection.query.hybrid(
             query=query,
             alpha=alpha,
             vector=vector,
-            filters=Filter.by_property(
-                LectureTranscriptionSchema.PAGE_NUMBER.value
-            ).equal(-1),
+            filters=combined_filter,
             limit=limit,
             return_metadata=MetadataQuery(score=True),
         ).objects
