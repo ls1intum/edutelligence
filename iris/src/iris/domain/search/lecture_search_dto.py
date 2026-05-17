@@ -99,8 +99,43 @@ class GlobalSearchRequestDTO(BaseModel):
         return value
 
 
+class GlobalSearchSourceDTO(BaseModel):
+    """Unified source result for the Iris answer pipeline.
+    Covers all entity types (lecture slides, exercises, FAQs, exams, channels).
+    The lecture search endpoint still uses LectureSearchResultDTO unchanged.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    source_type: str = Field(alias="sourceType")
+    entity_id: int = Field(alias="entityId")
+    course: CourseInfo
+    title: str
+    snippet: str | None = None
+    # Lecture-specific (only present for lecture_unit_* source types)
+    lecture: LectureInfo | None = None
+    lecture_unit: LectureUnitInfo | None = Field(default=None, alias="lectureUnit")
+    # Internal relevance score from Weaviate hybrid search — not serialized to JSON
+    score: float = Field(default=0.0, exclude=True)
+
+    @staticmethod
+    def from_lecture_result(
+        result: "LectureSearchResultDTO", score: float = 0.0
+    ) -> "GlobalSearchSourceDTO":
+        return GlobalSearchSourceDTO(
+            sourceType=result.lecture_unit.source_type,
+            entityId=result.lecture_unit.id,
+            course=result.course,
+            title=result.lecture_unit.name,
+            snippet=result.snippet,
+            lecture=result.lecture,
+            lectureUnit=result.lecture_unit,
+            score=score,
+        )
+
+
 class GlobalSearchResponseDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     answer: str | None
-    sources: list[LectureSearchResultDTO]
+    sources: list[GlobalSearchSourceDTO]

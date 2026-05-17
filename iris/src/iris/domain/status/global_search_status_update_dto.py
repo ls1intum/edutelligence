@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from iris.domain.search.lecture_search_dto import LectureSearchResultDTO
+from iris.domain.search.lecture_search_dto import GlobalSearchSourceDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 
 
@@ -14,4 +14,4 @@ class GlobalSearchStatusUpdateDTO(StatusUpdateDTO):
 
     result: Optional[str] = None
     answer: Optional[str] = None
-    sources: List[LectureSearchResultDTO] = []
+    sources: List[GlobalSearchSourceDTO] = []
