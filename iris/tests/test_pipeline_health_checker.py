@@ -70,7 +70,7 @@ class _FakePipelineBase:
     """Fake pipeline whose get_variants() is controlled by class attributes."""
 
     HEALTH_BASELINE_VARIANT_ID = "default"
-    _VARIANTS: list[Variant] = []
+    _VARIANTS: tuple[Variant, ...] = ()
 
     @classmethod
     def get_variants(cls) -> list[Variant]:
@@ -91,10 +91,10 @@ def _evaluate_with_fake(
 def test_evaluate_feature_with_custom_baseline_passes(monkeypatch):
     class P(_FakePipelineBase):
         HEALTH_BASELINE_VARIANT_ID = "problem_statement"
-        _VARIANTS = [
+        _VARIANTS = (
             _make_variant("faq", {"m_faq"}),
             _make_variant("problem_statement", {"m_ps"}),
-        ]
+        )
 
     result = _evaluate_with_fake(monkeypatch, P, available={"m_faq", "m_ps"})
     assert result.wired is True
@@ -106,10 +106,10 @@ def test_evaluate_feature_with_custom_baseline_passes(monkeypatch):
 def test_evaluate_feature_baseline_model_missing_flips_has_default(monkeypatch):
     class P(_FakePipelineBase):
         HEALTH_BASELINE_VARIANT_ID = "problem_statement"
-        _VARIANTS = [
+        _VARIANTS = (
             _make_variant("faq", {"m_faq"}),
             _make_variant("problem_statement", {"m_ps"}),
-        ]
+        )
 
     result = _evaluate_with_fake(monkeypatch, P, available={"m_faq"})
     assert result.wired is True
@@ -120,10 +120,10 @@ def test_evaluate_feature_baseline_model_missing_flips_has_default(monkeypatch):
 def test_evaluate_feature_non_baseline_missing_keeps_has_default(monkeypatch):
     class P(_FakePipelineBase):
         HEALTH_BASELINE_VARIANT_ID = "default"
-        _VARIANTS = [
+        _VARIANTS = (
             _make_variant("default", {"m_default"}),
             _make_variant("advanced", {"m_advanced"}),
-        ]
+        )
 
     result = _evaluate_with_fake(monkeypatch, P, available={"m_default"})
     assert result.wired is True
@@ -136,7 +136,7 @@ def test_evaluate_feature_non_baseline_missing_keeps_has_default(monkeypatch):
 def test_evaluate_feature_missing_baseline_variant_reports_expected_id(monkeypatch):
     class P(_FakePipelineBase):
         HEALTH_BASELINE_VARIANT_ID = "problem_statement"
-        _VARIANTS = [_make_variant("faq", {"m_faq"})]
+        _VARIANTS = (_make_variant("faq", {"m_faq"}),)
 
     result = _evaluate_with_fake(monkeypatch, P, available={"m_faq"})
     assert result.wired is True
