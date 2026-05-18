@@ -8,7 +8,7 @@ logger = get_logger(__name__)
 class IngestionJobHandler:
     """
     A handler to track the current ingestion jobs for lecture units.
-    Skips duplicate jobs if a thread is already running for the same lecture unit.
+    For duplicate jobs (same course/lecture/unit), the most recent request wins.
     """
 
     def __init__(self):
@@ -29,13 +29,12 @@ class IngestionJobHandler:
 
             if old_thread is not None and old_thread.is_alive():
                 logger.info(
-                    "Skipping duplicate ingestion job (already running) | "
+                    "Replacing running ingestion job with newer request | "
                     "course=%d lecture=%d unit=%d",
                     course_id,
                     lecture_id,
                     lecture_unit_id,
                 )
-                return
 
             self.job_list.setdefault(course_id, {}).setdefault(lecture_id, {})[
                 lecture_unit_id
