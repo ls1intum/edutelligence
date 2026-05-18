@@ -1145,6 +1145,150 @@ async def test_stuck_detection_does_not_trip_during_request_burst() -> None:
     assert isinstance(manager._handles.get(lane_id), FakeHandle)  # noqa: SLF001
 
 
+@pytest.mark.asyncio
+async def test_proxy_stuck_detection_kills_lane_when_engine_never_admits() -> None:
+    """Workernode connections piling up while vLLM scheduler stays empty.
+
+    Regression test for the vLLM mm-cache desync wedge: the API server
+    accepts a request, calls into EngineCore.preprocess_add_request, which
+    hangs (or 500s in a way that never decrements active_requests because
+    the proxy stream is still open).  vLLM's own ``requests_running``
+    stays at 0 because the request never reaches the scheduler, so the
+    existing token-progress branch would never fire — the proxy-stuck
+    branch must.
+    """
+    lane_id = "planner-google_gemma-4-26B-A4B-it"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    stopped = False
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+        async def stop(self) -> ProcessStatus:
+            nonlocal stopped
+            stopped = True
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
+    manager._active_requests[lane_id] = 36  # noqa: SLF001 — matches the wedge signature
+    manager._last_gen_tokens[lane_id] = 100.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 500.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(
+        lane_id,
+        gen_tokens=100.0,      # frozen
+        prompt_tokens=500.0,   # frozen
+        requests_running=0.0,  # nothing in vLLM's scheduler
+    )
+    await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
+
+    assert stopped is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_stuck_does_not_fire_without_parked_requests() -> None:
+    """If no proxy connections are parked, an idle empty engine is fine.
+
+    Avoids false positives during normal idle periods: vLLM has no work
+    (requests_running=0) AND token counters are flat AND no requests are
+    held on the workernode side.  The lane is simply idle, not wedged.
+    """
+    lane_id = "planner-idle"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    stopped = False
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+
+        async def stop(self) -> ProcessStatus:
+            nonlocal stopped
+            stopped = True
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
+    manager._active_requests[lane_id] = 0  # noqa: SLF001
+    manager._last_gen_tokens[lane_id] = 100.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 500.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(
+        lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=0.0,
+    )
+    await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
+
+    assert stopped is False
+    assert lane_id not in manager._stuck_since  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_liveness_stuck_detection_kills_lane_when_engine_rpc_wedges() -> None:
+    """N consecutive /is_sleeping timeouts trigger a restart even with no traffic.
+
+    Catches the idle-wedge case: the API server still serves /v1/models
+    and /health (HTTP layer is alive) but the EngineCore RPC channel is
+    hung so any endpoint that round-trips to the engine (/is_sleeping,
+    /sleep) hangs forever.  No proxy connections need to be parked.
+    """
+    from logos_worker_node.vllm_process import VllmProcessHandle
+
+    lane_id = "planner-google_gemma-4-26B-A4B-it"
+    lane_config = LaneConfig(
+        lane_id=lane_id,
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+
+    # Real VllmProcessHandle so isinstance() in production code matches.
+    # We swap in a fake stop() to avoid touching subprocesses, and prime
+    # consecutive_liveness_failures to the wedge signature.
+    handle = VllmProcessHandle(lane_id, 15000, OllamaConfig())
+    handle._lane_config = lane_config  # noqa: SLF001
+    handle._consecutive_liveness_failures = 4  # noqa: SLF001 — 4 > _LIVENESS_FAILURE_THRESHOLD (3)
+    stop_called = False
+
+    async def _fake_stop() -> ProcessStatus:
+        nonlocal stop_called
+        stop_called = True
+        return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=0)
+
+    handle.stop = _fake_stop  # type: ignore[assignment]
+
+    manager._handles[lane_id] = handle  # noqa: SLF001
+    manager._stuck_duration_seconds = 0.0  # noqa: SLF001
+    manager._last_gen_tokens[lane_id] = 100.0  # noqa: SLF001
+    manager._last_prompt_tokens[lane_id] = 500.0  # noqa: SLF001
+    manager._stuck_since[lane_id] = 0.0  # noqa: SLF001
+
+    status = _make_vllm_lane_status(
+        lane_id, gen_tokens=100.0, prompt_tokens=500.0, requests_running=0.0,
+    )
+    await manager._check_stuck_lanes([status], auto_restart=False)  # noqa: SLF001
+
+    assert stop_called is True
+
+
 # ── Circuit-breaker tests ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
