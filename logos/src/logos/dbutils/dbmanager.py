@@ -3631,6 +3631,43 @@ class DBManager:
         ).fetchone()
         return dict(row._mapping) if row else None
 
+    def update_user_info(self, user_id: int, prename: Optional[str], name: Optional[str], email: Optional[str]) -> \
+    tuple[dict, int]:
+        updates = []
+        params = {"user_id": user_id}
+
+        if prename is not None and prename.strip():
+            updates.append("prename = :prename")
+            params["prename"] = prename.strip()
+
+        if name is not None and name.strip():
+            updates.append("name = :name")
+            params["name"] = name.strip()
+
+        if email is not None and email.strip():
+            existing = self.session.execute(
+                text("SELECT id FROM users WHERE lower(email) = lower(:email) AND id != :user_id"),
+                {"email": email.strip(), "user_id": user_id}
+            ).fetchone()
+
+            if existing:
+                return {"error": "Email already in use by another user"}, 409
+
+            updates.append("email = :email")
+            params["email"] = email.strip()
+
+        if not updates:
+            return {"result": "No changes requested"}, 200
+
+        sql_str = f"UPDATE users SET {', '.join(updates)} WHERE id = :user_id RETURNING id"
+        row = self.session.execute(text(sql_str), params).fetchone()
+
+        if row is None:
+            return {"error": f"User {user_id} not found"}, 404
+
+        self.session.commit()
+        return {"result": "User info updated successfully"}, 200
+
     def _is_team_member(self, team_id: int, user_id: int) -> bool:
         return self.session.execute(
             text(
@@ -3935,6 +3972,40 @@ class DBManager:
             {"team_id": team_id, "user_id": user_id},
         ).fetchone()
         return row is not None
+
+    def update_team_name(self, team_id: int, name: str):
+        name = (name or "").strip()
+
+        if not name:
+            return {"error": "Team name is required"}, 422
+
+        existing = self.session.execute(
+            text("""
+                 SELECT id
+                 FROM teams
+                 WHERE name = :name
+                   AND id != :team_id
+                 """),
+            {"name": name, "team_id": team_id},
+        ).fetchone()
+
+        if existing is not None:
+            return {"error": "A team with this name already exists."}, 409
+
+        row = self.session.execute(
+            text("""
+                 UPDATE teams
+                 SET name = :name
+                 WHERE id = :team_id RETURNING id, name
+                 """),
+            {"name": name, "team_id": team_id},
+        ).fetchone()
+
+        if row is None:
+            return {"error": "Team not found"}, 404
+
+        self.session.commit()
+        return dict(row._mapping), 200
 
     def list_team_members(self, team_id: int) -> list[dict]:
         sql = text("""

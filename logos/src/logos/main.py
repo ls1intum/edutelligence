@@ -3972,6 +3972,41 @@ async def list_admin_users(request: Request):
         return db.list_admin_users()
 
 
+@app.patch("/users/{user_id}", tags=["users"])
+async def patch_user_info(user_id: int, body: UpdateUserInfoRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+
+        target_user = db.session.execute(
+            text("SELECT role FROM users WHERE id = :uid"),
+            {"uid": user_id}
+        ).fetchone()
+
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if caller["role"] == "app_admin":
+            if target_user.role in ("app_admin", "logos_admin") and caller["id"] != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="App admins cannot edit other administrators"
+                )
+
+        result, status = db.update_user_info(
+            user_id=user_id,
+            prename=body.prename,
+            name=body.name,
+            email=body.email
+        )
+
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+
+    return result
+
+
 @app.get("/teams", tags=["teams"])
 async def list_teams(request: Request):
     logos_key = require_app_admin_or_above(request)
@@ -4118,6 +4153,23 @@ async def set_team_member_owner(team_id: int, user_id: int, body: SetOwnerReques
         result, status = db.set_team_owner(team_id, user_id, body.is_owner)
     if status != 200:
         raise HTTPException(status_code=status, detail=result.get("error"))
+    return result
+
+@app.patch("/teams/{team_id}/name", tags=["teams"])
+async def patch_team_name(team_id: int, body: UpdateTeamNameRequest, request: Request):
+    logos_key = require_app_admin_or_above(request)
+
+    with DBManager() as db:
+        caller = db.get_user_by_logos_key(logos_key)
+
+        if caller["role"] == "app_admin" and not db.is_team_owner(team_id, caller["id"]):
+            raise HTTPException(status_code=403, detail="You do not own this team")
+
+        result, status = db.update_team_name(team_id, body.name)
+
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result.get("error"))
+
     return result
 
 

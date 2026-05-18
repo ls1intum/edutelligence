@@ -6,8 +6,11 @@ import { API_BASE, User } from "@/components/statistics/constants";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { HStack } from "@/components/ui/hstack";
-import { Icon, ArrowLeftIcon } from "@/components/ui/icon";
+import { Icon, ArrowLeftIcon, EditIcon } from "@/components/ui/icon";
 import { ConfirmDeleteModal } from "@/components/modals/confirm-delete-modal";
+import { BaseModal } from "@/components/modals/base-modal";
+import { Input, InputField } from "@/components/ui/input";
+import { Button, ButtonText } from "@/components/ui/button";
 
 import { Overview_tab } from "@/components/tabs/overview_tab";
 import { Members_tab } from "@/components/tabs/members_tab";
@@ -35,6 +38,11 @@ export default function TeamDetail() {
   const [isOwner, setIsOwner] = useState(false);
   const [deleteVisible, setDeleteVisible] = useState(false);
   const [adminUsers, setAdminUsers] = useState<User[]>([]);
+
+  const [editNameVisible, setEditNameVisible] = useState(false);
+  const [editNameInput, setEditNameInput] = useState("");
+  const [editNameLoading, setEditNameLoading] = useState(false);
+  const [editNameError, setEditNameError] = useState("");
 
   const fetchAllData = useCallback(async () => {
     setLoading(true);
@@ -103,6 +111,54 @@ export default function TeamDetail() {
     }
   };
 
+  const handleEditNameOpen = () => {
+    setEditNameInput(teamName);
+    setEditNameError("");
+    setEditNameVisible(true);
+  };
+
+  const handleSaveName = async () => {
+    if (!editNameInput.trim()) {
+      setEditNameError("Team name cannot be empty.");
+      return;
+    }
+    setEditNameLoading(true);
+    setEditNameError("");
+
+    try {
+      const res = await fetch(`${API_BASE}/teams/${teamId}/name`, {
+        method: "PATCH",
+        headers: { "logos-key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editNameInput.trim() }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        setTeamName(data.name);
+        setTeam((prev: any) => ({ ...prev, name: data.name }));
+        setEditNameVisible(false);
+      } else {
+        let errorMsg = "Failed to update team name.";
+
+        if (data.error) {
+          if (typeof data.error === "string") {
+            errorMsg = data.error;
+          } else if (typeof data.error === "object" && data.error.message) {
+            errorMsg = data.error.message;
+          }
+        } else if (typeof data.detail === "string") {
+          errorMsg = data.detail;
+        }
+
+        setEditNameError(errorMsg);
+      }
+    } catch (err) {
+      setEditNameError("Connection error.");
+    } finally {
+      setEditNameLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <VStack className="items-center justify-center p-8" space="lg">
@@ -148,13 +204,25 @@ export default function TeamDetail() {
         >
           <Icon as={ArrowLeftIcon} size="md" className="text-typography-600" />
         </Pressable>
-        <Text
-          size="2xl"
-          className="font-bold text-black dark:text-white"
-          style={{ flex: 1, textAlign: "center" }}
+
+        <HStack
+          space="sm"
+          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
         >
-          {teamName}
-        </Text>
+          <Text
+            size="2xl"
+            className="font-bold text-black dark:text-white"
+            style={{ textAlign: "center" }}
+          >
+            {teamName}
+          </Text>
+          {canEdit && (
+            <Pressable onPress={handleEditNameOpen} style={{ padding: 4 }}>
+              <Icon as={EditIcon} size="sm" className="text-typography-400" />
+            </Pressable>
+          )}
+        </HStack>
+
         <View style={{ width: 32 }} />
       </HStack>
 
@@ -238,6 +306,45 @@ export default function TeamDetail() {
         title="Delete Team?"
         message={`Are you sure you want to delete "${teamName}"? This action is permanent.`}
       />
+
+      <BaseModal
+        visible={editNameVisible}
+        onClose={() => setEditNameVisible(false)}
+        maxWidth={400}
+      >
+        <VStack space="md">
+          <Text style={{ fontWeight: "700", fontSize: 18 }}>
+            Edit Team Name
+          </Text>
+          <Input>
+            <InputField
+              placeholder="Team Name"
+              value={editNameInput}
+              onChangeText={setEditNameInput}
+              onSubmitEditing={handleSaveName}
+            />
+          </Input>
+          {editNameError ? (
+            <Text style={{ color: "#e63535", fontSize: 12 }}>
+              {editNameError}
+            </Text>
+          ) : null}
+          <HStack space="md" className="mt-2 justify-end">
+            <Button variant="outline" onPress={() => setEditNameVisible(false)}>
+              <ButtonText>Cancel</ButtonText>
+            </Button>
+            <Button
+              onPress={handleSaveName}
+              disabled={editNameLoading || !editNameInput.trim()}
+              style={{
+                opacity: editNameLoading || !editNameInput.trim() ? 0.5 : 1,
+              }}
+            >
+              <ButtonText>{editNameLoading ? "Saving..." : "Save"}</ButtonText>
+            </Button>
+          </HStack>
+        </VStack>
+      </BaseModal>
     </VStack>
   );
 }

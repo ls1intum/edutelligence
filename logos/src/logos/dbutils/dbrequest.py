@@ -281,6 +281,14 @@ class UpdateTeamRequest(BaseModel):
     default_monthly_budget_micro_cents: Optional[int] = None
     team_monthly_budget_micro_cents: Optional[int] = None
 
+class UpdateTeamNameRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+class UpdateUserInfoRequest(BaseModel):
+    prename: Optional[str] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+
 class CreateAppKeyEndpointRequest(BaseModel):
     name: str
     key_type: str = "application"

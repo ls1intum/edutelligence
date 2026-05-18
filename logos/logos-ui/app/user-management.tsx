@@ -7,11 +7,12 @@ import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { Button, ButtonText } from "@/components/ui/button";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableData } from "@/components/ui/table";
-import { Icon, TrashIcon } from "@/components/ui/icon";
+import { Icon, TrashIcon, EditIcon } from "@/components/ui/icon";
 import { UserRole, ALL_ROLES } from "@/components/route-permissions";
 import { BaseModal } from "@/components/modals/base-modal";
 import { ConfirmDeleteModal } from "@/components/modals/confirm-delete-modal";
 import { CreateUserModal, CreatedUser } from "@/components/modals/create-user-modal";
+import { EditUserModal } from "@/components/modals/edit-user-modal";
 import { CsvImportModal } from "@/components/modals/csv-import-modal";
 import { HStack } from "@/components/ui/hstack";
 
@@ -66,6 +67,7 @@ export default function UserManagement() {
     const [loading, setLoading] = useState(true);
     const [roleTarget, setRoleTarget] = useState<User | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+    const [editTarget, setEditTarget] = useState<User | null>(null);
     const [createVisible, setCreateVisible] = useState(false);
     const [importVisible, setImportVisible] = useState(false);
 
@@ -119,6 +121,12 @@ export default function UserManagement() {
         } catch (err) {
             setUsers(previousUsers);
         }
+    };
+
+    const handleUserEdited = (updatedUser: User) => {
+      setUsers((curr) =>
+        curr.map((u) => (u.id === updatedUser.id ? { ...u, ...updatedUser } : u))
+      );
     };
 
     return (
@@ -180,11 +188,18 @@ export default function UserManagement() {
                                             <TableData>
                                                 <Text>{user.teams.map(t => t.name).join(", ") || "-"}</Text>
                                             </TableData>
-                                            {isLogosAdmin && user.username !== "root" && (
+                                            {isLogosAdmin && (
                                                 <TableData>
-                                                    <Pressable onPress={() => setDeleteTarget(user)} style={{ padding: 8 }}>
-                                                        <Icon as={TrashIcon} size="sm" className="text-typography-400" />
-                                                    </Pressable>
+                                                    {user.username !== "root" && (
+                                                        <HStack space="sm" className="items-center justify-end">
+                                                            <Pressable onPress={() => setEditTarget(user)} style={{ padding: 8 }}>
+                                                                <Icon as={EditIcon} size="sm" className="text-typography-400"/>
+                                                            </Pressable>
+                                                            <Pressable onPress={() => setDeleteTarget(user)} style={{ padding: 8 }}>
+                                                                <Icon as={TrashIcon} size="sm" className="text-typography-400"/>
+                                                            </Pressable>
+                                                        </HStack>
+                                                    )}
                                                 </TableData>
                                             )}
                                         </TableRow>
@@ -218,6 +233,13 @@ export default function UserManagement() {
                 onClose={() => setImportVisible(false)}
                 apiKey={apiKey}
                 onImported={fetchUsers}
+            />
+            <EditUserModal
+                visible={editTarget !== null}
+                onClose={() => setEditTarget(null)}
+                onSaved={handleUserEdited}
+                apiKey={apiKey}
+                user={editTarget}
             />
         </VStack>
     );
