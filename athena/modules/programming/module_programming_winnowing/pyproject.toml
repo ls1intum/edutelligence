@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "module_programming_winnowing"
-version = "2.0.0"
+version = "2.2"
 description = "Programming assessment Winnowing module."
 authors = ["Marlon Bucciarelli <marlon.bucciarelli@tum.de>"]
 license = "MIT"
