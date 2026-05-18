@@ -55,6 +55,16 @@ class GlobalSearchPipeline(SubPipeline):
         pipeline_id = "global_search_pipeline"
         hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
         answer_model = resolve_model(pipeline_id, "default", "answer", local=local)
+        embedding_model = resolve_model(
+            pipeline_id, "default", "embedding", local=local
+        )
+        logger.info(
+            "Global search pipeline | mode=%s hyde_llm=%s answer_llm=%s embedding=%s",
+            "local" if local else "cloud",
+            hyde_model,
+            answer_model,
+            embedding_model,
+        )
 
         hyde_completion_args = CompletionArguments(temperature=0.7)
         answer_completion_args = CompletionArguments(
@@ -97,7 +107,7 @@ class GlobalSearchPipeline(SubPipeline):
         # Guard: skip the full LLM pipeline for navigation queries
         if intent is None:
             intent = classify_intent(query)
-        logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
+        logger.info("Intent classification | query=%r intent=%s", query[:80], intent)
         if intent == SearchIntent.SKIP_AI:
             sources = self.retriever.search(query=query, limit=limit)
             return GlobalSearchResponseDTO(answer=None, sources=sources)
