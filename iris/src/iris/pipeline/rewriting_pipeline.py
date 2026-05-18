@@ -51,6 +51,7 @@ class RewritingPipeline(Pipeline):
             "Default Problem statement rewriting variant.",
         ),
     ]
+    HEALTH_BASELINE_VARIANT_ID = "problem_statement"
 
     callback: RewritingCallback
     rewriting_handler: LlmRequestHandler
