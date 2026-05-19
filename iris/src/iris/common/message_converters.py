@@ -17,6 +17,7 @@ from iris.common.pyris_message import (
     PyrisMessage,
     PyrisToolMessage,
 )
+from iris.domain.data.json_message_content_dto import JsonMessageContentDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
@@ -28,7 +29,28 @@ def convert_iris_message_to_langchain_message(
     if iris_message is None or len(iris_message.contents) == 0:
         raise ValueError("IrisMessage contents must not be empty")
     message = iris_message.contents[0]
-    # Check if the message is of type TextMessageContentDTO
+
+    if iris_message.sender == IrisMessageRole.CTXSWAP:
+        if not isinstance(message, JsonMessageContentDTO):
+            raise ValueError("CTXSWAP message must be of type JsonMessageContentDTO")
+        data = message.json_content or {}
+        transition = data.get("transition")
+        entity_id = data.get("entityId", "")
+        name = data.get("name", "")
+        match transition:
+            case "added":
+                text = f"The student added the context '{name}' with ID '{entity_id}' to the chat."
+            case "removed":
+                text = (
+                    f"The student removed the context '{name}' with ID '{entity_id}' and returned "
+                    f"to the course-level chat."
+                )
+            case "changed":
+                text = f"The student switched the chat context to '{name}' with ID '{entity_id}'."
+            case _:
+                text = f"The student changed the chat context to '{name}' with ID '{entity_id}'."
+        return SystemMessage(content=f"[context_switch] {text}")
+
     if not isinstance(message, TextMessageContentDTO):
         raise ValueError("Message must be of type TextMessageContentDTO")
     match iris_message.sender:
@@ -48,10 +70,6 @@ def convert_iris_message_to_langchain_message(
             return AIMessage(content=message.text_content)
         case IrisMessageRole.SYSTEM:
             return SystemMessage(content=message.text_content)
-        case IrisMessageRole.CTXSWAP:
-            return SystemMessage(
-                content=f"[context_switch] The student switched the chat context to: {message.text_content}"
-            )
         case IrisMessageRole.ARTIFACT:
             return SystemMessage(content="Previous suggestion: " + message.text_content)
         case _:
