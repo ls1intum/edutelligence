@@ -3,7 +3,7 @@ import os
 import requests
 from typing import Dict, List
 
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 from langchain_openai import AzureChatOpenAI
 
 from athena.logger import logger

@@ -5,7 +5,7 @@ from llm_core.loaders.model_loaders.azure_loader import (
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
 from typing import ClassVar, Literal
 from pydantic import ConfigDict, Field
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 
 
 class AzureModelConfig(BaseChatModelConfig):

@@ -8,7 +8,7 @@ from pydantic import (
     Field,
     PositiveInt,
     PrivateAttr)
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 
 from llm_core.models.model_config import ModelConfig
 from llm_core.loaders.llm_capabilities_loader import get_model_capabilities
