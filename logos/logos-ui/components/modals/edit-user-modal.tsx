@@ -39,23 +39,25 @@ export function EditUserModal({
     }
   }, [user, visible]);
 
-  const isAnyFieldEmpty =
-    !form.prename.trim() || !form.name.trim() || !form.email.trim();
+  const isAnyFieldEmpty = !form.prename.trim() || !form.name.trim();
 
   const handleSave = async () => {
     setError("");
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
       setError("Email not valid.");
       return;
     }
 
     setLoading(true);
+    const body: Record<string, string> = { prename: form.prename, name: form.name };
+    if (form.email.trim()) body.email = form.email.trim();
+
     try {
       const res = await fetch(`${API_BASE}/users/${user.id}`, {
         method: "PATCH",
         headers: { "logos-key": apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();

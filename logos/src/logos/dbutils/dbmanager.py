@@ -3395,7 +3395,6 @@ class DBManager:
             "usage_tokens",
             "token_prices",
             "jobs",
-            "budget_usage"
         ]
         for table_name in table_names:
             if table_name not in json_data:
@@ -3522,8 +3521,9 @@ class DBManager:
             result.append(data)
         return result
 
-    def create_user(self, prename: str, name: str, email: str, role: str, team_ids: list[int] = None) -> tuple:
-        if self.session.execute(
+    def create_user(self, prename: str, name: str, email: str | None, role: str, team_ids: list[int] = None) -> tuple:
+        email = email or None
+        if email and self.session.execute(
                 text("SELECT id FROM users WHERE lower(email) = lower(:email)"),
                 {"email": email},
         ).fetchone():
@@ -4548,54 +4548,6 @@ class DBManager:
             {"aki": api_key_id, "month": month_start},
         ).fetchone()
         return int(row[0]) if row else 0
-
-    def compute_cost_micro_cents(self, usage_tokens: dict) -> int:
-        if not usage_tokens:
-            return 0
-
-        type_names = [k for k, v in usage_tokens.items() if v]
-        if not type_names:
-            return 0
-
-        rows = self.session.execute(
-            text("""
-                 SELECT tt.name,
-                        tp.price_per_k_token
-                 FROM token_types tt
-                          JOIN LATERAL (
-                     SELECT price_per_k_token
-                     FROM token_prices
-                     WHERE type_id = tt.id
-                       AND valid_from <= NOW()
-                     ORDER BY valid_from DESC
-                         LIMIT 1
-                 ) tp
-                 ON true
-                 WHERE tt.name = ANY (:names)
-                 """),
-            {"names": type_names},
-        ).fetchall()
-
-        total = 0
-        for row in rows:
-            count = usage_tokens.get(row.name, 0) or 0
-            total += int(count * float(row.price_per_k_token) / 1000)
-        return total
-
-    def record_budget_usage(self, api_key_id: int, month_start: str, cost_micro_cents: int) -> None:
-        if not cost_micro_cents:
-            return
-
-        self.session.execute(
-            text("""
-                 INSERT INTO budget_usage (api_key_id, month, cost_micro_cents)
-                 VALUES (:aki, :month, :cost) ON CONFLICT (api_key_id, month)
-                 DO
-                 UPDATE SET cost_micro_cents = budget_usage.cost_micro_cents + EXCLUDED.cost_micro_cents
-                 """),
-            {"aki": api_key_id, "month": month_start, "cost": cost_micro_cents},
-        )
-        self.session.commit()
 
     def __enter__(self):
         self.engine = _init_engine()

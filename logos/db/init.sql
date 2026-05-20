@@ -347,13 +347,25 @@ CREATE INDEX idx_model_profiles_source
     ON model_profiles(residency_source)
     WHERE residency_source != 'measured';
 
-CREATE TABLE budget_usage (
-    api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-    month DATE NOT NULL,
-    cost_micro_cents BIGINT NOT NULL DEFAULT 0,
-    PRIMARY KEY (api_key_id, month)
-);
-CREATE INDEX idx_budget_usage_month ON budget_usage(api_key_id, month);
+CREATE VIEW budget_usage AS
+SELECT
+    le.api_key_id,
+    DATE_TRUNC('month', le.timestamp_request)::DATE AS month,
+    COALESCE(SUM(
+        (ut.token_count * tp.price_per_k_token / 1000)::BIGINT
+    ), 0) AS cost_micro_cents
+FROM log_entry le
+JOIN usage_tokens ut ON ut.log_entry_id = le.id
+JOIN LATERAL (
+    SELECT price_per_k_token
+    FROM token_prices
+    WHERE type_id = ut.type_id
+      AND valid_from <= le.timestamp_request
+    ORDER BY valid_from DESC
+    LIMIT 1
+) tp ON true
+WHERE le.api_key_id IS NOT NULL
+GROUP BY le.api_key_id, DATE_TRUNC('month', le.timestamp_request)::DATE;
 
 -- Track applied migrations
 CREATE TABLE schema_migrations (

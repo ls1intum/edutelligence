@@ -2036,14 +2036,6 @@ async def _streaming_response(
                                 else None
                             ),
                         )
-                        if usage_tokens and api_key_id:
-                            cost = db.compute_cost_micro_cents(usage_tokens)
-                            if cost:
-                                db.record_budget_usage(
-                                    api_key_id,
-                                    datetime.date.today().replace(day=1).isoformat(),
-                                    cost,
-                                )
                 if rl_key:
                     from logos.rate_limiter import get_rate_limiter
                     total = usage_tokens.get("total_tokens") or (
@@ -2174,14 +2166,6 @@ async def _streaming_response(
                             else None
                         ),
                     )
-                    if usage_tokens and api_key_id:
-                        cost = db.compute_cost_micro_cents(usage_tokens)
-                        if cost:
-                            db.record_budget_usage(
-                                api_key_id,
-                                datetime.date.today().replace(day=1).isoformat(),
-                                cost,
-                            )
             if rl_key:
                 from logos.rate_limiter import get_rate_limiter
                 total = usage_tokens.get("total_tokens") or (
@@ -2352,14 +2336,6 @@ async def _sync_response(
                         else None
                     ),
                 )
-                if usage_tokens and api_key_id:
-                    cost = db.compute_cost_micro_cents(usage_tokens)
-                    if cost:
-                        db.record_budget_usage(
-                            api_key_id,
-                            datetime.date.today().replace(day=1).isoformat(),
-                            cost,
-                        )
 
         if scheduling_stats:
             status = (

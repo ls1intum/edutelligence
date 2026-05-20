@@ -222,12 +222,6 @@ class ApiKeyModelPermission(Base):
     model_id = Column(Integer, ForeignKey('models.id', ondelete='CASCADE'), primary_key=True)
 
 
-class BudgetUsage(Base):
-    __tablename__ = 'budget_usage'
-    api_key_id = Column(Integer, ForeignKey('api_keys.id', ondelete='CASCADE'), primary_key=True)
-    month = Column(Date, primary_key=True)
-    cost_micro_cents = Column(BigInteger, nullable=False, default=0)
-
 
 class JobStatus(enum.Enum):
     PENDING = "pending"

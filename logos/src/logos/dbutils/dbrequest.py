@@ -221,7 +221,7 @@ class UpdateRoleRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     prename: str
     name: str
-    email: str
+    email: Optional[str] = None
     role: str
     team_ids: list[int] = []
 

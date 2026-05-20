@@ -127,6 +127,7 @@ export default function UserManagement() {
       setUsers((curr) =>
         curr.map((u) => (u.id === updatedUser.id ? { ...u, ...updatedUser } : u))
       );
+      fetchUsers();
     };
 
     return (
@@ -222,7 +223,7 @@ export default function UserManagement() {
             <CreateUserModal
                 visible={createVisible}
                 onClose={() => setCreateVisible(false)}
-                onCreated={(user: CreatedUser) => setUsers(prev => [user as User, ...prev])}
+                onCreated={(user: CreatedUser) => { setUsers(prev => [user as User, ...prev]); fetchUsers(); }}
                 apiKey={apiKey}
                 showRoleSelector={isLogosAdmin}
                 showTeamPicker={true}
