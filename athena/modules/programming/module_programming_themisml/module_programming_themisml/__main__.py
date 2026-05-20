@@ -6,6 +6,7 @@ from typing import List, cast
 from athena import app, submissions_consumer, submission_selector, feedback_consumer, feedback_provider
 from athena.programming import Exercise, Submission, Feedback, get_stored_feedback_suggestions, get_stored_submissions, count_stored_submissions
 from athena.logger import logger
+from athena.schemas import AiSelectionDecision
 from athena.storage import store_feedback
 from athena.storage.feedback_storage import store_feedback_suggestions
 
@@ -81,8 +82,18 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 
 
 @feedback_provider
-async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool = True) -> List[Feedback]:
-    logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
+async def suggest_feedback(
+    exercise: Exercise,
+    submission: Submission,
+    is_graded: bool = True,
+    selection: AiSelectionDecision | None = None,
+) -> List[Feedback]:
+    logger.info(
+        "suggest_feedback: Suggestions for submission %d of exercise %d were requested, with selection: %s",
+        submission.id,
+        exercise.id,
+        selection.value if selection is not None else "None",
+    )
 
     # ThemisML currently only works with Java
     if exercise.programming_language.lower() != "java":
