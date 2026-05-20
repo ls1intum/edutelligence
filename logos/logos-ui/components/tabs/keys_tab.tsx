@@ -68,6 +68,7 @@ export function Keys_tab({
   const [newKeyLocalTpm, setNewKeyLocalTpm] = useState("");
   const [newKeyPrio, setNewKeyPrio] = useState("0");
   const [isSaving, setIsSaving] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const resetCreateForm = () => {
     setNewKeyEnv("prod");
@@ -77,6 +78,7 @@ export function Keys_tab({
     setNewKeyLocalRpm("");
     setNewKeyLocalTpm("");
     setNewKeyPrio("0");
+    setCreateError(null);
   };
 
   const handleCreateKey = async () => {
@@ -113,15 +115,16 @@ export function Keys_tab({
         resetCreateForm();
         onRefresh();
       } else {
-        const errData = await res.json().catch(() => null);
-        const backendMsg =
-          errData?.detail ||
-          errData?.error ||
-          "Failed to create Application Key.";
-        alert(backendMsg);
+        let backendMsg = "Failed to create Application Key.";
+        try {
+          const errData = JSON.parse(await res.text());
+          const raw = errData?.message || errData?.detail || errData?.error;
+          if (typeof raw === "string") backendMsg = raw;
+        } catch {}
+        setCreateError(backendMsg);
       }
     } catch {
-      alert("Network error: Failed to create Application Key.");
+      setCreateError("Network error: Failed to create Application Key.");
     } finally {
       setIsSaving(false);
     }
@@ -454,6 +457,10 @@ export function Keys_tab({
                 </HStack>
               </VStack>
             </>
+          )}
+
+          {createError && (
+            <Text style={{ color: "#e63535", fontSize: 13 }}>{createError}</Text>
           )}
 
           <HStack
