@@ -1177,3 +1177,128 @@ class TestSchedulingSanity:
         # Z (lower demand) should be the pick, not Y.
         assert "Z" in picked
         assert "Y" not in picked
+
+
+class TestWakeTargetSelfEviction:
+    """Regression tests for the "self-eviction stops the wakee" bug.
+
+    The eviction picker must never choose the very lane that is about to be
+    woken as its own victim: a `stop` destroys the wakee (the follow-up wake
+    then fails with "Lane '<id>' not found" and the model goes permanently
+    absent). Sibling replicas — same model_name on a *different* lane_id —
+    remain legitimate victims.
+    """
+
+    def test_eviction_excludes_wake_target_same_lane_id(self):
+        """The wake target's own lane is hard-excluded; with no other
+        candidate the deficit is uncoverable → None. Control: without
+        target_lane_id the same lane WOULD be picked (proves the setup is
+        otherwise tempting and the filter is what excludes it)."""
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="planner-X", model_name="X",
+                      runtime_state="sleeping", sleep_state="sleeping",
+                      effective_vram_mb=9000, gpu_devices="0"),
+            ],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0,
+                                    sleeping_residual_mb=9000.0)},
+        )
+        planner = _planner([provider])
+        planner._lane_loaded_at = {}
+        planner._demand.get_score = lambda *_: 0.0
+
+        common = dict(
+            provider_id=1,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 100.0},
+            lanes=provider.lanes,
+            profiles=provider.profiles,
+            target_model_name="X",
+        )
+
+        # Control: self-eviction allowed when we don't identify the wakee.
+        control = planner._find_eviction_set(**common)
+        assert control, "setup must be tempting: lane is picked without the filter"
+        assert any(l.lane_id == "planner-X" for l, _a, _e in control)
+
+        # With the wakee identified by lane_id it must be excluded entirely.
+        guarded = planner._find_eviction_set(target_lane_id="planner-X", **common)
+        assert guarded is None or all(
+            l.lane_id != "planner-X" for l, _a, _e in guarded
+        )
+
+    def test_eviction_allows_sibling_replica_of_same_model(self):
+        """Same model_name, different lane_id → still a valid victim."""
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[
+                _lane(lane_id="planner-X", model_name="X",
+                      runtime_state="sleeping", sleep_state="sleeping",
+                      effective_vram_mb=500, gpu_devices="0"),
+                _lane(lane_id="X-sibling", model_name="X",
+                      runtime_state="loaded", sleep_state="awake",
+                      effective_vram_mb=20_000, gpu_devices="0"),
+            ],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0,
+                                    sleeping_residual_mb=500.0)},
+        )
+        planner = _planner([provider])
+        planner._lane_loaded_at = {}
+        planner._stop_dedup_siblings = False
+        planner._demand.get_score = lambda *_: 0.0
+
+        eviction = planner._find_eviction_set(
+            provider_id=1,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 5000.0},
+            lanes=provider.lanes,
+            profiles=provider.profiles,
+            target_model_name="X",
+            target_lane_id="planner-X",
+        )
+        assert eviction is not None
+        picked = {l.lane_id for l, _a, _e in eviction}
+        assert "X-sibling" in picked          # sibling replica is fair game
+        assert "planner-X" not in picked      # the wakee never is
+
+    def test_self_eviction_followup_uses_load_when_target_stopped(self):
+        """Defensive net: if a `stop` of the wakee ever slips through, the
+        follow-up must be `load` (fresh process), never `wake` (would hit
+        "Lane not found"). Drive _compute_demand_actions with a poisoned
+        eviction set."""
+        target = _lane(lane_id="planner-X", model_name="X",
+                       runtime_state="sleeping", sleep_state="sleeping",
+                       effective_vram_mb=500, gpu_devices="0")
+        provider = _MockProvider(
+            provider_id=1, name="A",
+            lanes=[target],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0,
+                                    sleeping_residual_mb=500.0)},
+            available_vram_mb=0.0,  # force a deficit so eviction is needed
+        )
+        planner = _planner([provider])
+        planner._cross_provider_dedup = False
+        planner._provider_capacity_lock = lambda pid: SimpleNamespace(
+            locked=lambda: False
+        )
+        planner._vram_ledger = SimpleNamespace(
+            get_committed_mb=lambda pid: 0.0,
+            has_overlapping_reservation=lambda *a, **k: False,
+            get_gpu_effective_available_mb=lambda pid, g, f: f,
+        )
+        planner._get_queue_depth_across_deployments = lambda *_: 0
+        planner._build_load_params = lambda *a, **k: {}
+        planner._demand.get_ranked_models.return_value = [("X", 1.0)]
+
+        # Poison: return the wakee itself as a `stop` victim.
+        planner._find_eviction_set = lambda *a, **k: [(target, "stop", 0.0)]
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+
+        kinds = [(a.action, a.lane_id) for a in actions]
+        assert ("stop", "planner-X") in kinds
+        assert ("load", "planner-X") in kinds
+        assert all(a.action != "wake" for a in actions)
+        # Order: destructive stop before the recovering load.
+        assert kinds.index(("stop", "planner-X")) < kinds.index(("load", "planner-X"))
