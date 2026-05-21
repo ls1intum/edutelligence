@@ -36,10 +36,10 @@ class DummyDB:
     def __exit__(self, *args):
         return False
 
-    def get_models_for_profile(self, _profile_id: int):
+    def get_models_for_api_key(self, _api_key_id: int):
         return self._models
 
-    def get_model_for_profile(self, _profile_id: int, model_name: str):
+    def get_model_for_api_key(self, _api_key_id: int, model_name: str):
         return next((m for m in self._models if m["name"] == model_name), None)
 
 
@@ -59,11 +59,8 @@ async def test_list_models_returns_openai_format(monkeypatch):
         main, "DBManager", lambda: DummyDB(models=fake_models)
     )
 
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
-        from logos.auth import AuthContext
-        mock_auth.return_value = AuthContext(
-            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
-        )
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         response = await main.list_models(_make_request())
 
@@ -90,11 +87,8 @@ async def test_list_models_empty(monkeypatch):
     """When a profile has no models, returns an empty list."""
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=[]))
 
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
-        from logos.auth import AuthContext
-        mock_auth.return_value = AuthContext(
-            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
-        )
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         response = await main.list_models(_make_request())
 
@@ -107,7 +101,7 @@ async def test_list_models_empty(monkeypatch):
 @pytest.mark.asyncio
 async def test_list_models_auth_failure():
     """Missing/invalid key returns 401."""
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
+    with patch("logos.main.authenticate_api_key") as mock_auth:
         mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:
@@ -130,11 +124,8 @@ async def test_retrieve_model_success(monkeypatch):
 
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
-        from logos.auth import AuthContext
-        mock_auth.return_value = AuthContext(
-            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
-        )
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         response = await main.retrieve_model("gpt-4o", _make_request())
 
@@ -153,11 +144,8 @@ async def test_retrieve_model_not_found(monkeypatch):
     """Requesting a model that doesn't exist returns 404."""
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=[]))
 
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
-        from logos.auth import AuthContext
-        mock_auth.return_value = AuthContext(
-            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
-        )
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         with pytest.raises(HTTPException) as exc:
             await main.retrieve_model("nonexistent-model", _make_request())
@@ -173,11 +161,8 @@ async def test_retrieve_model_no_access(monkeypatch):
     ]
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
-        from logos.auth import AuthContext
-        mock_auth.return_value = AuthContext(
-            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
-        )
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         with pytest.raises(HTTPException) as exc:
             await main.retrieve_model("gpt-3.5-turbo", _make_request())
@@ -194,11 +179,8 @@ async def test_retrieve_model_with_slashes(monkeypatch):
     ]
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
-        from logos.auth import AuthContext
-        mock_auth.return_value = AuthContext(
-            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
-        )
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         response = await main.retrieve_model(slash_model, _make_request())
 
@@ -222,11 +204,8 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
     ]
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
-        from logos.auth import AuthContext
-        mock_auth.return_value = AuthContext(
-            logos_key="test-key", process_id=1, profile_id=10, profile_name="default"
-        )
+    with patch("logos.main.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         response = await main.retrieve_model(alias_model, _make_request())
 
@@ -240,7 +219,7 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
 @pytest.mark.asyncio
 async def test_retrieve_model_auth_failure():
     """Missing/invalid key on retrieve returns 401."""
-    with patch("logos.auth.authenticate_with_profile") as mock_auth:
+    with patch("logos.main.authenticate_api_key") as mock_auth:
         mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:

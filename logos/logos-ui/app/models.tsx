@@ -37,12 +37,12 @@ export default function Models() {
 
   const loadModels = async (key: string) => {
     try {
+      setLoading(true);
       const response = await fetch(
         `${API_BASE}/logosdb/get_models`,
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${key}`,
             "Content-Type": "application/json",
             logos_key: key,
           },
@@ -51,26 +51,15 @@ export default function Models() {
           }),
         }
       );
-      const [data, code] = JSON.parse(await response.text());
-      if (code === 200) {
-        const formattedModels = data.map((model: any[][]) => ({
-          id: model[0],
-          name: model[1],
-          endpoint: model[2],
-          weight_privacy: model[3],
-          weight_latency: model[4],
-          weight_accuracy: model[5],
-          weight_cost: model[6],
-          weight_quality: model[7],
-          tags: model[8],
-          parallel: model[9],
-          description: model[10],
-        }));
-        setModels(formattedModels);
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        setModels(data);
+      } else {
+        setModels([]);
       }
-      setLoading(false);
     } catch (e) {
       setModels([]);
+    } finally {
       setLoading(false);
     }
   };
@@ -82,7 +71,6 @@ export default function Models() {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${key}`,
             "Content-Type": "application/json",
             logos_key: key,
           },
@@ -91,12 +79,8 @@ export default function Models() {
           }),
         }
       );
-      const [data, code] = JSON.parse(await response.text());
-      if (code === 200) {
-        setStats(data);
-      } else {
-        setStats({ totalModels: 0, mostUsedModel: "None" });
-      }
+      const data = await response.json();
+      setStats(Array.isArray(data) ? data[0] : data);
     } catch (e) {
       setStats({ totalModels: 0, mostUsedModel: "None" });
     }
@@ -168,7 +152,6 @@ const ModelsTable = ({ models }: { models: any[] }) => {
         <TableRow className="bg-secondary-200">
           <TableHead>ID</TableHead>
           <TableHead>Name</TableHead>
-          <TableHead>Endpoint</TableHead>
           <TableHead>Privacy</TableHead>
           <TableHead>Latency</TableHead>
           <TableHead>Accuracy</TableHead>
@@ -184,7 +167,6 @@ const ModelsTable = ({ models }: { models: any[] }) => {
           <TableRow key={model.id} className="bg-secondary-200">
             <TableData>{model.id}</TableData>
             <TableData>{model.name}</TableData>
-            <TableData>{model.endpoint}</TableData>
             <TableData>{model.weight_privacy}</TableData>
             <TableData>{model.weight_latency}</TableData>
             <TableData>{model.weight_accuracy}</TableData>
