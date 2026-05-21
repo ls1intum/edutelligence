@@ -80,6 +80,17 @@ def _ensure_metadata(engine):
         _METADATA_REFLECTED = True
 
 
+def _reset_metadata():
+    # Drop the cached reflection so the next _ensure_metadata() re-reads the
+    # live schema. Required after run_migrations() applies DDL — otherwise
+    # Table(..., autoload_with=engine) returns the pre-migration cached
+    # object and inserts on new columns fail with "Unconsumed column names".
+    global _METADATA_REFLECTED
+    with _METADATA_LOCK:
+        _METADATA.clear()
+        _METADATA_REFLECTED = False
+
+
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
     with open(file_path, "r", encoding="utf-8") as f:
         compose = yaml.safe_load(f)
@@ -597,6 +608,9 @@ class DBManager:
         else:
             # Existing install: execute pending migrations
             logging.info("Applying %d pending migrations", len(pending))
+            # Migrations change the live schema; invalidate the reflected
+            # metadata so subsequent insert()/update() calls re-reflect.
+            _reset_metadata()
             for migration_file in pending:
                 migration_path = migrations_dir / migration_file
                 if not migration_path.exists():
