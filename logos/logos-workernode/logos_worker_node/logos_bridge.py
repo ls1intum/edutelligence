@@ -108,7 +108,7 @@ class LogosBridgeClient:
                     ws_url,
                     ping_interval=None,
                     close_timeout=5,
-                    max_size=4 * 1024 * 1024,
+                    max_size=None,
                 ) as ws:
                     self._connected = True
                     self._last_connected_at = datetime.now(timezone.utc)
