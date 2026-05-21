@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import threading
+from threading import Event
 from typing import Optional
 
 import fitz
@@ -12,6 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
@@ -165,11 +167,13 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         callback: ingestion_status_callback,
         variant: Variant,
         local: bool = False,
+        cancel_event: Optional[Event] = None,
     ):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
         self.callback = callback
+        self.cancel_event = cancel_event
         chat_model = variant.model("chat", local)
         embedding_model = variant.model("embedding", local)
         self.llm_chat = LlmRequestHandler(chat_model)
@@ -182,6 +186,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
+
+    def _check_cancellation(self):
+        """Check if job has been cancelled."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(
+                self.dto.lecture_unit.lecture_unit_id if self.dto else 0,
+                "Cancelled during PDF ingestion",
+            )
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
@@ -199,6 +211,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.callback.in_progress("skipping slide ingestion")
                 self.callback.done()
                 return self.course_language, self.tokens
+
+            self._check_cancellation()
+
+            # Atomic DELETE - no cancellation during DB operation
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
@@ -207,6 +223,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.dto.settings.artemis_base_url,
             )
             self.callback.done("Old slides removed")
+
+            # Weaviate now empty - Thread 2 can recover from here
+            self._check_cancellation()
+
+            # Chunking - cancellable between pages
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
@@ -219,13 +240,24 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
+
+            self._check_cancellation()
+
+            # Atomic INSERT - no cancellation during DB batch operation
             self.callback.in_progress("Ingesting lecture chunks into database...")
             logger.info(
-                "[%s] Embedding and indexing %d chunks into Weaviate",
+                "[%s] Generating embeddings for %d chunks",
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunks),
             )
-            self.batch_update(chunks)
+            chunk_embeddings = self.generate_embeddings(chunks)
+            self._check_cancellation()
+            logger.info(
+                "[%s] Indexing %d chunks into Weaviate",
+                self.dto.lecture_unit.lecture_unit_name,
+                len(chunk_embeddings),
+            )
+            self.batch_update(chunk_embeddings)
 
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
 
@@ -269,25 +301,33 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
         return version < self.dto.lecture_unit.attachment_version
 
-    def batch_update(self, chunks):
-        """
-        Batch update the chunks into the database
-        This method is thread-safe and can only be executed by one thread at a time.
-        Weaviate limitation.
-        """
+    def generate_embeddings(self, chunks):
+        """Generate embeddings for chunks (cancellable AI operation)."""
         total = len(chunks)
+        chunk_embeddings = []
+        for i, chunk in enumerate(chunks):
+            self._check_cancellation()  # Cancellable between embeddings
+
+            if i % 10 == 0:
+                self.callback.in_progress(f"Generating embedding {i + 1}/{total}...")
+            embed_chunk = self.llm_embedding.embed(
+                chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
+            )
+            chunk_embeddings.append((chunk, embed_chunk))
+        return chunk_embeddings
+
+    def batch_update(self, chunk_embeddings):
+        """Batch update chunks into database (atomic, thread-safe operation)."""
+        total = len(chunk_embeddings)
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
-                    for i, chunk in enumerate(chunks):
+                    for i, (chunk, embedding) in enumerate(chunk_embeddings):
                         if i % 10 == 0:
                             self.callback.in_progress(
                                 f"Ingesting lecture chunk {i + 1}/{total} into database..."
                             )
-                        embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
-                        )
-                        batch.add_object(properties=chunk, vector=embed_chunk)
+                        batch.add_object(properties=chunk, vector=embedding)
                 except Exception as e:
                     logger.error("Error updating lecture unit", exc_info=e)
                     self.callback.error(
@@ -317,6 +357,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
         for page_num in range(doc.page_count):
+            self._check_cancellation()  # Cancellable between pages
+
             self.callback.in_progress(
                 f"Chunking and interpreting lecture page {page_num + 1}/{doc.page_count}"
             )

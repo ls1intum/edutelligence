@@ -1,4 +1,5 @@
 from functools import reduce
+from threading import Event
 from typing import Any, Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
@@ -7,6 +8,7 @@ from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
@@ -56,11 +58,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
         dto: Optional[IngestionPipelineExecutionDto],
         callback: IngestionStatusCallback,
         local: bool = False,
+        cancel_event: Optional[Event] = None,
     ) -> None:
         super().__init__(implementation_id="transcription_ingestion_pipeline")
         self.client = client
         self.dto = dto
         self.callback = callback
+        self.cancel_event = cancel_event
         self.collection = init_lecture_transcription_schema(client)
         pipeline_id = "transcription_ingestion_pipeline"
         embedding_model = resolve_model(
@@ -77,29 +81,59 @@ class TranscriptionIngestionPipeline(SubPipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+    def _check_cancellation(self):
+        """Check if job has been cancelled."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(
+                self.dto.lecture_unit.lecture_unit_id if self.dto else 0,
+                "Cancelled during transcription ingestion",
+            )
+
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
+            self._check_cancellation()
+
+            # Atomic DELETE - no cancellation during DB operation
             self.callback.in_progress("Deleting existing transcription data")
             self.delete_existing_transcription_data(self.dto.lecture_unit)
             self.callback.done("Old slides deleted")
 
+            # Weaviate now empty - Thread 2 can recover from here
+            self._check_cancellation()
+
+            # Chunking - cancellable
             self.callback.in_progress("Chunking transcription")
             chunks = self.chunk_transcription(self.dto.lecture_unit)
             self.callback.done("Chunked transcription")
 
+            self._check_cancellation()
+
+            # Summarization - cancellable between chunks
             self.callback.in_progress("Summarizing transcription")
             chunks = self.summarize_chunks(chunks)
             self.callback.done("Summarized transcription")
 
+            self._check_cancellation()
+
+            # Atomic INSERT - no cancellation during DB batch operation
             self.callback.in_progress("Ingesting transcription into vector database")
             logger.info(
-                "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
+                "[%s / %s] Generating embeddings for %d transcription chunks",
                 self.dto.lecture_unit.lecture_name,
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunks),
             )
-            self.batch_insert(chunks)
+            chunk_embeddings = self.generate_embeddings(chunks)
+            self._check_cancellation()
+            logger.info(
+                "[%s / %s] Indexing %d transcription chunks into Weaviate",
+                self.dto.lecture_unit.lecture_name,
+                self.dto.lecture_unit.lecture_unit_name,
+                len(chunk_embeddings),
+            )
+            self.batch_insert(chunk_embeddings)
+
             self.callback.done("Transcriptions ingested successfully")
 
             return self.dto.lecture_unit.transcription.language, self.tokens
@@ -128,20 +162,33 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
         )
 
-    def batch_insert(self, chunks):
+    def generate_embeddings(self, chunks):
+        """Generate embeddings for chunks (cancellable AI operation)."""
         total = len(chunks)
+        chunk_embeddings = []
+        for i, chunk in enumerate(chunks):
+            self._check_cancellation()  # Cancellable between embeddings
+
+            if i % 5 == 0:
+                self.callback.in_progress(f"Generating embedding {i + 1}/{total}...")
+            embed_chunk = self.llm_embedding.embed(
+                chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
+            )
+            chunk_embeddings.append((chunk, embed_chunk))
+        return chunk_embeddings
+
+    def batch_insert(self, chunk_embeddings):
+        """Batch insert chunks into database (atomic, thread-safe operation)."""
+        total = len(chunk_embeddings)
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:
-                    for i, chunk in enumerate(chunks):
+                    for i, (chunk, embedding) in enumerate(chunk_embeddings):
                         if i % 5 == 0:
                             self.callback.in_progress(
                                 f"Ingesting transcription chunk {i + 1}/{total} into database..."
                             )
-                        embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
-                        )
-                        batch.add_object(properties=chunk, vector=embed_chunk)
+                        batch.add_object(properties=chunk, vector=embedding)
                 except Exception as e:
                     logger.error("Error embedding lecture transcription chunk: %s", e)
                     self.callback.error(
@@ -280,6 +327,8 @@ class TranscriptionIngestionPipeline(SubPipeline):
         chunks_with_summaries = []
         total = len(chunks)
         for i, chunk in enumerate(chunks):
+            self._check_cancellation()  # Cancellable between chunks
+
             slide = chunk.get(LectureTranscriptionSchema.PAGE_NUMBER.value, "?")
             logger.info(
                 "[%s / %s] Summarizing chunk %d/%d (slide %s)",
