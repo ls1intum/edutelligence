@@ -43,7 +43,7 @@ const colStyles: Record<string, any> = {
   actions: { width: 80, alignItems: "flex-end" },
 };
 
-export function Keys_tab({
+export function Application_keys_tab({
   team,
   teamId,
   apiKeys,
@@ -177,7 +177,7 @@ export function Keys_tab({
         </Text>
         {canEdit && (
           <Button size="sm" onPress={() => setCreateVisible(true)}>
-            <ButtonText>+ New App Key</ButtonText>
+            <ButtonText>+ New Application Key</ButtonText>
           </Button>
         )}
       </HStack>

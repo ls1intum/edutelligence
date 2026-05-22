@@ -1639,7 +1639,7 @@ class DBManager:
         For each model name the worker advertises:
         1. Ensure a row exists in ``models`` (create if missing).
         2. Ensure a ``model_provider`` link exists for this provider.
-        3. Ensure ``profile_model_permissions`` exist for all profiles.
+        3. Ensure ``team_model_permissions`` exist for all teams (and ``api_key_model_permissions`` for teamless keys).
         4. Ensure a ``logosnode_provider_keys`` row exists for this provider.
 
         Stale ``model_provider`` links (models the worker no longer advertises)
@@ -1712,16 +1712,24 @@ class DBManager:
                 {"pid": pid, "mid": mid},
             )
 
-            # Ensure profile_model_permissions for all profiles
+            # Grant all teams access to newly discovered local models
             self.session.execute(
                 text("""
-                    INSERT INTO profile_model_permissions (profile_id, model_id)
-                    SELECT pr.id, :mid
-                    FROM profiles pr
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM profile_model_permissions pmp
-                        WHERE pmp.profile_id = pr.id AND pmp.model_id = :mid
-                    )
+                    INSERT INTO team_model_permissions (team_id, model_id)
+                    SELECT t.id, :mid
+                    FROM teams t
+                    ON CONFLICT DO NOTHING
+                """),
+                {"mid": mid},
+            )
+            # Grant teamless api keys access (they have no team to inherit from)
+            self.session.execute(
+                text("""
+                    INSERT INTO api_key_model_permissions (api_key_id, model_id)
+                    SELECT ak.id, :mid
+                    FROM api_keys ak
+                    WHERE ak.team_id IS NULL
+                    ON CONFLICT DO NOTHING
                 """),
                 {"mid": mid},
             )
@@ -3008,6 +3016,18 @@ class DBManager:
         """
         is_admin = self.check_authorization(logos_key)
 
+        if not is_admin:
+            role_row = self.session.execute(
+                text("""
+                    SELECT u.role FROM api_keys ak
+                    JOIN users u ON ak.user_id = u.id
+                    WHERE ak.key_value = :logos_key AND ak.is_active = true
+                """),
+                {"logos_key": logos_key},
+            ).fetchone()
+            if role_row is not None and role_row.role == "app_admin":
+                is_admin = True
+
         if is_admin:
             sql = text("SELECT id, name, weight_privacy, description FROM models ORDER BY id")
             params = {}
@@ -3941,6 +3961,10 @@ class DBManager:
         ).fetchone()
         team_id = row.id
         for user_id in owner_ids:
+            existing_member = self.session.execute(
+                text("SELECT user_id FROM team_members WHERE team_id = :tid AND user_id = :uid"),
+                {"tid": team_id, "uid": user_id},
+            ).fetchone()
             self.session.execute(
                 text("""
                      INSERT INTO team_members (team_id, user_id, is_owner)
@@ -3948,6 +3972,22 @@ class DBManager:
                      """),
                 {"team_id": team_id, "user_id": user_id},
             )
+            if not existing_member:
+                user_row = self.session.execute(
+                    text("SELECT username FROM users WHERE id = :uid"),
+                    {"uid": user_id},
+                ).fetchone()
+                if user_row and user_row.username != "root":
+                    self.create_api_key(
+                        name=f"{user_row.username}-{name}-key",
+                        key_type="developer",
+                        team_id=team_id,
+                        user_id=user_id,
+                        environment="-",
+                        log="BILLING",
+                        settings={},
+                        default_priority=1,
+                    )
         self.session.commit()
         return team_id, 200
 
