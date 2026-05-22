@@ -1,20 +1,30 @@
 # ── Chat models (GPT-5 family) ───────────────────────────────────────────────
+#
+# MIGRATION NOTE: as of this commit, reasoning-model detection moved from a
+# name-based heuristic to an explicit per-model flag. Every reasoning model
+# (GPT-5 family, o-series, etc.) MUST declare `is_reasoning_model: true` or
+# `temperature` will be forwarded to the API and rejected. Set
+# `supports_reasoning_effort: true` only on models that accept the
+# `reasoning_effort` request parameter.
 - id: oai-gpt-52
   type: openai_chat
   model: gpt-5.2
   api_key:
+  is_reasoning_model: true
   cost_per_million_input_token: 3.0
   cost_per_million_output_token: 12.0
 - id: oai-gpt-5-mini
   type: openai_chat
   model: gpt-5-mini
   api_key:
+  is_reasoning_model: true
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 - id: oai-gpt-5-nano
   type: openai_chat
   model: gpt-5-nano
   api_key:
+  is_reasoning_model: true
   cost_per_million_input_token: 0.1
   cost_per_million_output_token: 0.4
 
@@ -26,6 +36,7 @@
   api_version: 2025-04-01-preview
   azure_deployment: gpt-5-mini
   endpoint: "<your-endpoint>"
+  is_reasoning_model: true
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
 
@@ -37,6 +48,7 @@
   api_version: 2025-04-01-preview
   azure_deployment: gpt-5.4
   endpoint: "<your-endpoint>"
+  is_reasoning_model: true
   supports_reasoning_effort: true
 
 # ── Embedding models ─────────────────────────────────────────────────────────
