@@ -206,20 +206,32 @@ RUN if ! command -v python3.12 >/dev/null 2>&1 \
 
 # ── CUDA toolchain for Triton / vLLM JIT compilation ─────────────────────────
 # Installed via versioned apt packages (CUDA_VERSION is set by the base image).
+#
+# Each CUDA math library is listed as a runtime/dev PAIR. This is deliberate:
+# the *-cudnn-runtime-* base image pins runtime libs (e.g. libcublas-13-1) to
+# a slightly older version than the latest -dev candidate. Listing only the
+# -dev package makes apt try to upgrade the held runtime alone, which conflicts
+# with cuDNN's pin. Listing both forces them into the same upgrade transaction.
+# Don't switch to the cuda-libraries-dev metapackage — it triggers the
+# above conflict on arm64 CI and we lose control over what's in scope anyway.
+#
 # Package purposes:
 #   cuda-nvcc            — NVIDIA compiler driver (nvcc) for kernel PTX generation
 #   libnvvm              — libdevice.bc, the PTX standard library used by nvcc
-#   cuda-libraries-dev   — metapackage that pulls in dev headers AND matching
-#                          runtime libs for the full CUDA math/JIT stack:
-#                          cublas, curand, cufft, cusparse, cusolver, nvrtc,
-#                          nvjitlink, nvfatbin, npp, cudart, cccl. FlashInfer's
-#                          Blackwell SM 12.0 CUTLASS grouped-GEMM JIT path
-#                          (triggered the first time a MoE model — e.g.
-#                          DeepSeek-OCR-2 — is calibrated on a Blackwell host)
-#                          pulls in arbitrary subsets of these headers
-#                          (cublasLt.h, curand_kernel.h, nvrtc.h, …); installing
-#                          the metapackage stops the whack-a-mole. See
-#                          vllm-project/vllm#35501.
+#   cuda-cudart{,-dev}   — CUDA runtime + headers
+#   cuda-nvrtc{,-dev}    — CUDA runtime compilation library + headers
+#   libcublas{,-dev}     — cuBLAS + cublasLt.h, cublas_v2.h
+#   libcurand{,-dev}     — cuRAND + curand_kernel.h
+#   libcufft{,-dev}      — cuFFT
+#   libcusparse{,-dev}   — cuSPARSE
+#   libcusolver{,-dev}   — cuSOLVER
+#   libnvjitlink{,-dev}  — NVJITLINK (PTX-to-cubin JIT linker, CUDA 13+)
+#   libnvfatbin{,-dev}   — NVFATBIN (fatbin packaging)
+# FlashInfer's Blackwell SM 12.0 CUTLASS grouped-GEMM JIT (first triggered on
+# deioma by DeepSeek-OCR-2 MoE) pulls arbitrary subsets of these headers
+# (cublasLt.h, curand_kernel.h, nvrtc.h, …) — keep the set wide.
+# See vllm-project/vllm#35501.
+#
 # gcc is the host C compiler Triton uses to compile its ctypes driver module.
 # On non-CUDA base images (CPU builds) only gcc is installed.
 RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
@@ -228,7 +240,15 @@ RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
         && apt-get install -y --no-install-recommends --allow-change-held-packages \
             gcc \
             cuda-nvcc-${CUDA_VER} \
-            cuda-libraries-dev-${CUDA_VER} \
+            cuda-cudart-${CUDA_VER}     cuda-cudart-dev-${CUDA_VER} \
+            cuda-nvrtc-${CUDA_VER}      cuda-nvrtc-dev-${CUDA_VER} \
+            libcublas-${CUDA_VER}       libcublas-dev-${CUDA_VER} \
+            libcurand-${CUDA_VER}       libcurand-dev-${CUDA_VER} \
+            libcufft-${CUDA_VER}        libcufft-dev-${CUDA_VER} \
+            libcusparse-${CUDA_VER}     libcusparse-dev-${CUDA_VER} \
+            libcusolver-${CUDA_VER}     libcusolver-dev-${CUDA_VER} \
+            libnvjitlink-${CUDA_VER}    libnvjitlink-dev-${CUDA_VER} \
+            libnvfatbin-${CUDA_VER}     libnvfatbin-dev-${CUDA_VER} \
             libnvvm-${CUDA_VER} \
         && rm -rf /var/lib/apt/lists/*; \
     elif [ "$INSTALL_VLLM" = "1" ]; then \
