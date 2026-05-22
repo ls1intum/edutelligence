@@ -58,9 +58,21 @@ class DummyRegistry:
         ]
 
 
+@pytest.fixture(autouse=True)
+def mock_auth(monkeypatch):
+    mock_auth_ctx = MagicMock()
+    mock_auth_ctx.key_value = "test-key"
+    mock_auth_ctx.api_key_id = 1
+    mock_auth_ctx.team_id = 1
+
+    def fake_authenticate(headers):
+        return mock_auth_ctx
+
+    monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate)
+
+
 @pytest.mark.asyncio
 async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
     monkeypatch.setattr(
         main,
         "DBManager",
@@ -186,7 +198,6 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
     monkeypatch.setattr(
         main,
         "DBManager",
@@ -275,7 +286,6 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(mon
 
 @pytest.mark.asyncio
 async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
     monkeypatch.setattr(
         main,
         "DBManager",
@@ -362,7 +372,6 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(mo
 
 @pytest.mark.asyncio
 async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(monkeypatch):
-    monkeypatch.setattr(main, "authenticate_logos_key", lambda headers: ("test-key", None))
     monkeypatch.setattr(
         main,
         "DBManager",

@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { UserRole } from "@/components/route-permissions";
 
 // All UI-internal endpoints live under `/api/*` so a single Traefik route
 // (and a single backend prefix-stripper middleware) covers every call.
@@ -49,3 +50,32 @@ export const ROLES_PALETTE = {
     app_admin: "#2A7F7F",
     app_developer: "#5B7CFA",
 };
+
+export const ROLE_COLORS: Record<UserRole, string> = {
+    logos_admin: ROLES_PALETTE.logos_admin,
+    app_admin: ROLES_PALETTE.app_admin,
+    app_developer: ROLES_PALETTE.app_developer,
+};
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+    logos_admin: "Logos Admin",
+    app_admin: "App Admin",
+    app_developer: "App Developer",
+};
+
+export const STATUS_COLORS: Record<ImportRow["status"], string> = {
+    created: "#7FB069",
+    existing: "#F59E0B",
+    failed: "#E63535",
+};
+
+export type ImportRow = {
+    email: string | null;
+    username: string | null;
+    apiKey: string | null;
+    team: string | null;
+    status: "created" | "existing" | "failed";
+    error: string | null;
+};
+export type User = { id: number; username: string; prename: string; name: string };
+export type BasicTeam = { id: number; name: string };

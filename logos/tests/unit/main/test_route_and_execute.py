@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import MagicMock
 
 import logos.main as main
 
@@ -10,7 +11,7 @@ async def test_route_and_execute_no_deployments_sync():
             deployments=[],
             body={},
             headers={},
-            logos_key="lg-key",
+            auth=MagicMock(key_value="lg-key"),
             path="chat/completions",
             log_id=None,
             is_async_job=False,
@@ -24,7 +25,7 @@ async def test_route_and_execute_no_deployments_async():
         deployments=[],
         body={},
         headers={},
-        logos_key="lg-key",
+        auth=MagicMock(key_value="lg-key"),
         path="chat/completions",
         log_id=None,
         is_async_job=True,
@@ -40,13 +41,13 @@ async def test_route_and_execute_proxy_branch(monkeypatch):
     async def fake_proxy(
         body,
         headers,
-        logos_key,
+        auth,
         deployments,
         log_id,
         is_async_job,
-        profile_id=None,
         request_id=None,
         request_path=None,
+        priority=1,
     ):
         called["proxy"] = True
         return {"status": "proxy"}
@@ -57,7 +58,7 @@ async def test_route_and_execute_proxy_branch(monkeypatch):
         deployments=[{"model_id": 1, "provider_id": 1}],
         body={"model": "gpt-4o"},
         headers={"h": "v"},
-        logos_key="lg-key",
+        auth=MagicMock(key_value="lg-key"),
         path="chat/completions",
         log_id=1,
         is_async_job=False,
@@ -70,7 +71,7 @@ async def test_route_and_execute_resource_branch(monkeypatch):
     """route_and_execute delegates to _execute_resource_mode when body has no 'model'."""
     called = {}
 
-    async def fake_resource(deployments, body, headers, logos_key, log_id, is_async_job, **kw):
+    async def fake_resource(deployments, body, headers, auth, log_id, is_async_job, **kw):
         called["resource"] = True
         return {"status": "resource"}
 
@@ -80,7 +81,7 @@ async def test_route_and_execute_resource_branch(monkeypatch):
         deployments=[{"model_id": 1, "provider_id": 1}],
         body={},
         headers={"h": "v"},
-        logos_key="lg-key",
+        auth=MagicMock(key_value="lg-key"),
         path="chat/completions",
         log_id=1,
         is_async_job=True,
