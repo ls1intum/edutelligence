@@ -207,18 +207,19 @@ RUN if ! command -v python3.12 >/dev/null 2>&1 \
 # ── CUDA toolchain for Triton / vLLM JIT compilation ─────────────────────────
 # Installed via versioned apt packages (CUDA_VERSION is set by the base image).
 # Package purposes:
-#   cuda-nvcc       — NVIDIA compiler driver (nvcc) for kernel PTX generation
-#   cuda-cudart     — CUDA runtime (libcudart.so; needed by torch + vLLM)
-#   cuda-nvrtc      — CUDA runtime compilation library (NVRTC)
-#   cuda-nvrtc-dev  — NVRTC headers (nvrtc.h) for FlashInfer JIT compiles
-#   libcublas       — cuBLAS (torch GEMM kernels)
-#   libcublas-dev   — cuBLAS headers (cublasLt.h, cublas_v2.h) required by
-#                     FlashInfer's Blackwell SM 12.0 CUTLASS grouped-GEMM JIT
-#                     path for MoE models (e.g. DeepSeek-OCR-2). Without it the
-#                     JIT fails with "fatal error: cublasLt.h: No such file or
-#                     directory" the first time a MoE model is calibrated on a
-#                     Blackwell host. See vllm-project/vllm#35501.
-#   libnvvm         — provides libdevice.bc, the PTX standard library used by nvcc
+#   cuda-nvcc            — NVIDIA compiler driver (nvcc) for kernel PTX generation
+#   libnvvm              — libdevice.bc, the PTX standard library used by nvcc
+#   cuda-libraries-dev   — metapackage that pulls in dev headers AND matching
+#                          runtime libs for the full CUDA math/JIT stack:
+#                          cublas, curand, cufft, cusparse, cusolver, nvrtc,
+#                          nvjitlink, nvfatbin, npp, cudart, cccl. FlashInfer's
+#                          Blackwell SM 12.0 CUTLASS grouped-GEMM JIT path
+#                          (triggered the first time a MoE model — e.g.
+#                          DeepSeek-OCR-2 — is calibrated on a Blackwell host)
+#                          pulls in arbitrary subsets of these headers
+#                          (cublasLt.h, curand_kernel.h, nvrtc.h, …); installing
+#                          the metapackage stops the whack-a-mole. See
+#                          vllm-project/vllm#35501.
 # gcc is the host C compiler Triton uses to compile its ctypes driver module.
 # On non-CUDA base images (CPU builds) only gcc is installed.
 RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
@@ -227,11 +228,7 @@ RUN if [ "$INSTALL_VLLM" = "1" ] && [ -n "${CUDA_VERSION}" ]; then \
         && apt-get install -y --no-install-recommends --allow-change-held-packages \
             gcc \
             cuda-nvcc-${CUDA_VER} \
-            cuda-cudart-${CUDA_VER} \
-            cuda-nvrtc-${CUDA_VER} \
-            cuda-nvrtc-dev-${CUDA_VER} \
-            libcublas-${CUDA_VER} \
-            libcublas-dev-${CUDA_VER} \
+            cuda-libraries-dev-${CUDA_VER} \
             libnvvm-${CUDA_VER} \
         && rm -rf /var/lib/apt/lists/*; \
     elif [ "$INSTALL_VLLM" = "1" ]; then \
