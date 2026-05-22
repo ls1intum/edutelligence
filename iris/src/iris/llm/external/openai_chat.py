@@ -219,7 +219,7 @@ class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
 
     api_key: str
-    is_reasoning_model: bool = False
+    supports_temperature: bool = True
     supports_reasoning_effort: bool = False
 
     @observe(name="OpenAI Chat Completion")
@@ -245,13 +245,11 @@ class OpenAIChatModel(ChatModel):
                 try:
                     params = {"model": self.model, "messages": messages}
 
-                    # Reasoning models (GPT-5 / o-series) do not accept
-                    # temperature. Each model declares this in YAML via
-                    # is_reasoning_model so we don't rely on name heuristics.
-                    if (
-                        arguments.temperature is not None
-                        and not self.is_reasoning_model
-                    ):
+                    # Reasoning models (GPT-5 / o-series) reject the
+                    # `temperature` parameter. Each model declares whether it
+                    # accepts temperature via `supports_temperature` in
+                    # llm_config.yml so we don't rely on name heuristics.
+                    if arguments.temperature is not None and self.supports_temperature:
                         params["temperature"] = arguments.temperature
 
                     if arguments.reasoning_effort is not None:

@@ -68,14 +68,14 @@ def test_reasoning_effort_forwarded_when_model_supports_it_and_value_set():
     assert params["reasoning_effort"] == "high"
 
 
-def test_temperature_dropped_for_reasoning_models():
-    model = _build_model(is_reasoning_model=True)
+def test_temperature_dropped_when_model_does_not_support_it():
+    model = _build_model(supports_temperature=False)
     params = _invoke_chat(model, temperature=0.5)
     assert "temperature" not in params
 
 
-def test_temperature_forwarded_for_non_reasoning_models():
-    model = _build_model()  # is_reasoning_model defaults to False
+def test_temperature_forwarded_by_default():
+    model = _build_model()  # supports_temperature defaults to True
     params = _invoke_chat(model, temperature=0.5)
     assert params["temperature"] == 0.5
 
