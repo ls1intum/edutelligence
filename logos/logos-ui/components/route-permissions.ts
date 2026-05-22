@@ -17,8 +17,9 @@ export const MENU_ITEMS: MenuItem[] = [
   { label: "Models", path: "/models", aliases: ["/add_model"], roles: ["logos_admin"] },
   { label: "Providers", path: "/providers", aliases: ["/add_provider"], roles: ["logos_admin"] },
   { label: "Statistics", path: "/statistics", roles: ["logos_admin"] },
-  { label: "User Management", path: "/user-management", roles: ADMIN_AND_ABOVE },
 
+  { label: "User Management", path: "/user-management", roles: ADMIN_AND_ABOVE },
+  { label: "Team Management", path: "/team-management", roles: ADMIN_AND_ABOVE },
   { label: "Billing", path: "/billing", roles: ADMIN_AND_ABOVE },
 
   { label: "Settings", path: "/settings", roles: ALL_ROLES },

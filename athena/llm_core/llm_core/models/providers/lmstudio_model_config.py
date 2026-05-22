@@ -5,7 +5,7 @@ from llm_core.loaders.model_loaders.lmstudio_loader import (
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
 from typing import ClassVar, Literal
 from pydantic import ConfigDict, Field, PrivateAttr
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 
 
 class LMStudioModelConfig(BaseChatModelConfig):

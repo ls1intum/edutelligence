@@ -447,7 +447,7 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
             return False
 
         @staticmethod
-        def get_user_by_logos_key(logos_key: str):
+        def get_user_by_api_key(logos_key: str):
             if logos_key == "root-key":
                 return {"role": "logos_admin"}
             return None
@@ -710,7 +710,7 @@ async def test_context_resolver_prefers_request_time_prepared_lane(monkeypatch):
             return False
 
         @staticmethod
-        def get_auth_info_to_deployment(model_id: int, provider_id: int, profile_id=None):  # noqa: ARG002
+        def get_auth_info_to_deployment(model_id: int, provider_id: int):
             return {
                 "model_id": model_id,
                 "model_name": "model-a",
@@ -753,7 +753,7 @@ async def test_context_resolver_allows_logosnode_without_api_key(monkeypatch):
             return False
 
         @staticmethod
-        def get_auth_info_to_deployment(model_id: int, provider_id: int, profile_id=None):  # noqa: ARG002
+        def get_auth_info_to_deployment(model_id: int, provider_id: int):
             return {
                 "model_id": model_id,
                 "model_name": "model-a",

@@ -21,10 +21,11 @@ import { ActivityIndicator } from "react-native";
 
 type Policy = {
   id: number;
-  entity_id: number;
+  api_key_id: number | null;
+  team_id: number | null;
   name: string;
   description: string;
-  threshold_privacy: number;
+  threshold_privacy: string;
   threshold_latency: number;
   threshold_accuracy: number;
   threshold_cost: number;
@@ -63,18 +64,19 @@ export default function Policies() {
       );
       const [data, code] = JSON.parse(await response.text());
       if (code === 200) {
-        const formattedPolicies = data.map((policy: any[][]) => ({
+        const formattedPolicies = data.map((policy: any[]) => ({
           id: policy[0],
-          entity_id: policy[1],
-          name: policy[2],
-          description: policy[3],
-          threshold_privacy: policy[4],
-          threshold_latency: policy[5],
-          threshold_accuracy: policy[6],
-          threshold_cost: policy[7],
-          threshold_quality: policy[8],
-          priority: policy[9],
-          topic: policy[10],
+          api_key_id: policy[1],
+          team_id: policy[2],
+          name: policy[3],
+          description: policy[4],
+          threshold_privacy: policy[5],
+          threshold_latency: policy[6],
+          threshold_accuracy: policy[7],
+          threshold_cost: policy[8],
+          threshold_quality: policy[9],
+          priority: policy[10],
+          topic: policy[11],
         }));
         setPolicies(formattedPolicies);
       } else {
@@ -131,7 +133,8 @@ const PoliciesTable = ({ policies }: { policies: Policy[] }) => {
       <TableHeader>
         <TableRow className="bg-secondary-200">
           <TableHead>ID</TableHead>
-          <TableHead>Service ID</TableHead>
+          <TableHead>API Key ID</TableHead>
+          <TableHead>Team ID</TableHead>
           <TableHead>Name</TableHead>
           <TableHead>Description</TableHead>
           <TableHead>Threshold Privacy</TableHead>
@@ -147,7 +150,12 @@ const PoliciesTable = ({ policies }: { policies: Policy[] }) => {
         {policies.map((policy) => (
           <TableRow key={policy.id} className="bg-secondary-200">
             <TableData>{policy.id}</TableData>
-            <TableData>{policy.entity_id}</TableData>
+            <TableData>
+              {policy.api_key_id !== null ? policy.api_key_id : "-"}
+            </TableData>
+            <TableData>
+              {policy.team_id !== null ? policy.team_id : "-"}
+            </TableData>
             <TableData>{policy.name}</TableData>
             <TableData>{policy.description}</TableData>
             <TableData>{policy.threshold_privacy}</TableData>

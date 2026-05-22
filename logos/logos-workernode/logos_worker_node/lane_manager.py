@@ -43,6 +43,12 @@ _GPU_PLACEMENT_HEADROOM_RATIO = 0.10
 _GPU_PLACEMENT_MIN_HEADROOM_MB = 1024.0
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
+# Minimum consecutive transport-level failures from /is_sleeping before
+# the liveness branch of _check_stuck_lanes will arm.  3 misses on a 5-second
+# httpx timeout = at least ~15s of dead EngineCore RPC before we even begin
+# the wall-clock dwell window, and probes only fire from status refreshes
+# (not every Nth event), so this won't trip on isolated network blips.
+_LIVENESS_FAILURE_THRESHOLD = 3
 
 
 def _write_reboot_sentinel(path: str) -> None:
@@ -1827,22 +1833,41 @@ class LaneManager:
         *,
         auto_restart: bool = True,
     ) -> None:
-        """Detect vLLM lanes that have stopped making any token-level progress.
+        """Detect vLLM lanes whose engine has wedged and trigger a restart.
 
-        A lane is considered stuck only when BOTH ``prompt_tokens_total`` AND
-        ``generation_tokens_total`` are unchanged AND ``requests_running > 0``
-        continuously for ``_stuck_duration_seconds``.  The threshold is
-        wall-clock time, not consecutive call count: ``get_all_statuses`` is
-        invoked by request-driven endpoints (``get_lanes`` / ``get_runtime``),
-        so a request burst can otherwise rack up many polls in seconds and
-        trip a count-based threshold during normal prefill.
+        Three independent stuck signals are checked, each rearming on the
+        same ``_stuck_duration_seconds`` wall-clock window so the existing
+        wall-clock threshold guards against transient blips:
 
-        Requiring both counters to freeze avoids a known false positive on
-        vLLM 0.20 V1 engine where ``generation_tokens_total`` can stay at 0
-        for gpt-oss reasoning models even while requests complete
-        successfully — a real engine hang freezes every metric, so requiring
-        both is still sufficient to catch genuine NCCL deadlocks and similar
-        hangs.
+        * ``engine_stuck`` — vLLM admitted requests (``requests_running > 0``)
+          but BOTH ``prompt_tokens_total`` AND ``generation_tokens_total``
+          stopped advancing.  Requiring both counters to freeze avoids the
+          known vLLM 0.20 false positive where ``generation_tokens_total``
+          stays at 0 for gpt-oss reasoning models that still complete
+          requests successfully.  Catches NCCL deadlocks and similar
+          in-scheduler hangs.
+
+        * ``proxy_stuck`` — the workernode has live request connections
+          (``self._active_requests[lid] > 0``) but vLLM never admitted them
+          (``requests_running == 0``) and no token progress is happening.
+          Catches wedges in ``preprocess_add_request`` — notably the
+          P0/P1 mm-cache desync after sleep/wake — where the API server
+          parks the HTTP connection forever waiting for an EngineCore that
+          will never reply, so the existing ``engine_stuck`` branch never
+          fires (vLLM's scheduler is empty from its own POV).
+
+        * ``liveness_stuck`` — ``/is_sleeping`` has timed out on the last
+          ``_LIVENESS_FAILURE_THRESHOLD`` consecutive status refreshes.
+          ``/is_sleeping`` round-trips to the EngineCore over ZMQ, so a
+          string of failures is a direct signal that the engine RPC
+          channel is dead even when the API server still serves
+          ``/v1/models``.  No traffic needs to be in flight for this to
+          fire — it's the catch-all for idle wedges.
+
+        ``get_all_statuses`` is invoked by request-driven endpoints
+        (``get_lanes`` / ``get_runtime``), so a request burst can rack up
+        many polls in seconds.  The wall-clock dwell time is the safety
+        margin against that.
 
         When *auto_restart* is True (the default), the lane is automatically
         restarted with its previous configuration.  Pass ``False`` when the
@@ -1858,54 +1883,98 @@ class LaneManager:
             prompt_tokens = metrics.get("prompt_tokens_total")
             requests_running = metrics.get("requests_running")
 
+            handle = self._handles.get(lid)
+            liveness_failures = 0
+            if isinstance(handle, VllmProcessHandle):
+                liveness_failures = handle.consecutive_liveness_failures
+
             if (
                 gen_tokens is None
                 or prompt_tokens is None
                 or requests_running is None
             ):
-                # Metrics not available — can't detect stuck state
-                self._stuck_since.pop(lid, None)
-                continue
+                # Metrics scrape failing means we can't run the token-progress
+                # checks.  But /is_sleeping is independent: a wedged engine
+                # whose API server still serves /metrics partially needs the
+                # liveness branch to kick in regardless.
+                self._last_gen_tokens.pop(lid, None)
+                self._last_prompt_tokens.pop(lid, None)
+                if liveness_failures < _LIVENESS_FAILURE_THRESHOLD:
+                    self._stuck_since.pop(lid, None)
+                    continue
+                # Fall through with synthetic "no progress" so the dwell-time
+                # gate below still applies and we don't restart on a single
+                # transient timeout.
+                no_gen_progress = True
+                no_prompt_progress = True
+                engine_stuck = False
+                proxy_stuck = False
+                liveness_stuck = True
+            else:
+                prev_gen = self._last_gen_tokens.get(lid)
+                prev_prompt = self._last_prompt_tokens.get(lid)
+                self._last_gen_tokens[lid] = gen_tokens
+                self._last_prompt_tokens[lid] = prompt_tokens
 
-            prev_gen = self._last_gen_tokens.get(lid)
-            prev_prompt = self._last_prompt_tokens.get(lid)
-            self._last_gen_tokens[lid] = gen_tokens
-            self._last_prompt_tokens[lid] = prompt_tokens
+                if prev_gen is None or prev_prompt is None:
+                    self._stuck_since.pop(lid, None)
+                    continue
 
-            if prev_gen is None or prev_prompt is None:
-                self._stuck_since.pop(lid, None)
-                continue
+                no_gen_progress = gen_tokens <= prev_gen
+                no_prompt_progress = prompt_tokens <= prev_prompt
+                worker_active = self._active_requests.get(lid, 0)
 
-            no_gen_progress = gen_tokens <= prev_gen
-            no_prompt_progress = prompt_tokens <= prev_prompt
-            if requests_running > 0 and no_gen_progress and no_prompt_progress:
+                engine_stuck = (
+                    requests_running > 0
+                    and no_gen_progress
+                    and no_prompt_progress
+                )
+                proxy_stuck = (
+                    worker_active > 0
+                    and requests_running == 0
+                    and no_gen_progress
+                    and no_prompt_progress
+                )
+                liveness_stuck = liveness_failures >= _LIVENESS_FAILURE_THRESHOLD
+
+            if engine_stuck or proxy_stuck or liveness_stuck:
                 stuck_since = self._stuck_since.get(lid)
                 if stuck_since is None:
                     self._stuck_since[lid] = now
                     continue
                 elapsed = now - stuck_since
                 if elapsed >= self._stuck_duration_seconds:
+                    if engine_stuck:
+                        reason = "engine_stuck"
+                    elif proxy_stuck:
+                        reason = "proxy_stuck"
+                    else:
+                        reason = "liveness_stuck"
+                    worker_active = self._active_requests.get(lid, 0)
                     logger.error(
-                        "Lane '%s' appears stuck: no token progress for %.1fs "
-                        "with requests_running=%.0f, prompt_tokens_total=%.0f, "
-                        "generation_tokens_total=%.0f. Killing the lane process.",
-                        lid, elapsed, requests_running, prompt_tokens, gen_tokens,
+                        "Lane '%s' appears stuck (%s): elapsed=%.1fs "
+                        "requests_running=%s prompt_tokens=%s "
+                        "generation_tokens=%s worker_active=%d "
+                        "consecutive_liveness_failures=%d. Killing the lane process.",
+                        lid, reason, elapsed, requests_running, prompt_tokens,
+                        gen_tokens, worker_active, liveness_failures,
                     )
                     self._record_event(
                         lid, "stuck_detected",
                         model=status.model,
                         details=(
+                            f"reason={reason}, "
                             f"prompt_tokens={prompt_tokens}, "
                             f"gen_tokens={gen_tokens}, "
                             f"running={requests_running}, "
+                            f"worker_active={worker_active}, "
+                            f"liveness_failures={liveness_failures}, "
                             f"elapsed={elapsed:.1f}s"
                         ),
                     )
                     self._stuck_since.pop(lid, None)
                     self._last_gen_tokens.pop(lid, None)
                     self._last_prompt_tokens.pop(lid, None)
-                    # Kill the stuck lane and attempt automatic restart
-                    handle = self._handles.get(lid)
                     if handle is not None:
                         lane_config = handle.lane_config
                         try:

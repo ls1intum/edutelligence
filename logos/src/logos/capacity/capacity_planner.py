@@ -239,10 +239,11 @@ class CapacityPlanner:
         ).strip().lower() not in ("0", "false", "no")
         # Phase 3: split Gate 1 (drop scheduler queue from pre-filter), tighten
         # branch A of the proceed check, and gate the per-lane VRAM ledger.
-        # Default off until staging confirms the deimama symptom unblocks
-        # without surprising eviction patterns.
+        # Default ON: production confirmed the deimama/7B-starvation symptom
+        # unblocks without surprising eviction patterns. Set
+        # LOGOS_EVICTION_GATE_V2=false to fall back to the legacy v1 gate.
         self._eviction_gate_v2 = os.environ.get(
-            "LOGOS_EVICTION_GATE_V2", "false"
+            "LOGOS_EVICTION_GATE_V2", "true"
         ).strip().lower() in ("1", "true", "yes")
         # Cross-provider best-first ranking: before iterating providers in a
         # cycle, pre-score every (provider, model) candidate by action cost
@@ -941,6 +942,7 @@ class CapacityPlanner:
             requests_running=0.0,
             gpu_cache_usage_percent=None,
             ttft_p95_seconds=0.0,
+            e2e_latency_p50_seconds=0.0,
             effective_vram_mb=0.0,
             num_parallel=0,
         )
@@ -1599,6 +1601,7 @@ class CapacityPlanner:
         profiles: dict[str, "ModelProfile"],
         target_model_name: Optional[str] = None,
         *,
+        target_lane_id: Optional[str] = None,
         replicas_only: bool = False,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> Optional[list[tuple[LaneSchedulerSignals, str, float]]]:
@@ -1623,6 +1626,11 @@ class CapacityPlanner:
         count is decremented so the *last* remaining copy of any model is
         never picked in this pass. Callers should fall back to a normal
         (non-replicas-only) call when this pass cannot cover the deficit.
+
+        ``target_lane_id`` is the lane_id of the lane about to be woken (wake
+        path only; cold load has no existing wakee and passes ``None``). That
+        lane is hard-excluded from the candidate set — it cannot evict itself
+        to make room for itself.
         """
         # Nothing to do if deficit is already met
         if all(d <= 0 for d in per_gpu_deficit.values()):
@@ -1645,6 +1653,17 @@ class CapacityPlanner:
         # empty. Each entry is (lane_id, model_name, reason).
         skipped: list[tuple[str, str, str]] = []
         for lane in lanes:
+            # The lane being woken can never be its own eviction victim:
+            # `stop` destroys the wakee (the follow-up wake then fails with
+            # "Lane '<id>' not found" and the model goes permanently absent),
+            # and `sleep_l1` is a no-op on an already-sleeping lane. Sibling
+            # replicas — the same model_name on a *different* lane_id — are
+            # still valid victims, so filter strictly on lane_id and never on
+            # model_name (the Phase 3.3 self-eviction branches below
+            # intentionally allow same-model siblings through).
+            if target_lane_id is not None and lane.lane_id == target_lane_id:
+                skipped.append((lane.lane_id, lane.model_name, "is-wake-target"))
+                continue
             total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
             # Phase 3.1: under LOGOS_EVICTION_GATE_V2, hard-block only on
             # vLLM-internal busyness (active_requests / queue_waiting). The
@@ -2735,6 +2754,7 @@ class CapacityPlanner:
                     eviction_set = self._find_eviction_set(
                         provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
                         target_model_name=model_name,
+                        target_lane_id=target.lane_id,
                         replicas_only=True,
                         cluster_lanes_by_model=cluster_lanes_by_model,
                     )
@@ -2742,6 +2762,7 @@ class CapacityPlanner:
                     eviction_set = self._find_eviction_set(
                         provider_id, target_gpus, per_gpu_deficit, available_lanes, profiles,
                         target_model_name=model_name,
+                        target_lane_id=target.lane_id,
                     )
 
                 if eviction_set is None:
@@ -2820,10 +2841,13 @@ class CapacityPlanner:
                             else f"target_eff={eff:.2f} > victim={max_victim_score:.2f}×{self.WAKE_COMPETITIVE_RATIO}"
                         )
                     if proceed:
+                        target_lane_destroyed = False
                         for vlane, vaction, _ in eviction_set:
                             if vlane.lane_id in claimed_victims:
                                 continue
                             claimed_victims.add(vlane.lane_id)
+                            if vaction == "stop" and vlane.lane_id == target.lane_id:
+                                target_lane_destroyed = True
                             actions.append(CapacityPlanAction(
                                 action=vaction,
                                 provider_id=provider_id,
@@ -2831,13 +2855,32 @@ class CapacityPlanner:
                                 model_name=vlane.model_name,
                                 reason=f"Evicted for {model_name} wake ({gate_reason})",
                             ))
-                        actions.append(CapacityPlanAction(
-                            action="wake",
-                            provider_id=provider_id,
-                            lane_id=target.lane_id,
-                            model_name=model_name,
-                            reason=f"Wake {model_name}: {gate_reason}",
-                        ))
+                        # The is-wake-target pre-filter in _find_eviction_set
+                        # makes this impossible on the wake path, but if any
+                        # other code path ever lets a `stop` of the wakee
+                        # itself slip through, a `wake` would fail with
+                        # "Lane '<id>' not found" — the destroyed lane needs a
+                        # fresh `load`, not a `wake`.
+                        if target_lane_destroyed:
+                            actions.append(CapacityPlanAction(
+                                action="load",
+                                provider_id=provider_id,
+                                lane_id=target.lane_id,
+                                model_name=model_name,
+                                params=self._build_load_params(
+                                    model_name, target.lane_id, profile,
+                                    capacity, provider_id,
+                                ),
+                                reason=f"Load {model_name} (wakee stopped): {gate_reason}",
+                            ))
+                        else:
+                            actions.append(CapacityPlanAction(
+                                action="wake",
+                                provider_id=provider_id,
+                                lane_id=target.lane_id,
+                                model_name=model_name,
+                                reason=f"Wake {model_name}: {gate_reason}",
+                            ))
                         planned_models.add(model_name)
                     else:
                         logger.info(
@@ -3257,6 +3300,7 @@ class CapacityPlanner:
                     requests_running=0.0,
                     gpu_cache_usage_percent=None,
                     ttft_p95_seconds=0.0,
+                    e2e_latency_p50_seconds=0.0,
                     effective_vram_mb=0.0,
                     num_parallel=0,
                     gpu_devices=sleeping_lane.gpu_devices,
