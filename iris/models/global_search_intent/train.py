@@ -39,8 +39,8 @@ print("=== Loading dataset ===")
 df = pd.read_csv("models/global_search_intent/training_data.csv")
 df["label"] = (df["Intent"] == "trigger_ai").astype(int)
 print(f"  Total rows   : {len(df)}")
-print(f"  trigger_ai   : {df["label"].sum()}")
-print(f"  skip_ai      : {(df["label"] == 0).sum()}")
+print(f"  trigger_ai   : {df['label'].sum()}")
+print(f"  skip_ai      : {(df['label'] == 0).sum()}")
 
 # Stratified split first so the eval set is representative of the full distribution.
 # Then balance only the training portion by capping to the minority class size.
@@ -58,8 +58,8 @@ df_train = pd.concat(
 ).reset_index(drop=True)
 print(f"  Training on  : {len(df_train)} rows ({minority_size} per class)")
 print(f"  Evaluating on: {len(df_eval)} rows")
-print(f"    trigger_ai : {df_eval["label"].sum()}")
-print(f"    skip_ai    : {(df_eval["label"] == 0).sum()}\n")
+print(f"    trigger_ai : {df_eval['label'].sum()}")
+print(f"    skip_ai    : {(df_eval['label'] == 0).sum()}\n")
 
 train_dataset = Dataset.from_pandas(
     df_train[["Query", "label"]].rename(columns={"Query": "text"})
