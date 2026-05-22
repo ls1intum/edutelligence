@@ -374,6 +374,8 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             intent=intent,
             course_ids=course_ids,
             access_context=dto.access_context,
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
         )
         if result.answer:
             logger.info(

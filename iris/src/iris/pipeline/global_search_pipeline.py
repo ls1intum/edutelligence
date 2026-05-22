@@ -31,6 +31,7 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
 )
 from iris.retrieval.searchable_entities_retrieval import SearchableEntitiesRetrieval
 from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.web.status.status_update import get_course_names
 
 logger = get_logger(__name__)
 
@@ -105,6 +106,8 @@ class GlobalSearchPipeline(SubPipeline):
         intent: SearchIntent | None = None,
         course_ids: list[int] | None = None,
         access_context: AccessContext | None = None,
+        run_id: str | None = None,
+        base_url: str | None = None,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
@@ -131,6 +134,7 @@ class GlobalSearchPipeline(SubPipeline):
                 query=query, limit=limit, access_context=access_context
             )
             sources = self._merge_sources(lecture_scored, entity_sources, limit)
+            self._enrich_course_names(sources, run_id, base_url)
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
         # Step 1: Generate a short hypothetical answer to use as the search vector
@@ -165,6 +169,7 @@ class GlobalSearchPipeline(SubPipeline):
         )
         entity_results: list[GlobalSearchSourceDTO] = entity_future.result()
         sources = self._merge_sources(lecture_scored, entity_results, limit)
+        self._enrich_course_names(sources, run_id, base_url)
 
         # Fallback: if HyDE vector produced no hits (e.g. ambiguous query where HyDE
         # generated off-topic content), retry with the raw query embedding.
@@ -259,6 +264,27 @@ class GlobalSearchPipeline(SubPipeline):
         )
 
         return GlobalSearchResponseDTO(answer=answer, sources=used_sources)
+
+    @staticmethod
+    def _enrich_course_names(
+        sources: list[GlobalSearchSourceDTO],
+        run_id: str | None,
+        base_url: str | None,
+    ) -> None:
+        """Overwrite course.name on every source with the current title from Artemis.
+
+        Only runs if run_id and base_url are provided. Fetches names for the unique
+        course IDs in the final merged list — typically 1–5 IDs — so the DB hit is tiny.
+        """
+        if not sources or not run_id or not base_url:
+            return
+        unique_ids = list({s.course.id for s in sources})
+        names = get_course_names(run_id, base_url, unique_ids)
+        if not names:
+            return
+        for source in sources:
+            if source.course.id in names:
+                source.course.name = names[source.course.id]
 
     @staticmethod
     def _merge_sources(

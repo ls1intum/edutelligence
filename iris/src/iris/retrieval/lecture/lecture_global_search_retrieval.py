@@ -324,7 +324,8 @@ class LectureGlobalSearchRetrieval:
 
         return LectureSearchResultDTO(
             course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                id=course_id,
+                name="",  # enriched with current Artemis title after the final RRF merge
             ),
             lecture=LectureInfo(
                 id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]
@@ -369,7 +370,8 @@ class LectureGlobalSearchRetrieval:
 
         return LectureSearchResultDTO(
             course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                id=course_id,
+                name="",  # enriched with current Artemis title after the final RRF merge
             ),
             lecture=LectureInfo(
                 id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]

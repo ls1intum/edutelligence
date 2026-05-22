@@ -11,10 +11,6 @@ from iris.domain.search.lecture_search_dto import (
 )
 from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
-from iris.vector_database.lecture_unit_schema import (
-    LectureUnitSchema,
-    init_lecture_unit_schema,
-)
 from iris.vector_database.searchable_entities_schema import (
     EntityType,
     FaqState,
@@ -43,7 +39,6 @@ class SearchableEntitiesRetrieval:
         self.collection = client.collections.get(
             SearchableEntitiesSchema.COLLECTION_NAME.value
         )
-        self.lecture_units = init_lecture_unit_schema(client)
 
         # Detect whether Artemis indexed vectors into this collection.
         # vectorizer "none" + no stored vectors → alpha=0 (pure BM25, model-agnostic).
@@ -164,7 +159,6 @@ class SearchableEntitiesRetrieval:
             )
         if not final:
             logger.info("[SearchableEntities] no results found")
-        self._resolve_course_names(final)
         return final
 
     def _search_no_filter(
@@ -223,39 +217,7 @@ class SearchableEntitiesRetrieval:
                 len(titles),
                 titles,
             )
-        self._resolve_course_names(final)
         return final
-
-    def _resolve_course_names(self, dtos: list[GlobalSearchSourceDTO]) -> None:
-        """Populate course.name in-place by looking up from LectureUnits (same course_id)."""
-        unknown_ids = {dto.course.id for dto in dtos if not dto.course.name}
-        if not unknown_ids:
-            return
-        try:
-            results = self.lecture_units.query.fetch_objects(
-                filters=Filter.by_property(
-                    LectureUnitSchema.COURSE_ID.value
-                ).contains_any(list(unknown_ids)),
-                limit=len(unknown_ids) * 2,
-                return_properties=[
-                    LectureUnitSchema.COURSE_ID.value,
-                    LectureUnitSchema.COURSE_NAME.value,
-                ],
-            ).objects
-            course_names = {
-                int(
-                    obj.properties[LectureUnitSchema.COURSE_ID.value]
-                ): obj.properties.get(LectureUnitSchema.COURSE_NAME.value, "")
-                for obj in results
-                if LectureUnitSchema.COURSE_ID.value in obj.properties
-            }
-            for dto in dtos:
-                if not dto.course.name and dto.course.id in course_names:
-                    dto.course.name = course_names[dto.course.id]
-        except Exception:
-            logger.warning(
-                "[SearchableEntities] course name lookup failed", exc_info=True
-            )
 
     def _build_access_filter(self, ctx: AccessContext) -> Filter | None:
         """Builds a compound Weaviate filter that mirrors GlobalSearchResource's per-type disjuncts."""
@@ -408,14 +370,11 @@ class SearchableEntitiesRetrieval:
         if entity_type is None or entity_id is None or course_id is None or not title:
             return None
 
-        course_name = props.get(SearchableEntitiesSchema.COURSE_NAME.value) or ""
-        description = props.get(SearchableEntitiesSchema.DESCRIPTION.value)
-        entity_label = entity_type.replace("_", " ")
-        snippet = (
-            description.strip()
-            if description and description.strip()
-            else f"This is a {entity_label} in this course."
+        course_name = (
+            ""  # enriched with current Artemis title after the final RRF merge
         )
+        description = props.get(SearchableEntitiesSchema.DESCRIPTION.value)
+        snippet = description.strip() if description and description.strip() else title
 
         return GlobalSearchSourceDTO(
             sourceType=entity_type,
